@@ -1,0 +1,694 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Quark daemon API",
+    "description": "Local control plane API served by quarkd on localhost.",
+    "license": {
+      "name": "MIT"
+    },
+    "version": "0.0.1"
+  },
+  "paths": {
+    "/v1/decisions": {
+      "get": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "The decisions inbox across all Projects.",
+        "operationId": "list_decisions",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only decisions in this state.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DecisionState"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Decision"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Typed event stream (WebSocket).",
+        "description": "Each text frame is one JSON `Event`. Upgrade with a standard WebSocket\nhandshake; the server ignores client frames other than close.",
+        "operationId": "stream",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Last `seq` the client has seen. Every later event is replayed before\nlive events. Omit to receive only events after connecting; pass 0 to\nreplay the whole log.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching to WebSocket; each frame is an Event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Daemon health and the latest event `seq`.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List Projects.",
+        "operationId": "list_projects",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create a Project.",
+        "description": "Phase 0 records the Project in the daemon only. Seeding its engine\nworkspace arrives with the adapter write path.",
+        "operationId": "create_project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get one Project.",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Configure a Project. Absent fields are left unchanged.",
+        "operationId": "update_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/tasks": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "The task board for one Project.",
+        "operationId": "list_tasks",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Task"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tasks/{id}": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Task detail.",
+        "operationId": "get_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateProject": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "workspace_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Decision": {
+        "type": "object",
+        "description": "A question held for a person.",
+        "required": [
+          "id",
+          "project_id",
+          "question",
+          "state",
+          "opened_at"
+        ],
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answered_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answered_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "opened_at": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DecisionState"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DecisionState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "answered"
+        ]
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code, e.g. `not_found`."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "description": "One entry of the event stream. `seq` is monotonic across the whole daemon;\na client that reconnects with `/v1/events?cursor=<last seq>` receives every\nevent with a greater `seq`, replayed from the store, then live events.",
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "payload"
+        ],
+        "properties": {
+          "payload": {
+            "type": "object"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent for daemon-wide events."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ts": {
+            "type": "string",
+            "description": "RFC 3339 UTC timestamp."
+          },
+          "type": {
+            "$ref": "#/components/schemas/EventType"
+          }
+        }
+      },
+      "EventType": {
+        "type": "string",
+        "description": "Every event type the stream can carry. Phase 0 emits the project, task and\ndecision events; the rest are reserved so clients can be generated now.",
+        "enum": [
+          "project.updated",
+          "task.created",
+          "task.state_changed",
+          "coordinator.message",
+          "worker.transcript",
+          "worker.output",
+          "decision.opened",
+          "decision.answered",
+          "pr.updated",
+          "check.updated",
+          "review.updated",
+          "dispatch.recorded",
+          "account.quota_changed"
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "engine",
+          "last_seq"
+        ],
+        "properties": {
+          "engine": {
+            "type": "string",
+            "description": "Name of the engine adapter in use."
+          },
+          "last_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest event `seq` in the store; 0 when empty."
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "description": "A Project: a goal-driven workspace that owns tasks, decisions and PRs.",
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "workspace_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Local path of the Project workspace, when one is attached."
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "title",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaskKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "pull_request_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "state_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short human-readable note about the latest state change."
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskKind": {
+        "type": "string",
+        "description": "What a task delivers.",
+        "enum": [
+          "ship",
+          "scout"
+        ]
+      },
+      "TaskState": {
+        "type": "string",
+        "description": "Neutral task lifecycle state. Engine adapters map their own states onto\nthese; anything they cannot classify is `unknown`.",
+        "enum": [
+          "queued",
+          "running",
+          "needs_decision",
+          "blocked",
+          "paused",
+          "in_review",
+          "done",
+          "failed",
+          "unknown"
+        ]
+      },
+      "UpdateProject": {
+        "type": "object",
+        "description": "Partial update; absent fields are left unchanged.",
+        "properties": {
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "daemon"
+    },
+    {
+      "name": "projects"
+    },
+    {
+      "name": "tasks"
+    },
+    {
+      "name": "decisions"
+    },
+    {
+      "name": "events"
+    }
+  ]
+}
