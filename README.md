@@ -1,2 +1,23 @@
-# quark
-The elementary particle of autonomous software engineering
+# Quark
+
+**Quark** is an open-source control plane and orchestration surface that connects local development environments with cloud microVM sandboxes. Quark allows developers to delegate entire software engineering goals across multiple repositories while maintaining local authority, multi-account routing, and complete harness neutrality. Quark treats the **Project** as the fundamental unit of work. It coordinates parallel worker agents across isolated git worktrees or cloud sandboxes, driving task intake all the way to evidence-backed, defensible pull requests.
+    
+## 🔬 System Taxonomy & Physics Metaphor
+    
+In physics, elementary quarks never exist in isolation, they are bound together by **gluons** to form composite **hadrons**. Quark adapts this quantum chromodynamics (QCD) architecture directly into its systems model:
+    
+| QCD Metaphor | Component | System Definition |
+| :--- | :--- | :--- |
+| **Quark** | **Worker Agent** | The individual, autonomous execution unit running inside an isolated microVM sandbox or git worktree. |
+| **Gluon** | **Control Plane & Bus** | The central event relay, credential broker, and orchestration engine that binds project memory, state, and active worker threads together. |
+| **Hadron** | **Project Workspace** | The goal-driven workspace with memory containing forge repos, issue backlogs, holdout tests, and merged PR pipelines. |
+| **Flavors** | **Harness Profiles** | Like the 6 quark flavors (*Up, Down, Charm, Strange, Top, Bottom*), Quark works across agent harnesses (Claude Code, Codex, Cursor, OpenCode, Pi, IBM Bob, Kiro, ...). |
+| **Color Charge** | **Isolation Rings** | Security boundaries separating local desktop runtimes, sandboxed processes, and cloud microVM environments. |
+    
+## ✨ Key Features
+    
+* **Goal-Driven Projects**: Define a goal and a definition of done. Quark's coordinator plans work, manages backlog intake, and reviews diffs without directly editing production code itself.
+* **Multi-Harness Parity & Complexity Routing**: Automatically route routine tasks to lightweight models and reserve frontier models for complex architectural changes using configurable dispatch rules.
+* **Local & Cloud Execution Parity**: Run seamlessly in **Cloud Mode** (microVM sandboxes per project) or **Local Mode** (native processes, Seatbelt/bubblewrap sandboxes, or Docker containers).
+* **Defensible Verification Gates**: Every agent run must pass repo-native unit checks, Playwright end-to-end journeys, and independent holdout tests before opening a pull request.
+* **Git-Backed Context Store**: Project instructions, architectural decisions, and agent learnings live in their own versioned repository, making project context fully diffable, reviewable, and portable.
