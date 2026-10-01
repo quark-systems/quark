@@ -795,16 +795,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quark-engine"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "quark-systems",
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "quark-systems"
 version = "0.0.1"
 dependencies = [
@@ -818,11 +808,11 @@ name = "quarkd"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
  "futures-util",
  "http-body-util",
- "quark-engine",
  "quark-systems",
  "rusqlite",
  "serde",

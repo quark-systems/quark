@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use quark_engine::{EngineAdapter, WorkspaceRef};
+use crate::engine::{EngineAdapter, WorkspaceRef};
 
 use crate::store::Store;
 
@@ -68,7 +68,7 @@ impl Projector {
         ws: &WorkspaceRef,
         operation: &'static str,
         started: Instant,
-        err: Option<&quark_engine::EngineError>,
+        err: Option<&crate::engine::EngineError>,
     ) {
         let elapsed = started.elapsed().as_millis() as u64;
         let detail = err.map(|e| e.to_string());

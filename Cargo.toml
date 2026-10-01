@@ -1,17 +1,16 @@
 [workspace]
-resolver = "3"
-members = ["crates/quarkd", "crates/quark-systems", "crates/quark-engine"]
+members = ["crates/*"]
+resolver = "2"
 
 [workspace.package]
 version = "0.0.1"
-edition = "2024"
+edition = "2021"
 license = "MIT"
 repository = "https://github.com/quark-systems/quark"
 rust-version = "1.85"
 
 [workspace.dependencies]
 quark-systems = { path = "crates/quark-systems", version = "0.0.1" }
-quark-engine = { path = "crates/quark-engine" }
 anyhow = "1.0"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
