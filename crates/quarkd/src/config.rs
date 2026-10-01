@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use quark_engine::{EngineAdapter, StubEngine};
+use crate::engine::{EngineAdapter, StubEngine};
 
 /// Default localhost port for the daemon API.
 pub const DEFAULT_PORT: u16 = 7380;
