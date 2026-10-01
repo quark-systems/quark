@@ -8,13 +8,15 @@
 //!
 //! - [`StubEngine`] is an in-memory adapter for tests and for running the
 //!   daemon without an engine checkout.
-//! - The firstmate implementation wraps the typed readers in the
+//! - [`firstmate::FirstmateEngine`] wraps the typed readers in the
 //!   `quark-engine` crate (fleet snapshot, status-log tails, hold records, PR
 //!   poll records) and maps engine states onto the neutral [`TaskState`], so
 //!   nothing engine-specific reaches the API.
 //!
 //! The write side (allowlisted `fm-*.sh` calls with argument validation and
 //! adapter-call records) is a later addition to this trait.
+
+pub mod firstmate;
 
 use std::path::PathBuf;
 use std::sync::Mutex;

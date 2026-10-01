@@ -1,0 +1,983 @@
+{
+  "schema": "fm-fleet-snapshot.v1",
+  "generated": "2026-10-01T22:50:56Z",
+  "fm_home": "/fixture/main",
+  "roots": {
+    "fm_root": "/fixture/fixture-root",
+    "state": "/fixture/main/state",
+    "data": "/fixture/main/data",
+    "config": "/fixture/main/config",
+    "projects": "/fixture/main/projects"
+  },
+  "backlog": {
+    "path": "/fixture/main/data/backlog.md",
+    "present": true,
+    "records": [
+      {
+        "order": 1,
+        "state": "in_flight",
+        "structured": true,
+        "id": "ship-task",
+        "checked": false,
+        "title": "Ship the thing",
+        "repo": "firstmate",
+        "kind": "ship",
+        "priority": null,
+        "hold_reason": null,
+        "hold_kind": null,
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": "2026-07-11",
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": null,
+        "local_note": null,
+        "raw": "- [ ] ship-task - Ship the thing (repo: firstmate) (kind: ship) (since 2026-07-11)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [],
+        "current_role": "worker",
+        "requires_child_metadata": true,
+        "hold_age_days": 82,
+        "hold_bucket": null,
+        "captain_actionable": false
+      },
+      {
+        "order": 2,
+        "state": "in_flight",
+        "structured": true,
+        "id": "scout-x",
+        "checked": false,
+        "title": "Investigate the thing",
+        "repo": "firstmate",
+        "kind": "scout",
+        "priority": null,
+        "hold_reason": null,
+        "hold_kind": null,
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": "2026-07-11",
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": "data/scout-x/report.md",
+        "local_note": null,
+        "raw": "- [ ] scout-x - Investigate the thing data/scout-x/report.md (repo: firstmate) (kind: scout) (since 2026-07-11)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [],
+        "current_role": "worker",
+        "requires_child_metadata": true,
+        "hold_age_days": 82,
+        "hold_bucket": null,
+        "captain_actionable": false
+      },
+      {
+        "order": 3,
+        "state": "queued",
+        "structured": true,
+        "id": "pick-db",
+        "checked": false,
+        "title": "Choose the projection store",
+        "repo": "firstmate",
+        "kind": "captain",
+        "priority": null,
+        "hold_reason": "SQLite or DuckDB",
+        "hold_kind": "captain",
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": null,
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": null,
+        "local_note": null,
+        "raw": "- [ ] pick-db - Choose the projection store (repo: firstmate) (kind: captain) (hold: SQLite or DuckDB) (hold-kind: captain)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [],
+        "current_role": "queued",
+        "requires_child_metadata": false,
+        "hold_age_days": null,
+        "hold_bucket": "live",
+        "captain_actionable": true
+      },
+      {
+        "order": 4,
+        "state": "queued",
+        "structured": true,
+        "id": "later-call",
+        "checked": false,
+        "title": "Revisit naming",
+        "repo": "firstmate",
+        "kind": "captain",
+        "priority": null,
+        "hold_reason": "after launch",
+        "hold_kind": "captain",
+        "hold_until": "2099-01-01",
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": null,
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": null,
+        "local_note": null,
+        "raw": "- [ ] later-call - Revisit naming (repo: firstmate) (kind: captain) (hold: after launch) (hold-kind: captain) (hold-until: 2099-01-01)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [],
+        "current_role": "queued",
+        "requires_child_metadata": false,
+        "hold_age_days": null,
+        "hold_bucket": "dated",
+        "captain_actionable": false
+      },
+      {
+        "order": 5,
+        "state": "queued",
+        "structured": true,
+        "id": "live-gate",
+        "checked": false,
+        "title": "Real queued work",
+        "repo": "firstmate",
+        "kind": "ship",
+        "priority": null,
+        "hold_reason": null,
+        "hold_kind": null,
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": "ship-task",
+        "blocked_by_ids": [
+          "ship-task"
+        ],
+        "blocked_reason": null,
+        "since": null,
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": null,
+        "local_note": null,
+        "raw": "- [ ] live-gate - Real queued work blocked-by: ship-task (repo: firstmate) (kind: ship)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [
+          "ship-task"
+        ],
+        "current_role": "queued",
+        "requires_child_metadata": false,
+        "hold_age_days": null,
+        "hold_bucket": null,
+        "captain_actionable": false
+      },
+      {
+        "order": 6,
+        "state": "queued",
+        "structured": true,
+        "id": "dead-gate",
+        "checked": false,
+        "title": "Old conditional work",
+        "repo": "firstmate",
+        "kind": "scout",
+        "priority": null,
+        "hold_reason": null,
+        "hold_kind": null,
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": null,
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": null,
+        "local_note": null,
+        "raw": "- [ ] dead-gate - Old conditional work (repo: firstmate) (kind: scout)",
+        "body_lines": [
+          "NOT REQUIRED - superseded 2026-07-11; kept as reference only."
+        ],
+        "body_excerpt": "NOT REQUIRED - superseded 2026-07-11; kept as reference only.",
+        "unresolved_blocker_ids": [],
+        "current_role": "queued",
+        "requires_child_metadata": false,
+        "hold_age_days": null,
+        "hold_bucket": null,
+        "captain_actionable": false
+      },
+      {
+        "order": 7,
+        "state": "done",
+        "structured": true,
+        "id": "done-a",
+        "checked": true,
+        "title": "Landed thing",
+        "repo": "firstmate",
+        "kind": "ship",
+        "priority": null,
+        "hold_reason": null,
+        "hold_kind": null,
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": null,
+        "merged": "2026-07-10",
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": "merged",
+          "date": "2026-07-10"
+        },
+        "links": [
+          "https://github.com/kunchenguid/firstmate/pull/7"
+        ],
+        "pr_url": "https://github.com/kunchenguid/firstmate/pull/7",
+        "report_path": null,
+        "local_note": null,
+        "raw": "- [x] done-a - Landed thing https://github.com/kunchenguid/firstmate/pull/7 (repo: firstmate) (kind: ship) (merged 2026-07-10)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [],
+        "current_role": "done",
+        "requires_child_metadata": false,
+        "hold_age_days": null,
+        "hold_bucket": null,
+        "captain_actionable": false
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "external-wait",
+      "kind": "ship",
+      "harness": "claude",
+      "mode": "no-mistakes",
+      "yolo": "",
+      "project": "firstmate",
+      "spawn_gen": null,
+      "backend": "tmux",
+      "remote": null,
+      "paths": {
+        "meta": {
+          "path": "/fixture/main/state/external-wait.meta",
+          "present": true
+        },
+        "status_log": {
+          "path": "/fixture/main/state/external-wait.status",
+          "present": true,
+          "kind": "event_history",
+          "last_event": {
+            "state": "paused",
+            "note": "declared external-wait for upstream release",
+            "raw": "paused: declared external-wait for upstream release"
+          }
+        },
+        "worktree": {
+          "path": "/fixture/main/projects/ship-wt",
+          "present": true
+        },
+        "home": {
+          "path": null,
+          "present": false
+        },
+        "report": {
+          "path": "/fixture/main/data/external-wait/report.md",
+          "present": false
+        }
+      },
+      "secondmate_projects": [],
+      "current_state": {
+        "state": "paused",
+        "source": "status-log",
+        "detail": "declared external-wait for upstream release",
+        "raw": "state: paused · source: status-log · declared external-wait for upstream release",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "endpoint": {
+        "target": "firstmate:fm-external-wait",
+        "exists": true,
+        "agent_alive": "not_checked",
+        "status": "unknown",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "pr": {
+        "url": null,
+        "source": "absent",
+        "head": null
+      },
+      "hints": {
+        "pending_decision": false,
+        "blocked_event": false,
+        "open_decisions": [],
+        "scout_report_present": false,
+        "last_event_text": "paused: declared external-wait for upstream release"
+      },
+      "actions": {
+        "watch": "bin/fm-peek.sh fm-external-wait",
+        "steer": "bin/fm-send.sh fm-external-wait '<instruction>'",
+        "return_channel_note": null
+      },
+      "backlog": null
+    },
+    {
+      "id": "mate",
+      "kind": "secondmate",
+      "harness": "codex",
+      "mode": "secondmate",
+      "yolo": "",
+      "project": "/fixture/main-secondmate-home",
+      "spawn_gen": null,
+      "backend": "tmux",
+      "remote": null,
+      "paths": {
+        "meta": {
+          "path": "/fixture/main/state/mate.meta",
+          "present": true
+        },
+        "status_log": {
+          "path": "/fixture/main/state/mate.status",
+          "present": true,
+          "kind": "event_history",
+          "last_event": {
+            "state": "done",
+            "note": "an unrelated subtask finished",
+            "raw": "done: an unrelated subtask finished"
+          }
+        },
+        "worktree": {
+          "path": "/fixture/main-secondmate-home",
+          "present": true
+        },
+        "home": {
+          "path": "/fixture/main-secondmate-home",
+          "present": true
+        },
+        "report": {
+          "path": "/fixture/main/data/mate/report.md",
+          "present": false
+        }
+      },
+      "secondmate_projects": [
+        "firstmate"
+      ],
+      "current_state": {
+        "state": "parked",
+        "source": "status-log",
+        "detail": "pick subscribe order",
+        "raw": "state: parked · source: status-log · pick subscribe order",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "endpoint": {
+        "target": "firstmate:fm-mate",
+        "exists": true,
+        "agent_alive": "dead",
+        "status": "dead",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "pr": {
+        "url": null,
+        "source": "absent",
+        "head": null
+      },
+      "hints": {
+        "pending_decision": true,
+        "blocked_event": false,
+        "open_decisions": [
+          {
+            "key": "race",
+            "verb": "needs-decision",
+            "summary": "pick subscribe order"
+          }
+        ],
+        "scout_report_present": false,
+        "last_event_text": "done: an unrelated subtask finished"
+      },
+      "actions": {
+        "send": "bin/fm-send.sh fm-mate '<request>'",
+        "watch": "read status/doc return channel; do not routinely fm-peek a secondmate for answers",
+        "return_channel_note": "Secondmate answers come back through status/doc paths after a marked fm-send request."
+      },
+      "backlog": null
+    },
+    {
+      "id": "scout-x",
+      "kind": "scout",
+      "harness": "claude",
+      "mode": "scout",
+      "yolo": "",
+      "project": "firstmate",
+      "spawn_gen": null,
+      "backend": "tmux",
+      "remote": null,
+      "paths": {
+        "meta": {
+          "path": "/fixture/main/state/scout-x.meta",
+          "present": true
+        },
+        "status_log": {
+          "path": "/fixture/main/state/scout-x.status",
+          "present": true,
+          "kind": "event_history",
+          "last_event": {
+            "state": "done",
+            "note": "report ready",
+            "raw": "done: report ready"
+          }
+        },
+        "worktree": {
+          "path": "/fixture/main/projects/ship-wt",
+          "present": true
+        },
+        "home": {
+          "path": null,
+          "present": false
+        },
+        "report": {
+          "path": "/fixture/main/data/scout-x/report.md",
+          "present": true
+        }
+      },
+      "secondmate_projects": [],
+      "current_state": {
+        "state": "done",
+        "source": "status-log",
+        "detail": "report ready",
+        "raw": "state: done · source: status-log · report ready",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "endpoint": {
+        "target": "firstmate:fm-scout-x",
+        "exists": true,
+        "agent_alive": "not_checked",
+        "status": "unknown",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "pr": {
+        "url": null,
+        "source": "absent",
+        "head": null
+      },
+      "hints": {
+        "pending_decision": false,
+        "blocked_event": false,
+        "open_decisions": [],
+        "scout_report_present": true,
+        "last_event_text": "done: report ready"
+      },
+      "actions": {
+        "watch": "bin/fm-peek.sh fm-scout-x",
+        "steer": "bin/fm-send.sh fm-scout-x '<instruction>'",
+        "return_channel_note": null
+      },
+      "backlog": {
+        "order": 2,
+        "state": "in_flight",
+        "structured": true,
+        "id": "scout-x",
+        "checked": false,
+        "title": "Investigate the thing",
+        "repo": "firstmate",
+        "kind": "scout",
+        "priority": null,
+        "hold_reason": null,
+        "hold_kind": null,
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": "2026-07-11",
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": "data/scout-x/report.md",
+        "local_note": null,
+        "raw": "- [ ] scout-x - Investigate the thing data/scout-x/report.md (repo: firstmate) (kind: scout) (since 2026-07-11)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [],
+        "current_role": "worker",
+        "requires_child_metadata": true,
+        "hold_age_days": 82,
+        "hold_bucket": null,
+        "captain_actionable": false
+      }
+    },
+    {
+      "id": "ship-task",
+      "kind": "ship",
+      "harness": "claude",
+      "mode": "no-mistakes",
+      "yolo": "",
+      "project": "firstmate",
+      "spawn_gen": null,
+      "backend": "tmux",
+      "remote": null,
+      "paths": {
+        "meta": {
+          "path": "/fixture/main/state/ship-task.meta",
+          "present": true
+        },
+        "status_log": {
+          "path": "/fixture/main/state/ship-task.status",
+          "present": true,
+          "kind": "event_history",
+          "last_event": {
+            "state": "working",
+            "note": "building the thing",
+            "raw": "working: building the thing"
+          }
+        },
+        "worktree": {
+          "path": "/fixture/main/projects/ship-wt",
+          "present": true
+        },
+        "home": {
+          "path": null,
+          "present": false
+        },
+        "report": {
+          "path": "/fixture/main/data/ship-task/report.md",
+          "present": false
+        }
+      },
+      "secondmate_projects": [],
+      "current_state": {
+        "state": "working",
+        "source": "pane",
+        "detail": "harness busy (claude-hook)",
+        "raw": "state: working · source: pane · harness busy (claude-hook)",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "endpoint": {
+        "target": "firstmate:fm-ship-task",
+        "exists": true,
+        "agent_alive": "not_checked",
+        "status": "unknown",
+        "observed_at": "2026-10-01T22:50:56Z",
+        "freshness": "fresh"
+      },
+      "pr": {
+        "url": "https://github.com/kunchenguid/firstmate/pull/9",
+        "source": "meta",
+        "head": null
+      },
+      "hints": {
+        "pending_decision": false,
+        "blocked_event": false,
+        "open_decisions": [],
+        "scout_report_present": false,
+        "last_event_text": "working: building the thing"
+      },
+      "actions": {
+        "watch": "bin/fm-peek.sh fm-ship-task",
+        "steer": "bin/fm-send.sh fm-ship-task '<instruction>'",
+        "return_channel_note": null
+      },
+      "backlog": {
+        "order": 1,
+        "state": "in_flight",
+        "structured": true,
+        "id": "ship-task",
+        "checked": false,
+        "title": "Ship the thing",
+        "repo": "firstmate",
+        "kind": "ship",
+        "priority": null,
+        "hold_reason": null,
+        "hold_kind": null,
+        "hold_until": null,
+        "hold_set": null,
+        "blocked_by": null,
+        "blocked_by_ids": [],
+        "blocked_reason": null,
+        "since": "2026-07-11",
+        "merged": null,
+        "reported": null,
+        "done": null,
+        "completion": {
+          "verb": null,
+          "date": null
+        },
+        "links": [],
+        "pr_url": null,
+        "report_path": null,
+        "local_note": null,
+        "raw": "- [ ] ship-task - Ship the thing (repo: firstmate) (kind: ship) (since 2026-07-11)",
+        "body_lines": [],
+        "body_excerpt": null,
+        "unresolved_blocker_ids": [],
+        "current_role": "worker",
+        "requires_child_metadata": true,
+        "hold_age_days": 82,
+        "hold_bucket": null,
+        "captain_actionable": false
+      }
+    }
+  ],
+  "main_inventory": {
+    "valid": true,
+    "reason": null,
+    "orphan_in_flight": [],
+    "unstructured_current_count": 0
+  },
+  "contributions": {
+    "known": 2,
+    "checked": 0,
+    "counts": {
+      "captain": 0,
+      "fleet": 2,
+      "maintainer": 0,
+      "nobody": 0
+    },
+    "unmeasured": 0,
+    "complete": false,
+    "proven_clear": false,
+    "stale_verdicts": 0,
+    "missing_verdicts": 0,
+    "unreadable_records": 0,
+    "valid_until": 900,
+    "captain": [],
+    "captain_omitted": 0
+  },
+  "scout_reports": [
+    {
+      "id": "scout-x",
+      "path": "/fixture/main/data/scout-x/report.md",
+      "kind": "scout"
+    }
+  ],
+  "secondmate_current": {
+    "registry": {
+      "present": true,
+      "available": true,
+      "reason": null,
+      "provenance": "registered-table",
+      "path": "/fixture/main/data/secondmates.md",
+      "freshness": {
+        "status": "fresh",
+        "observed_at": "2026-10-01T22:50:56Z"
+      },
+      "records": [
+        {
+          "id": "mate",
+          "home": "/fixture/main-secondmate-home",
+          "host": null,
+          "root": null,
+          "remote": false,
+          "registered": true,
+          "registry_error": null
+        }
+      ],
+      "input_truncated": false,
+      "records_truncated": false,
+      "complete": true,
+      "reasons": [],
+      "lines_in_window": 1,
+      "records_in_window": 1
+    },
+    "records": [
+      {
+        "id": "mate",
+        "home": "/fixture/main-secondmate-home",
+        "host": null,
+        "remote": false,
+        "registered": true,
+        "spawn_gen": null,
+        "current": {
+          "state": "captain_decision",
+          "reason": null
+        },
+        "invalidity": {
+          "kind": null,
+          "ids": []
+        },
+        "reconcile_inventory": {
+          "kind": null,
+          "ids": []
+        },
+        "provenance": {
+          "selected": "structured-home",
+          "structured_home": "/fixture/main-secondmate-home",
+          "summary_source": "local-ledger",
+          "summary_valid": true,
+          "trust": "complete",
+          "parent_event_role": "historical-only"
+        },
+        "freshness": {
+          "status": "fresh",
+          "observed_at": "2026-07-11T18:00:00Z",
+          "age_seconds": 7102256
+        },
+        "active_children": [],
+        "decisions_open": [
+          {
+            "id": "mate-decision-race",
+            "key": "mate-decision-race",
+            "verb": "captain-hold",
+            "summary": "Choose subscription order",
+            "reason": "captain choice pending",
+            "hold_until": null,
+            "hold_bucket": "live",
+            "hold_age_days": null,
+            "source": "backlog"
+          },
+          {
+            "id": "mate",
+            "key": "race",
+            "verb": "needs-decision",
+            "summary": "pick subscribe order",
+            "reason": null,
+            "source": "status"
+          }
+        ],
+        "holds": [
+          {
+            "id": "mate-decision-race",
+            "title": "Choose subscription order",
+            "blocked_by": null,
+            "blocked_by_ids": [],
+            "unresolved_blocker_ids": [],
+            "reason": "captain choice pending",
+            "source": "backlog"
+          },
+          {
+            "id": "mate",
+            "title": "mate",
+            "blocked_by": null,
+            "blocked_by_ids": [],
+            "unresolved_blocker_ids": [],
+            "reason": "pick subscribe order",
+            "source": "child-state"
+          }
+        ],
+        "queued": [
+          {
+            "id": "mate-decision-race",
+            "title": "Choose subscription order",
+            "blocked_by": null,
+            "blocked_by_ids": [],
+            "unresolved_blocker_ids": [],
+            "blocked_reason": null,
+            "hold_reason": "captain choice pending",
+            "hold_kind": "captain",
+            "hold_until": null,
+            "hold_bucket": "live",
+            "hold_age_days": null,
+            "captain_actionable": true,
+            "repo": "firstmate",
+            "kind": "captain",
+            "since": null
+          }
+        ],
+        "contributions": {
+          "known": 1,
+          "checked": 0,
+          "counts": {
+            "captain": 0,
+            "fleet": 1,
+            "maintainer": 0,
+            "nobody": 0
+          },
+          "unmeasured": 0,
+          "complete": false,
+          "proven_clear": false,
+          "stale_verdicts": 0,
+          "missing_verdicts": 0,
+          "unreadable_records": 0,
+          "valid_until": 900,
+          "captain": [],
+          "captain_omitted": 0
+        },
+        "landed": [
+          {
+            "id": "mate-landed",
+            "title": "Secondmate-managed fix",
+            "kind": "ship",
+            "hold_kind": null,
+            "pr_url": "https://github.com/kunchenguid/firstmate/pull/50",
+            "report_path": null,
+            "local_note": null,
+            "completion": {
+              "verb": "merged",
+              "date": "2026-07-11"
+            }
+          }
+        ],
+        "endpoints": [
+          {
+            "id": "mate",
+            "state": "parked",
+            "source": "status-log",
+            "endpoint": {
+              "target": "firstmate:fm-mate",
+              "exists": true,
+              "agent_alive": "not_checked",
+              "status": "unknown",
+              "observed_at": "2026-07-11T18:00:00Z",
+              "freshness": "fresh"
+            }
+          }
+        ],
+        "counts": {
+          "active_children": 0,
+          "decisions_open": 2,
+          "holds": 2,
+          "queued": 1,
+          "landed": 1,
+          "endpoints": 1
+        },
+        "omitted": [],
+        "parent_event": {
+          "raw": "done: an unrelated subtask finished",
+          "note": "an unrelated subtask finished",
+          "age_seconds": 1,
+          "open_activities": [],
+          "open_decisions": [
+            {
+              "key": "race",
+              "verb": "needs-decision",
+              "summary": "pick subscribe order"
+            }
+          ],
+          "activity_scan": {
+            "records": [],
+            "available": true,
+            "input_truncated": false,
+            "retained_truncated": false,
+            "reasons": [],
+            "lines_in_window": 2,
+            "records_in_window": 0
+          },
+          "reconciliation": {
+            "provenance": "parent-status-keyed-fold",
+            "trust": "untrusted-supplement",
+            "activities": [],
+            "decisions": [
+              {
+                "key": "race",
+                "verb": "needs-decision",
+                "summary": "pick subscribe order",
+                "verdict": "corroborates",
+                "compared_to": "decisions_open",
+                "matched": {
+                  "surface": "decisions_open",
+                  "id": "mate",
+                  "key": "race",
+                  "verb": "needs-decision"
+                }
+              }
+            ],
+            "contradiction": false,
+            "inconclusive": false
+          }
+        },
+        "terminal_evidence": {
+          "provenance": "parent-direct-report-terminal",
+          "trust": "untrusted-supplement",
+          "captured": false,
+          "observed_at": "2026-10-01T22:50:56Z",
+          "freshness": "not-collected",
+          "reason": "no useful contradiction check",
+          "lines": 0,
+          "bytes": 0,
+          "event_note_seen": false,
+          "contradiction": false
+        },
+        "contradiction": false
+      }
+    ],
+    "total_registered": 1,
+    "total": 1,
+    "shown": 1,
+    "truncated": 0
+  },
+  "secondmate_landed": {
+    "records": [
+      {
+        "id": "mate-landed",
+        "title": "Secondmate-managed fix",
+        "kind": "ship",
+        "hold_kind": null,
+        "pr_url": "https://github.com/kunchenguid/firstmate/pull/50",
+        "report_path": null,
+        "local_note": null,
+        "completion": {
+          "verb": "merged",
+          "date": "2026-07-11"
+        },
+        "home": "/fixture/main-secondmate-home",
+        "home_id": "mate"
+      }
+    ],
+    "truncated": [],
+    "unreadable": [],
+    "partial": []
+  },
+  "secondmate_guidance": {
+    "note": "For kind=secondmate, bearings selects validated structured state from that registered home; parent events and bounded terminal evidence are fallback-only supplements and never current-state authority."
+  }
+}
