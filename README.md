@@ -28,8 +28,9 @@ The repository is a Cargo workspace:
 
 | Crate | Purpose |
 | :--- | :--- |
-| `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection, and the `EngineAdapter` seam (`quarkd::engine`) |
+| `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection |
 | `crates/quark-systems` | Neutral API and event types shared by the daemon and its clients |
+| `crates/quark-engine` | The engine adapter seam (`EngineAdapter`) between `quarkd` and firstmate workspaces |
 
 ```sh
 cargo test --workspace

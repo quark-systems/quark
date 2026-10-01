@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use utoipa::IntoParams;
 
-use super::{db, ApiError, AppState};
+use super::{ApiError, AppState, db};
 
 const REPLAY_PAGE: u32 = 500;
 

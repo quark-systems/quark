@@ -2,18 +2,17 @@
 //!
 //! Serves the `/v1` REST API and typed event stream on localhost, projects
 //! engine state into SQLite, and reaches engine workspaces only through a
-//! [`engine::EngineAdapter`].
+//! [`quark_engine::EngineAdapter`].
 
 pub mod api;
 pub mod config;
-pub mod engine;
 pub mod projector;
 pub mod store;
 
 use std::sync::Arc;
 
-use crate::engine::EngineAdapter;
 use anyhow::Context;
+use quark_engine::EngineAdapter;
 use tokio::net::TcpListener;
 
 use crate::api::AppState;

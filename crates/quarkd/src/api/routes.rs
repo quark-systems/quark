@@ -1,13 +1,13 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use quark_systems::{
     CreateProject, Decision, DecisionState, ErrorBody, Health, Project, Task, UpdateProject,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
 
-use super::{db, ApiError, AppState};
+use super::{ApiError, AppState, db};
 
 /// Daemon health and the latest event `seq`.
 #[utoipa::path(
