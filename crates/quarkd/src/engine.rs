@@ -4,17 +4,15 @@
 //! state goes through an [`EngineAdapter`], and the daemon projects what it
 //! returns into SQLite and the event stream.
 //!
-//! Phase 0 defines the read side only:
+//! Every write goes through it too, as a neutral operation (steer a task,
+//! cancel it, relaunch it) that the adapter maps onto its own engine calls.
 //!
 //! - [`StubEngine`] is an in-memory adapter for tests and for running the
 //!   daemon without an engine checkout.
-//! - [`firstmate::FirstmateEngine`] wraps the typed readers in the
-//!   `quark-engine` crate (fleet snapshot, status-log tails, hold records, PR
-//!   poll records) and maps engine states onto the neutral [`TaskState`], so
-//!   nothing engine-specific reaches the API.
-//!
-//! The write side (allowlisted `fm-*.sh` calls with argument validation and
-//! adapter-call records) is a later addition to this trait.
+//! - [`firstmate::FirstmateEngine`] wraps the `quark-engine` crate: typed
+//!   readers (fleet snapshot, status-log tails, hold records, PR poll records)
+//!   mapped onto the neutral [`TaskState`], and allowlisted `fm-*.sh` writes
+//!   with argument validation, so nothing engine-specific reaches the API.
 
 pub mod firstmate;
 
@@ -77,8 +75,26 @@ pub struct Hold {
     pub answered_by: Option<String>,
 }
 
+/// Neutral lifecycle actions on a task's agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskControl {
+    /// Stop the agent. Its worktree and uncommitted changes are kept.
+    Cancel,
+    /// Replace the agent in the same worktree, optionally on another harness,
+    /// model or effort. `note` tells the new agent where things stand.
+    Relaunch {
+        harness: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        note: String,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
+    /// The request was refused before anything ran.
+    #[error("invalid request: {0}")]
+    Invalid(String),
     #[error("workspace not found: {0}")]
     WorkspaceNotFound(PathBuf),
     #[error("task not found: {0}")]
@@ -111,6 +127,36 @@ pub trait EngineAdapter: Send + Sync {
 
     /// Open and recently answered holds in the workspace.
     async fn holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError>;
+
+    /// Deliver a steering message to a task's worker. `Ok` means the message
+    /// is durably recorded for the worker, not that it has been read.
+    async fn send_message(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        text: &str,
+    ) -> Result<(), EngineError>;
+
+    /// Apply a lifecycle action. `Ok` means the engine verified the result.
+    async fn control(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        action: &TaskControl,
+    ) -> Result<(), EngineError>;
+}
+
+/// A write the [`StubEngine`] received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StubWrite {
+    Message {
+        task_id: String,
+        text: String,
+    },
+    Control {
+        task_id: String,
+        action: TaskControl,
+    },
 }
 
 /// In-memory adapter. Every workspace sees the same configurable state.
@@ -118,6 +164,8 @@ pub trait EngineAdapter: Send + Sync {
 pub struct StubEngine {
     snapshot: Mutex<FleetSnapshot>,
     holds: Mutex<Vec<Hold>>,
+    writes: Mutex<Vec<StubWrite>>,
+    write_error: Mutex<Option<String>>,
 }
 
 impl StubEngine {
@@ -131,6 +179,24 @@ impl StubEngine {
 
     pub fn set_holds(&self, holds: Vec<Hold>) {
         *self.holds.lock().unwrap() = holds;
+    }
+
+    /// Writes received so far, oldest first.
+    pub fn writes(&self) -> Vec<StubWrite> {
+        self.writes.lock().unwrap().clone()
+    }
+
+    /// Make every later write fail as an engine command error.
+    pub fn fail_writes(&self, message: Option<&str>) {
+        *self.write_error.lock().unwrap() = message.map(str::to_string);
+    }
+
+    fn accept(&self, write: StubWrite) -> Result<(), EngineError> {
+        if let Some(m) = self.write_error.lock().unwrap().clone() {
+            return Err(EngineError::Command(m));
+        }
+        self.writes.lock().unwrap().push(write);
+        Ok(())
     }
 }
 
@@ -158,5 +224,29 @@ impl EngineAdapter for StubEngine {
 
     async fn holds(&self, _ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
         Ok(self.holds.lock().unwrap().clone())
+    }
+
+    async fn send_message(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        text: &str,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::Message {
+            task_id: task_id.into(),
+            text: text.into(),
+        })
+    }
+
+    async fn control(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        action: &TaskControl,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::Control {
+            task_id: task_id.into(),
+            action: action.clone(),
+        })
     }
 }

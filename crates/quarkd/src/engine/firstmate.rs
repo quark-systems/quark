@@ -1,4 +1,5 @@
-//! [`EngineAdapter`] over a firstmate home, built on the `quark-engine` readers.
+//! [`EngineAdapter`] over a firstmate home, built on the `quark-engine`
+//! readers and its allowlisted writer.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,10 +11,12 @@ use quark_engine::holds::decisions;
 use quark_engine::runner::CallLog;
 use quark_engine::snapshot::{BacklogState, FleetSnapshot as FmSnapshot, Task};
 use quark_engine::status::StatusTail as FmTail;
-use quark_engine::{EngineReader, Error, Workspace};
+use quark_engine::write::WriteOp;
+use quark_engine::{EngineReader, EngineWriter, Error, Workspace};
 
 use super::{
-    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, StatusTail, WorkspaceRef,
+    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, StatusTail, TaskControl,
+    WorkspaceRef,
 };
 
 /// Reads firstmate homes with scripts from one pinned engine checkout.
@@ -32,13 +35,19 @@ impl FirstmateEngine {
     }
 
     fn reader(&self, ws: &WorkspaceRef) -> Result<EngineReader, EngineError> {
+        Ok(EngineReader::new(self.workspace(ws)?, self.log.clone()))
+    }
+
+    fn workspace(&self, ws: &WorkspaceRef) -> Result<Workspace, EngineError> {
         if !ws.root.is_dir() {
             return Err(EngineError::WorkspaceNotFound(ws.root.clone()));
         }
-        Ok(EngineReader::new(
-            Workspace::new(&ws.root, &self.engine_root),
-            self.log.clone(),
-        ))
+        Ok(Workspace::new(&ws.root, &self.engine_root))
+    }
+
+    async fn write(&self, ws: &WorkspaceRef, op: WriteOp) -> Result<(), EngineError> {
+        let writer = EngineWriter::new(self.workspace(ws)?, self.log.clone());
+        blocking(move || writer.write(&op).map(drop)).await
     }
 
     async fn read_snapshot(&self, ws: &WorkspaceRef) -> Result<FmSnapshot, EngineError> {
@@ -81,6 +90,45 @@ impl EngineAdapter for FirstmateEngine {
 
     async fn holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
         Ok(neutral_holds(&self.read_snapshot(ws).await?))
+    }
+
+    async fn send_message(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        text: &str,
+    ) -> Result<(), EngineError> {
+        let op = WriteOp::Send {
+            task_id: task_id.into(),
+            text: text.into(),
+        };
+        self.write(ws, op).await
+    }
+
+    /// Cancel is `exit`, never teardown: the worktree and its changes stay.
+    async fn control(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        action: &TaskControl,
+    ) -> Result<(), EngineError> {
+        let task_id = task_id.to_string();
+        let op = match action.clone() {
+            TaskControl::Cancel => WriteOp::Exit { task_id },
+            TaskControl::Relaunch {
+                harness,
+                model,
+                effort,
+                note,
+            } => WriteOp::Relaunch {
+                task_id,
+                harness,
+                model,
+                effort,
+                note,
+            },
+        };
+        self.write(ws, op).await
     }
 }
 
@@ -204,7 +252,7 @@ where
 {
     tokio::task::spawn_blocking(f)
         .await
-        .map_err(|e| EngineError::Command(format!("engine read task failed: {e}")))?
+        .map_err(|e| EngineError::Command(format!("engine task failed: {e}")))?
         .map_err(convert)
 }
 
@@ -212,6 +260,7 @@ fn convert(e: Error) -> EngineError {
     match e {
         Error::Io { source, .. } => EngineError::Io(source),
         Error::InvalidTaskId(id) => EngineError::TaskNotFound(id),
+        Error::InvalidArgument { reason, .. } => EngineError::Invalid(reason),
         e @ (Error::Json { .. } | Error::Schema { .. } | Error::Malformed { .. }) => {
             EngineError::Parse(e.to_string())
         }

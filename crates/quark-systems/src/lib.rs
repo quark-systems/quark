@@ -125,6 +125,25 @@ pub struct Task {
     pub updated_at: String,
 }
 
+/// A steering message for a task's worker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SendTaskMessage {
+    /// Plain text for the worker to read; may span several lines.
+    pub text: String,
+}
+
+/// Replace a task's worker in the same worktree. Absent fields keep the
+/// worker's current harness, model and effort.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct RelaunchTask {
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// Where things stand, for the new worker, which keeps the worktree but
+    /// none of the conversation. A default note is used when absent.
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionState {

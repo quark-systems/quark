@@ -61,8 +61,7 @@ async fn main() -> anyhow::Result<()> {
                 listen: args.listen,
                 refresh_interval: Duration::from_secs(args.refresh_secs.max(1)),
             };
-            let engine = config::build_engine(args.engine, &config)?;
-            quarkd::serve(config, engine).await
+            quarkd::serve(config, args.engine).await
         }
     }
 }

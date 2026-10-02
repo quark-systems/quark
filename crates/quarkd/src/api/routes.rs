@@ -1,19 +1,24 @@
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
     CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
-    ErrorBody, Health, Project, Task, TranscriptItem, UpdateProject,
+    ErrorBody, Health, Project, RelaunchTask, SendTaskMessage, Task, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
 use crate::chat::{self, ChatError, Delivery};
-use crate::engine::WorkspaceRef;
 use crate::store::TranscriptSource;
 use serde::Deserialize;
 use utoipa::IntoParams;
 
 use super::{db, ApiError, AppState};
+use crate::engine::{TaskControl, WorkspaceRef};
+
+/// Note given to a relaunched worker when the client sends none.
+const DEFAULT_RELAUNCH_NOTE: &str =
+    "Relaunched from Quark. Pick up from the current state of the worktree and the task brief.";
 
 /// Daemon health and the latest event `seq`.
 #[utoipa::path(
@@ -140,6 +145,152 @@ pub async fn get_task(
     Path(id): Path<String>,
 ) -> Result<Json<Task>, ApiError> {
     Ok(Json(db(&state, move |s| s.get_task(&id)).await?))
+}
+
+/// The engine task id and workspace for an API task id.
+async fn engine_target(state: &AppState, id: String) -> Result<(WorkspaceRef, String), ApiError> {
+    let t = db(state, move |s| s.task_target(&id)).await?;
+    let Some(root) = t.workspace_path else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "workspace_missing",
+            "the task's Project has no workspace attached",
+        ));
+    };
+    Ok((
+        WorkspaceRef {
+            project_id: t.project_id,
+            root: root.into(),
+        },
+        t.engine_id,
+    ))
+}
+
+/// Steer a task's worker.
+///
+/// The message is durably recorded for the worker before this returns; the
+/// worker reads it on its next turn.
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}/messages",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    request_body = SendTaskMessage,
+    responses(
+        (status = 204, description = "Message recorded for the worker"),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn send_task_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<SendTaskMessage>,
+) -> Result<StatusCode, ApiError> {
+    if input.text.trim().is_empty() {
+        return Err(ApiError::invalid("text is empty"));
+    }
+    let (ws, task) = engine_target(&state, id).await?;
+    state.engine.send_message(&ws, &task, &input.text).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Dispatches `POST /v1/tasks/{id}:<action>`.
+pub async fn task_action(
+    state: State<AppState>,
+    Path(target): Path<String>,
+    body: Bytes,
+) -> Result<StatusCode, ApiError> {
+    let Some((id, action)) = target.rsplit_once(':') else {
+        return Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "use POST /v1/tasks/{id}:cancel or :relaunch",
+        ));
+    };
+    let id = Path(id.to_string());
+    match action {
+        "cancel" => cancel_task(state, id).await,
+        "relaunch" => {
+            // The body is optional, so an empty one is accepted whatever its
+            // content type says.
+            let input = if body.iter().all(u8::is_ascii_whitespace) {
+                None
+            } else {
+                Some(Json(serde_json::from_slice(&body).map_err(|e| {
+                    ApiError::invalid(format!("invalid relaunch body: {e}"))
+                })?))
+            };
+            relaunch_task(state, id, input).await
+        }
+        _ => Err(ApiError::not_found()),
+    }
+}
+
+/// Cancel a task's worker.
+///
+/// Stops the worker and keeps its worktree and every uncommitted change;
+/// relaunch picks the task up again.
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}:cancel",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 204, description = "The worker is stopped"),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn cancel_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let (ws, task) = engine_target(&state, id).await?;
+    state
+        .engine
+        .control(&ws, &task, &TaskControl::Cancel)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Relaunch a task's worker in the same worktree.
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}:relaunch",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    request_body = RelaunchTask,
+    responses(
+        (status = 204, description = "A new worker is running"),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn relaunch_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Option<Json<RelaunchTask>>,
+) -> Result<StatusCode, ApiError> {
+    let input = input.map(|Json(i)| i).unwrap_or_default();
+    let note = input
+        .note
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_RELAUNCH_NOTE.into());
+    let action = TaskControl::Relaunch {
+        harness: input.harness,
+        model: input.model,
+        effort: input.effort,
+        note,
+    };
+    let (ws, task) = engine_target(&state, id).await?;
+    state.engine.control(&ws, &task, &action).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
