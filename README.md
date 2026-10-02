@@ -66,6 +66,8 @@ Each pull request carries its verification gate results (ADR-15) as `evidence`, 
 Review comments (`POST /v1/pull-requests/{id}/comments`) go to the owning worker as steering messages, and `:merge` runs the engine's guarded `fm-pr-merge.sh`.
 A Project's `standing_approval` merges its green pull requests without asking; turning it on also sets the engine's yolo posture for the Project's repos through `fm-project-yolo.sh` from the firstmate fork.
 
+Quark builds itself: [`selfhost/`](selfhost/README.md) sets up the Quark Project for this repo and the firstmate fork, with its verification gates and the Phase 3 work items.
+
 ### Desktop app
 
 `app/` is the desktop app: Tauri 2 with React, TypeScript and xterm.js, talking to `quarkd` over the `/v1` API and event stream.

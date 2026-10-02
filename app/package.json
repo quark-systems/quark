@@ -9,6 +9,7 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "e2e": "playwright test",
+    "e2e:serve": "node scripts/e2e-serve.mjs",
     "mock": "node mock/daemon.mjs",
     "tauri": "tauri"
   },
