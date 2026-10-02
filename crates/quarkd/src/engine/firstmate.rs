@@ -187,6 +187,13 @@ impl EngineAdapter for FirstmateEngine {
         res
     }
 
+    async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        let op = WriteOp::GatesConfig {
+            json: config.to_string(),
+        };
+        self.write(ws, op).await
+    }
+
     /// Cancel is `exit`, never teardown: the worktree and its changes stay.
     async fn control(
         &self,
