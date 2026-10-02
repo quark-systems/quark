@@ -57,3 +57,12 @@ describe("applyEvent", () => {
     expect(applyEvent(initialState, ev(1, "dispatch.recorded", {}))).toBe(initialState);
   });
 });
+
+describe("decisions", () => {
+  const open = { id: "d1", project_id: "p1", question: "Keep history?", state: "open", opened_at: "2026-10-02T10:00:00Z" };
+  it("replaces a decision when it is answered", () => {
+    let s = applyEvent(initialState, ev(1, "decision.opened", open));
+    s = applyEvent(s, ev(2, "decision.answered", { ...open, state: "answered", answer: "Latest only", answered_by: "matt", answered_at: "2026-10-02T10:05:00Z" }));
+    expect(s.decisions.d1).toMatchObject({ state: "answered", answer: "Latest only", answered_by: "matt" });
+  });
+});

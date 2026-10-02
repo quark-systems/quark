@@ -143,9 +143,15 @@ function seed() {
   T(site, "Pricing page on the new grid", "running", { diff: DIFFS[3], harness: "codex", updated_at: minutesAgo(8) });
   T(site, "Changelog feed", "failed", { state_note: "Build failed: missing RSS dependency", updated_at: minutesAgo(70) });
 
-  decisions.set("d-1", {
-    id: "d-1", project_id: quark.id, task_id: [...tasks.values()].find((t) => t.state === "needs_decision").id,
-    question: "Keep the full answer history per decision, or only the latest answer?", state: "open", answer: null, opened_at: minutesAgo(12),
+  const D = (id, p, question, extra = {}) => decisions.set(id, {
+    id, project_id: p.id, task_id: null, question, state: "open", answer: null, answered_by: null, answered_at: null, ...extra,
+  });
+  D("d-1", quark, "Keep the full answer history per decision, or only the latest answer?", {
+    task_id: [...tasks.values()].find((t) => t.state === "needs_decision").id, opened_at: minutesAgo(12),
+  });
+  D("d-2", site, "Launch the new design behind a flag, or replace the old site directly?", { opened_at: minutesAgo(6) });
+  D("d-3", quark, "Use SQLite WAL mode for the projection store?", {
+    opened_at: minutesAgo(200), state: "answered", answer: "Yes, WAL with a busy timeout.", answered_by: "matt", answered_at: minutesAgo(180),
   });
 
   for (const t of [a, b]) {
@@ -318,6 +324,19 @@ const server = http.createServer(async (req, res) => {
   if (p === "/v1/decisions" && req.method === "GET") {
     const st = url.searchParams.get("state");
     return send(res, 200, [...decisions.values()].filter((d) => !st || d.state === st));
+  }
+  if ((r = m(/^\/v1\/decisions\/([^/:]+):answer$/)) && req.method === "POST") {
+    const d = decisions.get(decodeURIComponent(r[1]));
+    if (!d) return notFound(res);
+    if (d.state !== "open") return send(res, 409, { error: { code: "already_answered", message: "the decision is already answered" } });
+    const b = await readJson(req);
+    const answer = typeof b?.answer === "string" ? b.answer.trim() : "";
+    if (!answer) return invalid(res, "answer is required");
+    Object.assign(d, { state: "answered", answer, answered_by: b.answered_by?.trim() || "mock-user", answered_at: now() });
+    emit("decision.answered", { ...d }, d.project_id);
+    const task = d.task_id && tasks.get(d.task_id);
+    if (task && task.state === "needs_decision") setState(task, "running", `Answered: ${answer.slice(0, 60)}`);
+    return send(res, 200, d);
   }
   if (p === "/v1/harnesses" && req.method === "GET") return send(res, 200, HARNESSES);
   if (p === "/v1/harnesses:validate" && req.method === "POST") {

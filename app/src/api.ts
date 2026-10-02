@@ -32,10 +32,14 @@ export interface Task {
   pull_request_url?: string | null; created_at: string; updated_at: string;
 }
 
+export type DecisionState = "open" | "answered";
 export interface Decision {
   id: string; project_id: string; task_id?: string | null; question: string;
-  state: "open" | "answered"; answer?: string | null; opened_at: string;
+  state: DecisionState; answer?: string | null; opened_at: string;
+  /** Who answered and when; null while open. */
+  answered_by?: string | null; answered_at?: string | null;
 }
+export interface AnswerDecision { answer: string; answered_by?: string | null }
 
 export interface Health { status: string; version: string; engine: string; last_seq: number }
 
@@ -147,7 +151,10 @@ export const api = {
   provision: (id: string) => req<void>("POST", `/v1/projects/${enc(id)}:provision`),
   tasks: (pid: string) => req<Task[]>("GET", `/v1/projects/${enc(pid)}/tasks`),
   task: (id: string) => req<Task>("GET", `/v1/tasks/${enc(id)}`),
-  decisions: () => req<Decision[]>("GET", "/v1/decisions?state=open"),
+  /** Open and answered decisions, so the inbox can show who answered. */
+  decisions: () => req<Decision[]>("GET", "/v1/decisions"),
+  /** Answers an open decision and returns it answered. `answered_by` defaults to the daemon's user. */
+  answerDecision: (id: string, body: AnswerDecision) => req<Decision>("POST", `/v1/decisions/${enc(id)}:answer`, body),
   harnesses: () => req<HarnessInfo[]>("GET", "/v1/harnesses"),
   validateAgent: (config: AgentConfig, role: AgentRole) =>
     req<HarnessValidation>("POST", "/v1/harnesses:validate", { config, role }),

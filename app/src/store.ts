@@ -180,6 +180,11 @@ export async function loadTranscript(taskId: string): Promise<"ok" | "unavailabl
   }
 }
 
+/** Records a decision the daemon returned, e.g. from answering it; the event may arrive before or after. */
+export function upsertDecision(d: Decision) {
+  set({ decisions: { ...state.decisions, [d.id]: d } });
+}
+
 export function addProject(p: Project) {
   set({ projects: { ...state.projects, [p.id]: p } });
 }

@@ -8,6 +8,7 @@ import { Projects } from "./screens/Projects";
 import { NewProject } from "./screens/NewProject";
 import { ProjectBoard } from "./screens/ProjectBoard";
 import { WorkerView } from "./screens/WorkerView";
+import { Inbox } from "./screens/Inbox";
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 export const MOD = isMac ? "⌘" : "Ctrl+";
@@ -16,6 +17,7 @@ export function App() {
   const route = useRoute();
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
+  const decisions = useStore((s) => s.decisions);
   const [palette, setPalette] = useState(false);
 
   useEffect(() => {
@@ -41,6 +43,8 @@ export function App() {
     return m;
   }, [tasks]);
 
+  const openDecisions = useMemo(() => Object.values(decisions).filter((d) => d.state === "open").length, [decisions]);
+
   const currentProject =
     route.name === "project" ? route.id : route.name === "task" ? tasks[route.id]?.project_id ?? null : null;
   const sorted = Object.values(projects).sort((a, b) => a.name.localeCompare(b.name));
@@ -52,6 +56,10 @@ export function App() {
         <div className="side-section">
           <a className={"side-item" + (route.name === "projects" ? " active" : "")} href={href({ name: "projects" })}>
             <span className="glyph">▦</span>Projects
+          </a>
+          <a className={"side-item" + (route.name === "inbox" ? " active" : "")} href={href({ name: "inbox" })} data-testid="nav-inbox">
+            <span className="glyph">?</span>Decisions
+            {openDecisions > 0 && <span className="pill accent" data-testid="inbox-count">{openDecisions}</span>}
           </a>
           <a className={"side-item" + (route.name === "new" ? " active" : "")} href={href({ name: "new" })} data-testid="nav-new-project">
             <span className="glyph">+</span>New project
@@ -70,7 +78,7 @@ export function App() {
           ))}
           {!sorted.length && <div className="faint side-empty">No projects yet</div>}
         </div>
-        <div className="side-foot"><span className="kbd">{MOD}K</span> jump to a project or task</div>
+        <div className="side-foot"><span className="kbd">{MOD}K</span> jump to a project, task or decision</div>
       </aside>
       <main className="main">
         <RouteView />
@@ -88,6 +96,7 @@ function RouteView() {
     case "new": return <NewProject onCreated={(id) => go({ name: "project", id })} />;
     case "project": return <ProjectBoard key={route.id} id={route.id} />;
     case "task": return <WorkerView key={route.id} id={route.id} />;
+    case "inbox": return <Inbox id={route.id} />;
   }
 }
 
