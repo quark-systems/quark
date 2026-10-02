@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use http_body_util::BodyExt;
 use quark_systems::{Event, EventType, TaskKind, TaskState};
 use quarkd::api::{self, ApiDoc, AppState};
-use quarkd::engine::{EngineTask, FleetSnapshot, Hold, StubEngine};
+use quarkd::engine::{EngineTask, FleetSnapshot, Hold, StubEngine, StubWrite, TaskControl};
 use quarkd::projector::Projector;
 use quarkd::store::Store;
 use serde_json::{json, Value};
@@ -192,6 +192,124 @@ async fn projects_tasks_decisions_and_event_replay() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(patched["goal"], "Ship the MVP");
     assert_eq!(patched["name"], "Quark");
+}
+
+/// A Project with `workspace_path` and one projected task; returns the task id.
+async fn project_with_task(h: &Harness, workspace_path: Option<&str>) -> String {
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Quark", "workspace_path": workspace_path})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![task(TaskState::Running)],
+    });
+    if workspace_path.is_none() {
+        return String::new();
+    }
+    h.projector.refresh_all().await.unwrap();
+    let (_, tasks) = call(&h.app, "GET", "/v1/projects", None).await;
+    let pid = tasks[0]["id"].as_str().unwrap();
+    let (_, tasks) = call(&h.app, "GET", &format!("/v1/projects/{pid}/tasks"), None).await;
+    tasks[0]["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn steer_cancel_and_relaunch_reach_the_engine_task() {
+    let h = harness().await;
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/tasks/{tid}/messages"),
+        Some(json!({"text": "also cover the empty-input case"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = call(&h.app, "POST", &format!("/v1/tasks/{tid}:cancel"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // No body: keep the harness, use the default note.
+    let (status, _) = call(&h.app, "POST", &format!("/v1/tasks/{tid}:relaunch"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/tasks/{tid}:relaunch"),
+        Some(json!({"harness": "codex", "note": "tests pass; open the PR"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let writes = h.engine.writes();
+    assert_eq!(writes.len(), 4);
+    // The engine sees its own task id, never the API id.
+    assert_eq!(
+        writes[0],
+        StubWrite::Message {
+            task_id: "fix-login".into(),
+            text: "also cover the empty-input case".into()
+        }
+    );
+    assert_eq!(
+        writes[1],
+        StubWrite::Control {
+            task_id: "fix-login".into(),
+            action: TaskControl::Cancel
+        }
+    );
+    let StubWrite::Control {
+        action: TaskControl::Relaunch { harness, note, .. },
+        ..
+    } = &writes[2]
+    else {
+        panic!("expected a relaunch, got {:?}", writes[2]);
+    };
+    assert_eq!(harness, &None);
+    assert!(!note.trim().is_empty());
+    let StubWrite::Control {
+        action: TaskControl::Relaunch { harness, note, .. },
+        ..
+    } = &writes[3]
+    else {
+        panic!("expected a relaunch, got {:?}", writes[3]);
+    };
+    assert_eq!(harness.as_deref(), Some("codex"));
+    assert_eq!(note, "tests pass; open the PR");
+}
+
+#[tokio::test]
+async fn task_writes_report_errors() {
+    let h = harness().await;
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/tasks/{tid}/messages"),
+        Some(json!({"text": "  "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+
+    let (status, _) = call(&h.app, "POST", "/v1/tasks/nope:cancel", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    h.engine.fail_writes(Some("endpoint is gone"));
+    let (status, body) = call(&h.app, "POST", &format!("/v1/tasks/{tid}:cancel"), None).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"]["code"], "engine_failed");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("endpoint is gone"));
+    assert!(h.engine.writes().is_empty());
 }
 
 #[tokio::test]

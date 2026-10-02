@@ -28,6 +28,12 @@ pub enum Error {
         stderr: String,
     },
 
+    #[error("invalid argument for {script}: {reason}")]
+    InvalidArgument {
+        script: &'static str,
+        reason: String,
+    },
+
     #[error("invalid task id {0:?}")]
     InvalidTaskId(String),
 
