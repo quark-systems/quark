@@ -4,6 +4,7 @@
 //! engine state into SQLite, and reaches engine workspaces only through a
 //! [`engine::EngineAdapter`].
 
+pub mod accounts;
 pub mod api;
 pub mod chat;
 pub mod config;
@@ -73,11 +74,23 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
     let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
     let pr_task = tokio::spawn(pr_center.run(config.pr_refresh_interval));
+    let harnesses = Arc::new(harness::HarnessRegistry::builtin());
+    let quota_axi = accounts::QuotaAxi {
+        bin: config.quota_axi.clone(),
+    };
+    let accounts = Arc::new(accounts::Accounts::new(
+        store.clone(),
+        harnesses.clone(),
+        Arc::new(quota_axi),
+        engine.account_envs(),
+    ));
+    let quota_task = tokio::spawn(accounts.clone().run(config.quota_refresh_interval));
 
     let app = api::router(AppState {
         store,
         engine,
-        harnesses: Arc::new(harness::HarnessRegistry::builtin()),
+        harnesses,
+        accounts,
         sessions: sessions.clone(),
         layout,
         chat: Arc::new(chat::SessionsInput::new(
@@ -95,6 +108,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .await?;
     projector_task.abort();
     pr_task.abort();
+    quota_task.abort();
     // The tmux server keeps running; the next start reattaches.
     sessions.detach_all();
     Ok(())

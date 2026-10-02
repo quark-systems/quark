@@ -227,3 +227,63 @@ test("PR center: verification evidence with failing journeys, screenshots and tr
   await page.getByRole("tab", { name: "Diff" }).click();
   await expect(page.getByTestId("pr-diff")).toBeVisible();
 });
+
+test("accounts: add a second Claude account and see both with health and quota", async ({ page }) => {
+  await open(page, "#/");
+  await page.getByTestId("nav-accounts").click();
+  await expect(page).toHaveURL(/#\/accounts$/);
+  await expect(page.locator(".header h1")).toHaveText("Accounts");
+
+  const claude = page.getByTestId("accounts-claude-code");
+  await expect(claude.getByTestId("account-row")).toHaveCount(1);
+  await expect(claude.getByTestId("account-row").first()).toContainText("Default");
+  await expect(claude.getByTestId("account-health").first()).toHaveText("Logged in");
+  await expect(claude.getByTestId("account-quota").first()).toContainText("62% left");
+  await expect(page.getByTestId("accounts-codex").getByTestId("account-quota")).toContainText("88% left");
+
+  // Adding: the form shows how to log in under the new directory and checks it.
+  const form = page.getByTestId("add-account-form");
+  await form.getByLabel("Harness").selectOption("claude-code");
+  await form.getByLabel("Config directory").fill("relative/dir");
+  await expect(form).toContainText("must be an absolute path");
+  await expect(form.getByRole("button", { name: "Add account" })).toBeDisabled();
+  await form.getByLabel("Label").fill("Work");
+  await form.getByLabel("Config directory").fill("/home/demo/.claude-work");
+  await expect(form).toContainText("CLAUDE_CONFIG_DIR=/home/demo/.claude-work claude");
+  await form.getByLabel("Pools").fill("max");
+  await form.getByRole("button", { name: "Add account" }).click();
+  await expect(form.getByTestId("account-added")).toContainText("Added Work");
+
+  // Both Claude accounts, each with health and quota; the new one's quota streams in.
+  const rows = claude.getByTestId("account-row");
+  await expect(rows).toHaveCount(2);
+  const work = rows.filter({ hasText: "Work" });
+  await expect(work).toContainText("/home/demo/.claude-work");
+  await expect(work.getByTestId("account-health")).toHaveText("Logged in");
+  await expect(work.locator(".pill.accent")).toHaveText("max");
+  await expect(work.getByTestId("account-quota")).toContainText("100% left");
+  await expect(rows.first().getByTestId("account-quota")).toContainText("62% left");
+
+  // The same directory again is refused with the daemon's message.
+  await form.getByLabel("Config directory").fill("/home/demo/.claude-work");
+  await form.getByRole("button", { name: "Add account" }).click();
+  await expect(form.locator(".form-error")).toContainText("already an account");
+
+  // Pools are edited in place; the default account can join one too.
+  await rows.first().getByRole("button", { name: "Edit pools for Default" }).click();
+  await rows.first().getByLabel("Pools for Default").fill("max");
+  await rows.first().getByRole("button", { name: "Save" }).click();
+  await expect(rows.first().locator(".pill.accent")).toHaveText("max");
+
+  // A new Project's agent can name the pool.
+  await page.getByTestId("nav-new-project").click();
+  await expect(page.getByLabel("Account pool")).toBeVisible();
+  await expect(page.getByLabel("Account pool").locator("option")).toHaveText(["Default account", "Pool: max"]);
+
+  // Removing takes a second click; the default account has no Remove button.
+  await page.getByTestId("nav-accounts").click();
+  await expect(rows.first().getByRole("button", { name: /^Remove/ })).toHaveCount(0);
+  await work.getByRole("button", { name: "Remove Work" }).click();
+  await work.getByRole("button", { name: "Remove Work" }).click();
+  await expect(rows).toHaveCount(1);
+});

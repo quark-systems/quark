@@ -45,6 +45,7 @@ fn config(harness: &str, model: Option<&str>, effort: Option<Effort>) -> AgentCo
         harness: harness.into(),
         model: model.map(Into::into),
         effort: effort.map(|e| e.as_str().to_string()),
+        pool: None,
     }
 }
 
@@ -236,17 +237,25 @@ async fn call(
 #[tokio::test]
 async fn harness_routes() {
     let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let harnesses = Arc::new(HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        fake_host(dir.path()),
+    ));
     let app = api::router(AppState {
-        store: Arc::new(Store::open_in_memory().unwrap()),
+        accounts: Arc::new(quarkd::accounts::Accounts::new(
+            store.clone(),
+            harnesses.clone(),
+            Arc::new(quarkd::accounts::StubQuota::new()),
+            &["CLAUDE_CONFIG_DIR"],
+        )),
+        store,
         engine: Arc::new(StubEngine::new()),
         chat: Arc::new(quarkd::chat::RecordingInput::new()),
         forge: Arc::new(quarkd::forge::StubForge::new()),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: quarkd::provision::Layout::new(dir.path().join("quark-home")),
-        harnesses: Arc::new(HarnessRegistry::new(
-            quarkd::harness::builtin(),
-            fake_host(dir.path()),
-        )),
+        harnesses,
     });
 
     let (status, body) = call(&app, "GET", "/v1/harnesses?refresh=true", None).await;

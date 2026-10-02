@@ -3,6 +3,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use quark_systems::{ErrorBody, ErrorDetail};
 
+use crate::accounts::AccountError;
 use crate::engine::EngineError;
 use crate::store::StoreError;
 
@@ -53,6 +54,17 @@ impl From<StoreError> for ApiError {
                 tracing::error!(error = %other, "store error");
                 ApiError::internal("internal store error")
             }
+        }
+    }
+}
+
+impl From<AccountError> for ApiError {
+    fn from(e: AccountError) -> Self {
+        match e {
+            AccountError::Invalid(m) => ApiError::invalid(m),
+            AccountError::NotFound => ApiError::not_found(),
+            AccountError::Conflict(m) => ApiError::new(StatusCode::CONFLICT, "conflict", m),
+            AccountError::Store(e) => e.into(),
         }
     }
 }
