@@ -5,7 +5,8 @@
 //! returns into SQLite and the event stream.
 //!
 //! Every write goes through it too, as a neutral operation (steer a task,
-//! cancel it, relaunch it) that the adapter maps onto its own engine calls.
+//! cancel it, relaunch it, provision a Project workspace) that the adapter
+//! maps onto its own engine calls.
 //!
 //! - [`StubEngine`] is an in-memory adapter for tests and for running the
 //!   daemon without an engine checkout.
@@ -16,11 +17,11 @@
 
 pub mod firstmate;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use quark_systems::{TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, TaskKind, TaskState};
 use serde::{Deserialize, Serialize};
 
 /// Addresses one engine workspace (a firstmate home). Location-neutral so a
@@ -90,6 +91,26 @@ pub enum TaskControl {
     },
 }
 
+/// A code repo to clone into a Project workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRepo {
+    /// Short name, unique in the Project and path-safe.
+    pub name: String,
+    pub url: String,
+}
+
+/// Everything the engine needs to seed one Project workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacePlan {
+    pub project_id: String,
+    pub name: String,
+    pub goal: Option<String>,
+    pub sources: Vec<SourceRepo>,
+    /// Where the workspace goes. It must not exist yet, or be the workspace
+    /// an earlier attempt seeded for the same Project.
+    pub root: PathBuf,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     /// The request was refused before anything ran.
@@ -144,6 +165,33 @@ pub trait EngineAdapter: Send + Sync {
         task_id: &str,
         action: &TaskControl,
     ) -> Result<(), EngineError>;
+
+    /// Clone `source` into the command-center workspace and register it, so
+    /// a Project workspace can be seeded from it. Idempotent for the same
+    /// name and URL.
+    async fn add_source(
+        &self,
+        command: &Path,
+        source: &SourceRepo,
+        delivery: DeliveryPolicy,
+    ) -> Result<(), EngineError>;
+
+    /// Create the Project workspace at `plan.root`, owned by the
+    /// command-center workspace, with every source cloned into it. Returns
+    /// the workspace root.
+    async fn seed_workspace(
+        &self,
+        command: &Path,
+        plan: &WorkspacePlan,
+    ) -> Result<PathBuf, EngineError>;
+
+    /// Start the coordinator of a seeded Project workspace with `agent`.
+    async fn start_coordinator(
+        &self,
+        command: &Path,
+        ws: &WorkspaceRef,
+        agent: &AgentConfig,
+    ) -> Result<(), EngineError>;
 }
 
 /// A write the [`StubEngine`] received.
@@ -157,9 +205,22 @@ pub enum StubWrite {
         task_id: String,
         action: TaskControl,
     },
+    AddSource {
+        name: String,
+        url: String,
+    },
+    SeedWorkspace {
+        project_id: String,
+        sources: Vec<String>,
+    },
+    StartCoordinator {
+        project_id: String,
+        harness: String,
+    },
 }
 
 /// In-memory adapter. Every workspace sees the same configurable state.
+/// Seeding creates the workspace directory so later steps can write there.
 #[derive(Debug, Default)]
 pub struct StubEngine {
     snapshot: Mutex<FleetSnapshot>,
@@ -247,6 +308,43 @@ impl EngineAdapter for StubEngine {
         self.accept(StubWrite::Control {
             task_id: task_id.into(),
             action: action.clone(),
+        })
+    }
+
+    async fn add_source(
+        &self,
+        _command: &Path,
+        source: &SourceRepo,
+        _delivery: DeliveryPolicy,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::AddSource {
+            name: source.name.clone(),
+            url: source.url.clone(),
+        })
+    }
+
+    async fn seed_workspace(
+        &self,
+        _command: &Path,
+        plan: &WorkspacePlan,
+    ) -> Result<PathBuf, EngineError> {
+        self.accept(StubWrite::SeedWorkspace {
+            project_id: plan.project_id.clone(),
+            sources: plan.sources.iter().map(|s| s.name.clone()).collect(),
+        })?;
+        std::fs::create_dir_all(&plan.root)?;
+        Ok(plan.root.clone())
+    }
+
+    async fn start_coordinator(
+        &self,
+        _command: &Path,
+        ws: &WorkspaceRef,
+        agent: &AgentConfig,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::StartCoordinator {
+            project_id: ws.project_id.clone(),
+            harness: agent.harness.clone(),
         })
     }
 }

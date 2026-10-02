@@ -14,6 +14,7 @@ use quarkd::api::{self, AppState};
 use quarkd::chat::{Delivery, RecordingInput};
 use quarkd::engine::{EngineTask, FleetSnapshot, StubEngine};
 use quarkd::projector::Projector;
+use quarkd::provision::Layout;
 use quarkd::store::Store;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -36,6 +37,7 @@ fn harness() -> Harness {
         store: store.clone(),
         engine: engine.clone(),
         chat: chat.clone(),
+        layout: Layout::new(dir.path().join("home")),
     });
     let roots = SessionRoots {
         claude: vec![dir.path().join("claude")],
@@ -307,6 +309,7 @@ async fn without_a_session_client_messages_are_refused() {
         store: store.clone(),
         engine: Arc::new(StubEngine::new()),
         chat: Arc::new(quarkd::chat::NoSessions),
+        layout: Layout::new(std::env::temp_dir().join("quark-test-home")),
     });
     let (_, project) = call(
         &app,

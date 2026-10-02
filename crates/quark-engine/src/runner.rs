@@ -115,7 +115,7 @@ impl ScriptRunner {
     pub fn run(&self, script: &str, args: &[&str]) -> Result<Vec<u8>> {
         check_allowed(script, args)?;
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        self.exec(CallKind::Read, script, args, self.timeout)
+        self.exec(CallKind::Read, script, args, &[], self.timeout)
     }
 
     /// Validate a write operation, run its script and return its stdout.
@@ -123,7 +123,7 @@ impl ScriptRunner {
     pub fn run_write(&self, op: &WriteOp) -> Result<Vec<u8>> {
         let args = op.argv()?;
         let timeout = self.write_timeout.unwrap_or_else(|| op.timeout());
-        self.exec(CallKind::Write, op.script(), args, timeout)
+        self.exec(CallKind::Write, op.script(), args, &op.env(), timeout)
     }
 
     fn exec(
@@ -131,6 +131,7 @@ impl ScriptRunner {
         kind: CallKind,
         script: &str,
         args: Vec<String>,
+        env: &[(&'static str, String)],
         timeout: Duration,
     ) -> Result<Vec<u8>> {
         let path = self.genuine_script(script)?;
@@ -153,6 +154,7 @@ impl ScriptRunner {
             .args(&args)
             .current_dir(&self.workspace.engine_root)
             .env("FM_HOME", &self.workspace.home)
+            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -358,6 +360,24 @@ mod tests {
             Err(Error::InvalidArgument { .. })
         ));
         assert_eq!(log.calls().len(), 1);
+    }
+
+    #[test]
+    fn write_env_reaches_the_script() {
+        let (_d, ws) = engine_with(
+            crate::write::HOME_SEED,
+            "#!/bin/sh\nprintf '%s|%s|home=%s' \"$FM_SECONDMATE_CHARTER\" \"$FM_SECONDMATE_SCOPE\" \"$2\"\n",
+        );
+        let r = ScriptRunner::new(ws, Arc::new(MemoryCallLog::default()));
+        let op = WriteOp::HomeSeed {
+            id: "p1".into(),
+            home: "/q/ws/p1".into(),
+            projects: vec!["r".into()],
+            charter: "Run\nit.".into(),
+            scope: "All.".into(),
+        };
+        let out = String::from_utf8(r.run_write(&op).unwrap()).unwrap();
+        assert_eq!(out, "Run it.|All.|home=/q/ws/p1");
     }
 
     #[test]

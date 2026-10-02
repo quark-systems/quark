@@ -1,22 +1,22 @@
 //! [`EngineAdapter`] over a firstmate home, built on the `quark-engine`
 //! readers and its allowlisted writer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use quark_systems::{TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, TaskKind, TaskState};
 
 use quark_engine::holds::decisions;
 use quark_engine::runner::CallLog;
 use quark_engine::snapshot::{BacklogState, FleetSnapshot as FmSnapshot, Task};
 use quark_engine::status::StatusTail as FmTail;
-use quark_engine::write::WriteOp;
+use quark_engine::write::{self, DeliveryMode, WriteOp};
 use quark_engine::{EngineReader, EngineWriter, Error, Workspace};
 
 use super::{
-    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, StatusTail, TaskControl,
-    WorkspaceRef,
+    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, SourceRepo, StatusTail,
+    TaskControl, WorkspacePlan, WorkspaceRef,
 };
 
 /// Reads firstmate homes with scripts from one pinned engine checkout.
@@ -46,8 +46,16 @@ impl FirstmateEngine {
     }
 
     async fn write(&self, ws: &WorkspaceRef, op: WriteOp) -> Result<(), EngineError> {
-        let writer = EngineWriter::new(self.workspace(ws)?, self.log.clone());
-        blocking(move || writer.write(&op).map(drop)).await
+        self.write_at(&ws.root, op).await.map(drop)
+    }
+
+    /// Run `op` with `FM_HOME` at `home` and return its stdout.
+    async fn write_at(&self, home: &Path, op: WriteOp) -> Result<String, EngineError> {
+        if !home.is_dir() {
+            return Err(EngineError::WorkspaceNotFound(home.to_path_buf()));
+        }
+        let writer = EngineWriter::new(Workspace::new(home, &self.engine_root), self.log.clone());
+        blocking(move || writer.write(&op)).await
     }
 
     async fn read_snapshot(&self, ws: &WorkspaceRef) -> Result<FmSnapshot, EngineError> {
@@ -130,6 +138,102 @@ impl EngineAdapter for FirstmateEngine {
         };
         self.write(ws, op).await
     }
+
+    async fn add_source(
+        &self,
+        command: &Path,
+        source: &SourceRepo,
+        delivery: DeliveryPolicy,
+    ) -> Result<(), EngineError> {
+        let op = WriteOp::ProjectAdd {
+            name: source.name.clone(),
+            origin: source.url.clone(),
+            mode: delivery_mode(delivery),
+            description: format!("{} (added by Quark)", source.url),
+        };
+        let out = self.write_at(command, op).await?;
+        write::parse_project_added(&out).map_err(convert)?;
+        Ok(())
+    }
+
+    /// Seeds the Project workspace as a local secondmate of the command
+    /// center, keyed by the Project id.
+    async fn seed_workspace(
+        &self,
+        command: &Path,
+        plan: &WorkspacePlan,
+    ) -> Result<PathBuf, EngineError> {
+        let (charter, scope) = charter(plan);
+        let op = WriteOp::HomeSeed {
+            id: plan.project_id.clone(),
+            home: plan.root.clone(),
+            projects: plan.sources.iter().map(|s| s.name.clone()).collect(),
+            charter,
+            scope,
+        };
+        let out = self.write_at(command, op).await?;
+        write::parse_seeded_home(&out).map_err(convert)
+    }
+
+    async fn start_coordinator(
+        &self,
+        command: &Path,
+        ws: &WorkspaceRef,
+        agent: &AgentConfig,
+    ) -> Result<(), EngineError> {
+        let op = WriteOp::SpawnSecondmate {
+            id: ws.project_id.clone(),
+            home: ws.root.clone(),
+            harness: engine_harness(&agent.harness).to_string(),
+            model: agent.model.clone(),
+            effort: agent.effort.clone(),
+        };
+        let out = self.write_at(command, op).await?;
+        write::parse_spawned(&out).map_err(convert)?;
+        Ok(())
+    }
+}
+
+fn delivery_mode(d: DeliveryPolicy) -> DeliveryMode {
+    match d {
+        DeliveryPolicy::Gated => DeliveryMode::NoMistakes,
+        DeliveryPolicy::Direct => DeliveryMode::DirectPr,
+    }
+}
+
+/// Neutral harness ids that differ from the engine's adapter names.
+pub fn engine_harness(harness: &str) -> &str {
+    match harness {
+        "claude-code" => "claude",
+        "cursor-agent" => "cursor",
+        "bob-shell" => "bob",
+        other => other,
+    }
+}
+
+/// The secondmate charter and routing scope for a Project workspace. The
+/// coordinator reads the charter as its standing job description.
+pub fn charter(plan: &WorkspacePlan) -> (String, String) {
+    let repos: Vec<_> = plan.sources.iter().map(|s| s.name.as_str()).collect();
+    let goal = plan
+        .goal
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .map(|g| format!(" Its goal: {g}"))
+        .unwrap_or_default();
+    let charter = format!(
+        "Coordinate the Quark Project \"{}\" across {}.{goal} The Project repo checked out at project/ holds its instructions.md and memory/; read instructions.md before planning work.",
+        plan.name,
+        repos.join(", "),
+    );
+    let scope = format!(
+        "All work for the Quark Project \"{}\" ({}) in {}.",
+        plan.name,
+        plan.project_id,
+        repos.join(", ")
+    );
+    (charter, scope)
 }
 
 /// Live tasks from metadata, plus queued backlog work that has not started.

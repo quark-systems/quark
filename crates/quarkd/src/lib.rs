@@ -8,7 +8,9 @@ pub mod api;
 pub mod chat;
 pub mod config;
 pub mod engine;
+pub mod project_repo;
 pub mod projector;
+pub mod provision;
 pub mod store;
 pub mod transcripts;
 
@@ -52,6 +54,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let app = api::router(AppState {
         store,
         engine,
+        layout: provision::Layout::new(&config.home),
         chat: Arc::new(chat::NoSessions),
     });
     let listener = TcpListener::bind(config.listen)

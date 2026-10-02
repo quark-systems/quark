@@ -4,7 +4,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
     CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
-    ErrorBody, Health, Project, RelaunchTask, SendTaskMessage, Task, TranscriptItem, UpdateProject,
+    ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task, TranscriptItem,
+    UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -15,6 +16,7 @@ use utoipa::IntoParams;
 
 use super::{db, ApiError, AppState};
 use crate::engine::{TaskControl, WorkspaceRef};
+use crate::provision;
 
 /// Note given to a relaunched worker when the client sends none.
 const DEFAULT_RELAUNCH_NOTE: &str =
@@ -50,8 +52,10 @@ pub async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Pro
 
 /// Create a Project.
 ///
-/// Phase 0 records the Project in the daemon only. Seeding its engine
-/// workspace arrives with the adapter write path.
+/// With `repos`, returns at once with status `provisioning` and provisions in
+/// the background: clones the repos into a new Project workspace, writes the
+/// Project repo and starts the coordinator. `project.updated` events report
+/// each step and the final `ready` or `failed` status.
 #[utoipa::path(
     post,
     path = "/v1/projects",
@@ -66,8 +70,61 @@ pub async fn create_project(
     State(state): State<AppState>,
     Json(input): Json<CreateProject>,
 ) -> Result<(StatusCode, Json<Project>), ApiError> {
+    let input = provision::normalize(input).map_err(ApiError::invalid)?;
     let project = db(&state, move |s| s.create_project(input)).await?;
+    if project.status == ProjectStatus::Provisioning {
+        start_provisioning(&state, &project.id);
+    }
     Ok((StatusCode::CREATED, Json(project)))
+}
+
+fn start_provisioning(state: &AppState, project_id: &str) {
+    tokio::spawn(provision::provision(
+        state.store.clone(),
+        state.engine.clone(),
+        state.layout.clone(),
+        project_id.to_string(),
+    ));
+}
+
+/// Dispatches `POST /v1/projects/{id}:<action>`.
+pub async fn project_action(
+    state: State<AppState>,
+    Path(target): Path<String>,
+) -> Result<(StatusCode, Json<Project>), ApiError> {
+    match target.rsplit_once(':') {
+        Some((id, "provision")) => provision_project(state, Path(id.to_string())).await,
+        Some(_) => Err(ApiError::not_found()),
+        None => Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "use POST /v1/projects/{id}:provision",
+        )),
+    }
+}
+
+/// Retry provisioning a Project whose provisioning failed.
+///
+/// Every step is safe to repeat, so provisioning starts again from the first
+/// step. Returns the Project with status `provisioning`.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{id}:provision",
+    tag = "projects",
+    params(("id" = String, Path, description = "Project id")),
+    responses(
+        (status = 202, body = Project),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody, description = "The Project is not in a failed state")
+    )
+)]
+pub async fn provision_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Project>), ApiError> {
+    let project = db(&state, move |s| s.retry_provisioning(&id)).await?;
+    start_provisioning(&state, &project.id);
+    Ok((StatusCode::ACCEPTED, Json(project)))
 }
 
 /// Get one Project.

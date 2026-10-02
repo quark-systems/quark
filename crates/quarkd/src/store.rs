@@ -11,15 +11,16 @@ use std::sync::Mutex;
 
 use crate::engine::{FleetSnapshot, Hold};
 use quark_systems::{
-    CreateProject, Decision, DecisionState, Event, EventType, Project, Task, TaskKind, TaskState,
-    TranscriptEntry, TranscriptItem, UpdateProject,
+    AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset, Event,
+    EventType, Project, ProjectStatus, RepoSource, Task, TaskKind, TaskState, TranscriptEntry,
+    TranscriptItem, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
 
 use crate::now_rfc3339;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -89,10 +90,19 @@ ALTER TABLE adapter_calls ADD COLUMN exit_code INTEGER;
 ALTER TABLE adapter_calls ADD COLUMN workspace TEXT;
 "#;
 
+/// Project creation: lifecycle status and the creation inputs (`spec`, JSON
+/// with repos, agent config, dispatch preset and delivery policy).
+const SCHEMA_V3: &str = r#"
+ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'ready';
+ALTER TABLE projects ADD COLUMN status_detail TEXT;
+ALTER TABLE projects ADD COLUMN spec TEXT;
+ALTER TABLE projects ADD COLUMN project_repo_path TEXT;
+"#;
+
 /// Where each transcript source was last read. The session logs stay the
 /// source of truth: this holds offsets, not copies, and moves in the same
 /// transaction as the events read from them.
-const SCHEMA_V3: &str = r#"
+const SCHEMA_V4: &str = r#"
 CREATE TABLE transcript_index (
     source     TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -110,6 +120,8 @@ const BUS_CAPACITY: usize = 1024;
 pub enum StoreError {
     #[error("not found")]
     NotFound,
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("invalid input: {0}")]
     Invalid(String),
     #[error(transparent)]
@@ -268,6 +280,9 @@ impl Store {
         self.read(|c| get_project(c, id))
     }
 
+    /// Records a Project. One created with repos starts out `provisioning`;
+    /// the caller then drives provisioning and reports through
+    /// [`Store::set_project_status`].
     pub fn create_project(&self, input: CreateProject) -> Result<Project> {
         let name = input.name.trim().to_string();
         if name.is_empty() {
@@ -275,23 +290,118 @@ impl Store {
         }
         self.write(|tx, events| {
             let now = now_rfc3339();
+            let provisioning = !input.repos.is_empty();
             let project = Project {
                 id: new_id("prj"),
                 name,
                 goal: input.goal,
                 workspace_path: input.workspace_path,
+                status: if provisioning {
+                    ProjectStatus::Provisioning
+                } else {
+                    ProjectStatus::Ready
+                },
+                status_detail: None,
+                repos: input.repos,
+                agent_config: input.agent_config,
+                dispatch_preset: input.dispatch_preset,
+                delivery: input.delivery,
+                project_repo_path: None,
                 created_at: now.clone(),
                 updated_at: now,
             };
             tx.execute(
-                "INSERT INTO projects (id, name, goal, workspace_path, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO projects (id, name, goal, workspace_path, created_at, updated_at,
+                     status, status_detail, spec, project_repo_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     project.id,
                     project.name,
                     project.goal,
                     project.workspace_path,
                     project.created_at,
+                    project.updated_at,
+                    project.status.as_str(),
+                    project.status_detail,
+                    spec_json(&project)?,
+                    project.project_repo_path,
+                ],
+            )?;
+            append_event(
+                tx,
+                events,
+                Some(&project.id),
+                EventType::ProjectUpdated,
+                serde_json::to_value(&project)?,
+            )?;
+            Ok(project)
+        })
+    }
+
+    /// Moves a failed Project back to `provisioning` so it can be retried.
+    /// Refuses any other status, atomically, so two retries never both run.
+    pub fn retry_provisioning(&self, id: &str) -> Result<Project> {
+        self.write(|tx, events| {
+            let mut project = get_project(tx, id)?;
+            if project.status != ProjectStatus::Failed || project.repos.is_empty() {
+                return Err(StoreError::Conflict(
+                    "only a Project whose provisioning failed can be provisioned again".into(),
+                ));
+            }
+            project.status = ProjectStatus::Provisioning;
+            project.status_detail = Some("Retrying".into());
+            project.updated_at = now_rfc3339();
+            tx.execute(
+                "UPDATE projects SET status = ?2, status_detail = ?3, updated_at = ?4 WHERE id = ?1",
+                params![
+                    project.id,
+                    project.status.as_str(),
+                    project.status_detail,
+                    project.updated_at
+                ],
+            )?;
+            append_event(
+                tx,
+                events,
+                Some(&project.id),
+                EventType::ProjectUpdated,
+                serde_json::to_value(&project)?,
+            )?;
+            Ok(project)
+        })
+    }
+
+    /// Moves a Project through provisioning. `workspace_path` and
+    /// `project_repo_path` are set when given and kept otherwise.
+    pub fn set_project_status(
+        &self,
+        id: &str,
+        status: ProjectStatus,
+        detail: Option<&str>,
+        workspace_path: Option<&str>,
+        project_repo_path: Option<&str>,
+    ) -> Result<Project> {
+        self.write(|tx, events| {
+            let mut project = get_project(tx, id)?;
+            project.status = status;
+            project.status_detail = detail.map(str::to_string);
+            if let Some(p) = workspace_path {
+                project.workspace_path = Some(p.to_string());
+            }
+            if let Some(p) = project_repo_path {
+                project.project_repo_path = Some(p.to_string());
+            }
+            project.updated_at = now_rfc3339();
+            tx.execute(
+                "UPDATE projects SET status = ?2, status_detail = ?3, workspace_path = ?4,
+                     project_repo_path = ?5, updated_at = ?6
+                 WHERE id = ?1",
+                params![
+                    project.id,
+                    project.status.as_str(),
+                    project.status_detail,
+                    project.workspace_path,
+                    project.project_repo_path,
                     project.updated_at
                 ],
             )?;
@@ -838,6 +948,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 3)?;
         tx.commit()?;
     }
+    if version < 4 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V4)?;
+        tx.pragma_update(None, "user_version", 4)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -867,8 +983,27 @@ fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", uuid::Uuid::now_v7().simple())
 }
 
-const PROJECT_SELECT: &str =
-    "SELECT id, name, goal, workspace_path, created_at, updated_at FROM projects";
+const PROJECT_SELECT: &str = "SELECT id, name, goal, workspace_path, created_at, updated_at, \
+                              status, status_detail, spec, project_repo_path FROM projects";
+
+/// The creation inputs kept with a Project row.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct ProjectSpec {
+    #[serde(default)]
+    repos: Vec<RepoSource>,
+    agent_config: Option<AgentConfig>,
+    dispatch_preset: Option<DispatchPreset>,
+    delivery: Option<DeliveryPolicy>,
+}
+
+fn spec_json(p: &Project) -> Result<String> {
+    Ok(serde_json::to_string(&ProjectSpec {
+        repos: p.repos.clone(),
+        agent_config: p.agent_config.clone(),
+        dispatch_preset: p.dispatch_preset,
+        delivery: p.delivery,
+    })?)
+}
 
 fn get_project(c: &Connection, id: &str) -> Result<Project> {
     c.query_row(
@@ -881,6 +1016,10 @@ fn get_project(c: &Connection, id: &str) -> Result<Project> {
 }
 
 fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
+    let spec: ProjectSpec = r
+        .get::<_, Option<String>>(8)?
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     Ok(Project {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -888,6 +1027,13 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         workspace_path: r.get(3)?,
         created_at: r.get(4)?,
         updated_at: r.get(5)?,
+        status: ProjectStatus::parse(&r.get::<_, String>(6)?),
+        status_detail: r.get(7)?,
+        repos: spec.repos,
+        agent_config: spec.agent_config,
+        dispatch_preset: spec.dispatch_preset,
+        delivery: spec.delivery,
+        project_repo_path: r.get(9)?,
     })
 }
 
@@ -990,6 +1136,7 @@ mod tests {
                 name: "demo".into(),
                 goal: None,
                 workspace_path: Some("/tmp/ws".into()),
+                ..Default::default()
             })
             .unwrap()
     }

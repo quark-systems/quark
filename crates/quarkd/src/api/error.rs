@@ -43,6 +43,7 @@ impl From<StoreError> for ApiError {
         match e {
             StoreError::NotFound => ApiError::not_found(),
             StoreError::Invalid(m) => ApiError::invalid(m),
+            StoreError::Conflict(m) => ApiError::new(StatusCode::CONFLICT, "conflict", m),
             other => {
                 tracing::error!(error = %other, "store error");
                 ApiError::internal("internal store error")
