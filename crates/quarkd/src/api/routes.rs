@@ -576,7 +576,7 @@ pub async fn decision_action(
 }
 
 /// Longest `answered_by` accepted, in bytes.
-const MAX_ANSWERED_BY_BYTES: usize = 128;
+pub(super) const MAX_ANSWERED_BY_BYTES: usize = 128;
 
 /// Answer an open decision.
 ///
@@ -659,7 +659,7 @@ fn already_answered() -> ApiError {
 }
 
 /// Who answers when the client names no one: the user running the daemon.
-fn daemon_user() -> String {
+pub(super) fn daemon_user() -> String {
     ["USER", "USERNAME", "LOGNAME"]
         .iter()
         .find_map(|v| std::env::var(v).ok().filter(|u| !u.trim().is_empty()))

@@ -43,6 +43,27 @@ export interface Decision {
 }
 export interface AnswerDecision { answer: string; answered_by?: string | null }
 
+// Project memory (journey J8, quark#29): learnings from finished tasks, reviewed as proposals.
+export type MemorySource = "worker" | "coordinator";
+export type MemoryProposalState = "proposed" | "accepted" | "rejected";
+export interface MemoryEvidence {
+  task_id?: string | null; task_title?: string | null; pull_request_url?: string | null; files: string[];
+}
+/** One file under the Project repo's `memory/`. Hand-written files carry only `id`, `path` and `text`. */
+export interface MemoryEntry {
+  id: string; project_id: string; path: string; text: string; evidence: MemoryEvidence;
+  source?: MemorySource | null; date?: string | null; accepted_at?: string | null; accepted_by?: string | null;
+  proposal_id?: string | null; commit?: string | null;
+}
+export interface MemoryProposal {
+  id: string; project_id: string; text: string; evidence: MemoryEvidence; source: MemorySource;
+  state: MemoryProposalState; proposed_at: string; decided_at?: string | null; decided_by?: string | null;
+  /** Set once accepted. */
+  entry?: MemoryEntry | null;
+}
+export interface AcceptMemoryProposal { text?: string | null; decided_by?: string | null }
+export interface RejectMemoryProposal { decided_by?: string | null }
+
 export interface Health { status: string; version: string; engine: string; last_seq: number }
 
 export type AgentRole = "coordinator" | "worker";
@@ -211,6 +232,14 @@ export const api = {
   decisions: () => req<Decision[]>("GET", "/v1/decisions"),
   /** Answers an open decision and returns it answered. `answered_by` defaults to the daemon's user. */
   answerDecision: (id: string, body: AnswerDecision) => req<Decision>("POST", `/v1/decisions/${enc(id)}:answer`, body),
+  memoryProposals: (pid: string, state?: MemoryProposalState) =>
+    req<MemoryProposal[]>("GET", `/v1/projects/${enc(pid)}/memory/proposals` + (state ? `?state=${state}` : "")),
+  /** Commits the entry (edited when `text` is given) to the Project repo and returns the accepted proposal. */
+  acceptMemoryProposal: (pid: string, id: string, body: AcceptMemoryProposal = {}) =>
+    req<MemoryProposal>("POST", `/v1/projects/${enc(pid)}/memory/proposals/${enc(id)}:accept`, body),
+  rejectMemoryProposal: (pid: string, id: string, body: RejectMemoryProposal = {}) =>
+    req<MemoryProposal>("POST", `/v1/projects/${enc(pid)}/memory/proposals/${enc(id)}:reject`, body),
+  memory: (pid: string) => req<MemoryEntry[]>("GET", `/v1/projects/${enc(pid)}/memory`),
   harnesses: () => req<HarnessInfo[]>("GET", "/v1/harnesses"),
   validateAgent: (config: AgentConfig, role: AgentRole) =>
     req<HarnessValidation>("POST", "/v1/harnesses:validate", { config, role }),
