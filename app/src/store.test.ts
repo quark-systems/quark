@@ -12,7 +12,9 @@ const ev = (seq: number, type: string, payload: unknown, project_id: string | nu
 describe("applyEvent", () => {
   it("upserts tasks from created and state_changed events", () => {
     let s = applyEvent(initialState, ev(1, "task.created", task()));
-    s = applyEvent(s, ev(2, "task.state_changed", task({ state: "running", state_note: "started" })));
+    s = applyEvent(s, ev(2, "task.state_changed", {
+      task: task({ state: "running", state_note: "started" }), previous_state: "queued",
+    }));
     expect(s.tasks.t1.state).toBe("running");
     expect(s.tasks.t1.state_note).toBe("started");
     expect(Object.keys(s.tasks)).toEqual(["t1"]);

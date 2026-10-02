@@ -86,10 +86,11 @@ function addTask(projectId, t, { silent = false } = {}) {
 
 let taskEventId = 0;
 function setState(task, state, note = null) {
+  const previous = task.state;
   task.state = state;
   task.state_note = note;
   task.updated_at = now();
-  emit("task.state_changed", { ...task }, task.project_id);
+  emit("task.state_changed", { task: { ...task }, previous_state: previous }, task.project_id);
   emit("task.event", { id: ++taskEventId, task_id: task.id, project_id: task.project_id, kind: state, note: note ?? "", ts: now() }, task.project_id);
 }
 
