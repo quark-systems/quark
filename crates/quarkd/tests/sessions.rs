@@ -72,10 +72,9 @@ fn contains(haystack: &[u8], needle: &str) -> bool {
         .any(|w| w == needle.as_bytes())
 }
 
-fn shell(name: &str, role: Option<&str>) -> WindowSpec {
+fn shell(name: &str) -> WindowSpec {
     WindowSpec {
         name: name.into(),
-        role: role.map(str::to_string),
         argv: vec!["bash".into(), "--norc".into(), "--noprofile".into()],
         cwd: None,
         env: vec![("PS1".into(), "$ ".into())],
@@ -98,16 +97,39 @@ async fn streams_maps_types_and_reattaches() {
         })
         .unwrap();
     let mut rx = store.subscribe();
-    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone());
-    let server = sessions.server(&project.id).unwrap();
+    let other = store
+        .create_project(CreateProject {
+            name: "other".into(),
+            goal: None,
+            workspace_path: None,
+        })
+        .unwrap();
+    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    let server = sessions.server().unwrap().clone();
+    assert_eq!(
+        sessions.tmux_env().unwrap(),
+        format!("{},0,0", server.socket().display())
+    );
 
-    // The coordinator window, then a worker window as firstmate would name it.
+    // The coordinator window, then worker windows as firstmate would name
+    // them, one of them another Project's.
+    sessions.ensure_server().await.unwrap();
+    let coordinator = sessions.start_window(&shell("fm-coord")).await.unwrap();
+    assert_eq!(coordinator, "quark:fm-coord");
     sessions
-        .start_window(&project.id, &shell("coordinator", Some("coordinator")))
+        .set_coordinator(&project.id, Some(coordinator.clone()))
         .await
         .unwrap();
+    sessions.start_window(&shell("fm-fix-login")).await.unwrap();
+    sessions.start_window(&shell("fm-elsewhere")).await.unwrap();
     sessions
-        .start_window(&project.id, &shell("fm-fix-login", None))
+        .sync(
+            &other.id,
+            vec![TaskTarget {
+                task_id: "tsk_elsewhere".into(),
+                target: "quark:fm-elsewhere".into(),
+            }],
+        )
         .await
         .unwrap();
     let task = "tsk_fixlogin";
@@ -143,6 +165,8 @@ async fn streams_maps_types_and_reattaches() {
             (task, TerminalRole::Worker, Some(task)),
         ]
     );
+    let others: Vec<_> = sessions.list(&other.id).into_iter().map(|t| t.id).collect();
+    assert_eq!(others, ["tsk_elsewhere"]);
 
     // Input is typed and its echo streams back as output.
     sessions
@@ -227,7 +251,11 @@ async fn streams_maps_types_and_reattaches() {
     // panes kept running and come back with a snapshot of where they were.
     sessions.detach_all();
     drop(sessions);
-    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone());
+    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    sessions
+        .set_coordinator(&project.id, Some(coordinator))
+        .await
+        .unwrap();
     sessions
         .sync(
             &project.id,
@@ -283,10 +311,11 @@ async fn floods_are_recorded_and_pruned_to_a_snapshot() {
         })
         .unwrap();
     let mut rx = store.subscribe();
-    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone());
-    let server = sessions.server(&project.id).unwrap();
+    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    let server = sessions.server().unwrap().clone();
+    let coordinator = sessions.start_window(&shell("fm-coord")).await.unwrap();
     sessions
-        .start_window(&project.id, &shell("coordinator", Some("coordinator")))
+        .set_coordinator(&project.id, Some(coordinator))
         .await
         .unwrap();
     let id = project.id.clone();

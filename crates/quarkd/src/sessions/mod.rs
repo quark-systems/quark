@@ -1,24 +1,27 @@
-//! Terminal sessions: worker and coordinator panes streamed from tmux.
+//! Terminal sessions: coordinator and worker panes streamed from tmux.
 //!
-//! Each Project workspace runs its own tmux server on a private socket,
-//! `<quark home>/run/tmux/<project id>`. Firstmate creates task windows in
-//! the server its supervisor runs in, so a coordinator started with
-//! [`Sessions::start_window`] puts every worker it spawns on that server.
+//! quarkd runs one private tmux server for Quark, on
+//! `<quark home>/run/tmux/quark`. The command center and every Project
+//! coordinator run on it: engine calls get [`Sessions::tmux_env`] as `TMUX`,
+//! and firstmate creates every window in the server it finds there, so
+//! coordinators and the workers they spawn all land on this server.
+//! Firstmate records no socket per task, which is why the server is shared
+//! rather than one per Project.
 //!
-//! For every session on a workspace server the daemon attaches one tmux
-//! control-mode client ([`control`]), which delivers every pane's output as
-//! raw bytes. Panes are mapped to terminals:
+//! For every session on the server the daemon attaches one tmux control-mode
+//! client ([`control`]), which delivers every pane's output as raw bytes.
+//! Panes are mapped to terminals by their `session:window` target:
 //!
-//! - a window whose `@quark_role` is `coordinator` is the Project's
-//!   coordinator terminal, with the Project id as its terminal id;
-//! - a window whose `session:window` target matches a task's engine endpoint
-//!   is that task's worker terminal, with the task id as its terminal id.
+//! - [`Sessions::set_coordinator`] names a Project's coordinator window; its
+//!   terminal id is the Project id;
+//! - [`Sessions::sync`] names a Project's task windows, from the engine
+//!   endpoints in each snapshot; a task's terminal id is the task id.
 //!
 //! Output from mapped panes becomes `worker.output` events. The first event
 //! for a pane is a snapshot of its screen, taken in stream order, and a new
 //! snapshot follows whenever output had to be dropped (tmux paused a pane
 //! the daemon fell behind on) or old output was pruned. After a daemon
-//! restart the servers are still running, so terminals reattach where they
+//! restart the server is still running, so terminals reattach where they
 //! were and start again from a snapshot.
 
 pub mod control;
@@ -48,6 +51,8 @@ const PAUSE_AFTER_SECS: u32 = 5;
 const INPUT_CHUNK: usize = 512;
 /// Layout notifications arrive in bursts; rescan once per burst.
 const RESCAN_DEBOUNCE: Duration = Duration::from_millis(30);
+/// Socket name of the shared server under `<run dir>/tmux/`.
+const SOCKET_NAME: &str = "quark";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -74,7 +79,7 @@ pub struct TaskTarget {
     pub target: String,
 }
 
-/// The daemon's terminal sessions across all workspaces. Cheap to clone.
+/// The daemon's terminal sessions. Cheap to clone.
 #[derive(Clone)]
 pub struct Sessions {
     shared: Option<Arc<Shared>>,
@@ -82,24 +87,23 @@ pub struct Sessions {
 }
 
 struct Shared {
-    tmux: PathBuf,
-    run_dir: PathBuf,
-    sink: std::sync::mpsc::Sender<Chunk>,
-    workspaces: Mutex<HashMap<String, Arc<Workspace>>>,
+    hub: Arc<Hub>,
     runtime: tokio::runtime::Handle,
 }
 
 impl Sessions {
-    /// Sessions backed by the `tmux` binary, with sockets under `run_dir`.
-    /// Output is written to `store` by a dedicated thread. Must be called
-    /// from within a Tokio runtime.
-    pub fn new(tmux: impl Into<PathBuf>, run_dir: impl Into<PathBuf>, store: Arc<Store>) -> Self {
+    /// Sessions backed by the `tmux` binary, with the server socket under
+    /// `run_dir`. Output is written to `store` by a dedicated thread. Must be
+    /// called from within a Tokio runtime.
+    pub fn new(
+        tmux: impl Into<PathBuf>,
+        run_dir: impl Into<PathBuf>,
+        store: Arc<Store>,
+    ) -> Result<Self, SessionError> {
+        let server = Server::new(tmux, run_dir.into().join("tmux").join(SOCKET_NAME))?;
         let (sink, rx) = std::sync::mpsc::channel();
         let shared = Arc::new(Shared {
-            tmux: tmux.into(),
-            run_dir: run_dir.into(),
-            sink,
-            workspaces: Mutex::new(HashMap::new()),
+            hub: Hub::start(server, sink),
             runtime: tokio::runtime::Handle::current(),
         });
         let weak = Arc::downgrade(&shared);
@@ -107,10 +111,10 @@ impl Sessions {
             .name("terminal-output".into())
             .spawn(move || write_output(rx, store, weak))
             .expect("spawn terminal output writer");
-        Self {
+        Ok(Self {
             shared: Some(shared),
             reason: Arc::from(""),
-        }
+        })
     }
 
     /// Sessions that report `reason` for every call, e.g. without tmux.
@@ -122,87 +126,126 @@ impl Sessions {
     }
 
     /// The tmux binary to use: `tmux` from `PATH` unless given, checked by
-    /// running `tmux -V`.
+    /// running `tmux -V`. Disabled sessions when it does not run.
     pub fn detect(tmux: Option<&Path>, run_dir: PathBuf, store: Arc<Store>) -> Self {
         let bin = tmux.map(Path::to_path_buf).unwrap_or_else(|| "tmux".into());
-        match std::process::Command::new(&bin).arg("-V").output() {
+        let version = match std::process::Command::new(&bin).arg("-V").output() {
             Ok(out) if out.status.success() => {
-                let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                tracing::info!(%version, "terminal sessions enabled");
-                Self::new(bin, run_dir, store)
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
             }
             _ => {
                 let reason = format!("{} is not installed or does not run", bin.display());
                 tracing::warn!(%reason, "terminal sessions disabled");
-                Self::disabled(reason)
+                return Self::disabled(reason);
+            }
+        };
+        match Self::new(bin, run_dir, store) {
+            Ok(s) => {
+                tracing::info!(%version, "terminal sessions enabled");
+                s
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "terminal sessions disabled");
+                Self::disabled(e.to_string())
             }
         }
     }
 
-    fn shared(&self) -> Result<&Arc<Shared>, SessionError> {
+    fn hub(&self) -> Result<&Arc<Hub>, SessionError> {
         self.shared
             .as_ref()
+            .map(|s| &s.hub)
             .ok_or_else(|| SessionError::Unavailable(self.reason.to_string()))
     }
 
-    /// The tmux server for a Project's workspace.
-    pub fn server(&self, project_id: &str) -> Result<Server, SessionError> {
-        let shared = self.shared()?;
-        if project_id.is_empty()
-            || !project_id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err(SessionError::Invalid(format!(
-                "invalid project id {project_id:?}"
-            )));
-        }
-        Ok(Server::new(
-            &shared.tmux,
-            shared.run_dir.join("tmux").join(project_id),
-        )?)
+    /// The shared tmux server.
+    pub fn server(&self) -> Result<&Server, SessionError> {
+        Ok(&self.hub()?.server)
     }
 
-    /// Starts a program in a new window on the Project's server, starting the
-    /// server first if needed, then maps it. Use `role: coordinator` for the
-    /// Project's coordinator. Returns the tmux window id.
-    pub async fn start_window(
-        &self,
-        project_id: &str,
-        spec: &WindowSpec,
-    ) -> Result<String, SessionError> {
-        let window = self.server(project_id)?.start_window(spec).await?;
-        self.workspace(project_id)?.rescan().await;
-        Ok(window)
+    /// The `TMUX` value that points engine calls (and every program they
+    /// start) at the shared server. Firstmate only reads the socket path.
+    pub fn tmux_env(&self) -> Result<String, SessionError> {
+        Ok(format!("{},0,0", self.server()?.socket().display()))
     }
 
-    /// Updates which tasks own which window targets for one Project and
-    /// reconciles its panes. Called after every projection refresh.
-    pub async fn sync(
-        &self,
-        project_id: &str,
-        targets: Vec<TaskTarget>,
-    ) -> Result<(), SessionError> {
-        let ws = self.workspace(project_id)?;
-        *ws.targets.lock().unwrap() = targets.into_iter().map(|t| (t.target, t.task_id)).collect();
-        ws.rescan().await;
+    /// Starts the shared server, with its `quark` session, if it is not
+    /// running. Call before the first engine call that opens a window.
+    pub async fn ensure_server(&self) -> Result<(), SessionError> {
+        let hub = self.hub()?;
+        hub.server.ensure_session().await?;
+        hub.rescan().await;
         Ok(())
     }
 
-    /// Live terminals of one Project.
+    /// Starts a program in a new window of the `quark` session, starting the
+    /// server first if needed. Returns the window's `session:window` target.
+    pub async fn start_window(&self, spec: &WindowSpec) -> Result<String, SessionError> {
+        let hub = self.hub()?;
+        let target = hub.server.start_window(spec).await?;
+        hub.rescan().await;
+        Ok(target)
+    }
+
+    /// Names (or, with `None`, forgets) the window a Project's coordinator
+    /// runs in, as the `session:window` target the engine reported.
+    pub async fn set_coordinator(
+        &self,
+        project_id: &str,
+        target: Option<String>,
+    ) -> Result<(), SessionError> {
+        let hub = self.hub()?;
+        {
+            let mut targets = hub.targets.lock().unwrap();
+            targets.retain(|_, r| {
+                !(r.project_id == project_id && r.role == TerminalRole::Coordinator)
+            });
+            if let Some(target) = target {
+                targets.insert(
+                    target,
+                    Owner {
+                        project_id: project_id.to_string(),
+                        role: TerminalRole::Coordinator,
+                        id: project_id.to_string(),
+                    },
+                );
+            }
+        }
+        hub.rescan().await;
+        Ok(())
+    }
+
+    /// Replaces the task window targets of one Project and reconciles the
+    /// panes. Called after every projection refresh.
+    pub async fn sync(&self, project_id: &str, tasks: Vec<TaskTarget>) -> Result<(), SessionError> {
+        let hub = self.hub()?;
+        {
+            let mut targets = hub.targets.lock().unwrap();
+            targets.retain(|_, r| !(r.project_id == project_id && r.role == TerminalRole::Worker));
+            for t in tasks {
+                // A target another Project already claims stays with it.
+                targets.entry(t.target).or_insert(Owner {
+                    project_id: project_id.to_string(),
+                    role: TerminalRole::Worker,
+                    id: t.task_id,
+                });
+            }
+        }
+        hub.rescan().await;
+        Ok(())
+    }
+
+    /// Live terminals of one Project, coordinator first.
     pub fn list(&self, project_id: &str) -> Vec<Terminal> {
-        let Ok(shared) = self.shared() else {
+        let Ok(hub) = self.hub() else {
             return Vec::new();
         };
-        let ws = shared.workspaces.lock().unwrap().get(project_id).cloned();
-        let Some(ws) = ws else {
-            return Vec::new();
-        };
-        let mut out: Vec<Terminal> = ws
+        let mut out: Vec<Terminal> = hub
             .panes
             .lock()
             .unwrap()
             .values()
+            .filter(|p| p.terminal.project_id == project_id)
             .map(|p| p.terminal.clone())
             .collect();
         out.sort_by(|a, b| (a.role as u8, &a.id).cmp(&(b.role as u8, &b.id)));
@@ -210,8 +253,9 @@ impl Sessions {
     }
 
     pub fn get(&self, terminal_id: &str) -> Result<Terminal, SessionError> {
-        let (ws, pane) = self.find(terminal_id)?;
-        let panes = ws.panes.lock().unwrap();
+        let hub = self.hub()?;
+        let pane = hub.find(terminal_id)?;
+        let panes = hub.panes.lock().unwrap();
         Ok(panes
             .get(&pane)
             .ok_or(SessionError::NotFound)?
@@ -228,13 +272,14 @@ impl Sessions {
         bytes: &[u8],
         seq: Option<u64>,
     ) -> Result<(), SessionError> {
-        let (ws, pane) = self.find(terminal_id)?;
-        let client = ws.client_for(&pane)?;
-        // Hold the sequence lock while typing so concurrent requests for one
-        // terminal are applied in sequence order or refused.
-        let _guard = ws.input_lock.lock().await;
+        let hub = self.hub()?;
+        let pane = hub.find(terminal_id)?;
+        let client = hub.client_for(&pane)?;
+        // Hold the input lock while typing so concurrent requests are applied
+        // in sequence order or refused.
+        let _guard = hub.input_lock.lock().await;
         if let Some(seq) = seq {
-            let mut last = ws.input_seq.lock().unwrap();
+            let mut last = hub.input_seq.lock().unwrap();
             let entry = last.entry(terminal_id.to_string()).or_insert(0);
             if seq <= *entry {
                 return Err(SessionError::StaleInput {
@@ -263,10 +308,11 @@ impl Sessions {
                 "size {cols}x{rows} is out of range"
             )));
         }
-        let (ws, pane) = self.find(terminal_id)?;
-        let client = ws.client_for(&pane)?;
+        let hub = self.hub()?;
+        let pane = hub.find(terminal_id)?;
+        let client = hub.client_for(&pane)?;
         let window = {
-            let panes = ws.panes.lock().unwrap();
+            let panes = hub.panes.lock().unwrap();
             panes
                 .get(&pane)
                 .ok_or(SessionError::NotFound)?
@@ -278,7 +324,7 @@ impl Sessions {
         client
             .run(&format!("resize-window -t {window} -x {cols} -y {rows}"))
             .await?;
-        let mut panes = ws.panes.lock().unwrap();
+        let mut panes = hub.panes.lock().unwrap();
         let p = panes.get_mut(&pane).ok_or(SessionError::NotFound)?;
         p.terminal.cols = cols;
         p.terminal.rows = rows;
@@ -289,51 +335,20 @@ impl Sessions {
     /// and returns that event. A client opening a terminal applies it, then
     /// the terminal's `worker.output` events with a greater `seq`.
     pub async fn snapshot(&self, terminal_id: &str) -> Result<Event, SessionError> {
-        let (ws, pane) = self.find(terminal_id)?;
-        let client = ws.client_for(&pane)?;
+        let hub = self.hub()?;
+        let pane = hub.find(terminal_id)?;
+        let client = hub.client_for(&pane)?;
         let (tx, rx) = oneshot::channel();
         request_snapshot(&client, &pane, Some(tx)).await?;
         rx.await
             .map_err(|_| SessionError::Unavailable("the terminal closed".into()))
     }
 
-    fn workspace(&self, project_id: &str) -> Result<Arc<Workspace>, SessionError> {
-        let server = self.server(project_id)?;
-        let shared = self.shared()?;
-        let mut map = shared.workspaces.lock().unwrap();
-        Ok(map
-            .entry(project_id.to_string())
-            .or_insert_with(|| Workspace::start(project_id, server, shared.sink.clone()))
-            .clone())
-    }
-
-    fn find(&self, terminal_id: &str) -> Result<(Arc<Workspace>, String), SessionError> {
-        let shared = self.shared()?;
-        let workspaces: Vec<_> = shared
-            .workspaces
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect();
-        for ws in workspaces {
-            let panes = ws.panes.lock().unwrap();
-            if let Some((pane, _)) = panes.iter().find(|(_, p)| p.terminal.id == terminal_id) {
-                let pane = pane.clone();
-                drop(panes);
-                return Ok((ws, pane));
-            }
-        }
-        Err(SessionError::NotFound)
-    }
-
-    /// Detaches every control client. tmux servers and their programs keep
+    /// Detaches every control client. The tmux server and its programs keep
     /// running, so a later daemon reattaches to them.
     pub fn detach_all(&self) {
-        if let Some(shared) = &self.shared {
-            for ws in shared.workspaces.lock().unwrap().drain().map(|(_, ws)| ws) {
-                ws.detach();
-            }
+        if let Ok(hub) = self.hub() {
+            hub.detach();
         }
     }
 }
@@ -347,13 +362,21 @@ fn send_keys(pane: &str, bytes: &[u8]) -> String {
     cmd
 }
 
-/// One Project workspace's server, its control clients and pane map.
-struct Workspace {
+/// Who a window target belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Owner {
     project_id: String,
+    role: TerminalRole,
+    /// Terminal id: the task id, or the Project id for a coordinator.
+    id: String,
+}
+
+/// The shared server, its control clients and the pane map.
+struct Hub {
     server: Server,
     sink: std::sync::mpsc::Sender<Chunk>,
-    /// Window target (`session:window`) to task id.
-    targets: Mutex<HashMap<String, String>>,
+    /// Window target (`session:window`) to owner.
+    targets: Mutex<HashMap<String, Owner>>,
     /// Mapped panes by tmux pane id. Shared with the control readers.
     panes: Arc<Mutex<HashMap<String, PaneRoute>>>,
     /// Control clients by tmux session id.
@@ -384,10 +407,9 @@ struct Cursor {
     visible: bool,
 }
 
-impl Workspace {
-    fn start(project_id: &str, server: Server, sink: std::sync::mpsc::Sender<Chunk>) -> Arc<Self> {
-        let ws = Arc::new(Workspace {
-            project_id: project_id.to_string(),
+impl Hub {
+    fn start(server: Server, sink: std::sync::mpsc::Sender<Chunk>) -> Arc<Self> {
+        let hub = Arc::new(Hub {
             server,
             sink,
             targets: Mutex::new(HashMap::new()),
@@ -398,17 +420,27 @@ impl Workspace {
             rescan_lock: tokio::sync::Mutex::new(()),
             layout_changed: Arc::new(Notify::new()),
         });
-        let weak = Arc::downgrade(&ws);
-        let notify = ws.layout_changed.clone();
+        let weak = Arc::downgrade(&hub);
+        let notify = hub.layout_changed.clone();
         tokio::spawn(async move {
             loop {
                 notify.notified().await;
                 tokio::time::sleep(RESCAN_DEBOUNCE).await;
-                let Some(ws) = weak.upgrade() else { return };
-                ws.rescan().await;
+                let Some(hub) = weak.upgrade() else { return };
+                hub.rescan().await;
             }
         });
-        ws
+        hub
+    }
+
+    fn find(&self, terminal_id: &str) -> Result<String, SessionError> {
+        self.panes
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, p)| p.terminal.id == terminal_id)
+            .map(|(pane, _)| pane.clone())
+            .ok_or(SessionError::NotFound)
     }
 
     fn client_for(&self, pane: &str) -> Result<ControlClient<Tag>, SessionError> {
@@ -435,7 +467,7 @@ impl Workspace {
         let panes = match self.server.list_panes().await {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(project = %self.project_id, error = %e, "listing tmux panes failed");
+                tracing::warn!(error = %e, "listing tmux panes failed");
                 return;
             }
         };
@@ -459,12 +491,11 @@ impl Workspace {
                     continue;
                 }
                 let handler = PaneHandler {
-                    project_id: self.project_id.clone(),
                     session_id: session.to_string(),
                     panes: self.panes.clone(),
                     sink: self.sink.clone(),
                     layout_changed: self.layout_changed.clone(),
-                    ws: Arc::downgrade(self),
+                    hub: Arc::downgrade(self),
                 };
                 match ControlClient::attach(
                     self.server.tmux(),
@@ -474,12 +505,12 @@ impl Workspace {
                     handler,
                 ) {
                     Ok(c) => {
-                        tracing::info!(project = %self.project_id, session, "attached tmux control client");
+                        tracing::info!(session, "attached tmux control client");
                         clients.insert(session.to_string(), c);
                         fresh.push(session.to_string());
                     }
                     Err(e) => {
-                        tracing::warn!(project = %self.project_id, session, error = %e, "tmux control attach failed")
+                        tracing::warn!(session, error = %e, "tmux control attach failed")
                     }
                 }
             }
@@ -500,17 +531,9 @@ impl Workspace {
         let targets = self.targets.lock().unwrap().clone();
         let mut wanted: HashMap<String, PaneRoute> = HashMap::new();
         for p in first.values() {
-            let (role, id, task_id) = if p.role.as_deref() == Some("coordinator") {
-                (TerminalRole::Coordinator, self.project_id.clone(), None)
-            } else if let Some(task) = targets.get(&p.target) {
-                (TerminalRole::Worker, task.clone(), Some(task.clone()))
-            } else {
+            let Some(owner) = targets.get(&p.target) else {
                 continue;
             };
-            // Two windows claiming one terminal: keep the first seen.
-            if wanted.values().any(|w| w.terminal.id == id) {
-                continue;
-            }
             let title = p.target.split_once(':').map_or(p.target.as_str(), |t| t.1);
             wanted.insert(
                 p.pane_id.clone(),
@@ -518,10 +541,10 @@ impl Workspace {
                     session_id: p.session_id.clone(),
                     window_id: p.window_id.clone(),
                     terminal: Terminal {
-                        id,
-                        project_id: self.project_id.clone(),
-                        role,
-                        task_id,
+                        id: owner.id.clone(),
+                        project_id: owner.project_id.clone(),
+                        role: owner.role,
+                        task_id: (owner.role == TerminalRole::Worker).then(|| owner.id.clone()),
                         title: title.to_string(),
                         cols: p.cols,
                         rows: p.rows,
@@ -564,7 +587,7 @@ impl Workspace {
             let client = self.clients.lock().unwrap().get(&session).cloned();
             if let Some(client) = client {
                 if let Err(e) = request_snapshot(&client, &pane, None).await {
-                    tracing::warn!(project = %self.project_id, pane, error = %e, "snapshot request failed");
+                    tracing::warn!(pane, error = %e, "snapshot request failed");
                 }
             }
         }
@@ -610,12 +633,11 @@ async fn request_snapshot(
 }
 
 struct PaneHandler {
-    project_id: String,
     session_id: String,
     panes: Arc<Mutex<HashMap<String, PaneRoute>>>,
     sink: std::sync::mpsc::Sender<Chunk>,
     layout_changed: Arc<Notify>,
-    ws: Weak<Workspace>,
+    hub: Weak<Hub>,
 }
 
 impl PaneHandler {
@@ -631,7 +653,7 @@ impl PaneHandler {
             TerminalChunkKind::Output => (None, None),
         };
         let _ = self.sink.send(Chunk {
-            project_id: self.project_id.clone(),
+            project_id: route.terminal.project_id.clone(),
             terminal_id: route.terminal.id.clone(),
             role: route.terminal.role,
             task_id: route.terminal.task_id.clone(),
@@ -664,7 +686,7 @@ impl Handler for PaneHandler {
         if let Some(route) = self.panes.lock().unwrap().get_mut(pane) {
             route.live = false;
         }
-        tracing::debug!(project = %self.project_id, pane, "tmux paused pane; resyncing");
+        tracing::debug!(pane, "tmux paused pane; resyncing");
         let client = client.clone();
         let pane = pane.to_string();
         tokio::spawn(async move {
@@ -698,7 +720,7 @@ impl Handler for PaneHandler {
                         return;
                     };
                     if !reply.ok {
-                        tracing::warn!(project = %self.project_id, pane, error = %reply.error_text(), "capture-pane failed");
+                        tracing::warn!(pane, error = %reply.error_text(), "capture-pane failed");
                         return;
                     }
                     route.live = true;
@@ -715,14 +737,14 @@ impl Handler for PaneHandler {
     }
 
     fn closed(&mut self) {
-        tracing::info!(project = %self.project_id, session = %self.session_id, "tmux control client closed");
-        if let Some(ws) = self.ws.upgrade() {
-            ws.clients.lock().unwrap().remove(&self.session_id);
-            ws.panes
+        tracing::info!(session = %self.session_id, "tmux control client closed");
+        if let Some(hub) = self.hub.upgrade() {
+            hub.clients.lock().unwrap().remove(&self.session_id);
+            hub.panes
                 .lock()
                 .unwrap()
                 .retain(|_, r| r.session_id != self.session_id);
-            ws.layout_changed.notify_one();
+            hub.layout_changed.notify_one();
         }
     }
 }
@@ -859,7 +881,7 @@ fn write_output(rx: std::sync::mpsc::Receiver<Chunk>, store: Arc<Store>, shared:
                     tracing::warn!(error = %e, "pruning terminal output failed");
                 }
                 if let Some(shared) = shared.upgrade() {
-                    resnapshot(&shared, &chunk.project_id, &chunk.terminal_id);
+                    resnapshot(&shared, &chunk.terminal_id);
                 }
             }
         }
@@ -867,19 +889,12 @@ fn write_output(rx: std::sync::mpsc::Receiver<Chunk>, store: Arc<Store>, shared:
 }
 
 /// Requests a snapshot of a terminal from the writer thread.
-fn resnapshot(shared: &Shared, project_id: &str, terminal_id: &str) {
-    let Some(ws) = shared.workspaces.lock().unwrap().get(project_id).cloned() else {
+fn resnapshot(shared: &Shared, terminal_id: &str) {
+    let hub = &shared.hub;
+    let Ok(pane) = hub.find(terminal_id) else {
         return;
     };
-    let pane = ws
-        .panes
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(_, p)| p.terminal.id == terminal_id)
-        .map(|(pane, _)| pane.clone());
-    let Some(pane) = pane else { return };
-    let Ok(client) = ws.client_for(&pane) else {
+    let Ok(client) = hub.client_for(&pane) else {
         return;
     };
     shared.runtime.spawn(async move {

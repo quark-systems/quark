@@ -7,8 +7,6 @@ use tokio::process::Command;
 
 /// Session the daemon creates windows in when it starts a server itself.
 pub const SESSION_NAME: &str = "quark";
-/// Window option that marks a window's role (`coordinator`).
-pub const ROLE_OPTION: &str = "@quark_role";
 /// Size of windows no client has sized yet.
 pub const DEFAULT_COLS: u16 = 120;
 pub const DEFAULT_ROWS: u16 = 36;
@@ -45,8 +43,6 @@ pub struct WindowSpec {
     /// Window name. Workers are found by `session:window` targets, so the
     /// name must be unique in its session.
     pub name: String,
-    /// Set as the window's `@quark_role` option, e.g. `coordinator`.
-    pub role: Option<String>,
     /// Program and arguments, run directly without a shell when there is
     /// more than one element.
     pub argv: Vec<String>,
@@ -63,14 +59,13 @@ pub struct PaneInfo {
     pub pane_index: u32,
     pub cols: u16,
     pub rows: u16,
-    pub role: Option<String>,
     /// `session_name:window_name`, the form firstmate records as a task's
     /// endpoint target.
     pub target: String,
 }
 
 const PANE_FORMAT: &str = "#{session_id}|#{window_id}|#{pane_id}|#{pane_index}|#{pane_width}|\
-#{pane_height}|#{@quark_role}|#{session_name}:#{window_name}";
+#{pane_height}|#{session_name}:#{window_name}";
 
 /// A private tmux server, addressed by socket path (`tmux -S`).
 #[derive(Debug, Clone)]
@@ -149,8 +144,23 @@ impl Server {
             .collect()
     }
 
+    /// Starts the server with its `quark` session, holding one idle shell
+    /// window, unless the session already exists.
+    pub async fn ensure_session(&self) -> Result<(), ServerError> {
+        if self.has_session(SESSION_NAME).await {
+            return Ok(());
+        }
+        self.start_window(&WindowSpec {
+            name: SESSION_NAME.into(),
+            ..WindowSpec::default()
+        })
+        .await
+        .map(drop)
+    }
+
     /// Starts `spec` in a new window of the `quark` session, starting the
-    /// server and the session first when needed. Returns the window id.
+    /// server and the session first when needed. Returns the window's
+    /// `session:window` target.
     pub async fn start_window(&self, spec: &WindowSpec) -> Result<String, ServerError> {
         if spec.name.is_empty() || spec.name.contains([':', '.']) {
             return Err(ServerError::Parse(format!(
@@ -179,7 +189,13 @@ impl Server {
                 &DEFAULT_ROWS.to_string(),
             ]);
         }
-        c.args(["-P", "-F", "#{window_id}", "-n", &spec.name]);
+        c.args([
+            "-P",
+            "-F",
+            "#{session_name}:#{window_name}",
+            "-n",
+            &spec.name,
+        ]);
         if let Some(cwd) = &spec.cwd {
             c.arg("-c").arg(cwd);
         }
@@ -187,13 +203,7 @@ impl Server {
             c.arg("-e").arg(format!("{k}={v}"));
         }
         c.args(&spec.argv);
-        let window = self.output(c, "new-window").await?.trim().to_string();
-        if let Some(role) = &spec.role {
-            let mut c = self.command();
-            c.args(["set-option", "-w", "-t", &window, ROLE_OPTION, role]);
-            self.output(c, "set-option").await?;
-        }
-        Ok(window)
+        Ok(self.output(c, "new-window").await?.trim().to_string())
     }
 
     async fn has_session(&self, name: &str) -> bool {
@@ -221,7 +231,7 @@ fn no_server(stderr: &str) -> bool {
 
 fn parse_pane(line: &str) -> Result<PaneInfo, ServerError> {
     let bad = || ServerError::Parse(line.to_string());
-    let mut f = line.splitn(8, '|');
+    let mut f = line.splitn(7, '|');
     let mut next = || f.next().ok_or_else(bad);
     let session_id = next()?.to_string();
     let window_id = next()?.to_string();
@@ -229,7 +239,6 @@ fn parse_pane(line: &str) -> Result<PaneInfo, ServerError> {
     let pane_index = next()?.parse().map_err(|_| bad())?;
     let cols = next()?.parse().map_err(|_| bad())?;
     let rows = next()?.parse().map_err(|_| bad())?;
-    let role = Some(next()?.to_string()).filter(|r| !r.is_empty());
     let target = next()?.to_string();
     Ok(PaneInfo {
         session_id,
@@ -238,7 +247,6 @@ fn parse_pane(line: &str) -> Result<PaneInfo, ServerError> {
         pane_index,
         cols,
         rows,
-        role,
         target,
     })
 }
@@ -267,17 +275,12 @@ mod tests {
 
     #[test]
     fn parses_pane_lines() {
-        let p = parse_pane("$0|@3|%7|0|120|36|coordinator|quark:coord|inator").unwrap();
+        let p = parse_pane("$0|@3|%7|0|120|36|quark:coord|inator").unwrap();
         assert_eq!(p.session_id, "$0");
         assert_eq!(p.window_id, "@3");
         assert_eq!(p.pane_id, "%7");
         assert_eq!((p.cols, p.rows), (120, 36));
-        assert_eq!(p.role.as_deref(), Some("coordinator"));
         assert_eq!(p.target, "quark:coord|inator");
-        assert_eq!(
-            parse_pane("$0|@1|%1|0|80|24||firstmate:fm-a").unwrap().role,
-            None
-        );
         assert!(parse_pane("garbage").is_err());
     }
 
