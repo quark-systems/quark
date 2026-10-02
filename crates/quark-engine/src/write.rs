@@ -19,6 +19,10 @@
 //!
 //! Verification gates (ADR-15) add [`WriteOp::GatesConfig`], which replaces a
 //! workspace's gate config through `fm-gates.sh config-set`.
+//!
+//! Dispatch profiles (ADR-11) add [`WriteOp::CrewDispatchConfig`], which
+//! replaces a workspace's `config/crew-dispatch.json` through
+//! `fm-crew-dispatch.sh config-set`.
 
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -34,6 +38,7 @@ pub const PR_MERGE: &str = "fm-pr-merge.sh";
 pub const PROJECT_YOLO: &str = "fm-project-yolo.sh";
 pub const CAPTAIN_HOLD: &str = "fm-captain-hold.sh";
 pub const GATES: &str = "fm-gates.sh";
+pub const CREW_DISPATCH: &str = "fm-crew-dispatch.sh";
 
 /// Largest gate config accepted, in bytes (`fm-gates.sh` refuses more).
 pub const MAX_GATES_CONFIG_BYTES: usize = 256 * 1024;
@@ -41,6 +46,13 @@ pub const MAX_GATES_CONFIG_BYTES: usize = 256 * 1024;
 /// The target name [`WriteOp::GatesConfig`] reports: it changes the
 /// workspace's config, not one task.
 pub const GATES_TARGET: &str = "gates";
+
+/// Largest crew dispatch config accepted, in bytes (`fm-crew-dispatch.sh`
+/// refuses more).
+pub const MAX_CREW_DISPATCH_CONFIG_BYTES: usize = 256 * 1024;
+
+/// The target name [`WriteOp::CrewDispatchConfig`] reports.
+pub const CREW_DISPATCH_TARGET: &str = "crew-dispatch";
 
 /// Longest charter, scope or project description accepted, in characters.
 pub const MAX_LINE_CHARS: usize = 600;
@@ -140,6 +152,11 @@ pub enum WriteOp {
     /// schema `fm.gates.v1`): `fm-gates.sh config-set` with the JSON in
     /// `FM_GATES_CONFIG_JSON`. The script validates it before writing.
     GatesConfig { json: String },
+    /// Replace the workspace's crew dispatch profiles
+    /// (`config/crew-dispatch.json`): `fm-crew-dispatch.sh config-set` with the
+    /// JSON in `FM_CREW_DISPATCH_CONFIG_JSON`. The script validates it and
+    /// exits 1, leaving the old file in place, when it is invalid.
+    CrewDispatchConfig { json: String },
 }
 
 /// How a pull request is merged on GitHub. GitLab uses the project's setting.
@@ -190,6 +207,7 @@ impl WriteOp {
             WriteOp::PrMerge { .. } => PR_MERGE,
             WriteOp::ProjectYolo { .. } => PROJECT_YOLO,
             WriteOp::GatesConfig { .. } => GATES,
+            WriteOp::CrewDispatchConfig { .. } => CREW_DISPATCH,
         }
     }
 
@@ -206,6 +224,7 @@ impl WriteOp {
             WriteOp::ProjectAdd { name, .. } | WriteOp::ProjectYolo { name, .. } => name,
             WriteOp::HomeSeed { id, .. } | WriteOp::SpawnSecondmate { id, .. } => id,
             WriteOp::GatesConfig { .. } => GATES_TARGET,
+            WriteOp::CrewDispatchConfig { .. } => CREW_DISPATCH_TARGET,
         }
     }
 
@@ -218,7 +237,8 @@ impl WriteOp {
             | WriteOp::ProjectYolo { .. }
             | WriteOp::Answer { .. }
             | WriteOp::AnswerHold { .. }
-            | WriteOp::GatesConfig { .. } => Duration::from_secs(60),
+            | WriteOp::GatesConfig { .. }
+            | WriteOp::CrewDispatchConfig { .. } => Duration::from_secs(60),
             WriteOp::PrMerge { .. } => Duration::from_secs(300),
             WriteOp::Exit { .. } => Duration::from_secs(120),
             WriteOp::Relaunch { .. } | WriteOp::SpawnSecondmate { .. } => Duration::from_secs(300),
@@ -235,6 +255,9 @@ impl WriteOp {
                 ("FM_SECONDMATE_SCOPE", one_line(scope)),
             ],
             WriteOp::GatesConfig { json } => vec![("FM_GATES_CONFIG_JSON", json.clone())],
+            WriteOp::CrewDispatchConfig { json } => {
+                vec![("FM_CREW_DISPATCH_CONFIG_JSON", json.clone())]
+            }
             _ => Vec::new(),
         }
     }
@@ -396,12 +419,12 @@ impl WriteOp {
                 Ok(vec![name.clone(), if *on { "on" } else { "off" }.into()])
             }
             WriteOp::GatesConfig { json } => {
-                check_text("gates config", json, MAX_GATES_CONFIG_BYTES).map_err(invalid)?;
-                let v: serde_json::Value = serde_json::from_str(json)
-                    .map_err(|e| invalid(format!("gates config is not JSON: {e}")))?;
-                if !v.is_object() {
-                    return Err(invalid("gates config must be a JSON object".into()));
-                }
+                check_json_object("gates config", json, MAX_GATES_CONFIG_BYTES).map_err(invalid)?;
+                Ok(vec!["config-set".into()])
+            }
+            WriteOp::CrewDispatchConfig { json } => {
+                check_json_object("crew dispatch config", json, MAX_CREW_DISPATCH_CONFIG_BYTES)
+                    .map_err(invalid)?;
                 Ok(vec!["config-set".into()])
             }
         }
@@ -594,6 +617,18 @@ pub fn check_answered_by(user: &str) -> std::result::Result<(), String> {
     }
     if user.chars().any(char::is_control) {
         return Err("answered_by must be one line without control characters".into());
+    }
+    Ok(())
+}
+
+/// A config handed to a `config-set` script: one JSON object of at most `max`
+/// bytes.
+fn check_json_object(what: &str, json: &str, max: usize) -> std::result::Result<(), String> {
+    check_text(what, json, max)?;
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("{what} is not JSON: {e}"))?;
+    if !v.is_object() {
+        return Err(format!("{what} must be a JSON object"));
     }
     Ok(())
 }
@@ -1041,6 +1076,31 @@ mod tests {
             &"x".repeat(MAX_GATES_CONFIG_BYTES + 1),
         ] {
             let op = WriteOp::GatesConfig { json: bad.into() };
+            assert!(op.argv().is_err(), "accepted {bad:.20}");
+        }
+    }
+
+    #[test]
+    fn crew_dispatch_config_passes_json_in_the_environment() {
+        let json = r#"{"rules":[],"default":{"harness":"claude"}}"#;
+        let op = WriteOp::CrewDispatchConfig { json: json.into() };
+        assert_eq!(op.script(), CREW_DISPATCH);
+        assert_eq!(op.task_id(), CREW_DISPATCH_TARGET);
+        assert_eq!(op.argv().unwrap(), vec!["config-set".to_string()]);
+        assert_eq!(
+            op.env(),
+            vec![("FM_CREW_DISPATCH_CONFIG_JSON", json.to_string())]
+        );
+        for bad in [
+            "",
+            "not json",
+            "[1]",
+            &format!(
+                "{{\"x\":\"{}\"}}",
+                "x".repeat(MAX_CREW_DISPATCH_CONFIG_BYTES)
+            ),
+        ] {
+            let op = WriteOp::CrewDispatchConfig { json: bad.into() };
             assert!(op.argv().is_err(), "accepted {bad:.20}");
         }
     }

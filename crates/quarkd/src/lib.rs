@@ -7,6 +7,7 @@
 pub mod api;
 pub mod chat;
 pub mod config;
+pub mod crew_dispatch;
 pub mod engine;
 pub mod forge;
 pub mod gates;

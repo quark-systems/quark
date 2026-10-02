@@ -289,6 +289,18 @@ pub trait EngineAdapter: Send + Sync {
         Ok(())
     }
 
+    /// Replace the workspace's crew dispatch profiles with `config` (the
+    /// engine's `crew-dispatch.json`, see [`crate::crew_dispatch`]). A config
+    /// the engine refuses as invalid is [`EngineError::Invalid`], and the last
+    /// good one stays. Engines without dispatch profiles ignore it.
+    async fn set_crew_dispatch(
+        &self,
+        _ws: &WorkspaceRef,
+        _config: &str,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
+
     /// Each running Project coordinator's tmux window target in the
     /// command-center workspace, keyed by Project id. Engines without
     /// coordinator windows have none.
@@ -353,6 +365,10 @@ pub enum StubWrite {
         on: bool,
     },
     Gates {
+        project_id: String,
+        config: String,
+    },
+    CrewDispatch {
         project_id: String,
         config: String,
     },
@@ -602,6 +618,13 @@ impl EngineAdapter for StubEngine {
 
     async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
         self.accept(StubWrite::Gates {
+            project_id: ws.project_id.clone(),
+            config: config.to_string(),
+        })
+    }
+
+    async fn set_crew_dispatch(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        self.accept(StubWrite::CrewDispatch {
             project_id: ws.project_id.clone(),
             config: config.to_string(),
         })
