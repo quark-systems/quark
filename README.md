@@ -47,13 +47,16 @@ The event stream is a WebSocket at `/v1/events?cursor=<seq>`: each frame is one 
 `POST /v1/projects` with `repos` and an `agent_config` provisions a Project in the background (`crates/quarkd/src/provision.rs`).
 It clones each repo into the command-center workspace (`~/.quark/workspaces/command`), seeds the Project workspace at `~/.quark/workspaces/<project-id>`, writes the Project repo (`~/.quark/projects/<project-id>.git`, checked out at `<workspace>/project`) and starts the coordinator.
 `project.updated` events report each step and the final `ready` or `failed` status; `POST /v1/projects/{id}:provision` retries a failed Project.
-The engine checkout under `~/.quark/engine` must be the quark-systems firstmate fork, which provides `fm-project-add.sh`, `fm-project-yolo.sh`, `fm-gates.sh` and `--answered-by` on answers.
+The engine checkout under `~/.quark/engine` must be the quark-systems firstmate fork, which provides `fm-project-add.sh`, `fm-project-yolo.sh`, `fm-gates.sh`, `fm-crew-dispatch.sh` and `--answered-by` on answers.
 
 `GET /v1/decisions` lists every Project's captain holds and workers' open keyed decisions; `POST /v1/decisions/{id}:answer` with `answer` and `answered_by` (the daemon's own user when absent) answers one through the engine (`fm-captain-hold.sh answer` for a hold, `fm-send.sh --resolve-key` for a worker's decision) and stores who answered.
 `decision.opened` and `decision.answered` events report each change; a question answered outside Quark arrives answered with no `answered_by`, and one asked again opens a new decision.
 
 Verification gates (ADR-15, `crates/quarkd/src/gates.rs`) are declared per source in `project.yaml` under `verification` (repo checks and Playwright journeys), and holdout tests live in the Project repo under `holdout/<source>/`.
 Each refresh compiles that declaration into the workspace's `config/gates.json`; workers run the gates before opening a PR, and the evidence lands in `state/<task-id>.gates.json` for the PR center.
+
+Dispatch rules (ADR-11, `crates/quarkd/src/crew_dispatch.rs`) live in the Project repo's `dispatch.yaml`: `rules` (each a `when` with one profile or a list of candidates in `use`), `default`, `default_select` and the `classifier` block.
+Each refresh compiles a changed `dispatch.yaml` on `main` into the workspace's `config/crew-dispatch.json` through `fm-crew-dispatch.sh config-set`, mapping Quark harness ids (`claude-code`) to the engine's (`claude`); a file that does not compile or that the engine refuses is recorded as a failed `dispatch` adapter call and the last good config stays.
 
 Terminal sessions need tmux 3.2 or newer (`--tmux` or `QUARKD_TMUX` picks the binary; without tmux the terminal routes answer 503).
 quarkd runs one private tmux server on `~/.quark/run/tmux/quark` and attaches to it in control mode; engine calls point `TMUX` at it, so the command center, every coordinator and every worker run there (firstmate records no tmux socket per task, so the server is shared rather than one per Project).

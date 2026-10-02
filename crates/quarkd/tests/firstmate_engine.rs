@@ -563,3 +563,52 @@ fn only_task_files_trigger_refresh() {
         assert!(!is_task_file(Path::new(no)), "{no}");
     }
 }
+
+#[tokio::test]
+async fn crew_dispatch_config_goes_through_config_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_engine(dir.path());
+    // Mirrors fm-crew-dispatch.sh config-set: input only from the
+    // environment, exit 1 on an invalid config with the old file untouched.
+    let script = fake.engine_root.join("bin/fm-crew-dispatch.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = config-set ] || { echo 'error: usage' >&2; exit 2; }\n\
+         case \"$FM_CREW_DISPATCH_CONFIG_JSON\" in *nope*) echo 'error: unverified harness: nope' >&2; exit 1;; esac\n\
+         mkdir -p \"$FM_HOME/config\"\n\
+         printf '%s' \"$FM_CREW_DISPATCH_CONFIG_JSON\" > \"$FM_HOME/config/crew-dispatch.json\"\n\
+         echo \"crew dispatch config written: $FM_HOME/config/crew-dispatch.json\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let log = Arc::new(MemoryCallLog::default());
+    let e = FirstmateEngine::new(&fake.engine_root, log.clone());
+    let ws = WorkspaceRef {
+        project_id: "p1".into(),
+        root: fake.home.clone(),
+    };
+    let file = fake.home.join("config/crew-dispatch.json");
+
+    let good = r#"{"rules":[],"default":{"harness":"claude"}}"#;
+    e.set_crew_dispatch(&ws, good).await.unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), good);
+
+    let err = e
+        .set_crew_dispatch(&ws, r#"{"default":{"harness":"nope"}}"#)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, EngineError::Invalid(ref m) if m == "crew dispatch config refused: unverified harness: nope"),
+        "{err:?}"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), good);
+
+    // Refused before anything runs.
+    let err = e.set_crew_dispatch(&ws, "[]").await.unwrap_err();
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    let calls = log.calls();
+    assert_eq!(calls.len(), 2);
+    assert!(calls
+        .iter()
+        .all(|c| c.script == "fm-crew-dispatch.sh" && c.args == ["config-set"]));
+}

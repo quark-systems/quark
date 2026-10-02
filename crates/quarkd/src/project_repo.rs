@@ -5,7 +5,7 @@
 //! ~/.quark/projects/<project-id>.git     bare repo, the source of truth
 //! <workspace>/project/                   checkout inside the Project workspace
 //!   project.yaml     goal, workspace sources, default agent config, trackers, delivery
-//!   dispatch.yaml    rules and default (compiled to the engine's dispatch profiles later)
+//!   dispatch.yaml    rules and default (compiled to the engine's dispatch profiles, `crate::crew_dispatch`)
 //!   instructions.md  Project-level guidance for the coordinator and workers
 //!   memory/          one file per entry, with evidence and date (empty at creation)
 //!   library/         files you add and artifacts agents produce
