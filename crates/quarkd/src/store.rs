@@ -26,7 +26,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -112,6 +112,12 @@ const SCHEMA_V4: &str = r#"
 ALTER TABLE events ADD COLUMN subject TEXT;
 ALTER TABLE events ADD COLUMN size INTEGER;
 CREATE INDEX events_subject ON events (subject, seq) WHERE subject IS NOT NULL;
+"#;
+
+/// The tmux target of each Project's coordinator window, as the engine
+/// reported it at launch, so terminals map again after a daemon restart.
+const SCHEMA_V5: &str = r#"
+ALTER TABLE projects ADD COLUMN coordinator_terminal TEXT;
 "#;
 
 /// Capacity of the live event channel. A subscriber that falls further behind
@@ -323,6 +329,33 @@ impl Store {
                 serde_json::to_value(&project)?,
             )?;
             Ok(project)
+        })
+    }
+
+    /// Records (or, with `None`, clears) the tmux target of a Project's
+    /// coordinator window.
+    pub fn set_coordinator_terminal(&self, id: &str, target: Option<&str>) -> Result<()> {
+        self.read(|c| {
+            let n = c.execute(
+                "UPDATE projects SET coordinator_terminal = ?2 WHERE id = ?1",
+                params![id, target],
+            )?;
+            if n == 0 {
+                return Err(StoreError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    /// Every recorded coordinator window, as `(project id, tmux target)`.
+    pub fn coordinator_terminals(&self) -> Result<Vec<(String, String)>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id, coordinator_terminal FROM projects \
+                 WHERE coordinator_terminal IS NOT NULL ORDER BY id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
         })
     }
 
@@ -891,6 +924,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(SCHEMA_V4)?;
         tx.pragma_update(None, "user_version", 4)?;
+        tx.commit()?;
+    }
+    if version < 5 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V5)?;
+        tx.pragma_update(None, "user_version", 5)?;
         tx.commit()?;
     }
     Ok(())

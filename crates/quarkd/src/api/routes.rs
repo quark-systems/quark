@@ -77,6 +77,7 @@ fn start_provisioning(state: &AppState, project_id: &str) {
     tokio::spawn(provision::provision(
         state.store.clone(),
         state.engine.clone(),
+        state.sessions.clone(),
         state.layout.clone(),
         project_id.to_string(),
     ));

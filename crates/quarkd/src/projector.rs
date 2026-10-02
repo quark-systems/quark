@@ -147,7 +147,33 @@ impl Projector {
     }
 
     /// Refreshes on start and then every `interval` until the task is dropped.
+    /// Maps each recorded coordinator window again after a daemon start.
+    async fn restore_coordinators(&self) {
+        let Some(sessions) = &self.sessions else {
+            return;
+        };
+        let store = self.store.clone();
+        let targets = match tokio::task::spawn_blocking(move || store.coordinator_terminals()).await
+        {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "reading coordinator windows failed");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "coordinator window read panicked");
+                return;
+            }
+        };
+        for (project_id, target) in targets {
+            if let Err(e) = sessions.set_coordinator(&project_id, Some(target)).await {
+                tracing::warn!(project = %project_id, error = %e, "mapping the coordinator terminal failed");
+            }
+        }
+    }
+
     pub async fn run(self, interval: Duration) {
+        self.restore_coordinators().await;
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {

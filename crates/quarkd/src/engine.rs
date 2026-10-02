@@ -186,12 +186,14 @@ pub trait EngineAdapter: Send + Sync {
     ) -> Result<PathBuf, EngineError>;
 
     /// Start the coordinator of a seeded Project workspace with `agent`.
+    /// Returns the tmux `session:window` target it runs in, when it runs in
+    /// a local tmux window.
     async fn start_coordinator(
         &self,
         command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
-    ) -> Result<(), EngineError>;
+    ) -> Result<Option<String>, EngineError>;
 }
 
 /// A write the [`StubEngine`] received.
@@ -341,10 +343,11 @@ impl EngineAdapter for StubEngine {
         _command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Option<String>, EngineError> {
         self.accept(StubWrite::StartCoordinator {
             project_id: ws.project_id.clone(),
             harness: agent.harness.clone(),
-        })
+        })?;
+        Ok(Some(format!("quark:{}", ws.project_id)))
     }
 }

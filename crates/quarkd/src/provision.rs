@@ -25,6 +25,7 @@ use quark_systems::{
 
 use crate::engine::{EngineAdapter, SourceRepo, WorkspacePlan, WorkspaceRef};
 use crate::project_repo;
+use crate::sessions::Sessions;
 use crate::store::Store;
 
 /// Where Quark keeps workspaces and Project repos under its home.
@@ -163,12 +164,14 @@ fn token(s: &str, model: bool) -> bool {
 pub async fn provision(
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
+    sessions: Sessions,
     layout: Layout,
     project_id: String,
 ) {
     let p = Provisioner {
         store,
         engine,
+        sessions,
         layout,
         project_id,
     };
@@ -187,6 +190,7 @@ pub async fn provision(
 struct Provisioner {
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
+    sessions: Sessions,
     layout: Layout,
     project_id: String,
 }
@@ -252,17 +256,57 @@ impl Provisioner {
             project_id: project.id.clone(),
             root: root.clone(),
         };
-        self.step(
-            "Starting the coordinator",
-            "start_coordinator",
-            self.engine.start_coordinator(&command, &ws, &agent),
-        )
-        .await?;
+        // The coordinator's window, and every worker window it opens, go in
+        // Quark's shared tmux server. Without tmux the engine uses its own.
+        let terminals = self.sessions.server().is_ok();
+        if terminals {
+            self.step(
+                "Starting the terminal server",
+                "ensure_tmux_server",
+                self.sessions.ensure_server(),
+            )
+            .await?;
+        }
+        let target = self
+            .step(
+                "Starting the coordinator",
+                "start_coordinator",
+                self.engine.start_coordinator(&command, &ws, &agent),
+            )
+            .await?;
+        if let Some(target) = target.filter(|_| terminals) {
+            self.map_coordinator(target).await;
+        }
 
         Ok(self
             .status(ProjectStatus::Ready, None, Some(&root), Some(&bare))
             .await
             .ok_or("could not record the ready Project")?)
+    }
+
+    /// Records the coordinator's window and streams it as the Project's
+    /// coordinator terminal. A failure here leaves the coordinator running,
+    /// so it is logged rather than failing the Project.
+    async fn map_coordinator(&self, target: String) {
+        let (store, id, t) = (self.store.clone(), self.project_id.clone(), target.clone());
+        match tokio::task::spawn_blocking(move || store.set_coordinator_terminal(&id, Some(&t)))
+            .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(project = %self.project_id, error = %e, "recording the coordinator window failed")
+            }
+            Err(e) => {
+                tracing::warn!(project = %self.project_id, error = %e, "recording the coordinator window panicked")
+            }
+        }
+        if let Err(e) = self
+            .sessions
+            .set_coordinator(&self.project_id, Some(target))
+            .await
+        {
+            tracing::warn!(project = %self.project_id, error = %e, "mapping the coordinator terminal failed");
+        }
     }
 
     /// Announce `label`, run `fut`, record it as adapter call `operation`, and

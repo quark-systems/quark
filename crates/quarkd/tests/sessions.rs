@@ -373,3 +373,111 @@ async fn floods_are_recorded_and_pruned_to_a_snapshot() {
     sessions.detach_all();
     server.kill().await;
 }
+
+/// Provisioning starts the coordinator through the engine in Quark's shared
+/// server and maps its window as the Project's coordinator terminal, which a
+/// restarted daemon maps again from the store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provisioning_starts_the_coordinator_in_the_shared_server() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use quark_engine::runner::MemoryCallLog;
+    use quark_systems::{AgentConfig, ProjectStatus, RepoSource};
+    use quarkd::engine::firstmate::FirstmateEngine;
+    use quarkd::engine::EngineAdapter;
+    use quarkd::provision::{self, Layout};
+
+    if !tmux_installed() {
+        eprintln!("tmux is not installed; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("engine/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    // fm-spawn opens its window in whatever server $TMUX names, as firstmate
+    // does, so the window only lands in Quark's server if TMUX reached it.
+    for (name, body) in [
+        (
+            "fm-project-add.sh",
+            "echo \"project=$1 path=$FM_HOME/projects/$1 mode=$4 yolo=off result=added\"",
+        ),
+        ("fm-home-seed.sh", "mkdir -p \"$2\"; echo \"home=$2\""),
+        (
+            "fm-spawn.sh",
+            "tmux new-window -d -t quark: -n \"$1\" 'sleep 600' || exit 1\n\
+             echo \"spawned $1 harness=$4 kind=secondmate window=quark:$1 worktree=$2\"",
+        ),
+    ] {
+        let p = bin.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    let engine: Arc<dyn EngineAdapter> = Arc::new(
+        FirstmateEngine::new(
+            dir.path().join("engine"),
+            Arc::new(MemoryCallLog::default()),
+        )
+        .with_tmux(sessions.tmux_env().ok()),
+    );
+    let input = provision::normalize(CreateProject {
+        name: "p".into(),
+        repos: vec![RepoSource {
+            url: "https://github.com/quark-systems/quark.git".into(),
+            name: None,
+        }],
+        agent_config: Some(AgentConfig {
+            harness: "claude-code".into(),
+            model: None,
+            effort: None,
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+    let project = store.create_project(input).unwrap();
+    let layout = Layout::new(dir.path().join("home"));
+    provision::provision(
+        store.clone(),
+        engine.clone(),
+        sessions.clone(),
+        layout,
+        project.id.clone(),
+    )
+    .await;
+
+    let p = store.get_project(&project.id).unwrap();
+    assert_eq!(p.status, ProjectStatus::Ready, "{:?}", p.status_detail);
+    let target = format!("quark:{}", project.id);
+    assert_eq!(
+        store.coordinator_terminals().unwrap(),
+        vec![(project.id.clone(), target.clone())]
+    );
+    let terminals = sessions.list(&project.id);
+    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    assert_eq!(terminals[0].id, project.id);
+    assert_eq!(terminals[0].role, TerminalRole::Coordinator);
+
+    // A restarted daemon has no mapping until the projector restores it.
+    sessions.detach_all();
+    let restarted = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    assert!(restarted.list(&project.id).is_empty());
+    let projector =
+        quarkd::projector::Projector::new(store.clone(), engine).with_sessions(restarted.clone());
+    let run = tokio::spawn(projector.run(Duration::from_secs(3600)));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while restarted.list(&project.id).is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "coordinator not restored"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    run.abort();
+    assert_eq!(
+        restarted.list(&project.id)[0].role,
+        TerminalRole::Coordinator
+    );
+    restarted.server().unwrap().kill().await;
+}

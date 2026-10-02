@@ -150,10 +150,15 @@ impl ScriptRunner {
             timed_out: false,
         };
 
-        let spawned = Command::new(&path)
+        let mut command = Command::new(&path);
+        command
             .args(&args)
             .current_dir(&self.workspace.engine_root)
-            .env("FM_HOME", &self.workspace.home)
+            .env("FM_HOME", &self.workspace.home);
+        if let Some(tmux) = &self.workspace.tmux {
+            command.env("TMUX", tmux).env_remove("TMUX_PANE");
+        }
+        let spawned = command
             .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -378,6 +383,18 @@ mod tests {
         };
         let out = String::from_utf8(r.run_write(&op).unwrap()).unwrap();
         assert_eq!(out, "Run it.|All.|home=/q/ws/p1");
+    }
+
+    #[test]
+    fn workspace_tmux_reaches_every_call() {
+        let (_d, ws) = engine_with(
+            FLEET_SNAPSHOT,
+            "#!/bin/sh\nprintf '%s|%s' \"$TMUX\" \"${TMUX_PANE-unset}\"\n",
+        );
+        let ws = ws.with_tmux(Some("/q/run/tmux/quark,0,0".into()));
+        let r = ScriptRunner::new(ws, Arc::new(MemoryCallLog::default()));
+        let out = String::from_utf8(r.run(FLEET_SNAPSHOT, &["--json"]).unwrap()).unwrap();
+        assert_eq!(out, "/q/run/tmux/quark,0,0|unset");
     }
 
     #[test]

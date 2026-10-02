@@ -263,7 +263,8 @@ fn add_provision_scripts(engine_root: &Path) {
             format!(
                 "#!/bin/sh\n{{ echo '--- {name}'; for a in \"$@\"; do echo \"$a\"; done; \
                  [ -n \"$FM_SECONDMATE_CHARTER\" ] && echo \"charter=$FM_SECONDMATE_CHARTER\"; \
-                 [ -n \"$FM_SECONDMATE_SCOPE\" ] && echo \"scope=$FM_SECONDMATE_SCOPE\"; }} \
+                 [ -n \"$FM_SECONDMATE_SCOPE\" ] && echo \"scope=$FM_SECONDMATE_SCOPE\"; \
+                 echo \"tmux=$TMUX\"; }} \
                  >> \"$FM_HOME/calls.log\"\n{result}\n"
             ),
         )
@@ -296,7 +297,8 @@ async fn provisioning_runs_project_add_seed_and_spawn() {
     let dir = tempfile::tempdir().unwrap();
     let fake = fake_engine(dir.path());
     add_provision_scripts(&fake.engine_root);
-    let e = FirstmateEngine::new(&fake.engine_root, Arc::new(MemoryCallLog::default()));
+    let e = FirstmateEngine::new(&fake.engine_root, Arc::new(MemoryCallLog::default()))
+        .with_tmux(Some("/q/run/tmux/quark,0,0".into()));
     let command = fake.home.clone();
     let plan = plan(dir.path().join("workspaces/prj_1"));
 
@@ -311,17 +313,19 @@ async fn provisioning_runs_project_add_seed_and_spawn() {
         project_id: "prj_1".into(),
         root,
     };
-    e.start_coordinator(
-        &command,
-        &ws,
-        &AgentConfig {
-            harness: "claude-code".into(),
-            model: Some("claude-sonnet-5".into()),
-            effort: Some("high".into()),
-        },
-    )
-    .await
-    .unwrap();
+    let target = e
+        .start_coordinator(
+            &command,
+            &ws,
+            &AgentConfig {
+                harness: "claude-code".into(),
+                model: Some("claude-sonnet-5".into()),
+                effort: Some("high".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(target.as_deref(), Some("fm:prj_1"));
 
     let root = plan.root.to_str().unwrap();
     let log = fs::read_to_string(command.join("calls.log")).unwrap();
@@ -329,15 +333,15 @@ async fn provisioning_runs_project_add_seed_and_spawn() {
         log,
         format!(
             "--- fm-project-add.sh\nquark\nhttps://github.com/quark-systems/quark.git\n--mode\nno-mistakes\n\
-             --desc\nhttps://github.com/quark-systems/quark.git (added by Quark)\n\
+             --desc\nhttps://github.com/quark-systems/quark.git (added by Quark)\ntmux=/q/run/tmux/quark,0,0\n\
              --- fm-project-add.sh\nengine\ngit@github.com:quark-systems/firstmate.git\n--mode\nno-mistakes\n\
-             --desc\ngit@github.com:quark-systems/firstmate.git (added by Quark)\n\
+             --desc\ngit@github.com:quark-systems/firstmate.git (added by Quark)\ntmux=/q/run/tmux/quark,0,0\n\
              --- fm-home-seed.sh\nprj_1\n{root}\nquark\nengine\n\
              charter=Coordinate the Quark Project \"Quark\" across quark, engine. Its goal: Ship J2 \
              The Project repo checked out at project/ holds its instructions.md and memory/; \
              read instructions.md before planning work.\n\
-             scope=All work for the Quark Project \"Quark\" (prj_1) in quark, engine.\n\
-             --- fm-spawn.sh\nprj_1\n{root}\n--harness\nclaude\n--model\nclaude-sonnet-5\n--effort\nhigh\n--secondmate\n"
+             scope=All work for the Quark Project \"Quark\" (prj_1) in quark, engine.\ntmux=/q/run/tmux/quark,0,0\n\
+             --- fm-spawn.sh\nprj_1\n{root}\n--harness\nclaude\n--model\nclaude-sonnet-5\n--effort\nhigh\n--secondmate\ntmux=/q/run/tmux/quark,0,0\n"
         )
     );
 

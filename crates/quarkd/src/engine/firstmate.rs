@@ -24,6 +24,7 @@ use super::{
 pub struct FirstmateEngine {
     engine_root: PathBuf,
     log: Arc<dyn CallLog>,
+    tmux: Option<String>,
 }
 
 impl FirstmateEngine {
@@ -31,7 +32,15 @@ impl FirstmateEngine {
         Self {
             engine_root: engine_root.into(),
             log,
+            tmux: None,
         }
+    }
+
+    /// Run every engine call with `TMUX` set to `tmux`, so firstmate opens
+    /// and checks windows in Quark's shared tmux server.
+    pub fn with_tmux(mut self, tmux: Option<String>) -> Self {
+        self.tmux = tmux;
+        self
     }
 
     fn reader(&self, ws: &WorkspaceRef) -> Result<EngineReader, EngineError> {
@@ -42,7 +51,7 @@ impl FirstmateEngine {
         if !ws.root.is_dir() {
             return Err(EngineError::WorkspaceNotFound(ws.root.clone()));
         }
-        Ok(Workspace::new(&ws.root, &self.engine_root))
+        Ok(Workspace::new(&ws.root, &self.engine_root).with_tmux(self.tmux.clone()))
     }
 
     async fn write(&self, ws: &WorkspaceRef, op: WriteOp) -> Result<(), EngineError> {
@@ -54,7 +63,8 @@ impl FirstmateEngine {
         if !home.is_dir() {
             return Err(EngineError::WorkspaceNotFound(home.to_path_buf()));
         }
-        let writer = EngineWriter::new(Workspace::new(home, &self.engine_root), self.log.clone());
+        let workspace = Workspace::new(home, &self.engine_root).with_tmux(self.tmux.clone());
+        let writer = EngineWriter::new(workspace, self.log.clone());
         blocking(move || writer.write(&op)).await
     }
 
@@ -180,7 +190,7 @@ impl EngineAdapter for FirstmateEngine {
         command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Option<String>, EngineError> {
         let op = WriteOp::SpawnSecondmate {
             id: ws.project_id.clone(),
             home: ws.root.clone(),
@@ -189,9 +199,19 @@ impl EngineAdapter for FirstmateEngine {
             effort: agent.effort.clone(),
         };
         let out = self.write_at(command, op).await?;
-        write::parse_spawned(&out).map_err(convert)?;
-        Ok(())
+        let line = write::parse_spawned(&out).map_err(convert)?;
+        Ok(spawned_window(&line))
     }
+}
+
+/// The local `session:window` target from fm-spawn's `spawned` line. A
+/// remote secondmate reports `window=remote:<id>`, which no local tmux
+/// server holds.
+fn spawned_window(line: &str) -> Option<String> {
+    let window = line
+        .split_whitespace()
+        .find_map(|f| f.strip_prefix("window="))?;
+    (window.contains(':') && !window.starts_with("remote:")).then(|| window.to_string())
 }
 
 fn delivery_mode(d: DeliveryPolicy) -> DeliveryMode {
@@ -376,5 +396,20 @@ fn convert(e: Error) -> EngineError {
             EngineError::Parse(e.to_string())
         }
         e => EngineError::Command(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spawned_window;
+
+    #[test]
+    fn spawned_window_is_the_local_tmux_target() {
+        let line = "spawned prj_1 harness=claude kind=secondmate window=quark:prj_1 worktree=/w";
+        assert_eq!(spawned_window(line).as_deref(), Some("quark:prj_1"));
+        let remote = "spawned prj_1 harness=claude kind=secondmate mode=secondmate yolo=off \
+                      window=remote:prj_1 worktree=/w remote=box backend=tmux";
+        assert_eq!(spawned_window(remote), None);
+        assert_eq!(spawned_window("spawned prj_1 harness=claude"), None);
     }
 }

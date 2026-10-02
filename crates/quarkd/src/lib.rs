@@ -46,9 +46,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let db_path = config.db_path();
     let store =
         Arc::new(Store::open(&db_path).with_context(|| format!("opening {}", db_path.display()))?);
-    let engine: Arc<dyn EngineAdapter> = config::build_engine(engine, &config, store.clone())?;
-
+    // Engine calls run against Quark's shared tmux server, so coordinators
+    // and their workers open windows where the terminal sessions stream them.
     let sessions = Sessions::detect(config.tmux.as_deref(), config.run_dir(), store.clone());
+    let engine: Arc<dyn EngineAdapter> =
+        config::build_engine(engine, &config, store.clone(), sessions.tmux_env().ok())?;
+
     let projector = Projector::new(store.clone(), engine.clone()).with_sessions(sessions.clone());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
