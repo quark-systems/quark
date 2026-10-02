@@ -124,7 +124,7 @@
           "projects"
         ],
         "summary": "Create a Project.",
-        "description": "Phase 0 records the Project in the daemon only. Seeding its engine\nworkspace arrives with the adapter write path.",
+        "description": "With `repos`, returns at once with status `provisioning` and provisions in\nthe background: clones the repos into a new Project workspace, writes the\nProject repo and starts the coordinator. `project.updated` events report\neach step and the final `ready` or `failed` status.",
         "operationId": "create_project",
         "requestBody": {
           "content": {
@@ -341,6 +341,57 @@
         }
       }
     },
+    "/v1/projects/{id}:provision": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Retry provisioning a Project whose provisioning failed.",
+        "description": "Every step is safe to repeat, so provisioning starts again from the first\nstep. Returns the Project with status `provisioning`.",
+        "operationId": "provision_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Project is not in a failed state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}": {
       "get": {
         "tags": [
@@ -370,6 +421,205 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tasks/{id}/messages": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Steer a task's worker.",
+        "description": "The message is durably recorded for the worker before this returns; the\nworker reads it on its next turn.",
+        "operationId": "send_task_message",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTaskMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Message recorded for the worker"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tasks/{id}:cancel": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Cancel a task's worker.",
+        "description": "Stops the worker and keeps its worktree and every uncommitted change;\nrelaunch picks the task up again.",
+        "operationId": "cancel_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The worker is stopped"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tasks/{id}:relaunch": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Relaunch a task's worker in the same worktree.",
+        "operationId": "relaunch_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelaunchTask"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "A new worker is running"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
             "content": {
               "application/json": {
                 "schema": {
@@ -597,12 +847,71 @@
   },
   "components": {
     "schemas": {
+      "AgentConfig": {
+        "type": "object",
+        "description": "A harness with its model and effort.",
+        "required": [
+          "harness"
+        ],
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`low`, `medium`, `high`, `xhigh` or `max`."
+          },
+          "harness": {
+            "type": "string",
+            "description": "Harness id, e.g. `claude-code`, `codex`, `pi`."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CreateProject": {
         "type": "object",
+        "description": "Create a Project.\n\nWith `repos`, the daemon provisions it: clones the repos into a new\nProject workspace, writes the Project repo and starts the coordinator. The\nProject is returned with status `provisioning` and moves to `ready` or\n`failed` (see `project.updated` events). `agent_config` is required then.\n\nWithout `repos`, the Project is only recorded, optionally attached to an\nexisting workspace at `workspace_path`.",
         "required": [
           "name"
         ],
         "properties": {
+          "agent_config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivery": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryPolicy",
+                "description": "Default `gated`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatch_preset": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchPreset",
+                "description": "One of the presets listed by `DispatchPreset`; default `single`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "goal": {
             "type": [
               "string",
@@ -612,11 +921,18 @@
           "name": {
             "type": "string"
           },
+          "repos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepoSource"
+            }
+          },
           "workspace_path": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Attach an existing workspace instead of provisioning one."
           }
         }
       },
@@ -677,6 +993,22 @@
         "enum": [
           "open",
           "answered"
+        ]
+      },
+      "DeliveryPolicy": {
+        "type": "string",
+        "description": "How a Project's changes reach a pull request.",
+        "enum": [
+          "gated",
+          "direct"
+        ]
+      },
+      "DispatchPreset": {
+        "type": "string",
+        "description": "Starting dispatch rules for a new Project. Both route to the Project's\nagent config; rules can be edited afterwards.",
+        "enum": [
+          "single",
+          "light_trivial"
         ]
       },
       "ErrorBody": {
@@ -790,12 +1122,46 @@
         "required": [
           "id",
           "name",
+          "status",
+          "repos",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "agent_config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentConfig",
+                "description": "Harness, model and effort the coordinator and, by default, workers use."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "type": "string"
+          },
+          "delivery": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatch_preset": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchPreset",
+                "description": "Dispatch preset the Project's `dispatch.yaml` was created from."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "goal": {
             "type": [
@@ -809,6 +1175,30 @@
           "name": {
             "type": "string"
           },
+          "project_repo_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Local path of the Project repo (bare), which holds `project.yaml`,\n`dispatch.yaml`, `instructions.md` and `memory/`."
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepoSource"
+            },
+            "description": "Code repos in the Project workspace."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProjectStatus"
+          },
+          "status_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What is happening now while provisioning, or why provisioning failed."
+          },
           "updated_at": {
             "type": "string"
           },
@@ -817,7 +1207,80 @@
               "string",
               "null"
             ],
-            "description": "Local path of the Project workspace, when one is attached."
+            "description": "Local path of the Project workspace, once it is provisioned or attached."
+          }
+        }
+      },
+      "ProjectStatus": {
+        "type": "string",
+        "description": "Where a Project is in its lifecycle.",
+        "enum": [
+          "provisioning",
+          "ready",
+          "failed"
+        ]
+      },
+      "RelaunchTask": {
+        "type": "object",
+        "description": "Replace a task's worker in the same worktree. Absent fields keep the\nworker's current harness, model and effort.",
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where things stand, for the new worker, which keeps the worktree but\nnone of the conversation. A default note is used when absent."
+          }
+        }
+      },
+      "RepoSource": {
+        "type": "object",
+        "description": "A forge repo in a Project workspace.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short name, unique in the Project; derived from the URL when absent."
+          },
+          "url": {
+            "type": "string",
+            "description": "Clone URL (https, ssh, scp-like or an absolute local path)."
+          }
+        }
+      },
+      "SendTaskMessage": {
+        "type": "object",
+        "description": "A steering message for a task's worker.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Plain text for the worker to read; may span several lines."
           }
         }
       },

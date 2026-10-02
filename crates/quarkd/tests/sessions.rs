@@ -94,6 +94,7 @@ async fn streams_maps_types_and_reattaches() {
             name: "p".into(),
             goal: None,
             workspace_path: None,
+            ..Default::default()
         })
         .unwrap();
     let mut rx = store.subscribe();
@@ -102,6 +103,7 @@ async fn streams_maps_types_and_reattaches() {
             name: "other".into(),
             goal: None,
             workspace_path: None,
+            ..Default::default()
         })
         .unwrap();
     let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
@@ -308,6 +310,7 @@ async fn floods_are_recorded_and_pruned_to_a_snapshot() {
             name: "flood".into(),
             goal: None,
             workspace_path: None,
+            ..Default::default()
         })
         .unwrap();
     let mut rx = store.subscribe();

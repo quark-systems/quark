@@ -3,10 +3,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use quark_engine::runner::{AdapterCall, CallLog};
+use std::time::UNIX_EPOCH;
+
+use quark_engine::runner::{AdapterCall, CallKind, CallLog};
 
 use crate::engine::firstmate::FirstmateEngine;
 use crate::engine::{EngineAdapter, StubEngine};
+use crate::store::{ScriptCall, Store};
 
 /// Default localhost port for the daemon API.
 pub const DEFAULT_PORT: u16 = 7380;
@@ -57,26 +60,73 @@ pub enum EngineKind {
     Firstmate,
 }
 
-pub fn build_engine(kind: EngineKind, config: &Config) -> anyhow::Result<Arc<dyn EngineAdapter>> {
+pub fn build_engine(
+    kind: EngineKind,
+    config: &Config,
+    store: Arc<Store>,
+) -> anyhow::Result<Arc<dyn EngineAdapter>> {
     match kind {
         EngineKind::Stub => Ok(Arc::new(StubEngine::new())),
         EngineKind::Firstmate => Ok(Arc::new(FirstmateEngine::new(
             config.engine_root(),
-            Arc::new(TracingCallLog),
+            Arc::new(StoreCallLog { store }),
         ))),
     }
 }
 
-/// Logs each engine script call. The projector records one `adapter_calls`
-/// row per operation; this keeps the per-script detail in the daemon log.
-struct TracingCallLog;
+/// Logs every engine script call and keeps an `adapter_calls` record of each
+/// write and each failed read. Successful reads run on a short timer, so the
+/// projector's per-operation rows and the daemon log cover them.
+pub struct StoreCallLog {
+    pub store: Arc<Store>,
+}
 
-impl CallLog for TracingCallLog {
+impl CallLog for StoreCallLog {
     fn record(&self, call: &AdapterCall) {
-        if call.exit_code == Some(0) {
-            tracing::debug!(script = %call.script, args = ?call.args, duration_ms = call.duration.as_millis() as u64, stdout_bytes = call.stdout_bytes, "engine script");
+        let ok = call.exit_code == Some(0);
+        if ok {
+            tracing::debug!(kind = call.kind.as_str(), script = %call.script, args = ?call.args, duration_ms = call.duration.as_millis() as u64, stdout_bytes = call.stdout_bytes, "engine script");
         } else {
-            tracing::warn!(script = %call.script, args = ?call.args, exit_code = ?call.exit_code, timed_out = call.timed_out, stderr = %call.stderr, "engine script failed");
+            tracing::warn!(kind = call.kind.as_str(), script = %call.script, args = ?call.args, exit_code = ?call.exit_code, timed_out = call.timed_out, stderr = %call.stderr, "engine script failed");
+        }
+        if ok && call.kind == CallKind::Read {
+            return;
+        }
+        let detail = if call.timed_out {
+            Some(format!("timed out; {}", call.stderr))
+        } else if ok {
+            None
+        } else {
+            Some(call.stderr.clone())
+        };
+        let row = ScriptCall {
+            ts: rfc3339(call.started_at),
+            project_id: None,
+            kind: call.kind.as_str().into(),
+            script: call.script.clone(),
+            args: call.args.clone(),
+            workspace: call.workspace.to_string_lossy().into_owned(),
+            ok,
+            exit_code: call.exit_code,
+            duration_ms: call.duration.as_millis() as u64,
+            detail,
+        };
+        if let Err(e) = self.store.record_script_call(&row) {
+            tracing::error!(error = %e, script = %call.script, "could not record adapter call");
         }
     }
+}
+
+fn rfc3339(t: std::time::SystemTime) -> String {
+    let nanos = t
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i128)
+        .unwrap_or(0);
+    time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .ok()
+        .and_then(|t| {
+            t.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
+        .unwrap_or_else(crate::now_rfc3339)
 }

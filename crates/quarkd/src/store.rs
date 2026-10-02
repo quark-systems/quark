@@ -11,8 +11,8 @@ use std::sync::Mutex;
 
 use crate::engine::{FleetSnapshot, Hold};
 use quark_systems::{
-    CreateProject, Decision, DecisionState, Event, EventType, Project, Task, TaskKind, TaskState,
-    UpdateProject,
+    AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset, Event,
+    EventType, Project, ProjectStatus, RepoSource, Task, TaskKind, TaskState, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -26,7 +26,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -86,10 +86,29 @@ CREATE TABLE adapter_calls (
 );
 "#;
 
+/// Engine script detail on adapter-call records. Rows written by the
+/// projector per operation leave these empty.
+const SCHEMA_V2: &str = r#"
+ALTER TABLE adapter_calls ADD COLUMN kind TEXT;
+ALTER TABLE adapter_calls ADD COLUMN script TEXT;
+ALTER TABLE adapter_calls ADD COLUMN args TEXT;
+ALTER TABLE adapter_calls ADD COLUMN exit_code INTEGER;
+ALTER TABLE adapter_calls ADD COLUMN workspace TEXT;
+"#;
+
+/// Project creation: lifecycle status and the creation inputs (`spec`, JSON
+/// with repos, agent config, dispatch preset and delivery policy).
+const SCHEMA_V3: &str = r#"
+ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'ready';
+ALTER TABLE projects ADD COLUMN status_detail TEXT;
+ALTER TABLE projects ADD COLUMN spec TEXT;
+ALTER TABLE projects ADD COLUMN project_repo_path TEXT;
+"#;
+
 /// Terminal output is the one high-volume event. `subject` names the terminal
 /// a `worker.output` event belongs to and `size` its byte count, so old
 /// output can be pruned per terminal.
-const SCHEMA_V2: &str = r#"
+const SCHEMA_V4: &str = r#"
 ALTER TABLE events ADD COLUMN subject TEXT;
 ALTER TABLE events ADD COLUMN size INTEGER;
 CREATE INDEX events_subject ON events (subject, seq) WHERE subject IS NOT NULL;
@@ -103,6 +122,8 @@ const BUS_CAPACITY: usize = 1024;
 pub enum StoreError {
     #[error("not found")]
     NotFound,
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("invalid input: {0}")]
     Invalid(String),
     #[error(transparent)]
@@ -112,6 +133,32 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// Engine coordinates of a task, from [`Store::task_target`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskTarget {
+    pub project_id: String,
+    pub engine_id: String,
+    pub workspace_path: Option<String>,
+}
+
+/// One engine script call as stored in `adapter_calls`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptCall {
+    pub ts: String,
+    /// Filled in from the workspace on insert; ignored by `record_script_call`.
+    pub project_id: Option<String>,
+    /// `read` or `write`.
+    pub kind: String,
+    pub script: String,
+    pub args: Vec<String>,
+    pub workspace: String,
+    pub ok: bool,
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    /// Failure detail: stderr tail, or why the script could not run.
+    pub detail: Option<String>,
+}
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -221,6 +268,9 @@ impl Store {
         self.read(|c| get_project(c, id))
     }
 
+    /// Records a Project. One created with repos starts out `provisioning`;
+    /// the caller then drives provisioning and reports through
+    /// [`Store::set_project_status`].
     pub fn create_project(&self, input: CreateProject) -> Result<Project> {
         let name = input.name.trim().to_string();
         if name.is_empty() {
@@ -228,23 +278,118 @@ impl Store {
         }
         self.write(|tx, events| {
             let now = now_rfc3339();
+            let provisioning = !input.repos.is_empty();
             let project = Project {
                 id: new_id("prj"),
                 name,
                 goal: input.goal,
                 workspace_path: input.workspace_path,
+                status: if provisioning {
+                    ProjectStatus::Provisioning
+                } else {
+                    ProjectStatus::Ready
+                },
+                status_detail: None,
+                repos: input.repos,
+                agent_config: input.agent_config,
+                dispatch_preset: input.dispatch_preset,
+                delivery: input.delivery,
+                project_repo_path: None,
                 created_at: now.clone(),
                 updated_at: now,
             };
             tx.execute(
-                "INSERT INTO projects (id, name, goal, workspace_path, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO projects (id, name, goal, workspace_path, created_at, updated_at,
+                     status, status_detail, spec, project_repo_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     project.id,
                     project.name,
                     project.goal,
                     project.workspace_path,
                     project.created_at,
+                    project.updated_at,
+                    project.status.as_str(),
+                    project.status_detail,
+                    spec_json(&project)?,
+                    project.project_repo_path,
+                ],
+            )?;
+            append_event(
+                tx,
+                events,
+                Some(&project.id),
+                EventType::ProjectUpdated,
+                serde_json::to_value(&project)?,
+            )?;
+            Ok(project)
+        })
+    }
+
+    /// Moves a failed Project back to `provisioning` so it can be retried.
+    /// Refuses any other status, atomically, so two retries never both run.
+    pub fn retry_provisioning(&self, id: &str) -> Result<Project> {
+        self.write(|tx, events| {
+            let mut project = get_project(tx, id)?;
+            if project.status != ProjectStatus::Failed || project.repos.is_empty() {
+                return Err(StoreError::Conflict(
+                    "only a Project whose provisioning failed can be provisioned again".into(),
+                ));
+            }
+            project.status = ProjectStatus::Provisioning;
+            project.status_detail = Some("Retrying".into());
+            project.updated_at = now_rfc3339();
+            tx.execute(
+                "UPDATE projects SET status = ?2, status_detail = ?3, updated_at = ?4 WHERE id = ?1",
+                params![
+                    project.id,
+                    project.status.as_str(),
+                    project.status_detail,
+                    project.updated_at
+                ],
+            )?;
+            append_event(
+                tx,
+                events,
+                Some(&project.id),
+                EventType::ProjectUpdated,
+                serde_json::to_value(&project)?,
+            )?;
+            Ok(project)
+        })
+    }
+
+    /// Moves a Project through provisioning. `workspace_path` and
+    /// `project_repo_path` are set when given and kept otherwise.
+    pub fn set_project_status(
+        &self,
+        id: &str,
+        status: ProjectStatus,
+        detail: Option<&str>,
+        workspace_path: Option<&str>,
+        project_repo_path: Option<&str>,
+    ) -> Result<Project> {
+        self.write(|tx, events| {
+            let mut project = get_project(tx, id)?;
+            project.status = status;
+            project.status_detail = detail.map(str::to_string);
+            if let Some(p) = workspace_path {
+                project.workspace_path = Some(p.to_string());
+            }
+            if let Some(p) = project_repo_path {
+                project.project_repo_path = Some(p.to_string());
+            }
+            project.updated_at = now_rfc3339();
+            tx.execute(
+                "UPDATE projects SET status = ?2, status_detail = ?3, workspace_path = ?4,
+                     project_repo_path = ?5, updated_at = ?6
+                 WHERE id = ?1",
+                params![
+                    project.id,
+                    project.status.as_str(),
+                    project.status_detail,
+                    project.workspace_path,
+                    project.project_repo_path,
                     project.updated_at
                 ],
             )?;
@@ -317,6 +462,28 @@ impl Store {
             c.query_row(&format!("{TASK_SELECT} WHERE id = ?1"), [id], task_from_row)
                 .optional()?
                 .ok_or(StoreError::NotFound)
+        })
+    }
+
+    /// Where to reach a task in its engine: the owning Project, the engine's
+    /// own task id and the Project's workspace, if one is attached.
+    pub fn task_target(&self, id: &str) -> Result<TaskTarget> {
+        self.read(|c| {
+            c.query_row(
+                "SELECT t.project_id, t.engine_id, p.workspace_path
+                 FROM tasks t JOIN projects p ON p.id = t.project_id
+                 WHERE t.id = ?1",
+                [id],
+                |r| {
+                    Ok(TaskTarget {
+                        project_id: r.get(0)?,
+                        engine_id: r.get(1)?,
+                        workspace_path: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound)
         })
     }
 
@@ -602,6 +769,73 @@ impl Store {
 
     // Adapter calls
 
+    /// Records one engine script call. The Project is the one whose workspace
+    /// the script ran against, when the daemon knows it.
+    pub fn record_script_call(&self, call: &ScriptCall) -> Result<()> {
+        self.read(|c| {
+            let project_id: Option<String> = c
+                .query_row(
+                    "SELECT id FROM projects WHERE workspace_path = ?1",
+                    [&call.workspace],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            c.execute(
+                "INSERT INTO adapter_calls (ts, project_id, operation, ok, duration_ms, detail,
+                     kind, script, args, exit_code, workspace)
+                 VALUES (?1, ?2, 'script', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    call.ts,
+                    project_id,
+                    call.ok,
+                    call.duration_ms as i64,
+                    call.detail,
+                    call.kind,
+                    call.script,
+                    serde_json::to_string(&call.args)?,
+                    call.exit_code,
+                    call.workspace
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Most recent script calls first.
+    pub fn recent_script_calls(&self, limit: u32) -> Result<Vec<ScriptCall>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT ts, project_id, ok, duration_ms, detail, kind, script, args, exit_code,
+                        workspace
+                 FROM adapter_calls WHERE operation = 'script' ORDER BY id DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map([limit], |r| {
+                Ok((
+                    ScriptCall {
+                        ts: r.get(0)?,
+                        project_id: r.get(1)?,
+                        ok: r.get(2)?,
+                        duration_ms: r.get::<_, i64>(3)? as u64,
+                        detail: r.get(4)?,
+                        kind: r.get(5)?,
+                        script: r.get(6)?,
+                        args: Vec::new(),
+                        exit_code: r.get(8)?,
+                        workspace: r.get(9)?,
+                    },
+                    r.get::<_, String>(7)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (mut call, args) = row?;
+                call.args = serde_json::from_str(&args)?;
+                out.push(call);
+            }
+            Ok(out)
+        })
+    }
+
     pub fn record_adapter_call(
         &self,
         project_id: Option<&str>,
@@ -645,6 +879,18 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(SCHEMA_V2)?;
         tx.pragma_update(None, "user_version", 2)?;
+        tx.commit()?;
+    }
+    if version < 3 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V3)?;
+        tx.pragma_update(None, "user_version", 3)?;
+        tx.commit()?;
+    }
+    if version < 4 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V4)?;
+        tx.pragma_update(None, "user_version", 4)?;
         tx.commit()?;
     }
     Ok(())
@@ -696,8 +942,27 @@ fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", uuid::Uuid::now_v7().simple())
 }
 
-const PROJECT_SELECT: &str =
-    "SELECT id, name, goal, workspace_path, created_at, updated_at FROM projects";
+const PROJECT_SELECT: &str = "SELECT id, name, goal, workspace_path, created_at, updated_at, \
+                              status, status_detail, spec, project_repo_path FROM projects";
+
+/// The creation inputs kept with a Project row.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct ProjectSpec {
+    #[serde(default)]
+    repos: Vec<RepoSource>,
+    agent_config: Option<AgentConfig>,
+    dispatch_preset: Option<DispatchPreset>,
+    delivery: Option<DeliveryPolicy>,
+}
+
+fn spec_json(p: &Project) -> Result<String> {
+    Ok(serde_json::to_string(&ProjectSpec {
+        repos: p.repos.clone(),
+        agent_config: p.agent_config.clone(),
+        dispatch_preset: p.dispatch_preset,
+        delivery: p.delivery,
+    })?)
+}
 
 fn get_project(c: &Connection, id: &str) -> Result<Project> {
     c.query_row(
@@ -710,6 +975,10 @@ fn get_project(c: &Connection, id: &str) -> Result<Project> {
 }
 
 fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
+    let spec: ProjectSpec = r
+        .get::<_, Option<String>>(8)?
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     Ok(Project {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -717,6 +986,13 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         workspace_path: r.get(3)?,
         created_at: r.get(4)?,
         updated_at: r.get(5)?,
+        status: ProjectStatus::parse(&r.get::<_, String>(6)?),
+        status_detail: r.get(7)?,
+        repos: spec.repos,
+        agent_config: spec.agent_config,
+        dispatch_preset: spec.dispatch_preset,
+        delivery: spec.delivery,
+        project_repo_path: r.get(9)?,
     })
 }
 
@@ -819,6 +1095,7 @@ mod tests {
                 name: "demo".into(),
                 goal: None,
                 workspace_path: Some("/tmp/ws".into()),
+                ..Default::default()
             })
             .unwrap()
     }

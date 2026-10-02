@@ -3,7 +3,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use quark_systems::{ErrorBody, ErrorDetail};
 
+use crate::engine::EngineError;
 use crate::store::StoreError;
+
+/// Longest engine failure detail returned to a client, in bytes.
+const ENGINE_DETAIL_MAX: usize = 2048;
 
 #[derive(Debug)]
 pub struct ApiError {
@@ -39,12 +43,46 @@ impl From<StoreError> for ApiError {
         match e {
             StoreError::NotFound => ApiError::not_found(),
             StoreError::Invalid(m) => ApiError::invalid(m),
+            StoreError::Conflict(m) => ApiError::new(StatusCode::CONFLICT, "conflict", m),
             other => {
                 tracing::error!(error = %other, "store error");
                 ApiError::internal("internal store error")
             }
         }
     }
+}
+
+impl From<EngineError> for ApiError {
+    fn from(e: EngineError) -> Self {
+        match e {
+            EngineError::Invalid(m) => ApiError::invalid(m),
+            EngineError::TaskNotFound(_) => ApiError::not_found(),
+            EngineError::WorkspaceNotFound(_) => ApiError::new(
+                StatusCode::CONFLICT,
+                "workspace_missing",
+                "the Project's workspace is not on this machine",
+            ),
+            other => {
+                let message = other.to_string();
+                tracing::warn!(error = %message, "engine call failed");
+                ApiError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "engine_failed",
+                    tail(&message, ENGINE_DETAIL_MAX),
+                )
+            }
+        }
+    }
+}
+
+/// The last `max` bytes of `s`, on a character boundary.
+fn tail(s: &str, max: usize) -> String {
+    let s = s.trim_end();
+    let mut start = s.len().saturating_sub(max);
+    while !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_string()
 }
 
 impl IntoResponse for ApiError {

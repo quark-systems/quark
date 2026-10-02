@@ -7,7 +7,9 @@
 pub mod api;
 pub mod config;
 pub mod engine;
+pub mod project_repo;
 pub mod projector;
+pub mod provision;
 pub mod sessions;
 pub mod store;
 
@@ -18,7 +20,7 @@ use anyhow::Context;
 use tokio::net::TcpListener;
 
 use crate::api::AppState;
-use crate::config::Config;
+use crate::config::{Config, EngineKind};
 use crate::projector::Projector;
 use crate::sessions::Sessions;
 use crate::store::Store;
@@ -30,8 +32,9 @@ pub fn now_rfc3339() -> String {
         .expect("RFC 3339 formatting never fails for UTC")
 }
 
-/// Opens the store, starts the projector and serves the API until shutdown.
-pub async fn serve(config: Config, engine: Arc<dyn EngineAdapter>) -> anyhow::Result<()> {
+/// Opens the store, builds the engine adapter, starts the projector and
+/// serves the API until shutdown.
+pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     if !config.listen.ip().is_loopback() {
         anyhow::bail!(
             "refusing to listen on non-loopback address {}; Local mode serves localhost only",
@@ -43,6 +46,7 @@ pub async fn serve(config: Config, engine: Arc<dyn EngineAdapter>) -> anyhow::Re
     let db_path = config.db_path();
     let store =
         Arc::new(Store::open(&db_path).with_context(|| format!("opening {}", db_path.display()))?);
+    let engine: Arc<dyn EngineAdapter> = config::build_engine(engine, &config, store.clone())?;
 
     let sessions = Sessions::detect(config.tmux.as_deref(), config.run_dir(), store.clone());
     let projector = Projector::new(store.clone(), engine.clone()).with_sessions(sessions.clone());
@@ -52,6 +56,7 @@ pub async fn serve(config: Config, engine: Arc<dyn EngineAdapter>) -> anyhow::Re
         store,
         engine,
         sessions: sessions.clone(),
+        layout: provision::Layout::new(&config.home),
     });
     let listener = TcpListener::bind(config.listen)
         .await

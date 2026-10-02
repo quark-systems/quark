@@ -24,6 +24,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub engine: Arc<dyn EngineAdapter>,
     pub sessions: Sessions,
+    /// Where new Project workspaces and Project repos go.
+    pub layout: crate::provision::Layout,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -34,12 +36,21 @@ pub fn router(state: AppState) -> Router {
             "/v1/projects",
             get(routes::list_projects).post(routes::create_project),
         )
+        // POST serves the custom method `/v1/projects/{id}:provision`.
         .route(
             "/v1/projects/{id}",
-            get(routes::get_project).patch(routes::update_project),
+            get(routes::get_project)
+                .patch(routes::update_project)
+                .post(routes::project_action),
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
-        .route("/v1/tasks/{id}", get(routes::get_task))
+        // POST serves the custom methods `/v1/tasks/{id}:cancel` and
+        // `:relaunch`; the router allows one parameter per segment.
+        .route(
+            "/v1/tasks/{id}",
+            get(routes::get_task).post(routes::task_action),
+        )
+        .route("/v1/tasks/{id}/messages", post(routes::send_task_message))
         .route(
             "/v1/projects/{id}/terminals",
             get(terminals::list_terminals),

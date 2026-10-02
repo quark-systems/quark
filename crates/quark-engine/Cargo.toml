@@ -1,6 +1,6 @@
 [package]
 name = "quark-engine"
-description = "Typed, read-only access to firstmate engine state: snapshots, status logs, holds and PR records."
+description = "Typed access to firstmate engine state: snapshot, status-log, hold and PR reads, and allowlisted script writes."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

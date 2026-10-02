@@ -1,13 +1,21 @@
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    CreateProject, Decision, DecisionState, ErrorBody, Health, Project, Task, UpdateProject,
+    CreateProject, Decision, DecisionState, ErrorBody, Health, Project, ProjectStatus,
+    RelaunchTask, SendTaskMessage, Task, UpdateProject,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
 
 use super::{db, ApiError, AppState};
+use crate::engine::{TaskControl, WorkspaceRef};
+use crate::provision;
+
+/// Note given to a relaunched worker when the client sends none.
+const DEFAULT_RELAUNCH_NOTE: &str =
+    "Relaunched from Quark. Pick up from the current state of the worktree and the task brief.";
 
 /// Daemon health and the latest event `seq`.
 #[utoipa::path(
@@ -39,8 +47,10 @@ pub async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Pro
 
 /// Create a Project.
 ///
-/// Phase 0 records the Project in the daemon only. Seeding its engine
-/// workspace arrives with the adapter write path.
+/// With `repos`, returns at once with status `provisioning` and provisions in
+/// the background: clones the repos into a new Project workspace, writes the
+/// Project repo and starts the coordinator. `project.updated` events report
+/// each step and the final `ready` or `failed` status.
 #[utoipa::path(
     post,
     path = "/v1/projects",
@@ -55,8 +65,61 @@ pub async fn create_project(
     State(state): State<AppState>,
     Json(input): Json<CreateProject>,
 ) -> Result<(StatusCode, Json<Project>), ApiError> {
+    let input = provision::normalize(input).map_err(ApiError::invalid)?;
     let project = db(&state, move |s| s.create_project(input)).await?;
+    if project.status == ProjectStatus::Provisioning {
+        start_provisioning(&state, &project.id);
+    }
     Ok((StatusCode::CREATED, Json(project)))
+}
+
+fn start_provisioning(state: &AppState, project_id: &str) {
+    tokio::spawn(provision::provision(
+        state.store.clone(),
+        state.engine.clone(),
+        state.layout.clone(),
+        project_id.to_string(),
+    ));
+}
+
+/// Dispatches `POST /v1/projects/{id}:<action>`.
+pub async fn project_action(
+    state: State<AppState>,
+    Path(target): Path<String>,
+) -> Result<(StatusCode, Json<Project>), ApiError> {
+    match target.rsplit_once(':') {
+        Some((id, "provision")) => provision_project(state, Path(id.to_string())).await,
+        Some(_) => Err(ApiError::not_found()),
+        None => Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "use POST /v1/projects/{id}:provision",
+        )),
+    }
+}
+
+/// Retry provisioning a Project whose provisioning failed.
+///
+/// Every step is safe to repeat, so provisioning starts again from the first
+/// step. Returns the Project with status `provisioning`.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{id}:provision",
+    tag = "projects",
+    params(("id" = String, Path, description = "Project id")),
+    responses(
+        (status = 202, body = Project),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody, description = "The Project is not in a failed state")
+    )
+)]
+pub async fn provision_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Project>), ApiError> {
+    let project = db(&state, move |s| s.retry_provisioning(&id)).await?;
+    start_provisioning(&state, &project.id);
+    Ok((StatusCode::ACCEPTED, Json(project)))
 }
 
 /// Get one Project.
@@ -134,6 +197,152 @@ pub async fn get_task(
     Path(id): Path<String>,
 ) -> Result<Json<Task>, ApiError> {
     Ok(Json(db(&state, move |s| s.get_task(&id)).await?))
+}
+
+/// The engine task id and workspace for an API task id.
+async fn engine_target(state: &AppState, id: String) -> Result<(WorkspaceRef, String), ApiError> {
+    let t = db(state, move |s| s.task_target(&id)).await?;
+    let Some(root) = t.workspace_path else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "workspace_missing",
+            "the task's Project has no workspace attached",
+        ));
+    };
+    Ok((
+        WorkspaceRef {
+            project_id: t.project_id,
+            root: root.into(),
+        },
+        t.engine_id,
+    ))
+}
+
+/// Steer a task's worker.
+///
+/// The message is durably recorded for the worker before this returns; the
+/// worker reads it on its next turn.
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}/messages",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    request_body = SendTaskMessage,
+    responses(
+        (status = 204, description = "Message recorded for the worker"),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn send_task_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<SendTaskMessage>,
+) -> Result<StatusCode, ApiError> {
+    if input.text.trim().is_empty() {
+        return Err(ApiError::invalid("text is empty"));
+    }
+    let (ws, task) = engine_target(&state, id).await?;
+    state.engine.send_message(&ws, &task, &input.text).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Dispatches `POST /v1/tasks/{id}:<action>`.
+pub async fn task_action(
+    state: State<AppState>,
+    Path(target): Path<String>,
+    body: Bytes,
+) -> Result<StatusCode, ApiError> {
+    let Some((id, action)) = target.rsplit_once(':') else {
+        return Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "use POST /v1/tasks/{id}:cancel or :relaunch",
+        ));
+    };
+    let id = Path(id.to_string());
+    match action {
+        "cancel" => cancel_task(state, id).await,
+        "relaunch" => {
+            // The body is optional, so an empty one is accepted whatever its
+            // content type says.
+            let input = if body.iter().all(u8::is_ascii_whitespace) {
+                None
+            } else {
+                Some(Json(serde_json::from_slice(&body).map_err(|e| {
+                    ApiError::invalid(format!("invalid relaunch body: {e}"))
+                })?))
+            };
+            relaunch_task(state, id, input).await
+        }
+        _ => Err(ApiError::not_found()),
+    }
+}
+
+/// Cancel a task's worker.
+///
+/// Stops the worker and keeps its worktree and every uncommitted change;
+/// relaunch picks the task up again.
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}:cancel",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 204, description = "The worker is stopped"),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn cancel_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let (ws, task) = engine_target(&state, id).await?;
+    state
+        .engine
+        .control(&ws, &task, &TaskControl::Cancel)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Relaunch a task's worker in the same worktree.
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}:relaunch",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    request_body = RelaunchTask,
+    responses(
+        (status = 204, description = "A new worker is running"),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn relaunch_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Option<Json<RelaunchTask>>,
+) -> Result<StatusCode, ApiError> {
+    let input = input.map(|Json(i)| i).unwrap_or_default();
+    let note = input
+        .note
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_RELAUNCH_NOTE.into());
+    let action = TaskControl::Relaunch {
+        harness: input.harness,
+        model: input.model,
+        effort: input.effort,
+        note,
+    };
+    let (ws, task) = engine_target(&state, id).await?;
+    state.engine.control(&ws, &task, &action).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
