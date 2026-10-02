@@ -575,7 +575,11 @@ impl Harness for CliHarness {
         Ok(LaunchPlan {
             engine_harness: self.0.engine,
             model,
-            effort: config.effort.filter(|e| self.0.efforts.contains(e)),
+            effort: config
+                .effort
+                .as_deref()
+                .and_then(Effort::parse)
+                .filter(|e| self.0.efforts.contains(e)),
             env,
             worktree: worktree.to_path_buf(),
         })

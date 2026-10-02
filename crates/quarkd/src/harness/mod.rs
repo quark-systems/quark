@@ -302,8 +302,17 @@ fn default_validate<H: Harness + ?Sized>(
             ));
         }
     }
-    if let Some(effort) = config.effort {
+    if let Some(raw) = config.effort.as_deref() {
         let accepted = h.efforts();
+        let Some(effort) = Effort::parse(raw) else {
+            let all: Vec<_> = Effort::ALL.iter().map(|e| e.as_str()).collect();
+            errors.push(issue(
+                "effort",
+                "invalid_effort",
+                format!("effort `{raw}` must be one of {}", all.join(", ")),
+            ));
+            return (errors, warnings);
+        };
         if accepted.is_empty() {
             warnings.push(issue(
                 "effort",

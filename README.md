@@ -28,8 +28,10 @@ The repository is a Cargo workspace:
 
 | Crate | Purpose |
 | :--- | :--- |
-| `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection, and the `EngineAdapter` seam (`quarkd::engine`) |
+| `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection, the `EngineAdapter` seam (`quarkd::engine`), and tmux terminal sessions (`quarkd::sessions`) |
 | `crates/quark-systems` | Neutral API and event types shared by the daemon and its clients |
+| `crates/quark-engine` | Typed firstmate reads and allowlisted, argument-validated script writes |
+| `crates/quark-transcript` | Parsers for harness session logs (Claude Code, Codex, Pi) that feed `coordinator.message` and `worker.transcript` events |
 
 ```sh
 cargo test --workspace
@@ -41,3 +43,25 @@ cargo run -p quarkd -- openapi      # prints the OpenAPI document
 Regenerate it with `cargo run -p quarkd -- openapi > api/openapi.json`.
 
 The event stream is a WebSocket at `/v1/events?cursor=<seq>`: each frame is one JSON event with a monotonic `seq`, and a client that reconnects with its last `seq` replays everything it missed.
+
+`POST /v1/projects` with `repos` and an `agent_config` provisions a Project in the background (`crates/quarkd/src/provision.rs`).
+It clones each repo into the command-center workspace (`~/.quark/workspaces/command`), seeds the Project workspace at `~/.quark/workspaces/<project-id>`, writes the Project repo (`~/.quark/projects/<project-id>.git`, checked out at `<workspace>/project`) and starts the coordinator.
+`project.updated` events report each step and the final `ready` or `failed` status; `POST /v1/projects/{id}:provision` retries a failed Project.
+The engine checkout under `~/.quark/engine` must be the quark-systems firstmate fork, which provides `fm-project-add.sh`.
+
+Terminal sessions need tmux 3.2 or newer (`--tmux` or `QUARKD_TMUX` picks the binary; without tmux the terminal routes answer 503).
+quarkd runs one private tmux server on `~/.quark/run/tmux/quark` and attaches to it in control mode; engine calls point `TMUX` at it, so the command center, every coordinator and every worker run there (firstmate records no tmux socket per task, so the server is shared rather than one per Project).
+Each Project's coordinator window and task windows become its terminals: `GET /v1/projects/{id}/terminals`, input, resize and snapshot under `/v1/terminals/{id}`, and output as `worker.output` events.
+A terminal's output starts with a `snapshot` chunk (reset the emulator, then feed the bytes), and the daemon keeps about 2 MiB of output per terminal.
+To open a terminal, subscribe to the event stream, call `POST /v1/terminals/{id}/snapshot`, apply the returned event, then the terminal's events with a greater `seq`.
+
+### Desktop app
+
+`app/` is the desktop app: Tauri 2 with React, TypeScript and xterm.js, talking to `quarkd` over the `/v1` API and event stream.
+See [`app/README.md`](app/README.md) for running it, and [`app/CONTRACT.md`](app/CONTRACT.md) for the endpoints it expects.
+
+```sh
+cd app && npm install
+npm run dev                         # web build on http://127.0.0.1:1420, against quarkd on :7380
+npm run tauri dev                   # desktop app
+```

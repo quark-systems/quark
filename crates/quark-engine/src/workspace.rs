@@ -11,6 +11,9 @@ pub struct Workspace {
     pub home: PathBuf,
     /// The pinned firstmate checkout whose `bin/` holds the engine scripts.
     pub engine_root: PathBuf,
+    /// Extra environment for every script run against this workspace, such
+    /// as the `TMUX` socket the engine should open its windows on.
+    pub env: Vec<(String, String)>,
 }
 
 impl Workspace {
@@ -18,7 +21,14 @@ impl Workspace {
         Self {
             home: home.into(),
             engine_root: engine_root.into(),
+            env: Vec::new(),
         }
+    }
+
+    /// Adds `key=value` to every script run against this workspace.
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
     }
 
     pub fn state_dir(&self) -> PathBuf {

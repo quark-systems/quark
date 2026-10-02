@@ -1,19 +1,22 @@
-//! [`EngineAdapter`] over a firstmate home, built on the `quark-engine` readers.
+//! [`EngineAdapter`] over a firstmate home, built on the `quark-engine`
+//! readers and its allowlisted writer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use quark_systems::{TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, TaskKind, TaskState};
 
 use quark_engine::holds::decisions;
 use quark_engine::runner::CallLog;
 use quark_engine::snapshot::{BacklogState, FleetSnapshot as FmSnapshot, Task};
 use quark_engine::status::StatusTail as FmTail;
-use quark_engine::{EngineReader, Error, Workspace};
+use quark_engine::write::{self, DeliveryMode, WriteOp};
+use quark_engine::{EngineReader, EngineWriter, Error, Workspace};
 
 use super::{
-    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, StatusTail, WorkspaceRef,
+    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, SourceRepo, StatusTail,
+    TaskControl, WorkspacePlan, WorkspaceRef,
 };
 
 /// Reads firstmate homes with scripts from one pinned engine checkout.
@@ -21,6 +24,7 @@ use super::{
 pub struct FirstmateEngine {
     engine_root: PathBuf,
     log: Arc<dyn CallLog>,
+    tmux: Option<String>,
 }
 
 impl FirstmateEngine {
@@ -28,17 +32,48 @@ impl FirstmateEngine {
         Self {
             engine_root: engine_root.into(),
             log,
+            tmux: None,
+        }
+    }
+
+    /// Runs every engine script with `TMUX` set to `value`, so the engine
+    /// opens and finds windows on quarkd's tmux server rather than the
+    /// user's own.
+    pub fn with_tmux(mut self, value: Option<String>) -> Self {
+        self.tmux = value;
+        self
+    }
+
+    fn at(&self, home: &Path) -> Workspace {
+        let ws = Workspace::new(home, &self.engine_root);
+        match &self.tmux {
+            Some(t) => ws.with_env("TMUX", t.clone()),
+            None => ws,
         }
     }
 
     fn reader(&self, ws: &WorkspaceRef) -> Result<EngineReader, EngineError> {
+        Ok(EngineReader::new(self.workspace(ws)?, self.log.clone()))
+    }
+
+    fn workspace(&self, ws: &WorkspaceRef) -> Result<Workspace, EngineError> {
         if !ws.root.is_dir() {
             return Err(EngineError::WorkspaceNotFound(ws.root.clone()));
         }
-        Ok(EngineReader::new(
-            Workspace::new(&ws.root, &self.engine_root),
-            self.log.clone(),
-        ))
+        Ok(self.at(&ws.root))
+    }
+
+    async fn write(&self, ws: &WorkspaceRef, op: WriteOp) -> Result<(), EngineError> {
+        self.write_at(&ws.root, op).await.map(drop)
+    }
+
+    /// Run `op` with `FM_HOME` at `home` and return its stdout.
+    async fn write_at(&self, home: &Path, op: WriteOp) -> Result<String, EngineError> {
+        if !home.is_dir() {
+            return Err(EngineError::WorkspaceNotFound(home.to_path_buf()));
+        }
+        let writer = EngineWriter::new(self.at(home), self.log.clone());
+        blocking(move || writer.write(&op)).await
     }
 
     async fn read_snapshot(&self, ws: &WorkspaceRef) -> Result<FmSnapshot, EngineError> {
@@ -82,6 +117,141 @@ impl EngineAdapter for FirstmateEngine {
     async fn holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
         Ok(neutral_holds(&self.read_snapshot(ws).await?))
     }
+
+    async fn send_message(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        text: &str,
+    ) -> Result<(), EngineError> {
+        let op = WriteOp::Send {
+            task_id: task_id.into(),
+            text: text.into(),
+        };
+        self.write(ws, op).await
+    }
+
+    /// Cancel is `exit`, never teardown: the worktree and its changes stay.
+    async fn control(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        action: &TaskControl,
+    ) -> Result<(), EngineError> {
+        let task_id = task_id.to_string();
+        let op = match action.clone() {
+            TaskControl::Cancel => WriteOp::Exit { task_id },
+            TaskControl::Relaunch {
+                harness,
+                model,
+                effort,
+                note,
+            } => WriteOp::Relaunch {
+                task_id,
+                harness,
+                model,
+                effort,
+                note,
+            },
+        };
+        self.write(ws, op).await
+    }
+
+    async fn add_source(
+        &self,
+        command: &Path,
+        source: &SourceRepo,
+        delivery: DeliveryPolicy,
+    ) -> Result<(), EngineError> {
+        let op = WriteOp::ProjectAdd {
+            name: source.name.clone(),
+            origin: source.url.clone(),
+            mode: delivery_mode(delivery),
+            description: format!("{} (added by Quark)", source.url),
+        };
+        let out = self.write_at(command, op).await?;
+        write::parse_project_added(&out).map_err(convert)?;
+        Ok(())
+    }
+
+    /// Seeds the Project workspace as a local secondmate of the command
+    /// center, keyed by the Project id.
+    async fn seed_workspace(
+        &self,
+        command: &Path,
+        plan: &WorkspacePlan,
+    ) -> Result<PathBuf, EngineError> {
+        let (charter, scope) = charter(plan);
+        let op = WriteOp::HomeSeed {
+            id: plan.project_id.clone(),
+            home: plan.root.clone(),
+            projects: plan.sources.iter().map(|s| s.name.clone()).collect(),
+            charter,
+            scope,
+        };
+        let out = self.write_at(command, op).await?;
+        write::parse_seeded_home(&out).map_err(convert)
+    }
+
+    async fn start_coordinator(
+        &self,
+        command: &Path,
+        ws: &WorkspaceRef,
+        agent: &AgentConfig,
+    ) -> Result<(), EngineError> {
+        let op = WriteOp::SpawnSecondmate {
+            id: ws.project_id.clone(),
+            home: ws.root.clone(),
+            harness: engine_harness(&agent.harness).to_string(),
+            model: agent.model.clone(),
+            effort: agent.effort.clone(),
+        };
+        let out = self.write_at(command, op).await?;
+        write::parse_spawned(&out).map_err(convert)?;
+        Ok(())
+    }
+}
+
+fn delivery_mode(d: DeliveryPolicy) -> DeliveryMode {
+    match d {
+        DeliveryPolicy::Gated => DeliveryMode::NoMistakes,
+        DeliveryPolicy::Direct => DeliveryMode::DirectPr,
+    }
+}
+
+/// Neutral harness ids that differ from the engine's adapter names.
+pub fn engine_harness(harness: &str) -> &str {
+    match harness {
+        "claude-code" => "claude",
+        "cursor-agent" => "cursor",
+        "bob-shell" => "bob",
+        other => other,
+    }
+}
+
+/// The secondmate charter and routing scope for a Project workspace. The
+/// coordinator reads the charter as its standing job description.
+pub fn charter(plan: &WorkspacePlan) -> (String, String) {
+    let repos: Vec<_> = plan.sources.iter().map(|s| s.name.as_str()).collect();
+    let goal = plan
+        .goal
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .map(|g| format!(" Its goal: {g}"))
+        .unwrap_or_default();
+    let charter = format!(
+        "Coordinate the Quark Project \"{}\" across {}.{goal} The Project repo checked out at project/ holds its instructions.md and memory/; read instructions.md before planning work.",
+        plan.name,
+        repos.join(", "),
+    );
+    let scope = format!(
+        "All work for the Quark Project \"{}\" ({}) in {}.",
+        plan.name,
+        plan.project_id,
+        repos.join(", ")
+    );
+    (charter, scope)
 }
 
 /// Live tasks from metadata, plus queued backlog work that has not started.
@@ -108,6 +278,14 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
                 state_note: current.and_then(|c| c.detail.clone()),
                 harness: t.harness.clone(),
                 pull_request_url,
+                terminal: tmux_target(t),
+                worktree: t
+                    .paths
+                    .worktree
+                    .as_ref()
+                    .filter(|w| w.present)
+                    .and_then(|w| w.path.as_ref())
+                    .map(PathBuf::from),
             }
         })
         .collect();
@@ -130,6 +308,8 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
             state_note: r.hold_reason.clone(),
             harness: None,
             pull_request_url: None,
+            terminal: None,
+            worktree: None,
         });
     }
     FleetSnapshot { tasks }
@@ -160,6 +340,19 @@ pub fn neutral_holds(s: &FmSnapshot) -> Vec<Hold> {
         answered_by: None,
     });
     held.chain(open).collect()
+}
+
+/// The task's tmux window target. Other backends' endpoints are not tmux
+/// targets, and remote ones (`remote:<id>`) are not on this machine.
+fn tmux_target(t: &Task) -> Option<String> {
+    if !matches!(t.backend.as_deref(), None | Some("tmux")) {
+        return None;
+    }
+    let target = t.endpoint.as_ref()?.target.as_deref()?;
+    if target.starts_with("remote:") || !target.contains(':') {
+        return None;
+    }
+    Some(target.to_string())
 }
 
 fn task_kind(kind: Option<&str>) -> Option<TaskKind> {
@@ -196,7 +389,7 @@ where
 {
     tokio::task::spawn_blocking(f)
         .await
-        .map_err(|e| EngineError::Command(format!("engine read task failed: {e}")))?
+        .map_err(|e| EngineError::Command(format!("engine task failed: {e}")))?
         .map_err(convert)
 }
 
@@ -204,6 +397,7 @@ fn convert(e: Error) -> EngineError {
     match e {
         Error::Io { source, .. } => EngineError::Io(source),
         Error::InvalidTaskId(id) => EngineError::TaskNotFound(id),
+        Error::InvalidArgument { reason, .. } => EngineError::Invalid(reason),
         e @ (Error::Json { .. } | Error::Schema { .. } | Error::Malformed { .. }) => {
             EngineError::Parse(e.to_string())
         }

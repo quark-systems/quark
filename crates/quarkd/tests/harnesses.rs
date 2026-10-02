@@ -44,7 +44,7 @@ fn config(harness: &str, model: Option<&str>, effort: Option<Effort>) -> AgentCo
     AgentConfig {
         harness: harness.into(),
         model: model.map(Into::into),
-        effort,
+        effort: effort.map(|e| e.as_str().to_string()),
     }
 }
 
@@ -114,6 +114,12 @@ fn validates_agent_configs() {
     assert_eq!(
         codes(config("grok", None, Some(Effort::Max)), AgentRole::Worker),
         (false, vec!["unsupported_effort".into()], vec![])
+    );
+    let mut bad = config("codex", None, None);
+    bad.effort = Some("turbo".into());
+    assert_eq!(
+        codes(bad, AgentRole::Worker),
+        (false, vec!["invalid_effort".into()], vec![])
     );
     assert_eq!(
         codes(config("opencode", Some("gpt-5"), None), AgentRole::Worker),
@@ -233,6 +239,9 @@ async fn harness_routes() {
     let app = api::router(AppState {
         store: Arc::new(Store::open_in_memory().unwrap()),
         engine: Arc::new(StubEngine::new()),
+        chat: Arc::new(quarkd::chat::RecordingInput::new()),
+        sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
+        layout: quarkd::provision::Layout::new(dir.path().join("quark-home")),
         harnesses: Arc::new(HarnessRegistry::new(
             quarkd::harness::builtin(),
             fake_host(dir.path()),

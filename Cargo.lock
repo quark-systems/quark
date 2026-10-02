@@ -826,17 +826,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-transcript"
+version = "0.0.1"
+dependencies = [
+ "quark-systems",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "quarkd"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64",
  "clap",
  "futures-util",
  "http-body-util",
  "quark-engine",
  "quark-systems",
+ "quark-transcript",
  "rusqlite",
  "serde",
  "serde_json",

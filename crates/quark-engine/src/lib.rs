@@ -1,13 +1,14 @@
 //! Adapter between `quarkd` and the firstmate engine.
 //!
-//! This crate is the read side of the engine boundary (spec ADR-8). It turns
-//! firstmate's on-disk state into typed values and never writes engine files:
+//! This crate is the engine boundary (spec ADR-8). It turns firstmate's
+//! on-disk state into typed values and never writes engine files itself:
 //!
 //! - [`snapshot`]: `fm-fleet-snapshot.sh --json` (schema `fm-fleet-snapshot.v1`).
 //! - [`status`]: `state/<id>.status` wake-event lines and an incremental tail.
 //! - [`holds`]: captain holds and open decisions derived from a snapshot.
 //! - [`pr`]: `state/<id>.pr-poll` sidecars and merge-notified markers.
 //! - [`summary`]: `state/home-summary.json` (schema `fm-secondmate-home-summary.v1`).
+//! - [`write`]: typed writes, each run through its own engine script.
 //!
 //! Every script invocation goes through [`runner::ScriptRunner`], which only runs
 //! allowlisted, genuine `bin/fm-*.sh` files from the pinned engine checkout and
@@ -24,6 +25,7 @@ pub mod snapshot;
 pub mod status;
 pub mod summary;
 pub mod workspace;
+pub mod write;
 
 pub use error::{Error, Result};
 pub use workspace::{validate_task_id, Workspace};
@@ -32,6 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use runner::{CallLog, ScriptRunner};
+use write::WriteOp;
 
 /// Read-only view of one firstmate workspace (a firstmate home).
 pub struct EngineReader {
@@ -81,5 +84,31 @@ impl EngineReader {
         Ok(status::StatusTail::new(
             self.workspace.status_log_path(task_id)?,
         ))
+    }
+}
+
+/// Changes one firstmate workspace, only through allowlisted [`WriteOp`]s.
+pub struct EngineWriter {
+    runner: ScriptRunner,
+}
+
+impl EngineWriter {
+    pub fn new(workspace: Workspace, log: Arc<dyn CallLog>) -> Self {
+        Self {
+            runner: ScriptRunner::new(workspace, log),
+        }
+    }
+
+    /// One timeout for every write, replacing each operation's own bound.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.runner = self.runner.with_write_timeout(timeout);
+        self
+    }
+
+    /// Validate and run one write. Returns the script's stdout; a non-zero
+    /// exit is an error carrying stderr, and nothing is retried.
+    pub fn write(&self, op: &WriteOp) -> Result<String> {
+        let out = self.runner.run_write(op)?;
+        Ok(String::from_utf8_lossy(&out).into_owned())
     }
 }

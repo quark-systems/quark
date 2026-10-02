@@ -5,13 +5,18 @@ mod events;
 mod harnesses;
 mod openapi;
 mod routes;
+mod terminals;
 
 use std::sync::Arc;
 
+use crate::chat::CoordinatorInput;
 use crate::engine::EngineAdapter;
 use crate::harness::HarnessRegistry;
+use crate::sessions::Sessions;
+use axum::http::{header, HeaderValue, Method};
 use axum::routing::{get, post};
 use axum::Router;
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::store::Store;
@@ -24,6 +29,11 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub engine: Arc<dyn EngineAdapter>,
     pub harnesses: Arc<HarnessRegistry>,
+    pub sessions: Sessions,
+    /// Where new Project workspaces and Project repos go.
+    pub layout: crate::provision::Layout,
+    /// Delivers chat input to coordinator sessions.
+    pub chat: Arc<dyn CoordinatorInput>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -34,18 +44,63 @@ pub fn router(state: AppState) -> Router {
             "/v1/projects",
             get(routes::list_projects).post(routes::create_project),
         )
+        // POST serves the custom method `/v1/projects/{id}:provision`.
         .route(
             "/v1/projects/{id}",
-            get(routes::get_project).patch(routes::update_project),
+            get(routes::get_project)
+                .patch(routes::update_project)
+                .post(routes::project_action),
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
-        .route("/v1/tasks/{id}", get(routes::get_task))
+        // POST serves the custom methods `/v1/tasks/{id}:cancel` and
+        // `:relaunch`; the router allows one parameter per segment.
+        .route(
+            "/v1/tasks/{id}",
+            get(routes::get_task).post(routes::task_action),
+        )
+        .route("/v1/tasks/{id}/messages", post(routes::send_task_message))
+        .route(
+            "/v1/projects/{id}/terminals",
+            get(terminals::list_terminals),
+        )
+        .route("/v1/terminals/{id}", get(terminals::get_terminal))
+        .route("/v1/terminals/{id}/input", post(terminals::input))
+        .route("/v1/terminals/{id}/resize", post(terminals::resize))
+        .route("/v1/terminals/{id}/snapshot", post(terminals::snapshot))
+        .route("/v1/tasks/{id}/transcript", get(routes::task_transcript))
         .route("/v1/decisions", get(routes::list_decisions))
         .route("/v1/harnesses", get(harnesses::list))
         .route("/v1/harnesses:validate", post(harnesses::validate))
+        .route(
+            "/v1/coordinators/{id}/messages",
+            get(routes::coordinator_messages).post(routes::send_coordinator_message),
+        )
         .route("/v1/events", get(events::stream))
+        .layer(cors())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Origins of the desktop app: the Tauri webview (macOS/Linux and Windows) and the
+/// Vite dev server. Browsers do not send `Origin` for WebSocket upgrades through CORS,
+/// so this only governs REST calls.
+pub const APP_ORIGINS: &[&str] = &[
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+];
+
+fn cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(
+            APP_ORIGINS
+                .iter()
+                .map(|o| HeaderValue::from_static(o))
+                .collect::<Vec<_>>(),
+        )
+        .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        .allow_headers([header::CONTENT_TYPE])
 }
 
 /// Runs a blocking store call off the async runtime.
