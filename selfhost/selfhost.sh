@@ -138,16 +138,21 @@ if [ -n "$HOLDOUT" ]; then
     mkdir -p "$work/project/holdout"
     cp -R "$HOLDOUT/$src" "$work/project/holdout/$src"
   done
-  missing=$(find "$work/project/holdout" -mindepth 2 -maxdepth 2 -type d ! -exec test -x '{}/run' ';' -print)
-  [ -z "$missing" ] || die "holdout categories without an executable run: $missing"
+  for category in "$work"/project/holdout/*/*/; do
+    [ -x "${category}run" ] || die "holdout category ${category#"$work/project/"} has no executable run"
+  done
 fi
 git -C "$work/project" add --all
 if git -C "$work/project" diff --cached --quiet; then
   say "the Project repo is already up to date"
 else
-  ident=()
-  git -C "$work/project" config user.email >/dev/null || ident=(-c user.name=Quark -c user.email=quark@localhost)
-  git -C "$work/project" "${ident[@]}" -c commit.gpgsign=false commit --quiet \
+  # Commit as the person when git knows them; otherwise as Quark, in this
+  # throwaway clone only.
+  if ! git -C "$work/project" config user.email >/dev/null; then
+    git -C "$work/project" config user.name Quark
+    git -C "$work/project" config user.email quark@localhost
+  fi
+  git -C "$work/project" -c commit.gpgsign=false commit --quiet \
     -m "Self-hosting: verification gates, instructions${HOLDOUT:+ and holdout tests}"
   git -C "$work/project" push --quiet origin HEAD:main
   say "committed gates and instructions to the Project repo"
