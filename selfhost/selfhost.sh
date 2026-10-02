@@ -77,6 +77,21 @@ NAME=$(jq -r .name "$HERE/project.json")
 
 # 1. The Project.
 ID=$(api GET /v1/projects | jq -r --arg n "$NAME" '[.[] | select(.name == $n)][0].id // empty')
+if [ -n "$ID" ]; then
+  # Repos cannot change after creation. A failed Project with other repos
+  # (say, https instead of ssh URLs) is renamed out of the way and replaced;
+  # a working one is never touched.
+  existing=$(api GET "/v1/projects/$ID")
+  if ! jq -e --slurpfile want "$HERE/project.json" \
+    '[.repos[] | {url, name}] == [$want[0].repos[] | {url, name}]' <<<"$existing" >/dev/null; then
+    [ "$(jq -r .status <<<"$existing")" = failed ] \
+      || die "Project $NAME ($ID) has other repos than project.json; rename it in the app first"
+    old="$NAME (replaced $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+    api PATCH "/v1/projects/$ID" "$(jq -n --arg n "$old" '{name: $n}')" >/dev/null
+    say "renamed the failed Project $ID with other repos to \"$old\""
+    ID=""
+  fi
+fi
 if [ -z "$ID" ]; then
   ID=$(api POST /v1/projects "$(cat "$HERE/project.json")" | jq -r .id)
   say "created Project $NAME ($ID)"
