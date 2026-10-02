@@ -25,4 +25,6 @@ for (let i = 0; ; i++) {
   if (i >= 100) { console.error("e2e-serve: the demo daemon did not answer on :7392"); stop(1); }
   await new Promise((r) => setTimeout(r, 100));
 }
-run("npx", ["vite", "--port", "1421", "--strictPort"]);
+// Vite runs as a direct child (not through npx), so stopping this script
+// stops it too and no server outlives a gate.
+run(process.execPath, ["node_modules/vite/bin/vite.js", "--port", "1421", "--strictPort"]);
