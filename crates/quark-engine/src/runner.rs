@@ -9,7 +9,7 @@
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -150,7 +150,8 @@ impl ScriptRunner {
             timed_out: false,
         };
 
-        let spawned = Command::new(&path)
+        let mut command = Command::new(&path);
+        command
             .args(&args)
             .current_dir(&self.workspace.engine_root)
             .envs(
@@ -163,9 +164,8 @@ impl ScriptRunner {
             .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-        let mut child = match spawned {
+            .stderr(Stdio::piped());
+        let mut child = match spawn_retrying_busy(&mut command, start + timeout) {
             Ok(c) => c,
             Err(source) => {
                 record.duration = start.elapsed();
@@ -280,6 +280,26 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8
 fn tail_utf8(bytes: &[u8], keep: usize) -> String {
     let start = bytes.len().saturating_sub(keep);
     String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
+/// Spawns `command`, retrying while the script is "text file busy" (ETXTBSY).
+///
+/// Linux refuses to exec a file that some process still holds open for writing. A script
+/// that was just written can stay open briefly in a child forked concurrently by another
+/// thread, before that child's exec closes its copy of the descriptor; the same happens
+/// while an engine update rewrites its scripts. The condition clears on its own.
+fn spawn_retrying_busy(command: &mut Command, deadline: Instant) -> std::io::Result<Child> {
+    loop {
+        match command.spawn() {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(5));
+            }
+            other => return other,
+        }
+    }
 }
 
 #[cfg(test)]
