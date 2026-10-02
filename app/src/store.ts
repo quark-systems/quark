@@ -2,7 +2,7 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  Account, AccountQuotaChanged, api, CheckUpdated, DaemonEvent, Decision, Health, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
+  Account, AccountQuotaChanged, api, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
   TranscriptItem, wsUrl,
 } from "./api";
 
@@ -20,6 +20,8 @@ export interface AppState {
   transcripts: Record<string, TranscriptItem[]>;
   /** Count of `task.event` events per task, so views can refetch what a task changed. */
   taskActivity: Record<string, number>;
+  /** Dispatch records by task id, oldest first. Absent until loaded. */
+  dispatch: Record<string, DispatchRecord[]>;
   /** PR center: pull requests across Projects by id. */
   pullRequests: Record<string, PullRequest>;
   /** Whether the daemon serves the PR center; null until the first load answers. */
@@ -35,7 +37,7 @@ export interface AppState {
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
-  projects: {}, tasks: {}, decisions: {}, chat: {}, transcripts: {}, taskActivity: {},
+  projects: {}, tasks: {}, decisions: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
   pullRequests: {}, prsAvailable: null, prActivity: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
 };
@@ -85,6 +87,11 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
       const tid = p.task_id as string;
       if (!tid) return s;
       return { ...s, taskActivity: { ...s.taskActivity, [tid]: (s.taskActivity[tid] ?? 0) + 1 } };
+    }
+    case "dispatch.recorded": {
+      const tid = p?.task_id as string | undefined;
+      if (!tid || !(tid in s.dispatch) || typeof p.id !== "string") return s; // loaded on demand; the fetch includes it
+      return { ...s, dispatch: { ...s.dispatch, [tid]: upsertById(s.dispatch[tid], p as DispatchRecord) } };
     }
     case "pr.updated": {
       if (typeof p?.id !== "string") return s;
@@ -227,6 +234,21 @@ export async function loadTranscript(taskId: string): Promise<"ok" | "unavailabl
     const merged = new Map((state.transcripts[taskId] ?? []).map((m) => [m.id, m]));
     for (const m of entries) merged.set(m.id, m);
     set({ transcripts: { ...state.transcripts, [taskId]: [...merged.values()] } });
+    return "ok";
+  } catch (e) {
+    if (e instanceof NotAvailable) return "unavailable";
+    throw e;
+  }
+}
+
+/** Loads a task's dispatch records; later `dispatch.recorded` events append to them. */
+export async function loadDispatch(taskId: string): Promise<"ok" | "unavailable"> {
+  try {
+    const records = await api.dispatch(taskId);
+    const merged = new Map((state.dispatch[taskId] ?? []).map((r) => [r.id, r]));
+    for (const r of records) merged.set(r.id, r);
+    const sorted = [...merged.values()].sort((a, b) => a.recorded_at.localeCompare(b.recorded_at));
+    set({ dispatch: { ...state.dispatch, [taskId]: sorted } });
     return "ok";
   } catch (e) {
     if (e instanceof NotAvailable) return "unavailable";

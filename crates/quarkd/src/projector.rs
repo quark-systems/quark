@@ -6,8 +6,9 @@
 //! a task file changes there, so the board moves while a worker reports.
 //! Each refresh also hands the engine the verification gates the Project
 //! repo's `project.yaml` declares and the dispatch profiles its
-//! `dispatch.yaml` declares, whenever either declaration changes, and turns
-//! what finished tasks learned into memory proposals.
+//! `dispatch.yaml` declares, whenever either declaration changes, turns
+//! what finished tasks learned into memory proposals, and records why each
+//! newly spawned worker got its agent ([`crate::dispatch`]).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -15,12 +16,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use quark_systems::MemoryEvidence;
+use quark_systems::{DispatchTrigger, MemoryEvidence};
 use quark_transcript::{SessionFormat, SessionRoots};
 use tokio::sync::mpsc;
 
 use crate::sessions::{Sessions, TaskTarget};
 
+use crate::dispatch::{self, Resolved};
 use crate::engine::{EngineAdapter, EngineError, EngineTask, WorkspaceRef};
 
 use crate::memory;
@@ -133,6 +135,7 @@ impl Projector {
                     .await;
             log_apply(ws, "snapshot", res);
             self.sync_sessions(ws, terminals).await;
+            self.record_dispatches(ws, &tasks).await;
         }
         self.tap_transcripts(ws, tasks).await;
 
@@ -243,6 +246,91 @@ impl Projector {
                 .unwrap()
                 .insert(ws.project_id.clone(), declared.blob);
         }
+    }
+
+    /// Records each worker spawn not yet recorded: a task's first spawn with
+    /// the engine's dispatch resolution of its brief, when the spawn is fresh,
+    /// and each later relaunch as such. One adapter-call record covers the
+    /// pass and carries the first failure.
+    async fn record_dispatches(&self, ws: &WorkspaceRef, tasks: &[EngineTask]) {
+        let spawned: Vec<String> = tasks
+            .iter()
+            .filter(|t| t.harness.is_some())
+            .map(|t| t.id.clone())
+            .collect();
+        if spawned.is_empty() {
+            return;
+        }
+        let store = self.store.clone();
+        let project_id = ws.project_id.clone();
+        let known = tokio::task::spawn_blocking(move || {
+            Ok((
+                store.task_ids_by_engine(&project_id)?,
+                store.dispatch_generations(&project_id)?,
+            ))
+        })
+        .await;
+        let (ids, recorded) = match known {
+            Ok(Ok(k)) => k,
+            res => {
+                log_apply(ws, "dispatch_record", res.map(|r| r.map(|_| ())));
+                return;
+            }
+        };
+
+        let started = Instant::now();
+        let mut first_err = None;
+        for engine_id in spawned {
+            let Some(task_id) = ids.get(&engine_id) else {
+                continue;
+            };
+            let spawn = match self.engine.spawn(ws, &engine_id).await {
+                Ok(Some(s)) => s,
+                Ok(None) => continue,
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                    continue;
+                }
+            };
+            let seen = recorded.get(task_id).map(Vec::as_slice).unwrap_or_default();
+            if seen.contains(&spawn.generation) {
+                continue;
+            }
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            let (trigger, resolved) = if !seen.is_empty() {
+                (
+                    DispatchTrigger::Relaunch,
+                    Resolved::NotRun("relaunched in the same worktree".into()),
+                )
+            } else if !dispatch::fresh(&spawn, now) {
+                (
+                    DispatchTrigger::Spawn,
+                    Resolved::NotRun(
+                        "The worker started before Quark saw it, so the dispatch resolution was not run"
+                            .into(),
+                    ),
+                )
+            } else {
+                let project = spawn.project.as_deref();
+                let resolved = match self.engine.resolve_dispatch(ws, &engine_id, project).await {
+                    Ok(Some(r)) => Resolved::Ran(Box::new(r)),
+                    Ok(None) => Resolved::NotRun(
+                        "The engine reported no dispatch resolution for this task".into(),
+                    ),
+                    Err(e) => Resolved::Failed(e.to_string()),
+                };
+                (DispatchTrigger::Spawn, resolved)
+            };
+            let record = dispatch::build(task_id, &ws.project_id, &spawn, trigger, resolved);
+            let store = self.store.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                store.record_dispatch(&record, &spawn.generation).map(drop)
+            })
+            .await;
+            log_apply(ws, "dispatch_record", res);
+        }
+        self.record(ws, "dispatch_record", started, first_err.as_ref())
+            .await;
     }
 
     /// Projects new coordinator and worker session-log entries. A log that

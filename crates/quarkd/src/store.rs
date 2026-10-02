@@ -11,9 +11,9 @@ use std::sync::Mutex;
 
 use crate::engine::{FleetSnapshot, Hold, StatusEntry};
 use quark_systems::{
-    AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset, Event,
-    EventType, Project, ProjectStatus, RepoSource, Task, TaskEvent, TaskKind, TaskState,
-    TranscriptEntry, TranscriptItem, UpdateProject,
+    AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset,
+    DispatchRecord, Event, EventType, Project, ProjectStatus, RepoSource, Task, TaskEvent,
+    TaskKind, TaskState, TranscriptEntry, TranscriptItem, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -35,7 +35,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -297,6 +297,21 @@ CREATE TABLE account_quota (
 
 ALTER TABLE tasks ADD COLUMN account_id TEXT;
 ALTER TABLE projects ADD COLUMN coordinator_account_id TEXT;
+"#;
+
+/// Why each task got its agent (ADR-11), one row per worker spawn, as API
+/// JSON. History kept for scoring: no foreign key, so nothing that removes or
+/// cleans up a task removes its records, and nothing prunes them.
+const SCHEMA_V12: &str = r#"
+CREATE TABLE dispatch_records (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL,
+    project_id  TEXT NOT NULL,
+    generation  TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    record      TEXT NOT NULL,
+    UNIQUE (task_id, generation)
+);
 "#;
 
 /// A task whose status log the projector tails.
@@ -843,6 +858,104 @@ impl Store {
                 }
             }
             Ok(())
+        })
+    }
+
+    // Dispatch records
+
+    /// Spawn generations already recorded for each of a Project's tasks.
+    pub fn dispatch_generations(&self, project_id: &str) -> Result<HashMap<String, Vec<String>>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT task_id, generation FROM dispatch_records WHERE project_id = ?1",
+            )?;
+            let rows = stmt.query_map([project_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            let mut out: HashMap<String, Vec<String>> = HashMap::new();
+            for row in rows {
+                let (task, generation) = row?;
+                out.entry(task).or_default().push(generation);
+            }
+            Ok(out)
+        })
+    }
+
+    /// Stores the record of one spawn, assigning its id and time, and emits
+    /// `dispatch.recorded`. A record that names no account gets the account
+    /// the task runs under, if one is known. A generation already recorded
+    /// for the task is left as it was and returns `None`.
+    pub fn record_dispatch(
+        &self,
+        record: &DispatchRecord,
+        generation: &str,
+    ) -> Result<Option<DispatchRecord>> {
+        self.write(|tx, events| {
+            let mut record = DispatchRecord {
+                id: new_id("dsp"),
+                recorded_at: now_rfc3339(),
+                ..record.clone()
+            };
+            if record.chosen.account.is_none() {
+                record.chosen.account = tx
+                    .query_row(
+                        "SELECT account_id FROM tasks WHERE id = ?1",
+                        [&record.task_id],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
+                    .optional()?
+                    .flatten();
+            }
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO dispatch_records
+                     (id, task_id, project_id, generation, recorded_at, record)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    record.id,
+                    record.task_id,
+                    record.project_id,
+                    generation,
+                    record.recorded_at,
+                    serde_json::to_string(&record)?
+                ],
+            )?;
+            if inserted == 0 {
+                return Ok(None);
+            }
+            append_event(
+                tx,
+                events,
+                Some(&record.project_id),
+                EventType::DispatchRecorded,
+                serde_json::to_value(&record)?,
+            )?;
+            Ok(Some(record))
+        })
+    }
+
+    /// A task's dispatch records, oldest first: its first spawn, then each
+    /// relaunch.
+    pub fn list_dispatch(&self, task_id: &str) -> Result<Vec<DispatchRecord>> {
+        self.read(|c| {
+            let known: bool = c.query_row(
+                "SELECT EXISTS (SELECT 1 FROM tasks WHERE id = ?1)
+                     OR EXISTS (SELECT 1 FROM dispatch_records WHERE task_id = ?1)",
+                [task_id],
+                |r| r.get(0),
+            )?;
+            if !known {
+                return Err(StoreError::NotFound);
+            }
+            let mut stmt = c.prepare(
+                "SELECT record FROM dispatch_records WHERE task_id = ?1
+                 ORDER BY recorded_at, id",
+            )?;
+            let rows = stmt.query_map([task_id], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(serde_json::from_str(&row?)?);
+            }
+            Ok(out)
         })
     }
 
@@ -1491,6 +1604,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 11)?;
         tx.commit()?;
     }
+    if version < 12 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V12)?;
+        tx.pragma_update(None, "user_version", 12)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -2071,5 +2190,69 @@ mod tests {
         assert_eq!(store.get_project(&id).unwrap().name, "demo");
         assert_eq!(store.last_seq().unwrap(), 1);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_v11_database_migrates_to_dispatch_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("quark.db");
+        {
+            // A database as main's last schema left it, with a task that has
+            // an account (v11).
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for sql in [
+                SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
+                SCHEMA_V8, SCHEMA_V9, SCHEMA_V10, SCHEMA_V11,
+            ] {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('prj_1', 'demo', 't', 't')",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO tasks (id, project_id, engine_id, title, state, harness, created_at,
+                     updated_at, account_id)
+                 VALUES ('tsk_1', 'prj_1', 'fix', 'Fix', 'running', 'claude', 't', 't', 'acc_2')",
+                [],
+            )
+            .unwrap();
+            tx.pragma_update(None, "user_version", 11).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let version: i64 = store
+            .read(|c| Ok(c.query_row("PRAGMA user_version", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(
+            store.get_task("tsk_1").unwrap().account_id.as_deref(),
+            Some("acc_2")
+        );
+        assert!(store.list_dispatch("tsk_1").unwrap().is_empty());
+
+        // The new table works, and a record takes the task's account.
+        let spawn = crate::engine::EngineSpawn {
+            generation: "s1.1.1".into(),
+            harness: "claude".into(),
+            model: None,
+            effort: None,
+            spawned_at: None,
+            project: None,
+        };
+        let record = crate::dispatch::build(
+            "tsk_1",
+            "prj_1",
+            &spawn,
+            quark_systems::DispatchTrigger::Spawn,
+            crate::dispatch::Resolved::NotRun("test".into()),
+        );
+        let stored = store.record_dispatch(&record, "s1.1.1").unwrap().unwrap();
+        assert_eq!(stored.chosen.account.as_deref(), Some("acc_2"));
+        assert!(store.record_dispatch(&record, "s1.1.1").unwrap().is_none());
+        assert_eq!(store.list_dispatch("tsk_1").unwrap(), vec![stored]);
     }
 }

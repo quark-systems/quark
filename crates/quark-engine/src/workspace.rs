@@ -59,6 +59,17 @@ impl Workspace {
         self.task_file(task_id, "pr-poll-merge-notified")
     }
 
+    /// The task's metadata record, rewritten on every spawn and relaunch.
+    pub fn meta_path(&self, task_id: &str) -> Result<PathBuf> {
+        self.task_file(task_id, "meta")
+    }
+
+    /// The brief a task's worker was started from.
+    pub fn brief_path(&self, task_id: &str) -> Result<PathBuf> {
+        validate_task_id(task_id)?;
+        Ok(self.data_dir().join(task_id).join("brief.md"))
+    }
+
     /// The gate runner's manifest for a task (`quark.gates.v1`).
     pub fn gates_manifest_path(&self, task_id: &str) -> Result<PathBuf> {
         self.task_file(task_id, "gates.json")

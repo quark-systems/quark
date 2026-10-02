@@ -1717,6 +1717,49 @@
         }
       }
     },
+    "/v1/tasks/{id}/dispatch": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Why the task got its agent: one dispatch record per worker spawn, oldest\nfirst (the first spawn, then each relaunch). Empty until the task's worker\nhas been spawned. Records outlive the task. New records arrive on the\nevent stream as `dispatch.recorded`.",
+        "operationId": "list_task_dispatch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DispatchRecord"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}/events": {
       "get": {
         "tags": [
@@ -2880,12 +2923,259 @@
           "old"
         ]
       },
+      "DispatchCandidate": {
+        "type": "object",
+        "required": [
+          "harness",
+          "passed",
+          "reason"
+        ],
+        "properties": {
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The quota evidence it was judged on, e.g. `provider=claude\nscope=all_models remaining=79%`."
+          },
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "Whether the candidate was eligible."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it passed or failed, e.g. `eligible` or `profile floor\nall_models below 15%`."
+          }
+        }
+      },
+      "DispatchChoice": {
+        "type": "object",
+        "description": "The agent a worker was started with.",
+        "required": [
+          "harness"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account the worker was started under (an `Account.id`, as on the\ntask when it was recorded); absent when the harness has no accounts or\nthe daemon does not know it."
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent for the harness's default effort."
+          },
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent for the harness's default model."
+          }
+        }
+      },
+      "DispatchClassifier": {
+        "type": "object",
+        "description": "The classifier behind the System-1 API, as consulted for this dispatch.",
+        "required": [
+          "provider"
+        ],
+        "properties": {
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The classifier's confidence in the matched rule, from 0 to 1."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model that answered, e.g. `jev-1.13.0`."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`none` when no classifier was consulted and the coordinator picked."
+          }
+        }
+      },
+      "DispatchDecider": {
+        "type": "string",
+        "enum": [
+          "classifier",
+          "coordinator",
+          "relaunch"
+        ]
+      },
       "DispatchPreset": {
         "type": "string",
         "description": "Starting dispatch rules for a new Project. Both route to the Project's\nagent config; rules can be edited afterwards.",
         "enum": [
           "single",
           "light_trivial"
+        ]
+      },
+      "DispatchRecord": {
+        "type": "object",
+        "description": "Why a task got its agent (ADR-11): one record per spawn of the task's\nworker. Records are history: they are kept after the task ends, for later\nscoring, and never change once recorded.",
+        "required": [
+          "id",
+          "task_id",
+          "project_id",
+          "trigger",
+          "decided_by",
+          "summary",
+          "resolution",
+          "candidates",
+          "chosen",
+          "classifier",
+          "recorded_at"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchCandidate"
+            },
+            "description": "Every profile the resolution weighed, in the rule's order, each with\nwhether it passed and why."
+          },
+          "chosen": {
+            "$ref": "#/components/schemas/DispatchChoice",
+            "description": "The agent the worker was actually started with."
+          },
+          "classifier": {
+            "$ref": "#/components/schemas/DispatchClassifier"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/DispatchDecider",
+            "description": "Who chose the agent."
+          },
+          "id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "recorded_at": {
+            "type": "string",
+            "description": "When the daemon recorded the dispatch (RFC 3339 UTC)."
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/DispatchResolution",
+            "description": "What the engine's dispatch resolution reported."
+          },
+          "rule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchRule",
+                "description": "The dispatch rule the classifier matched; absent when none matched or\nno classifier was consulted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "description": "One sentence on why this agent, for people."
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/DispatchTrigger",
+            "description": "What started this worker."
+          }
+        }
+      },
+      "DispatchResolution": {
+        "type": "object",
+        "required": [
+          "status",
+          "notes"
+        ],
+        "properties": {
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Further notes from the resolution, such as an unranked candidate."
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The resolution's output as the engine printed it, kept for scoring."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the status is not `clear`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DispatchStatus"
+          }
+        }
+      },
+      "DispatchRule": {
+        "type": "object",
+        "description": "A dispatch rule, as the Project's dispatch rules name it.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The rule's id in the resolution, e.g. `rule_2`, or `default`."
+          },
+          "when": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rule's `when` condition."
+          }
+        }
+      },
+      "DispatchStatus": {
+        "type": "string",
+        "enum": [
+          "clear",
+          "ambiguous",
+          "escalate",
+          "error",
+          "off",
+          "not_consulted"
+        ]
+      },
+      "DispatchTrigger": {
+        "type": "string",
+        "enum": [
+          "spawn",
+          "relaunch"
         ]
       },
       "Effort": {

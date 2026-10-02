@@ -1,5 +1,5 @@
-// J4: one worker in one view. Live terminal and steering on the left; transcript and
-// changed files with their diff on the right; cancel and relaunch in the header.
+// J4: one worker in one view. Live terminal and steering on the left; transcript, changed
+// files with their diff, and why this agent on the right; cancel and relaunch in the header.
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
@@ -10,13 +10,14 @@ import { renderMarkdown } from "../markdown";
 import { DiffFile, parseUnifiedDiff } from "../diff";
 import { FileDiff } from "../components/FileDiff";
 import { Unavailable } from "../components/Unavailable";
+import { WhyThisAgent } from "../components/WhyThisAgent";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
   const project = useStore((s) => (task ? s.projects[task.project_id] : undefined));
   const connected = useStore((s) => s.connected);
   const activity = useStore((s) => s.taskActivity[id] ?? 0);
-  const [tab, setTab] = useState<"transcript" | "changes">("transcript");
+  const [tab, setTab] = useState<"transcript" | "changes" | "why">("transcript");
   const [missing, setMissing] = useState(false);
 
   useEffect(() => {
@@ -50,9 +51,12 @@ export function WorkerView({ id }: { id: string }) {
           <div className="tabs" role="tablist">
             <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}>Transcript</button>
             <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
+            <button role="tab" aria-selected={tab === "why"} className={tab === "why" ? "on" : ""} onClick={() => setTab("why")}>Why this agent</button>
           </div>
           <div className="tab-body">
-            {tab === "transcript" ? <TranscriptPanel taskId={id} /> : <ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} />}
+            {tab === "transcript" && <TranscriptPanel taskId={id} />}
+            {tab === "changes" && <ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} />}
+            {tab === "why" && <WhyThisAgent taskId={id} />}
           </div>
         </section>
       </div>
