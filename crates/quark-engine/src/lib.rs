@@ -7,6 +7,7 @@
 //! - [`status`]: `state/<id>.status` wake-event lines and an incremental tail.
 //! - [`holds`]: captain holds and open decisions derived from a snapshot.
 //! - [`pr`]: `state/<id>.pr-poll` sidecars and merge-notified markers.
+//! - [`gates`]: `state/<id>.gates.json` verification gate manifests (`quark.gates.v1`).
 //! - [`summary`]: `state/home-summary.json` (schema `fm-secondmate-home-summary.v1`).
 //! - [`write`]: typed writes, each run through its own engine script.
 //!
@@ -18,6 +19,7 @@
 //! comes from the snapshot's `current_state`, which the engine reconciles.
 
 mod error;
+pub mod gates;
 pub mod holds;
 pub mod pr;
 pub mod runner;
@@ -77,6 +79,11 @@ impl EngineReader {
     /// Read a task's merge-notified marker, if a merge was already delivered.
     pub fn merge_notified(&self, task_id: &str) -> Result<Option<pr::MergeNotified>> {
         pr::read_merge_notified(&self.workspace.merge_notified_path(task_id)?)
+    }
+
+    /// Read a task's verification gate manifest, if the gates have run.
+    pub fn gates(&self, task_id: &str) -> Result<Option<gates::GateManifest>> {
+        gates::read(&self.workspace.gates_manifest_path(task_id)?)
     }
 
     /// A tail over a task's status log, starting at the beginning of the file.

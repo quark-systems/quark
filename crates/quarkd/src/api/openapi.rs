@@ -31,6 +31,7 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         pull_requests::diff,
         pull_requests::comment,
         pull_requests::merge,
+        pull_requests::artifact,
         harnesses::list,
         harnesses::validate,
         terminals::list_terminals,
@@ -69,6 +70,9 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         quark_systems::ReviewUpdated,
         quark_systems::DiffSide,
         quark_systems::MergeMethod,
+        quark_systems::GateState,
+        quark_systems::GateKind,
+        quark_systems::ArtifactKind,
     )),
     tags(
         (name = "daemon"),

@@ -430,3 +430,102 @@ async fn standing_approval_merges_green_pull_requests_once_per_head() {
         }
     );
 }
+
+#[tokio::test]
+async fn gate_evidence_and_artifacts() {
+    use quark_systems::{
+        ArtifactKind, Evidence, EvidenceArtifact, Gate, GateCase, GateKind, GateState,
+    };
+    let h = harness().await;
+    h.forge
+        .set(URL, forge_pr(PullRequestState::Open, CheckStatus::Success));
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("journeys")).unwrap();
+    std::fs::write(dir.path().join("journeys/trace.zip"), b"PK-trace").unwrap();
+    let artifact = |kind, path: &str| EvidenceArtifact {
+        id: path.into(),
+        kind,
+        name: path.rsplit('/').next().unwrap().into(),
+        content_type: "application/zip".into(),
+        size_bytes: Some(8),
+        url: String::new(),
+    };
+    let evidence = Evidence {
+        head_sha: Some("abc123".into()),
+        state: GateState::Failed,
+        stale: false,
+        started_at: None,
+        completed_at: None,
+        gates: vec![Gate {
+            kind: GateKind::Journeys,
+            state: GateState::Failed,
+            summary: Some("1 of 1 failed".into()),
+            started_at: None,
+            completed_at: None,
+            cases: vec![GateCase {
+                name: "merge a PR".into(),
+                state: GateState::Failed,
+                duration_ms: Some(1200),
+                message: Some("timed out".into()),
+                artifacts: vec![
+                    artifact(ArtifactKind::Trace, "journeys/trace.zip"),
+                    artifact(ArtifactKind::Screenshot, "journeys/gone.png"),
+                ],
+            }],
+        }],
+    };
+    h.engine
+        .set_evidence("ship-pr-center", evidence, dir.path().to_path_buf());
+    h.center.refresh().await;
+
+    let (_, list) = call(&h.app, "GET", "/v1/pull-requests", None).await;
+    let pr = &list[0];
+    let e = &pr["evidence"];
+    assert_eq!(e["state"], "failed");
+    assert_eq!(e["stale"], false);
+    assert_eq!(e["gates"][0]["kind"], "journeys");
+    let trace = &e["gates"][0]["cases"][0]["artifacts"][0];
+    assert_eq!(trace["kind"], "trace");
+    let url = trace["url"].as_str().unwrap().to_string();
+    assert!(url.starts_with(&format!(
+        "/v1/pull-requests/{}/evidence/artifacts/",
+        pr["id"].as_str().unwrap()
+    )));
+
+    let req = Request::builder().uri(&url).body(Body::empty()).unwrap();
+    let res = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "application/zip");
+    assert_eq!(res.headers()["content-security-policy"], "sandbox");
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"PK-trace");
+
+    // A listed file that is gone, and ids the evidence does not list.
+    let gone = e["gates"][0]["cases"][0]["artifacts"][1]["url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, _) = call(&h.app, "GET", &gone, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let id = pr["id"].as_str().unwrap();
+    let escape = quarkd::store::artifact_id("../../etc/passwd");
+    let (status, _) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/pull-requests/{id}/evidence/artifacts/{escape}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Unchanged evidence emits nothing; a moved head marks it stale.
+    let seq = h.store.last_seq().unwrap();
+    h.center.refresh().await;
+    assert_eq!(h.store.last_seq().unwrap(), seq);
+    let mut moved = forge_pr(PullRequestState::Open, CheckStatus::Success);
+    moved.head_sha = Some("def456".into());
+    h.forge.set(URL, moved);
+    h.center.refresh().await;
+    let (_, one) = call(&h.app, "GET", &format!("/v1/pull-requests/{id}"), None).await;
+    assert_eq!(one["evidence"]["stale"], true);
+}

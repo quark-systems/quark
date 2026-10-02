@@ -56,6 +56,7 @@ A terminal's output starts with a `snapshot` chunk (reset the emulator, then fee
 To open a terminal, subscribe to the event stream, call `POST /v1/terminals/{id}/snapshot`, apply the returned event, then the terminal's events with a greater `seq`.
 
 The PR center (`crates/quarkd/src/pr_center.rs`) lists every pull request a task reports at `GET /v1/pull-requests`, with checks and reviews read from GitHub through the `gh` CLI every 30 seconds (`--pr-refresh-secs`), and streams changes as `pr.updated`, `check.updated` and `review.updated`.
+Each pull request carries its verification gate results (ADR-15) as `evidence`, read from the gate runner's `state/<task>.gates.json` manifest (`quark.gates.v1`); traces, screenshots and logs are served at `/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`.
 Review comments (`POST /v1/pull-requests/{id}/comments`) go to the owning worker as steering messages, and `:merge` runs the engine's guarded `fm-pr-merge.sh`.
 A Project's `standing_approval` merges its green pull requests without asking; turning it on also sets the engine's yolo posture for the Project's repos through `fm-project-yolo.sh` from the firstmate fork.
 

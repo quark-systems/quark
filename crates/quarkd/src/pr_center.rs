@@ -5,6 +5,9 @@
 //! the result. Merged and closed pull requests are read once more and then
 //! left alone, so the forge is only polled for live work.
 //!
+//! Each refresh also reads the owning task's verification gate results
+//! (ADR-15) into the pull request's `evidence`.
+//!
 //! Standing approval: for each Project that has it on, every open pull
 //! request that is mergeable, green and not held by a review is merged
 //! through the engine's guarded merge. Each head commit is tried once, so a
@@ -58,8 +61,30 @@ impl PrCenter {
             if let Err(e) = sync(&self.store, self.forge.as_ref(), &t.id, &t.url).await {
                 tracing::debug!(pr = %t.url, error = %e, "pull request not refreshed");
             }
+            if let Err(e) = self.evidence(&t.id).await {
+                tracing::debug!(pr = %t.url, error = %e, "gate evidence not refreshed");
+            }
         }
         self.standing_approval().await;
+    }
+
+    /// Reads the owning task's gate results into the pull request.
+    async fn evidence(&self, id: &str) -> Result<(), PrError> {
+        let store = self.store.clone();
+        let pid = id.to_string();
+        let owner = tokio::task::spawn_blocking(move || store.pull_request_owner(&pid))
+            .await
+            .map_err(|e| PrError::Store(StoreError::Invalid(e.to_string())))??;
+        let Ok((ws, task)) = owner_target(&owner) else {
+            return Ok(());
+        };
+        let evidence = self.engine.gate_evidence(&ws, &task).await?;
+        let store = self.store.clone();
+        let pid = id.to_string();
+        tokio::task::spawn_blocking(move || store.apply_evidence(&pid, evidence))
+            .await
+            .map_err(|e| PrError::Store(StoreError::Invalid(e.to_string())))??;
+        Ok(())
     }
 
     async fn standing_approval(&self) {

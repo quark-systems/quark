@@ -22,7 +22,7 @@ use crate::now_rfc3339;
 
 mod pull_requests;
 
-pub use pull_requests::{PrOwner, PrSyncTarget};
+pub use pull_requests::{artifact_id, artifact_path, PrOwner, PrSyncTarget};
 
 /// One `worker.output` event to append.
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -212,6 +212,11 @@ CREATE TABLE reviews (
     commit_sha      TEXT,
     PRIMARY KEY (pull_request_id, id)
 );
+"#;
+
+/// Verification gate evidence (ADR-15) per pull request, as API JSON.
+const SCHEMA_V8: &str = r#"
+ALTER TABLE pull_requests ADD COLUMN evidence TEXT;
 "#;
 
 /// A task whose status log the projector tails.
@@ -1293,6 +1298,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(SCHEMA_V7)?;
         tx.pragma_update(None, "user_version", 7)?;
+        tx.commit()?;
+    }
+    if version < 8 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V8)?;
+        tx.pragma_update(None, "user_version", 8)?;
         tx.commit()?;
     }
     Ok(())

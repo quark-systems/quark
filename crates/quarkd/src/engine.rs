@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind, TaskState};
 use serde::{Deserialize, Serialize};
 
 /// Addresses one engine workspace (a firstmate home). Location-neutral so a
@@ -218,6 +218,28 @@ pub trait EngineAdapter: Send + Sync {
         on: bool,
     ) -> Result<(), EngineError>;
 
+    /// The task's verification gate results, if its gates have run. Each
+    /// artifact's `id` is its path relative to the task's gate directory and
+    /// its `url` is empty; the daemon assigns both. `stale` is left false.
+    async fn gate_evidence(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+    ) -> Result<Option<Evidence>, EngineError> {
+        Ok(None)
+    }
+
+    /// The file of a gate artifact the task's evidence lists, by its path
+    /// relative to the task's gate directory.
+    fn gate_artifact(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        _path: &str,
+    ) -> Result<PathBuf, EngineError> {
+        Err(EngineError::TaskNotFound(task_id.to_string()))
+    }
+
     /// Clone `source` into the command-center workspace and register it, so
     /// a Project workspace can be seeded from it. Idempotent for the same
     /// name and URL.
@@ -253,6 +275,21 @@ pub trait EngineAdapter: Send + Sync {
         _command: &Path,
     ) -> Result<HashMap<String, String>, EngineError> {
         Ok(HashMap::new())
+    }
+}
+
+/// Refuses an artifact path the evidence does not list.
+pub fn listed_artifact(e: &Evidence, path: &str) -> Result<(), EngineError> {
+    let listed = e
+        .gates
+        .iter()
+        .flat_map(|g| &g.cases)
+        .flat_map(|c| &c.artifacts)
+        .any(|a| a.id == path);
+    if listed {
+        Ok(())
+    } else {
+        Err(EngineError::Invalid(format!("no gate artifact {path:?}")))
     }
 }
 
@@ -301,6 +338,8 @@ pub struct StubEngine {
     coordinators: Mutex<HashMap<String, String>>,
     /// Status entries per engine task id; the offset is an index.
     status: Mutex<HashMap<String, Vec<StatusEntry>>>,
+    /// Gate evidence and its artifact directory per engine task id.
+    evidence: Mutex<HashMap<String, (Evidence, PathBuf)>>,
 }
 
 impl StubEngine {
@@ -329,6 +368,14 @@ impl StubEngine {
             .entry(task_id.to_string())
             .or_default()
             .push(entry);
+    }
+
+    /// Gate results for an engine task, with artifacts under `dir`.
+    pub fn set_evidence(&self, task_id: &str, evidence: Evidence, dir: PathBuf) {
+        self.evidence
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), (evidence, dir));
     }
 
     /// Writes received so far, oldest first.
@@ -408,6 +455,33 @@ impl EngineAdapter for StubEngine {
             task_id: task_id.into(),
             action: action.clone(),
         })
+    }
+
+    async fn gate_evidence(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<Option<Evidence>, EngineError> {
+        Ok(self
+            .evidence
+            .lock()
+            .unwrap()
+            .get(task_id)
+            .map(|(e, _)| e.clone()))
+    }
+
+    fn gate_artifact(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        path: &str,
+    ) -> Result<PathBuf, EngineError> {
+        let evidence = self.evidence.lock().unwrap();
+        let (e, dir) = evidence
+            .get(task_id)
+            .ok_or_else(|| EngineError::TaskNotFound(task_id.into()))?;
+        listed_artifact(e, path)?;
+        Ok(dir.join(path))
     }
 
     async fn merge_pull_request(

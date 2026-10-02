@@ -280,3 +280,78 @@ pub async fn merge(
     })?;
     Ok(Json(merged))
 }
+
+/// One file a verification gate produced: a Playwright trace, a screenshot,
+/// a video, a log or a report, as listed in the pull request's `evidence`.
+///
+/// Served with its content type, `nosniff` and a sandboxing CSP, so an HTML
+/// report cannot run script against the daemon.
+#[utoipa::path(
+    get,
+    path = "/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}",
+    tag = "pull-requests",
+    params(
+        ("id" = String, Path, description = "Pull request id"),
+        ("artifact_id" = String, Path, description = "Artifact id from the evidence")
+    ),
+    responses(
+        (status = 200, description = "The artifact's bytes", content_type = "application/octet-stream"),
+        (status = 404, description = "Unknown pull request or artifact, or the file is gone", body = ErrorBody),
+        (status = 409, description = "No task owns the pull request, or its workspace is missing", body = ErrorBody)
+    )
+)]
+pub async fn artifact(
+    State(state): State<AppState>,
+    Path((id, artifact_id)): Path<(String, String)>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    let owner = db(&state, move |s| s.pull_request_owner(&id)).await?;
+    let listed = owner
+        .pull_request
+        .evidence
+        .iter()
+        .flat_map(|e| &e.gates)
+        .flat_map(|g| &g.cases)
+        .flat_map(|c| &c.artifacts)
+        .find(|a| a.id == artifact_id)
+        .cloned()
+        .ok_or_else(ApiError::not_found)?;
+    let rel = crate::store::artifact_path(&artifact_id).ok_or_else(ApiError::not_found)?;
+    let (ws, task) = pr_center::owner_target(&owner).map_err(pr_error)?;
+    let path = state
+        .engine
+        .gate_artifact(&ws, &task, &rel)
+        .map_err(|_| ApiError::not_found())?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiError::not_found())?;
+    let content_type = axum::http::HeaderValue::from_str(&listed.content_type).unwrap_or(
+        axum::http::HeaderValue::from_static("application/octet-stream"),
+    );
+    let disposition = format!(
+        "inline; filename=\"{}\"",
+        listed.name.replace(['"', '\\', '\r', '\n'], "_")
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (
+                header::CONTENT_DISPOSITION,
+                axum::http::HeaderValue::from_str(&disposition)
+                    .unwrap_or(axum::http::HeaderValue::from_static("inline")),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                axum::http::HeaderValue::from_static("nosniff"),
+            ),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                axum::http::HeaderValue::from_static("sandbox"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
