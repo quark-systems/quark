@@ -1,0 +1,214 @@
+// Typed client for the quarkd v1 API. Shapes follow api/openapi.json and the Phase 1 PRs
+// listed in app/CONTRACT.md.
+
+export type TaskState =
+  | "queued" | "running" | "needs_decision" | "blocked" | "paused"
+  | "in_review" | "done" | "failed" | "unknown";
+export type TaskKind = "ship" | "scout";
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface AgentConfig { harness: string; model?: string | null; effort?: string | null }
+export interface RepoSource { url: string; name?: string | null }
+export type DispatchPreset = "single" | "light_trivial";
+export type DeliveryPolicy = "gated" | "direct";
+export type ProjectStatus = "provisioning" | "ready" | "failed";
+
+export interface Project {
+  id: string; name: string; goal?: string | null; workspace_path?: string | null;
+  created_at: string; updated_at: string;
+  // From the J2 work (quark#10); absent on older daemons.
+  status?: ProjectStatus; status_detail?: string | null; repos?: RepoSource[];
+  agent_config?: AgentConfig | null; dispatch_preset?: DispatchPreset | null; delivery?: DeliveryPolicy | null;
+}
+
+export interface CreateProject {
+  name: string; goal?: string | null; workspace_path?: string | null;
+  repos?: RepoSource[]; agent_config?: AgentConfig; dispatch_preset?: DispatchPreset; delivery?: DeliveryPolicy;
+}
+
+export interface Task {
+  id: string; project_id: string; title: string; state: TaskState;
+  kind?: TaskKind | null; state_note?: string | null; harness?: string | null;
+  pull_request_url?: string | null; created_at: string; updated_at: string;
+}
+
+export interface Decision {
+  id: string; project_id: string; task_id?: string | null; question: string;
+  state: "open" | "answered"; answer?: string | null; opened_at: string;
+}
+
+export interface Health { status: string; version: string; engine: string; last_seq: number }
+
+export type AgentRole = "coordinator" | "worker";
+export interface HarnessInfo {
+  id: string; name: string; roles: AgentRole[];
+  install: { installed: boolean; version?: string | null; path?: string | null; install_hint: string };
+  models: { selection: "free_form" | "provider_qualified" | "automatic"; discovery?: string | null };
+  efforts: Effort[];
+  auth: { state: "configured" | "not_configured" | "unknown"; detail?: string | null };
+  transcript: boolean;
+}
+export interface ValidationIssue { field: string; code: string; message: string }
+export interface HarnessValidation { valid: boolean; errors: ValidationIssue[]; warnings: ValidationIssue[] }
+
+export type TranscriptRole = "user" | "assistant" | "thinking" | "tool_call" | "tool_result";
+export interface TranscriptEntry {
+  role: TranscriptRole; text: string; tool_name?: string | null; tool_call_id?: string | null;
+  is_error: boolean; truncated: boolean; ts?: string | null;
+}
+/** A transcript entry with its id: the `seq` of the event that carried it. */
+export interface TranscriptItem extends TranscriptEntry { id: number }
+export interface MessageAccepted { coordinator_id: string; confirmed: boolean; accepted_at: string }
+
+export interface Terminal {
+  id: string; project_id: string; role: AgentRole; task_id?: string | null; title: string; cols: number; rows: number;
+}
+export interface TerminalOutput {
+  terminal_id: string; role: AgentRole; task_id?: string | null; kind: "output" | "snapshot";
+  data_b64: string; cols?: number | null; rows?: number | null;
+}
+
+export type ChangeStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "type_changed" | "untracked";
+export interface ChangedFile {
+  path: string; old_path?: string | null; status: ChangeStatus; additions?: number | null; deletions?: number | null;
+}
+export interface TaskChanges { task_id: string; base_ref: string; base: string; head: string; files: ChangedFile[] }
+export interface TaskDiff { task_id: string; base: string; path?: string | null; patch: string; truncated: boolean }
+
+export interface DaemonEvent<T = unknown> {
+  seq: number; project_id?: string | null; type: string; ts: string; payload: T;
+}
+
+/** The daemon answered, but does not serve this endpoint yet (404/405/501). */
+export class NotAvailable extends Error {
+  constructor(public path: string) { super(`${path} is not available on this daemon yet`); }
+}
+/** Any other non-2xx answer. `message` is the daemon's `error.message` when it sent one. */
+export class ApiError extends Error {
+  constructor(public status: number, public code: string | null, message: string) { super(message); }
+}
+
+export const DEFAULT_DAEMON = "http://127.0.0.1:7380";
+const STORAGE_KEY = "quark.daemon";
+
+function initialDaemon(): string {
+  const fromQuery = typeof location !== "undefined" ? new URLSearchParams(location.search).get("daemon") : null;
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(STORAGE_KEY); } catch { /* storage unavailable */ }
+  return (fromQuery ?? saved ?? DEFAULT_DAEMON).replace(/\/$/, "");
+}
+
+let daemon = initialDaemon();
+export function daemonUrl() { return daemon; }
+export function wsUrl(path: string) { return daemon.replace(/^http/, "ws") + path; }
+/** Point the app at another daemon and remember it for this viewer. */
+export function setDaemonUrl(url: string) {
+  daemon = url.trim().replace(/\/$/, "") || DEFAULT_DAEMON;
+  try { localStorage.setItem(STORAGE_KEY, daemon); } catch { /* storage unavailable */ }
+}
+
+const enc = (s: string) => encodeURIComponent(s);
+
+async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const r = await fetch(daemon + path, {
+    method,
+    headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (r.status === 404 || r.status === 405 || r.status === 501) {
+    // A 404 with a daemon error body naming a missing entity is a real "not found", not a missing route.
+    const err = await r.json().catch(() => null);
+    if (r.status === 404 && err?.error?.code && err.error.code !== "route_not_found") {
+      throw new ApiError(404, err.error.code, err.error.message ?? "not found");
+    }
+    throw new NotAvailable(path);
+  }
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    let code: string | null = null, message = text || r.statusText;
+    try {
+      const j = JSON.parse(text);
+      code = j?.error?.code ?? null;
+      message = j?.error?.message ?? (typeof j?.error === "string" ? j.error : message);
+    } catch { /* not JSON */ }
+    throw new ApiError(r.status, code, `${message} (${r.status})`);
+  }
+  if (r.status === 202 || r.status === 204) return undefined as T;
+  const ct = r.headers.get("content-type") ?? "";
+  if (ct.includes("json")) return (await r.json()) as T;
+  return (await r.text()) as unknown as T;
+}
+
+export const api = {
+  health: () => req<Health>("GET", "/v1/health"),
+  projects: () => req<Project[]>("GET", "/v1/projects"),
+  project: (id: string) => req<Project>("GET", `/v1/projects/${enc(id)}`),
+  createProject: (p: CreateProject) => req<Project>("POST", "/v1/projects", p),
+  provision: (id: string) => req<void>("POST", `/v1/projects/${enc(id)}:provision`),
+  tasks: (pid: string) => req<Task[]>("GET", `/v1/projects/${enc(pid)}/tasks`),
+  task: (id: string) => req<Task>("GET", `/v1/tasks/${enc(id)}`),
+  decisions: () => req<Decision[]>("GET", "/v1/decisions?state=open"),
+  harnesses: () => req<HarnessInfo[]>("GET", "/v1/harnesses"),
+  validateAgent: (config: AgentConfig, role: AgentRole) =>
+    req<HarnessValidation>("POST", "/v1/harnesses:validate", { config, role }),
+
+  chat: (cid: string) => req<TranscriptItem[]>("GET", `/v1/coordinators/${enc(cid)}/messages?limit=1000`),
+  sendChat: (cid: string, text: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}/messages`, { text }),
+
+  steer: (id: string, text: string) => req<void>("POST", `/v1/tasks/${enc(id)}/messages`, { text }),
+  cancel: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:cancel`),
+  relaunch: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:relaunch`),
+
+  transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
+  changes: (id: string) => req<TaskChanges>("GET", `/v1/tasks/${enc(id)}/changes`),
+  diff: (id: string, path?: string) =>
+    req<TaskDiff>("GET", `/v1/tasks/${enc(id)}/diff` + (path ? `?path=${enc(path)}` : "")),
+
+  terminal: (id: string) => req<Terminal>("GET", `/v1/terminals/${enc(id)}`),
+  /** Appends a snapshot `worker.output` event for the terminal and returns it. */
+  terminalSnapshot: (id: string) => req<DaemonEvent<TerminalOutput>>("POST", `/v1/terminals/${enc(id)}/snapshot`),
+  terminalResize: (id: string, cols: number, rows: number) =>
+    req<Terminal>("POST", `/v1/terminals/${enc(id)}/resize`, { cols, rows }),
+  /** Ordered input: one request in flight per terminal; keys typed meanwhile are coalesced. */
+  terminalInput: (id: string, data: string) => enqueueInput(id, data),
+};
+
+const te = new TextEncoder();
+export function utf8ToB64(s: string): string {
+  const bytes = te.encode(s);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+export function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Concurrent fetches can reach the daemon out of order (POC: "echo" arrived as "ecoh"
+// when typing fast), so input is serialized per task and coalesced while a POST is in flight.
+interface InputQueue { buf: string; busy: boolean; waiters: ((e?: unknown) => void)[] }
+const inputQ = new Map<string, InputQueue>();
+function enqueueInput(id: string, data: string): Promise<void> {
+  let q = inputQ.get(id);
+  if (!q) inputQ.set(id, (q = { buf: "", busy: false, waiters: [] }));
+  q.buf += data;
+  const done = new Promise<void>((resolve, reject) => q!.waiters.push((e) => (e ? reject(e) : resolve())));
+  if (!q.busy) void pump(id, q);
+  return done;
+}
+async function pump(id: string, q: InputQueue) {
+  q.busy = true;
+  while (q.buf) {
+    const chunk = q.buf, waiters = q.waiters;
+    q.buf = ""; q.waiters = [];
+    let err: unknown;
+    try {
+      await req<void>("POST", `/v1/terminals/${enc(id)}/input`, { data_b64: utf8ToB64(chunk) });
+    } catch (e) { err = e; }
+    waiters.forEach((w) => w(err));
+  }
+  q.busy = false;
+}
