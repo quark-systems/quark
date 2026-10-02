@@ -2,7 +2,8 @@
 // dispatch preset. The agent picker lists the harnesses the daemon reports as able to
 // coordinate, and the config is validated before the Project is created.
 import React, { useEffect, useMemo, useState } from "react";
-import { api, DeliveryPolicy, DispatchPreset, HarnessInfo, NotAvailable, ValidationIssue } from "../api";
+import { Account, api, DeliveryPolicy, DispatchPreset, HarnessInfo, NotAvailable, ValidationIssue } from "../api";
+import { poolsFor } from "../accounts";
 import { href } from "../nav";
 import { addProject } from "../store";
 import { errText } from "../util";
@@ -40,6 +41,8 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
   const [harness, setHarness] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
+  const [pool, setPool] = useState("");
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [preset, setPreset] = useState<DispatchPreset>("single");
   const [delivery, setDelivery] = useState<DeliveryPolicy>("gated");
   const [workspace, setWorkspace] = useState("");
@@ -57,13 +60,19 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
       });
   }, []);
 
+  useEffect(() => {
+    // Pools are optional: an older daemon without accounts simply offers none.
+    api.accounts().then(setAccounts).catch(() => setAccounts([]));
+  }, []);
+
   // The Project's agent config runs its coordinator, so only coordinator-capable harnesses fit.
   const options = useMemo(() => (harnesses ?? []).filter((h) => h.roles.includes("coordinator")), [harnesses]);
   useEffect(() => {
     if (!harness) setHarness((options.find((h) => h.install.installed) ?? options[0])?.id ?? "");
   }, [options, harness]);
   const current = options.find((h) => h.id === harness);
-  useEffect(() => { setModel(""); setEffort(""); setIssues([]); }, [harness]);
+  useEffect(() => { setModel(""); setEffort(""); setPool(""); setIssues([]); }, [harness]);
+  const pools = useMemo(() => poolsFor(accounts, harness), [accounts, harness]);
 
   const cleanRepos = repos.map((r) => r.trim()).filter(Boolean);
   const badRepo = cleanRepos.find((r) => !validRepo(r));
@@ -77,6 +86,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
       harness,
       model: current?.models.selection === "automatic" ? null : model.trim() || null,
       effort: effort || null,
+      ...(pool ? { pool } : {}),
     };
     try {
       try {
@@ -161,7 +171,14 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
                   {current.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
               )}
+              {pools.length > 0 && (
+                <select value={pool} onChange={(e) => setPool(e.target.value)} aria-label="Account pool">
+                  <option value="">Default account</option>
+                  {pools.map((p) => <option key={p} value={p}>Pool: {p}</option>)}
+                </select>
+              )}
             </div>
+            {pool && <div className="hint-line">Each task runs under one of the pool's accounts, the least busy when it starts.</div>}
             {current?.models.discovery && <div className="hint-line">Models: {current.models.discovery}</div>}
             {current?.models.selection === "automatic" && <div className="hint-line">{current.name} picks its model itself.</div>}
             {current?.auth.state === "not_configured" && (

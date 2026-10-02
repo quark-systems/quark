@@ -228,6 +228,7 @@ async fn writes_run_allowlisted_scripts_and_are_recorded() {
             model: None,
             effort: Some("high".into()),
             note: "--resume from the red test".into(),
+            account_env: Vec::new(),
         },
     )
     .await
@@ -406,7 +407,9 @@ async fn provisioning_runs_project_add_seed_and_spawn() {
             harness: "claude-code".into(),
             model: Some("claude-sonnet-5".into()),
             effort: Some("high".into()),
+            pool: None,
         },
+        &[],
     )
     .await
     .unwrap();
@@ -515,7 +518,7 @@ async fn engine_scripts_run_on_the_daemons_tmux_server() {
     let spawn = fake.engine_root.join("bin/fm-spawn.sh");
     fs::write(
         &spawn,
-        "#!/bin/sh\necho \"TMUX=$TMUX FM_HOME=$FM_HOME\" > \"$FM_HOME/env.log\"\n\
+        "#!/bin/sh\necho \"TMUX=$TMUX FM_HOME=$FM_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR\" > \"$FM_HOME/env.log\"\n\
          echo \"spawned $1 harness=$4 kind=secondmate window=fm:$1 worktree=$2\"\n",
     )
     .unwrap();
@@ -535,17 +538,43 @@ async fn engine_scripts_run_on_the_daemons_tmux_server() {
             harness: "claude-code".into(),
             model: None,
             effort: None,
+            pool: Some("max".into()),
         },
+        &[("CLAUDE_CONFIG_DIR".into(), "/accounts/claude-work".into())],
     )
     .await
     .unwrap();
     assert_eq!(
         fs::read_to_string(fake.home.join("env.log")).unwrap(),
         format!(
-            "TMUX=/run/quark/tmux/quark,0,0 FM_HOME={}\n",
+            "TMUX=/run/quark/tmux/quark,0,0 FM_HOME={} CLAUDE_CONFIG_DIR=/accounts/claude-work\n",
             fake.home.display()
         )
     );
+
+    // Only an account variable the engine forwards, set to an absolute
+    // path, reaches a script.
+    for env in [
+        ("CODEX_HOME", "/accounts/codex-work"),
+        ("CLAUDE_CONFIG_DIR", "relative/dir"),
+        ("PATH", "/tmp"),
+    ] {
+        let err = e
+            .start_coordinator(
+                &fake.home,
+                &ws,
+                &AgentConfig {
+                    harness: "claude-code".into(),
+                    model: None,
+                    effort: None,
+                    pool: None,
+                },
+                &[(env.0.into(), env.1.into())],
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Invalid(_)), "{env:?}: {err}");
+    }
 }
 
 #[test]

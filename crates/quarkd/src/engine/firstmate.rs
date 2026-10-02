@@ -74,10 +74,26 @@ impl FirstmateEngine {
 
     /// Run `op` with `FM_HOME` at `home` and return its stdout.
     async fn write_at(&self, home: &Path, op: WriteOp) -> Result<String, EngineError> {
+        self.write_env(home, op, &[]).await
+    }
+
+    /// [`Self::write_at`] with account variables in the script's
+    /// environment, which `fm-spawn.sh` carries onto the agent's launch.
+    async fn write_env(
+        &self,
+        home: &Path,
+        op: WriteOp,
+        account_env: &[(String, String)],
+    ) -> Result<String, EngineError> {
         if !home.is_dir() {
             return Err(EngineError::WorkspaceNotFound(home.to_path_buf()));
         }
-        let writer = EngineWriter::new(self.at(home), self.log.clone());
+        let mut ws = self.at(home);
+        for (key, value) in account_env {
+            check_account_env(key, value)?;
+            ws = ws.with_env(key.clone(), value.clone());
+        }
+        let writer = EngineWriter::new(ws, self.log.clone());
         blocking(move || writer.write(&op)).await
     }
 
@@ -202,22 +218,30 @@ impl EngineAdapter for FirstmateEngine {
         action: &TaskControl,
     ) -> Result<(), EngineError> {
         let task_id = task_id.to_string();
-        let op = match action.clone() {
-            TaskControl::Cancel => WriteOp::Exit { task_id },
+        let (op, account_env) = match action.clone() {
+            TaskControl::Cancel => (WriteOp::Exit { task_id }, Vec::new()),
             TaskControl::Relaunch {
                 harness,
                 model,
                 effort,
                 note,
-            } => WriteOp::Relaunch {
-                task_id,
-                harness,
-                model,
-                effort,
-                note,
-            },
+                account_env,
+            } => (
+                WriteOp::Relaunch {
+                    task_id,
+                    harness,
+                    model,
+                    effort,
+                    note,
+                },
+                account_env,
+            ),
         };
-        self.write(ws, op).await
+        self.write_env(&ws.root, op, &account_env).await.map(drop)
+    }
+
+    fn account_envs(&self) -> &'static [&'static str] {
+        FORWARDED_ACCOUNT_ENVS
     }
 
     async fn gate_evidence(
@@ -351,6 +375,7 @@ impl EngineAdapter for FirstmateEngine {
         command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
+        account_env: &[(String, String)],
     ) -> Result<(), EngineError> {
         let op = WriteOp::SpawnSecondmate {
             id: ws.project_id.clone(),
@@ -359,7 +384,7 @@ impl EngineAdapter for FirstmateEngine {
             model: agent.model.clone(),
             effort: agent.effort.clone(),
         };
-        let out = self.write_at(command, op).await?;
+        let out = self.write_env(command, op, account_env).await?;
         write::parse_spawned(&out).map_err(convert)?;
         Ok(())
     }
@@ -379,6 +404,27 @@ impl EngineAdapter for FirstmateEngine {
         };
         Ok(coordinator_targets(&self.read_snapshot(&ws).await?))
     }
+}
+
+/// Account variables `fm-spawn.sh` carries onto an agent's launch. It
+/// forwards an ambient `CLAUDE_CONFIG_DIR` to Claude Code only; Codex's
+/// `CODEX_HOME` and the others do not reach the agent's pane yet.
+const FORWARDED_ACCOUNT_ENVS: &[&str] = &["CLAUDE_CONFIG_DIR"];
+
+/// Only a forwarded account variable, set to an absolute directory path,
+/// reaches an engine script.
+fn check_account_env(key: &str, value: &str) -> Result<(), EngineError> {
+    if !FORWARDED_ACCOUNT_ENVS.contains(&key) {
+        return Err(EngineError::Invalid(format!(
+            "the engine cannot launch an agent under {key}"
+        )));
+    }
+    if !Path::new(value).is_absolute() || value.chars().any(char::is_control) {
+        return Err(EngineError::Invalid(format!(
+            "{key} must be an absolute path, got {value:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// Gate results in neutral names. Artifact ids are their relative paths; the

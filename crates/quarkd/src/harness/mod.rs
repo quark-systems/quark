@@ -33,6 +33,20 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Longest model id accepted in an agent config.
 const MAX_MODEL_LEN: usize = 128;
 
+/// Longest account pool name.
+const MAX_POOL_LEN: usize = 64;
+
+/// Pool names are lowercase letters, digits and dashes, not starting with a
+/// dash, so they are safe in YAML, URLs and engine arguments alike.
+pub fn pool_name_ok(pool: &str) -> bool {
+    !pool.is_empty()
+        && pool.len() <= MAX_POOL_LEN
+        && !pool.starts_with('-')
+        && pool
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 /// The parts of the host environment harness checks read. Tests build one
 /// by hand so detection and credential checks never touch the real machine.
 #[derive(Debug, Clone, Default)]
@@ -207,6 +221,18 @@ pub trait Harness: Send + Sync {
     /// config directory, when it supports more than one account.
     fn account_env(&self) -> Option<&'static str>;
 
+    /// The default account's config directory: the account variable when it
+    /// is set in the daemon's environment, else the harness's usual place.
+    fn default_config_dir(&self, _env: &HostEnv) -> Option<PathBuf> {
+        None
+    }
+
+    /// The `quota-axi --provider` name that reads one account's quota with
+    /// `--profile-only`, when quota-axi supports the harness.
+    fn quota_provider(&self) -> Option<&'static str> {
+        None
+    }
+
     fn launch(
         &self,
         config: &AgentConfig,
@@ -302,6 +328,21 @@ fn default_validate<H: Harness + ?Sized>(
             ));
         }
     }
+    if let Some(pool) = config.pool.as_deref() {
+        if !pool_name_ok(pool) {
+            errors.push(issue(
+                "pool",
+                "invalid_pool",
+                format!("pool `{pool}` must be lowercase letters, digits and dashes"),
+            ));
+        } else if h.account_env().is_none() {
+            errors.push(issue(
+                "pool",
+                "pool_unsupported",
+                format!("{} supports only its default account", h.name()),
+            ));
+        }
+    }
     if let Some(raw) = config.effort.as_deref() {
         let accepted = h.efforts();
         let Some(effort) = Effort::parse(raw) else {
@@ -367,6 +408,25 @@ impl HarnessRegistry {
 
     pub fn ids(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.harnesses.iter().map(|h| h.id())
+    }
+
+    /// Every harness, in display order.
+    pub fn all(&self) -> &[Arc<dyn Harness>] {
+        &self.harnesses
+    }
+
+    /// The host environment checks run against.
+    pub fn env(&self) -> &HostEnv {
+        &self.env
+    }
+
+    /// The harness a task reports, by its id or the engine's adapter name
+    /// (firstmate reports `claude` for Claude Code).
+    pub fn resolve(&self, reported: &str) -> Option<&Arc<dyn Harness>> {
+        self.get(reported).or_else(|| {
+            let id = SPECS.iter().find(|s| s.engine == reported)?.id;
+            self.get(id)
+        })
     }
 
     /// Checks `config` for `role`. Unknown harnesses, unsupported roles,

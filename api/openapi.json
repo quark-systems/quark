@@ -9,6 +9,235 @@
     "version": "0.0.1"
   },
   "paths": {
+    "/v1/accounts": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Every account per harness, with credential health from the harness\nadapter and the latest quota reading. A harness with accounts lists its\ndefault account first.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "harness",
+            "in": "query",
+            "description": "Only this harness's accounts, e.g. `claude-code`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "description": "Read every listed account's quota now (one quota-axi call each)\ninstead of returning the last reading.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Account"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Add an account: a config directory for a harness that supports more than\none. Its quota is read right away and arrives as `account.quota_changed`.",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The directory is already an account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "One account.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Remove an added account. Its directory is left as it is. Refused for a\ndefault account and while a task runs under the account.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The account is removed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A default account, or one in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Rename an added account or replace any account's pools.",
+        "operationId": "update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/coordinators/{id}/messages": {
       "get": {
         "tags": [
@@ -1757,6 +1986,142 @@
   },
   "components": {
     "schemas": {
+      "Account": {
+        "type": "object",
+        "description": "An account a harness runs under: its own config directory, holding what\nthe harness writes after its own login. Every harness with accounts also\nhas a default account (`default: true`), its usual config directory, which\nis listed but cannot be removed.",
+        "required": [
+          "id",
+          "harness",
+          "label",
+          "default",
+          "pools",
+          "health",
+          "quota",
+          "active_tasks",
+          "launchable"
+        ],
+        "properties": {
+          "active_tasks": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks and coordinators currently running under the account.",
+            "minimum": 0
+          },
+          "config_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The config directory the harness is pointed at (`CLAUDE_CONFIG_DIR`,\n`CODEX_HOME` and equivalents)."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "harness": {
+            "type": "string",
+            "description": "Harness id, e.g. `claude-code`."
+          },
+          "health": {
+            "$ref": "#/components/schemas/HarnessAuth",
+            "description": "Credential health from the harness adapter."
+          },
+          "id": {
+            "type": "string",
+            "description": "`acc_...`, or `default-<harness>` for a harness's default account."
+          },
+          "label": {
+            "type": "string"
+          },
+          "launchable": {
+            "type": "boolean",
+            "description": "False when the engine cannot start this harness under another account\nyet, so only its default account can be chosen from a pool."
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pools the account belongs to. A dispatch profile naming a pool runs\neach task under one of the pool's accounts for its harness."
+          },
+          "quota": {
+            "$ref": "#/components/schemas/AccountQuota"
+          }
+        }
+      },
+      "AccountQuota": {
+        "type": "object",
+        "description": "An account's latest quota reading.",
+        "required": [
+          "state",
+          "windows"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the reading was taken (RFC 3339 UTC)."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why there are no numbers."
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The subscription plan, when reported."
+          },
+          "remaining_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What limits the account now, 0 to 100."
+          },
+          "state": {
+            "$ref": "#/components/schemas/QuotaState"
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuotaWindow"
+            }
+          }
+        }
+      },
+      "AccountQuotaChanged": {
+        "type": "object",
+        "description": "Payload of `account.quota_changed`.",
+        "required": [
+          "account_id",
+          "harness",
+          "quota"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/AccountQuota"
+          }
+        }
+      },
       "AgentConfig": {
         "type": "object",
         "description": "A harness with its model and effort.",
@@ -1780,6 +2145,13 @@
               "string",
               "null"
             ]
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Account pool to run under: one of the harness's accounts in this pool\nis chosen per task (see `Account.pools`). Absent runs under the\nharness's default account."
           }
         }
       },
@@ -2043,6 +2415,36 @@
           },
           "coordinator_id": {
             "type": "string"
+          }
+        }
+      },
+      "CreateAccount": {
+        "type": "object",
+        "description": "Add an account for a harness.",
+        "required": [
+          "harness",
+          "config_dir"
+        ],
+        "properties": {
+          "config_dir": {
+            "type": "string",
+            "description": "Absolute path of the account's config directory. Log in once with the\nharness pointed at it, e.g. `CLAUDE_CONFIG_DIR=<dir> claude`."
+          },
+          "harness": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown in the app; defaults to the directory name."
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -3054,6 +3456,49 @@
           "closed"
         ]
       },
+      "QuotaState": {
+        "type": "string",
+        "description": "Whether an account's quota could be read.",
+        "enum": [
+          "pending",
+          "known",
+          "unavailable",
+          "error",
+          "unsupported"
+        ]
+      },
+      "QuotaWindow": {
+        "type": "object",
+        "description": "One rate-limit window of an account's plan.",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "e.g. `five_hour`, `weekly`."
+          },
+          "label": {
+            "type": "string",
+            "description": "e.g. `session`, `week`."
+          },
+          "percent_remaining": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "resets_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339 UTC."
+          }
+        }
+      },
       "RelaunchTask": {
         "type": "object",
         "description": "Replace a task's worker in the same worktree. Absent fields keep the\nworker's current harness, model and effort.",
@@ -3082,6 +3527,13 @@
               "null"
             ],
             "description": "Where things stand, for the new worker, which keeps the worktree but\nnone of the conversation. A default note is used when absent."
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Account pool to choose from when the task has no usable account of\nthe harness yet; absent uses the Project agent config's pool when the\nharness matches. A task keeps its account across relaunches."
           }
         }
       },
@@ -3222,6 +3674,13 @@
           "updated_at"
         ],
         "properties": {
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account the task's worker was started under (an `Account.id`),\nwhen the harness has accounts."
+          },
           "created_at": {
             "type": "string"
           },
@@ -3631,6 +4090,29 @@
           "tool_result"
         ]
       },
+      "UpdateAccount": {
+        "type": "object",
+        "description": "Partial update; absent fields are left unchanged.",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Not accepted for a default account."
+          },
+          "pools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Replaces the account's pools."
+          }
+        }
+      },
       "UpdateProject": {
         "type": "object",
         "description": "Partial update; absent fields are left unchanged.",
@@ -3705,6 +4187,9 @@
     },
     {
       "name": "harnesses"
+    },
+    {
+      "name": "accounts"
     },
     {
       "name": "terminals"

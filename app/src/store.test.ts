@@ -10,6 +10,21 @@ const ev = (seq: number, type: string, payload: unknown, project_id: string | nu
   ({ seq, type, payload, project_id, ts: "2026-10-02T10:00:00Z" });
 
 describe("applyEvent", () => {
+  it("merges an account's new quota and ignores accounts not loaded yet", () => {
+    const quota = { state: "known" as const, remaining_percent: 40, windows: [], plan: "max", detail: null, checked_at: null };
+    const account = {
+      id: "acc_2", harness: "claude-code", label: "Work", config_dir: "/a/work", default: false, pools: ["max"],
+      health: { state: "configured" as const, detail: "found" }, quota: { ...quota, state: "pending" as const, remaining_percent: null },
+      active_tasks: 0, launchable: true,
+    };
+    const loaded: AppState = { ...initialState, accounts: { acc_2: account }, accountOrder: ["acc_2"], accountsAvailable: true };
+    const s = applyEvent(loaded, ev(1, "account.quota_changed", { account_id: "acc_2", harness: "claude-code", quota }, null));
+    expect(s.accounts.acc_2.quota.remaining_percent).toBe(40);
+    expect(s.accounts.acc_2.label).toBe("Work");
+    const other = ev(2, "account.quota_changed", { account_id: "acc_9", harness: "codex", quota }, null);
+    expect(applyEvent(s, other)).toBe(s);
+  });
+
   it("upserts tasks from created and state_changed events", () => {
     let s = applyEvent(initialState, ev(1, "task.created", task()));
     s = applyEvent(s, ev(2, "task.state_changed", task({ state: "running", state_note: "started" })));

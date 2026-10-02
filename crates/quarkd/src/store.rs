@@ -20,8 +20,10 @@ use tokio::sync::broadcast;
 
 use crate::now_rfc3339;
 
+mod accounts;
 mod pull_requests;
 
+pub use accounts::{default_account_id, AccountRow};
 pub use pull_requests::{artifact_id, artifact_path, PrOwner, PrSyncTarget};
 
 /// One `worker.output` event to append.
@@ -31,7 +33,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -242,6 +244,35 @@ INSERT INTO decisions_v9 (id, project_id, engine_id, task_id, question, state, a
 DROP TABLE decisions;
 ALTER TABLE decisions_v9 RENAME TO decisions;
 CREATE INDEX decisions_by_engine_id ON decisions (project_id, engine_id);
+"#;
+
+/// Accounts and pools (ADR-11) are daemon configuration, not engine state.
+/// A harness's default account (`default-<harness>`) has no `accounts` row
+/// but can still be in pools and hold a quota reading. A task records the
+/// account it was started under; a Project records its coordinator's.
+const SCHEMA_V10: &str = r#"
+CREATE TABLE accounts (
+    id         TEXT PRIMARY KEY,
+    harness    TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    config_dir TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (harness, config_dir)
+);
+
+CREATE TABLE account_pools (
+    account_id TEXT NOT NULL,
+    pool       TEXT NOT NULL,
+    PRIMARY KEY (account_id, pool)
+);
+
+CREATE TABLE account_quota (
+    account_id TEXT PRIMARY KEY,
+    quota      TEXT NOT NULL
+);
+
+ALTER TABLE tasks ADD COLUMN account_id TEXT;
+ALTER TABLE projects ADD COLUMN coordinator_account_id TEXT;
 "#;
 
 /// A task whose status log the projector tails.
@@ -695,14 +726,18 @@ impl Store {
                             state_note: et.state_note.clone(),
                             harness: et.harness.clone(),
                             pull_request_url: et.pull_request_url.clone(),
+                            account_id: et
+                                .harness
+                                .as_deref()
+                                .and_then(|h| accounts::inherited_account(tx, project_id, h)),
                             created_at: now.clone(),
                             updated_at: now,
                         };
                         tx.execute(
                             "INSERT INTO tasks (id, project_id, engine_id, title, kind, state,
                                  state_note, harness, pull_request_url, created_at, updated_at,
-                                 worktree_path)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                 worktree_path, account_id)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                             params![
                                 task.id,
                                 task.project_id,
@@ -715,7 +750,8 @@ impl Store {
                                 task.pull_request_url,
                                 task.created_at,
                                 task.updated_at,
-                                worktree
+                                worktree,
+                                task.account_id
                             ],
                         )?;
                         append_event(
@@ -1398,6 +1434,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 9)?;
         tx.commit()?;
     }
+    if version < 10 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V10)?;
+        tx.pragma_update(None, "user_version", 10)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1504,9 +1546,9 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
 }
 
 const TASK_COLUMNS: &str = "id, project_id, title, kind, state, state_note, harness, \
-                            pull_request_url, created_at, updated_at";
+                            pull_request_url, created_at, updated_at, account_id";
 const TASK_SELECT: &str = "SELECT id, project_id, title, kind, state, state_note, harness, \
-                           pull_request_url, created_at, updated_at FROM tasks";
+                           pull_request_url, created_at, updated_at, account_id FROM tasks";
 
 fn task_from_row(r: &Row) -> rusqlite::Result<Task> {
     task_from_row_at(r, 0)
@@ -1527,6 +1569,7 @@ fn task_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Task> {
         pull_request_url: r.get(i + 7)?,
         created_at: r.get(i + 8)?,
         updated_at: r.get(i + 9)?,
+        account_id: r.get(i + 10)?,
     })
 }
 

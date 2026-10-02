@@ -11,6 +11,7 @@ import { WorkerView } from "./screens/WorkerView";
 import { Inbox } from "./screens/Inbox";
 import { PullRequests } from "./screens/PullRequests";
 import { PullRequestView } from "./screens/PullRequestView";
+import { Accounts } from "./screens/Accounts";
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 export const MOD = isMac ? "⌘" : "Ctrl+";
@@ -70,6 +71,9 @@ export function App() {
             <span className="glyph">⇄</span>Pull requests
             <span className="count">{openPrs}</span>
           </a>
+          <a className={"side-item" + (route.name === "accounts" ? " active" : "")} href={href({ name: "accounts" })} data-testid="nav-accounts">
+            <span className="glyph">@</span>Accounts
+          </a>
           <a className={"side-item" + (route.name === "new" ? " active" : "")} href={href({ name: "new" })} data-testid="nav-new-project">
             <span className="glyph">+</span>New project
           </a>
@@ -108,6 +112,7 @@ function RouteView() {
     case "inbox": return <Inbox id={route.id} />;
     case "prs": return <PullRequests />;
     case "pr": return <PullRequestView key={route.id} id={route.id} />;
+    case "accounts": return <Accounts />;
   }
 }
 

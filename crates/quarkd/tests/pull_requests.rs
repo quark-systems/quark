@@ -40,12 +40,19 @@ async fn harness() -> Harness {
     let store = Arc::new(Store::open_in_memory().unwrap());
     let engine = Arc::new(StubEngine::new());
     let forge = Arc::new(StubForge::new());
+    let harnesses = Arc::new(HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        HostEnv::default(),
+    ));
     let app = api::router(AppState {
         store: store.clone(),
         engine: engine.clone(),
-        harnesses: Arc::new(HarnessRegistry::new(
-            quarkd::harness::builtin(),
-            HostEnv::default(),
+        harnesses: harnesses.clone(),
+        accounts: Arc::new(quarkd::accounts::Accounts::new(
+            store.clone(),
+            harnesses,
+            Arc::new(quarkd::accounts::StubQuota::new()),
+            &["CLAUDE_CONFIG_DIR"],
         )),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(dir.path().join("home")),

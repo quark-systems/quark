@@ -2,7 +2,7 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  api, CheckUpdated, DaemonEvent, Decision, Health, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
+  Account, AccountQuotaChanged, api, CheckUpdated, DaemonEvent, Decision, Health, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
   TranscriptItem, wsUrl,
 } from "./api";
 
@@ -26,12 +26,18 @@ export interface AppState {
   prsAvailable: boolean | null;
   /** Count of `pr.updated`, `check.updated` and `review.updated` events per PR, so views can refetch it. */
   prActivity: Record<string, number>;
+  /** Accounts per harness by id, in the daemon's order (`order`). */
+  accounts: Record<string, Account>;
+  accountOrder: string[];
+  /** Whether the daemon serves accounts; null until the first load answers. */
+  accountsAvailable: boolean | null;
 }
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
   projects: {}, tasks: {}, decisions: {}, chat: {}, transcripts: {}, taskActivity: {},
   pullRequests: {}, prsAvailable: null, prActivity: {},
+  accounts: {}, accountOrder: [], accountsAvailable: null,
 };
 
 function upsertById<T extends { id: string | number }>(list: T[] | undefined, item: T): T[] {
@@ -98,6 +104,12 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
         next.pullRequests = { ...s.pullRequests, [id]: { ...cur, reviews: upsertBy(cur.reviews, (p as ReviewUpdated).review, "id") } };
       }
       return next;
+    }
+    case "account.quota_changed": {
+      const q = p as AccountQuotaChanged;
+      const cur = q?.account_id ? s.accounts[q.account_id] : undefined;
+      if (!cur || !q.quota) return s; // not loaded yet; the next load includes it
+      return { ...s, accounts: { ...s.accounts, [cur.id]: { ...cur, quota: q.quota } } };
     }
     default:
       return s;
@@ -242,6 +254,21 @@ export async function refreshPullRequest(id: string) {
 
 export function setPullRequest(pr: PullRequest) {
   set({ pullRequests: { ...state.pullRequests, [pr.id]: pr } });
+}
+
+/** Loads every account. Answers "unavailable" while the daemon has no accounts. */
+export async function loadAccounts(refresh = false): Promise<"ok" | "unavailable"> {
+  try {
+    setAccounts(await api.accounts(refresh));
+    return "ok";
+  } catch (e) {
+    if (e instanceof NotAvailable) { set({ accountsAvailable: false }); return "unavailable"; }
+    throw e;
+  }
+}
+
+export function setAccounts(list: Account[]) {
+  set({ accounts: Object.fromEntries(list.map((a) => [a.id, a])), accountOrder: list.map((a) => a.id), accountsAvailable: true });
 }
 
 export function addProject(p: Project) {
