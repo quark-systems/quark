@@ -11,6 +11,7 @@ rust-version.workspace = true
 quark-systems.workspace = true
 quark-engine.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 clap.workspace = true
 futures-util.workspace = true
@@ -30,3 +31,4 @@ uuid.workspace = true
 http-body-util = "0.1.5"
 tokio-tungstenite.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
+tempfile = "3"

@@ -1,0 +1,252 @@
+{
+  "schema": "fm-secondmate-home-summary.v1",
+  "hold_classifier_schema": "fm-captain-hold-buckets.v1",
+  "contributions": {
+    "known": 2,
+    "checked": 0,
+    "counts": {
+      "captain": 0,
+      "fleet": 2,
+      "maintainer": 0,
+      "nobody": 0
+    },
+    "unmeasured": 0,
+    "complete": false,
+    "proven_clear": false,
+    "stale_verdicts": 0,
+    "missing_verdicts": 0,
+    "unreadable_records": 0,
+    "valid_until": 900,
+    "captain": [],
+    "captain_omitted": 0
+  },
+  "generated": "2026-10-01T22:50:57Z",
+  "generated_epoch": 1790895057,
+  "home": "/fixture/main",
+  "valid": false,
+  "reason": "live child state has no in-flight backlog item: external-wait=paused",
+  "invalidity": {
+    "kind": "unowned_current",
+    "ids": [
+      "external-wait"
+    ]
+  },
+  "state": "captain_decision",
+  "active_children": [
+    {
+      "id": "ship-task",
+      "kind": "ship",
+      "state": "working",
+      "repo": "firstmate",
+      "name": "Ship the thing",
+      "source": "pane",
+      "doing": "harness busy (claude-hook)"
+    }
+  ],
+  "decisions_open": [
+    {
+      "id": "pick-db",
+      "key": "pick-db",
+      "verb": "captain-hold",
+      "summary": "Choose the projection store",
+      "reason": "SQLite or DuckDB",
+      "hold_until": null,
+      "hold_bucket": "live",
+      "hold_age_days": null,
+      "source": "backlog"
+    },
+    {
+      "id": "mate",
+      "key": "race",
+      "verb": "needs-decision",
+      "summary": "pick subscribe order",
+      "reason": null,
+      "source": "status"
+    }
+  ],
+  "holds": [
+    {
+      "id": "pick-db",
+      "title": "Choose the projection store",
+      "blocked_by": null,
+      "blocked_by_ids": [],
+      "unresolved_blocker_ids": [],
+      "reason": "SQLite or DuckDB",
+      "source": "backlog"
+    },
+    {
+      "id": "later-call",
+      "title": "Revisit naming",
+      "blocked_by": null,
+      "blocked_by_ids": [],
+      "unresolved_blocker_ids": [],
+      "reason": "after launch",
+      "source": "backlog"
+    },
+    {
+      "id": "live-gate",
+      "title": "Real queued work",
+      "blocked_by": "ship-task",
+      "blocked_by_ids": [
+        "ship-task"
+      ],
+      "unresolved_blocker_ids": [
+        "ship-task"
+      ],
+      "reason": "blocked",
+      "source": "backlog"
+    }
+  ],
+  "queued": [
+    {
+      "id": "later-call",
+      "title": "Revisit naming",
+      "blocked_by": null,
+      "blocked_by_ids": [],
+      "unresolved_blocker_ids": [],
+      "blocked_reason": null,
+      "hold_reason": "after launch",
+      "hold_kind": "captain",
+      "hold_until": "2099-01-01",
+      "hold_bucket": "dated",
+      "hold_age_days": null,
+      "captain_actionable": false,
+      "repo": "firstmate",
+      "kind": "captain",
+      "since": null
+    },
+    {
+      "id": "live-gate",
+      "title": "Real queued work",
+      "blocked_by": "ship-task",
+      "blocked_by_ids": [
+        "ship-task"
+      ],
+      "unresolved_blocker_ids": [
+        "ship-task"
+      ],
+      "blocked_reason": null,
+      "hold_reason": null,
+      "hold_kind": null,
+      "hold_until": null,
+      "hold_bucket": null,
+      "hold_age_days": null,
+      "captain_actionable": false,
+      "repo": "firstmate",
+      "kind": "ship",
+      "since": null
+    },
+    {
+      "id": "dead-gate",
+      "title": "Old conditional work",
+      "blocked_by": null,
+      "blocked_by_ids": [],
+      "unresolved_blocker_ids": [],
+      "blocked_reason": null,
+      "hold_reason": null,
+      "hold_kind": null,
+      "hold_until": null,
+      "hold_bucket": null,
+      "hold_age_days": null,
+      "captain_actionable": false,
+      "repo": "firstmate",
+      "kind": "scout",
+      "since": null
+    },
+    {
+      "id": "pick-db",
+      "title": "Choose the projection store",
+      "blocked_by": null,
+      "blocked_by_ids": [],
+      "unresolved_blocker_ids": [],
+      "blocked_reason": null,
+      "hold_reason": "SQLite or DuckDB",
+      "hold_kind": "captain",
+      "hold_until": null,
+      "hold_bucket": "live",
+      "hold_age_days": null,
+      "captain_actionable": true,
+      "repo": "firstmate",
+      "kind": "captain",
+      "since": null
+    }
+  ],
+  "landed": [
+    {
+      "id": "done-a",
+      "title": "Landed thing",
+      "kind": "ship",
+      "hold_kind": null,
+      "pr_url": "https://github.com/kunchenguid/firstmate/pull/7",
+      "report_path": null,
+      "local_note": null,
+      "completion": {
+        "verb": "merged",
+        "date": "2026-07-10"
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "external-wait",
+      "state": "paused",
+      "source": "status-log",
+      "endpoint": {
+        "target": "firstmate:fm-external-wait",
+        "exists": true,
+        "agent_alive": "not_checked",
+        "status": "unknown",
+        "observed_at": "2026-10-01T22:50:57Z",
+        "freshness": "fresh"
+      }
+    },
+    {
+      "id": "mate",
+      "state": "parked",
+      "source": "status-log",
+      "endpoint": {
+        "target": "firstmate:fm-mate",
+        "exists": true,
+        "agent_alive": "dead",
+        "status": "dead",
+        "observed_at": "2026-10-01T22:50:57Z",
+        "freshness": "fresh"
+      }
+    },
+    {
+      "id": "scout-x",
+      "state": "done",
+      "source": "status-log",
+      "endpoint": {
+        "target": "firstmate:fm-scout-x",
+        "exists": true,
+        "agent_alive": "not_checked",
+        "status": "unknown",
+        "observed_at": "2026-10-01T22:50:57Z",
+        "freshness": "fresh"
+      }
+    },
+    {
+      "id": "ship-task",
+      "state": "working",
+      "source": "pane",
+      "endpoint": {
+        "target": "firstmate:fm-ship-task",
+        "exists": true,
+        "agent_alive": "not_checked",
+        "status": "unknown",
+        "observed_at": "2026-10-01T22:50:57Z",
+        "freshness": "fresh"
+      }
+    }
+  ],
+  "counts": {
+    "active_children": 1,
+    "decisions_open": 2,
+    "holds": 3,
+    "queued": 4,
+    "landed": 1,
+    "endpoints": 4
+  },
+  "omitted": []
+}

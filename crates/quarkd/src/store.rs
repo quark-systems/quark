@@ -9,12 +9,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use quark_engine::{FleetSnapshot, Hold};
+use crate::engine::{FleetSnapshot, Hold};
 use quark_systems::{
     CreateProject, Decision, DecisionState, Event, EventType, Project, Task, TaskKind, TaskState,
     UpdateProject,
 };
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
 
 use crate::now_rfc3339;
@@ -691,7 +691,7 @@ fn insert_decision(tx: &Transaction, engine_id: &str, d: &Decision) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quark_engine::EngineTask;
+    use crate::engine::EngineTask;
 
     fn engine_task(id: &str, state: TaskState) -> EngineTask {
         EngineTask {
@@ -783,12 +783,10 @@ mod tests {
         store
             .apply_holds(&p.id, std::slice::from_ref(&hold))
             .unwrap();
-        assert!(
-            store
-                .list_decisions(Some(DecisionState::Open))
-                .unwrap()
-                .is_empty()
-        );
+        assert!(store
+            .list_decisions(Some(DecisionState::Open))
+            .unwrap()
+            .is_empty());
         let all = store.list_decisions(None).unwrap();
         assert_eq!(all[0].answered_by.as_deref(), Some("user_1"));
 

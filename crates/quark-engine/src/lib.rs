@@ -1,156 +1,85 @@
-//! The engine adapter seam.
+//! Adapter between `quarkd` and the firstmate engine.
 //!
-//! `quarkd` never touches engine files itself. Every read of orchestration
-//! state goes through an [`EngineAdapter`], and the daemon projects what it
-//! returns into SQLite and the event stream.
+//! This crate is the read side of the engine boundary (spec ADR-8). It turns
+//! firstmate's on-disk state into typed values and never writes engine files:
 //!
-//! Phase 0 defines the read side only:
+//! - [`snapshot`]: `fm-fleet-snapshot.sh --json` (schema `fm-fleet-snapshot.v1`).
+//! - [`status`]: `state/<id>.status` wake-event lines and an incremental tail.
+//! - [`holds`]: captain holds and open decisions derived from a snapshot.
+//! - [`pr`]: `state/<id>.pr-poll` sidecars and merge-notified markers.
+//! - [`summary`]: `state/home-summary.json` (schema `fm-secondmate-home-summary.v1`).
 //!
-//! - [`StubEngine`] (this crate) is an in-memory adapter for tests and for
-//!   running the daemon without an engine checkout.
-//! - The firstmate adapter (fleet snapshot, status-log tails, hold records,
-//!   PR poll records) lands in a `firstmate` module of this crate. It maps
-//!   engine states onto the neutral [`TaskState`] so nothing engine-specific
-//!   reaches the API.
+//! Every script invocation goes through [`runner::ScriptRunner`], which only runs
+//! allowlisted, genuine `bin/fm-*.sh` files from the pinned engine checkout and
+//! records each call as an [`runner::AdapterCall`].
 //!
-//! The write side (allowlisted `fm-*.sh` calls with argument validation and
-//! adapter-call records) is a later addition to this trait.
+//! Status lines are wake-event history, not current state. Current task state
+//! comes from the snapshot's `current_state`, which the engine reconciles.
 
-use std::path::PathBuf;
-use std::sync::Mutex;
+mod error;
+pub mod holds;
+pub mod pr;
+pub mod runner;
+pub mod snapshot;
+pub mod status;
+pub mod summary;
+pub mod workspace;
 
-use async_trait::async_trait;
-use quark_systems::{TaskKind, TaskState};
-use serde::{Deserialize, Serialize};
+pub use error::{Error, Result};
+pub use workspace::{validate_task_id, Workspace};
 
-/// Addresses one engine workspace (a firstmate home). Location-neutral so a
-/// cloud runtime can become another kind of location later.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct WorkspaceRef {
-    /// The Quark Project that owns the workspace.
-    pub project_id: String,
-    /// Local filesystem root of the workspace.
-    pub root: PathBuf,
+use std::sync::Arc;
+use std::time::Duration;
+
+use runner::{CallLog, ScriptRunner};
+
+/// Read-only view of one firstmate workspace (a firstmate home).
+pub struct EngineReader {
+    workspace: Workspace,
+    runner: ScriptRunner,
 }
 
-/// Point-in-time view of every task in one workspace.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct FleetSnapshot {
-    pub tasks: Vec<EngineTask>,
-}
-
-/// A task as the engine reports it, already mapped to neutral names.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EngineTask {
-    /// Engine task id; stable for the life of the task.
-    pub id: String,
-    pub title: String,
-    pub kind: Option<TaskKind>,
-    pub state: TaskState,
-    pub state_note: Option<String>,
-    pub harness: Option<String>,
-    pub pull_request_url: Option<String>,
-}
-
-/// New status-log lines for one task, starting at a byte offset.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct StatusTail {
-    pub lines: Vec<String>,
-    /// Offset to pass on the next call.
-    pub next_offset: u64,
-}
-
-/// A question the engine is holding for a person.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Hold {
-    pub id: String,
-    pub task_id: Option<String>,
-    pub question: String,
-    /// `Some` once the hold has been answered.
-    pub answer: Option<String>,
-    pub answered_by: Option<String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum EngineError {
-    #[error("workspace not found: {0}")]
-    WorkspaceNotFound(PathBuf),
-    #[error("task not found: {0}")]
-    TaskNotFound(String),
-    #[error("engine command failed: {0}")]
-    Command(String),
-    #[error("could not parse engine output: {0}")]
-    Parse(String),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-}
-
-/// Read access to engine workspaces. Implementations must be cheap to call on
-/// a short timer; the daemon diffs successive results itself.
-#[async_trait]
-pub trait EngineAdapter: Send + Sync {
-    /// Short name reported by `GET /v1/health`.
-    fn name(&self) -> &'static str;
-
-    /// Every task currently known to the workspace.
-    async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError>;
-
-    /// Status-log lines for `task_id` from byte `offset` onward.
-    async fn status_tail(
-        &self,
-        ws: &WorkspaceRef,
-        task_id: &str,
-        offset: u64,
-    ) -> Result<StatusTail, EngineError>;
-
-    /// Open and recently answered holds in the workspace.
-    async fn holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError>;
-}
-
-/// In-memory adapter. Every workspace sees the same configurable state.
-#[derive(Debug, Default)]
-pub struct StubEngine {
-    snapshot: Mutex<FleetSnapshot>,
-    holds: Mutex<Vec<Hold>>,
-}
-
-impl StubEngine {
-    pub fn new() -> Self {
-        Self::default()
+impl EngineReader {
+    pub fn new(workspace: Workspace, log: Arc<dyn CallLog>) -> Self {
+        let runner = ScriptRunner::new(workspace.clone(), log);
+        Self { workspace, runner }
     }
 
-    pub fn set_snapshot(&self, snapshot: FleetSnapshot) {
-        *self.snapshot.lock().unwrap() = snapshot;
+    /// Override the per-call timeout (default 60s).
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.runner = self.runner.with_timeout(timeout);
+        self
     }
 
-    pub fn set_holds(&self, holds: Vec<Hold>) {
-        *self.holds.lock().unwrap() = holds;
-    }
-}
-
-#[async_trait]
-impl EngineAdapter for StubEngine {
-    fn name(&self) -> &'static str {
-        "stub"
+    pub fn workspace(&self) -> &Workspace {
+        &self.workspace
     }
 
-    async fn snapshot(&self, _ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
-        Ok(self.snapshot.lock().unwrap().clone())
+    /// Run `fm-fleet-snapshot.sh --json` and parse the result.
+    pub fn fleet_snapshot(&self) -> Result<snapshot::FleetSnapshot> {
+        let out = self.runner.run(runner::FLEET_SNAPSHOT, &["--json"])?;
+        snapshot::parse(&out)
     }
 
-    async fn status_tail(
-        &self,
-        _ws: &WorkspaceRef,
-        _task_id: &str,
-        offset: u64,
-    ) -> Result<StatusTail, EngineError> {
-        Ok(StatusTail {
-            lines: Vec::new(),
-            next_offset: offset,
-        })
+    /// Read the published `state/home-summary.json`, if this home has one.
+    pub fn home_summary(&self) -> Result<Option<summary::HomeSummary>> {
+        summary::read(&self.workspace.home_summary_path())
     }
 
-    async fn holds(&self, _ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
-        Ok(self.holds.lock().unwrap().clone())
+    /// Read a task's PR poll sidecar, if one is registered.
+    pub fn pr_poll(&self, task_id: &str) -> Result<Option<pr::PrPollRecord>> {
+        pr::read_poll(&self.workspace.pr_poll_path(task_id)?)
+    }
+
+    /// Read a task's merge-notified marker, if a merge was already delivered.
+    pub fn merge_notified(&self, task_id: &str) -> Result<Option<pr::MergeNotified>> {
+        pr::read_merge_notified(&self.workspace.merge_notified_path(task_id)?)
+    }
+
+    /// A tail over a task's status log, starting at the beginning of the file.
+    pub fn status_tail(&self, task_id: &str) -> Result<status::StatusTail> {
+        Ok(status::StatusTail::new(
+            self.workspace.status_log_path(task_id)?,
+        ))
     }
 }
