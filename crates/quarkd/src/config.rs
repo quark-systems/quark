@@ -60,17 +60,20 @@ pub enum EngineKind {
     Firstmate,
 }
 
+/// `tmux` is the `TMUX` value engine scripts run with, when the daemon has
+/// terminal sessions.
 pub fn build_engine(
     kind: EngineKind,
     config: &Config,
     store: Arc<Store>,
+    tmux: Option<String>,
 ) -> anyhow::Result<Arc<dyn EngineAdapter>> {
     match kind {
         EngineKind::Stub => Ok(Arc::new(StubEngine::new())),
-        EngineKind::Firstmate => Ok(Arc::new(FirstmateEngine::new(
-            config.engine_root(),
-            Arc::new(StoreCallLog { store }),
-        ))),
+        EngineKind::Firstmate => Ok(Arc::new(
+            FirstmateEngine::new(config.engine_root(), Arc::new(StoreCallLog { store }))
+                .with_tmux(tmux),
+        )),
     }
 }
 

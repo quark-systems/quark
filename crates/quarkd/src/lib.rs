@@ -48,9 +48,17 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let db_path = config.db_path();
     let store =
         Arc::new(Store::open(&db_path).with_context(|| format!("opening {}", db_path.display()))?);
-    let engine: Arc<dyn EngineAdapter> = config::build_engine(engine, &config, store.clone())?;
-
     let sessions = Sessions::detect(config.tmux.as_deref(), config.run_dir(), store.clone());
+    // The engine opens its windows on the shared server, so it must be up
+    // before the first engine write.
+    if engine == EngineKind::Firstmate {
+        if let Err(e) = sessions.ensure_server().await {
+            tracing::warn!(error = %e, "terminal sessions unavailable");
+        }
+    }
+    let tmux = sessions.tmux_env().ok();
+    let engine: Arc<dyn EngineAdapter> =
+        config::build_engine(engine, &config, store.clone(), tmux)?;
     let projector = Projector::new(store.clone(), engine.clone()).with_sessions(sessions.clone());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
@@ -59,7 +67,10 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         engine,
         sessions: sessions.clone(),
         layout: provision::Layout::new(&config.home),
-        chat: Arc::new(chat::NoSessions),
+        chat: Arc::new(chat::SessionsInput::new(
+            sessions.clone(),
+            quark_transcript::SessionRoots::from_env(),
+        )),
     });
     let listener = TcpListener::bind(config.listen)
         .await

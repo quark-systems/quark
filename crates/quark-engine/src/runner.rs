@@ -153,6 +153,12 @@ impl ScriptRunner {
         let spawned = Command::new(&path)
             .args(&args)
             .current_dir(&self.workspace.engine_root)
+            .envs(
+                self.workspace
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str())),
+            )
             .env("FM_HOME", &self.workspace.home)
             .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .stdin(Stdio::null())
