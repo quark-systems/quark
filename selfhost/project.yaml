@@ -1,0 +1,50 @@
+# The self-hosting Project's project.yaml. selfhost.sh fills in @ID@ and
+# @CREATED_AT@ from the Project quarkd created and commits this to the Project
+# repo. Keep name, goal, repos, agent_config and delivery in step with
+# project.json; a quarkd test checks that and that the gates compile.
+schema: "quark.project.v1"
+id: "@ID@"
+name: "Quark"
+goal: "Build the Quark MVP: all ten journeys in the spec pass on Matt's machine with his real repos. Quark builds itself from Phase 3 on."
+created_at: "@CREATED_AT@"
+workspace:
+  sources:
+    - name: "quark"
+      url: "https://github.com/quark-systems/quark.git"
+      verification:
+        checks:
+          - { name: "rustfmt", run: "cargo fmt --all --check" }
+          - { name: "clippy", run: "cargo clippy --workspace --all-targets -- -D warnings", timeout_s: 1800 }
+          - { name: "cargo test", run: "cargo test --workspace", timeout_s: 1800 }
+          - { name: "app build and unit tests", run: "cd app && npm ci && npm run build && npm test", timeout_s: 900 }
+        journeys:
+          dir: "app"
+          setup: "npm ci && npx playwright install chromium"
+          start: "npm run e2e:serve"
+          url: "http://127.0.0.1:1421/"
+          ready_timeout_s: 120
+    - name: "firstmate"
+      url: "https://github.com/quark-systems/firstmate.git"
+      verification:
+        checks:
+          # Lint needs CI's pinned shellcheck and actionlint; install each pin once into a cache.
+          - name: "lint"
+            run: |
+              c="${XDG_CACHE_HOME:-$HOME/.cache}/quark-gates"
+              sc="$c/shellcheck-$(bin/fm-lint.sh --required-version)"
+              al="$c/actionlint-$(bin/fm-lint-workflows.sh --required-version)"
+              [ -x "$sc/shellcheck" ] || bin/fm-install-shellcheck.sh "$sc"
+              [ -x "$al/actionlint" ] || bin/fm-install-actionlint.sh "$al"
+              PATH="$sc:$al:$PATH" bin/fm-lint.sh
+          - { name: "changed tests", run: "bin/fm-test-run.sh --changed", timeout_s: 1800 }
+agent_config:
+  harness: "claude-code"
+  effort: "high"
+trackers:
+  - kind: "github_issues"
+    repo: "quark-systems/quark"
+  - kind: "github_issues"
+    repo: "quark-systems/firstmate"
+delivery:
+  policy: "direct"
+  standing_approval: false
