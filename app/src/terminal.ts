@@ -17,7 +17,8 @@ export function defaultRenderer(): string {
   return /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent) ? "dom" : "webgl";
 }
 
-export type TermStatus = "connecting" | "live" | "unavailable" | "error";
+/** `none`: the task has no worker window yet (or any more), so no terminal. */
+export type TermStatus = "connecting" | "live" | "none" | "unavailable" | "error";
 
 export interface TermHandle {
   id: string;
@@ -72,6 +73,7 @@ async function open(h: TermHandle) {
     h.unsub?.();
     if (e instanceof NotAvailable) setStatus(h, "unavailable", "Live terminals are not available from this daemon yet");
     else if (e instanceof ApiError && e.code === "unavailable") setStatus(h, "unavailable", "The daemon cannot reach tmux, so live terminals are off");
+    else if (e instanceof ApiError && e.status === 404) setStatus(h, "none", "No terminal yet: this task has no worker running.");
     else setStatus(h, "error", String((e as Error).message ?? e));
     return;
   }

@@ -89,9 +89,11 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await expect(term.locator(".xterm-rows")).toContainText("relaunched on");
 });
 
-test("a queued task explains that it has no changes yet", async ({ page }) => {
+test("a queued task explains that it has no terminal or changes yet", async ({ page }) => {
   await open(page, "#/p/quark");
   await page.getByTestId("task-card").filter({ hasText: "Harness registry trait" }).click();
+  await expect(page.getByTestId("no-terminal")).toHaveText("No terminal yet: this task has no worker running.");
+  await expect(page.getByTestId("terminal").getByRole("button", { name: "Retry" })).toHaveCount(0);
   await page.getByRole("tab", { name: "Changes" }).click();
   await expect(page.getByTestId("changes")).toContainText("This task has no working copy yet.");
 });
