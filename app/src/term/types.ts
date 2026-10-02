@@ -13,6 +13,8 @@ export interface TermAdapter {
   reset(cols?: number, rows?: number): void;
   fit(): void;
   focus(): void;
+  /** The buffer's text, scrollback included, one line per row, whatever the renderer. */
+  text(): string;
   /** The underlying library object, for debugging. */
   raw(): unknown;
 }

@@ -128,6 +128,11 @@ export function resetTerm(id: string) {
   (h.adapter?.raw() as { dispose?: () => void } | undefined)?.dispose?.();
 }
 
+/** A live terminal's text, or null before it is open; for the end-to-end tests. */
+export function terminalText(id: string): string | null {
+  return terms.get(id)?.adapter?.text() ?? null;
+}
+
 export function attach(h: TermHandle, container: HTMLElement) {
   if (h.host.parentElement !== container) container.appendChild(h.host);
   h.adapter?.fit();
