@@ -19,6 +19,8 @@ export interface Project {
   // From the J2 work (quark#10); absent on older daemons.
   status?: ProjectStatus; status_detail?: string | null; repos?: RepoSource[];
   agent_config?: AgentConfig | null; dispatch_preset?: DispatchPreset | null; delivery?: DeliveryPolicy | null;
+  /** PR center: merge this Project's green PRs without asking (the engine's yolo posture). */
+  standing_approval?: boolean | null;
 }
 
 export interface CreateProject {
@@ -78,6 +80,40 @@ export interface ChangedFile {
 }
 export interface TaskChanges { task_id: string; base_ref: string; base: string; head: string; files: ChangedFile[] }
 export interface TaskDiff { task_id: string; base: string; path?: string | null; patch: string; truncated: boolean }
+
+// PR center (Phase 2 workstream 3, quark#16).
+export type PullRequestState = "open" | "draft" | "merged" | "closed";
+export type ChecksState = "passing" | "failing" | "pending" | "none";
+export type ReviewDecision = "approved" | "changes_requested" | "review_required" | "none";
+export type Mergeability = "mergeable" | "conflicting" | "unknown";
+export type CheckStatus = "pending" | "success" | "failure" | "neutral" | "cancelled";
+export interface Check {
+  name: string; status: CheckStatus;
+  /** The forge's own conclusion, e.g. `timed_out`, when it says more than `status`. */
+  conclusion?: string | null; details_url?: string | null; started_at?: string | null; completed_at?: string | null;
+}
+export interface Review {
+  id: string; author?: string | null; state: "approved" | "changes_requested" | "commented" | "dismissed" | "pending";
+  body: string; submitted_at?: string | null; commit?: string | null;
+}
+/** Verification evidence (ADR-15); reserved, always absent for now. */
+export interface Evidence { summary: string; url?: string | null }
+export interface PullRequest {
+  id: string; project_id: string; task_id?: string | null; url: string; provider: string; repo: string; number: number;
+  title?: string | null; author?: string | null; state: PullRequestState;
+  head_ref?: string | null; base_ref?: string | null; head_sha?: string | null;
+  mergeable: Mergeability; checks_state: ChecksState; review_decision: ReviewDecision;
+  additions?: number | null; deletions?: number | null; changed_files?: number | null;
+  checks: Check[]; reviews: Review[]; evidence?: Evidence | null;
+  opened_at?: string | null; updated_at?: string | null; merged_at?: string | null; closed_at?: string | null;
+  synced_at?: string | null; sync_error?: string | null;
+}
+export interface CheckUpdated { pull_request_id: string; task_id?: string | null; head_sha?: string | null; check: Check }
+export interface ReviewUpdated { pull_request_id: string; task_id?: string | null; review: Review }
+export interface PullRequestDiff { pull_request_id: string; path?: string | null; patch: string; truncated: boolean }
+export type DiffSide = "new" | "old";
+export interface PullRequestComment { text: string; path?: string | null; line?: number | null; side?: DiffSide | null }
+export type MergeMethod = "squash" | "merge" | "rebase";
 
 export interface DaemonEvent<T = unknown> {
   seq: number; project_id?: string | null; type: string; ts: string; payload: T;
@@ -170,6 +206,17 @@ export const api = {
   changes: (id: string) => req<TaskChanges>("GET", `/v1/tasks/${enc(id)}/changes`),
   diff: (id: string, path?: string) =>
     req<TaskDiff>("GET", `/v1/tasks/${enc(id)}/diff` + (path ? `?path=${enc(path)}` : "")),
+
+  pullRequests: () => req<PullRequest[]>("GET", "/v1/pull-requests"),
+  pullRequest: (id: string) => req<PullRequest>("GET", `/v1/pull-requests/${enc(id)}`),
+  pullRequestDiff: (id: string) => req<PullRequestDiff>("GET", `/v1/pull-requests/${enc(id)}/diff`),
+  /** Delivered to the PR's owning worker as a steering message; not posted on the forge. */
+  commentPullRequest: (id: string, c: PullRequestComment) => req<void>("POST", `/v1/pull-requests/${enc(id)}/comments`, c),
+  /** The engine's guarded merge; 409 `merge_refused` unless open, green and conflict-free. */
+  mergePullRequest: (id: string, method?: MergeMethod) =>
+    req<PullRequest>("POST", `/v1/pull-requests/${enc(id)}:merge`, method ? { method } : {}),
+  setStandingApproval: (projectId: string, on: boolean) =>
+    req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { standing_approval: on }),
 
   terminal: (id: string) => req<Terminal>("GET", `/v1/terminals/${enc(id)}`),
   /** Appends a snapshot `worker.output` event for the terminal and returns it. */

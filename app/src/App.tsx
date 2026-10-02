@@ -9,6 +9,8 @@ import { NewProject } from "./screens/NewProject";
 import { ProjectBoard } from "./screens/ProjectBoard";
 import { WorkerView } from "./screens/WorkerView";
 import { Inbox } from "./screens/Inbox";
+import { PullRequests } from "./screens/PullRequests";
+import { PullRequestView } from "./screens/PullRequestView";
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 export const MOD = isMac ? "⌘" : "Ctrl+";
@@ -18,6 +20,8 @@ export function App() {
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
+  const prs = useStore((s) => s.pullRequests);
+  const openPrs = useMemo(() => Object.values(prs).filter((p) => p.state === "open").length, [prs]);
   const [palette, setPalette] = useState(false);
 
   useEffect(() => {
@@ -46,7 +50,8 @@ export function App() {
   const openDecisions = useMemo(() => Object.values(decisions).filter((d) => d.state === "open").length, [decisions]);
 
   const currentProject =
-    route.name === "project" ? route.id : route.name === "task" ? tasks[route.id]?.project_id ?? null : null;
+    route.name === "project" ? route.id : route.name === "task" ? tasks[route.id]?.project_id ?? null
+      : route.name === "pr" ? prs[route.id]?.project_id ?? null : null;
   const sorted = Object.values(projects).sort((a, b) => a.name.localeCompare(b.name));
 
   return (
@@ -60,6 +65,10 @@ export function App() {
           <a className={"side-item" + (route.name === "inbox" ? " active" : "")} href={href({ name: "inbox" })} data-testid="nav-inbox">
             <span className="glyph">?</span>Decisions
             {openDecisions > 0 && <span className="pill accent" data-testid="inbox-count">{openDecisions}</span>}
+          </a>
+          <a className={"side-item" + (route.name === "prs" || route.name === "pr" ? " active" : "")} href={href({ name: "prs" })} data-testid="nav-prs">
+            <span className="glyph">⇄</span>Pull requests
+            <span className="count">{openPrs}</span>
           </a>
           <a className={"side-item" + (route.name === "new" ? " active" : "")} href={href({ name: "new" })} data-testid="nav-new-project">
             <span className="glyph">+</span>New project
@@ -78,7 +87,7 @@ export function App() {
           ))}
           {!sorted.length && <div className="faint side-empty">No projects yet</div>}
         </div>
-        <div className="side-foot"><span className="kbd">{MOD}K</span> jump to a project, task or decision</div>
+        <div className="side-foot"><span className="kbd">{MOD}K</span> jump to a project, task, decision or PR</div>
       </aside>
       <main className="main">
         <RouteView />
@@ -97,6 +106,8 @@ function RouteView() {
     case "project": return <ProjectBoard key={route.id} id={route.id} />;
     case "task": return <WorkerView key={route.id} id={route.id} />;
     case "inbox": return <Inbox id={route.id} />;
+    case "prs": return <PullRequests />;
+    case "pr": return <PullRequestView key={route.id} id={route.id} />;
   }
 }
 

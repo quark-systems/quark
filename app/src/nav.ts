@@ -4,6 +4,8 @@
 //   #/p/<project id>   board and coordinator chat
 //   #/t/<task id>      worker view
 //   #/inbox[/<id>]     decisions inbox, optionally with one decision selected
+//   #/prs              PR center
+//   #/pr/<pr id>       one pull request: checks, reviews, diff
 import { useSyncExternalStore } from "react";
 
 export type Route =
@@ -11,7 +13,9 @@ export type Route =
   | { name: "new" }
   | { name: "project"; id: string }
   | { name: "task"; id: string }
-  | { name: "inbox"; id?: string };
+  | { name: "inbox"; id?: string }
+  | { name: "prs" }
+  | { name: "pr"; id: string };
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
@@ -19,6 +23,8 @@ export function parseRoute(hash: string): Route {
   if (parts[0] === "p" && parts[1]) return { name: "project", id: parts[1] };
   if (parts[0] === "t" && parts[1]) return { name: "task", id: parts[1] };
   if (parts[0] === "inbox") return parts[1] ? { name: "inbox", id: parts[1] } : { name: "inbox" };
+  if (parts[0] === "prs") return { name: "prs" };
+  if (parts[0] === "pr" && parts[1]) return { name: "pr", id: parts[1] };
   return { name: "projects" };
 }
 
@@ -29,6 +35,8 @@ export function href(r: Route): string {
     case "project": return `#/p/${encodeURIComponent(r.id)}`;
     case "task": return `#/t/${encodeURIComponent(r.id)}`;
     case "inbox": return r.id ? `#/inbox/${encodeURIComponent(r.id)}` : "#/inbox";
+    case "prs": return "#/prs";
+    case "pr": return `#/pr/${encodeURIComponent(r.id)}`;
   }
 }
 

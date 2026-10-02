@@ -39,6 +39,9 @@ const chats = new Map(); // project id -> ChatMessage[]
 const transcripts = new Map(); // task id -> TranscriptEntry[]
 const terms = new Map(); // task id -> { cols, rows, screen: string, line: string }
 const diffOf = new Map(); // task id -> unified diff text
+const pulls = new Map(); // PR id -> PullRequest
+const pullDiffs = new Map(); // PR id -> unified diff text
+const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
 
 const events = []; // { seq, ... } bounded
 let seq = 0;
@@ -59,7 +62,7 @@ function addProject(p) {
     created_at: p.created_at ?? now(), updated_at: p.updated_at ?? now(),
     repos: (p.repos ?? []).map((r) => ({ url: r.url, name: r.name ?? r.url.replace(/\.git$/, "").split(/[/:]/).pop() })),
     agent_config: p.agent_config ?? null, dispatch_preset: p.dispatch_preset ?? "single", delivery: p.delivery ?? "gated",
-    status: p.status ?? "ready", status_detail: p.status_detail ?? null,
+    status: p.status ?? "ready", status_detail: p.status_detail ?? null, standing_approval: p.standing_approval ?? false,
   };
   projects.set(proj.id, proj);
   chats.set(proj.id, []);
@@ -152,6 +155,47 @@ function seed() {
   D("d-2", site, "Launch the new design behind a flag, or replace the old site directly?", { opened_at: minutesAgo(6) });
   D("d-3", quark, "Use SQLite WAL mode for the projection store?", {
     opened_at: minutesAgo(200), state: "answered", answer: "Yes, WAL with a busy timeout.", answered_by: "matt", answered_at: minutesAgo(180),
+  });
+
+
+  // PR center (quark#16): one PR per state, across both Projects.
+  const PR = (id, project, task, extra) => {
+    const repo = project.repos[0].url.replace(/^https:\/\/github.com\//, "").replace(/\.git$/, "");
+    const pr = {
+      id, project_id: project.id, task_id: task?.id ?? null, provider: "github", repo, author: "quark-bot", state: "open",
+      head_sha: "9f1e2d3c4b", mergeable: "mergeable", checks_state: "passing", review_decision: "review_required",
+      checks: [], reviews: [], evidence: null, opened_at: minutesAgo(120), updated_at: minutesAgo(10),
+      merged_at: null, closed_at: null, synced_at: minutesAgo(1), sync_error: null, ...extra,
+    };
+    pr.url = `https://github.com/${repo}/pull/${pr.number}`;
+    pullDiffs.set(id, pr.diff ?? "");
+    delete pr.diff;
+    const files = filesOf(pullDiffs.get(id));
+    Object.assign(pr, {
+      additions: files.reduce((n, f) => n + f.additions, 0), deletions: files.reduce((n, f) => n + f.deletions, 0), changed_files: files.length,
+    });
+    pulls.set(id, pr);
+  };
+  const ok = (name) => ({ name, status: "success", conclusion: null, details_url: `https://github.com/quark-systems/quark/actions/runs/1#${name}`, started_at: minutesAgo(50), completed_at: minutesAgo(45) });
+  const inReview = [...tasks.values()].find((t) => t.title === "OpenAPI check in CI");
+  PR("pr-1", quark, inReview, {
+    number: 2, title: "OpenAPI check in CI", head_ref: "quark/openapi-check", base_ref: "main", diff: DIFFS[0],
+    checks: [ok("CI / rust"), ok("CI / desktop-app")], updated_at: minutesAgo(40),
+  });
+  PR("pr-2", quark, b, {
+    number: 15, title: "Terminal sessions over tmux control mode", head_ref: "quark/tmux-control", base_ref: "main", diff: DIFFS[1],
+    checks: [ok("CI / rust"), { name: "CI / desktop-app", status: "failure", conclusion: "timed_out", details_url: null }], checks_state: "failing",
+    review_decision: "changes_requested", updated_at: minutesAgo(6),
+    reviews: [{ id: "r-1", author: "mattsanchez", state: "changes_requested", body: "Resize should debounce; the pane flickers.", submitted_at: minutesAgo(15), commit: "9f1e2d3c4b" }],
+  });
+  PR("pr-3", site, null, {
+    number: 41, title: "Pricing page on the new grid", head_ref: "quark/pricing-grid", base_ref: "main", diff: DIFFS[3],
+    state: "draft", checks: [{ name: "build", status: "pending", started_at: minutesAgo(2) }], checks_state: "pending", review_decision: "none",
+  });
+  PR("pr-4", quark, null, {
+    number: 1, title: "Daemon skeleton", head_ref: "quark/daemon", base_ref: "main", diff: DIFFS[2], state: "merged",
+    checks: [ok("CI / rust")], review_decision: "approved", merged_at: minutesAgo(300), closed_at: minutesAgo(300), updated_at: minutesAgo(300),
+    reviews: [{ id: "r-2", author: "mattsanchez", state: "approved", body: "", submitted_at: minutesAgo(310), commit: "9f1e2d3c4b" }],
   });
 
   for (const t of [a, b]) {
@@ -310,6 +354,14 @@ const server = http.createServer(async (req, res) => {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);
     if (!r[2] && req.method === "GET") return send(res, 200, proj);
+    if (!r[2] && req.method === "PATCH") {
+      const b = await readJson(req);
+      if (!b || (b.standing_approval !== undefined && typeof b.standing_approval !== "boolean")) return invalid(res, "standing_approval must be a boolean");
+      if (b.standing_approval !== undefined) proj.standing_approval = b.standing_approval;
+      proj.updated_at = now();
+      emit("project.updated", { ...proj }, proj.id);
+      return send(res, 200, proj);
+    }
     if (r[2] && req.method === "POST") {
       if (proj.status !== "failed") return send(res, 409, { error: { code: "conflict", message: "project is not failed" } });
       provision(proj);
@@ -433,6 +485,44 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { task_id: task.id, base: "0a28113f4c", path, patch: diffFor(diffOf.get(task.id), path), truncated: false });
     }
   }
+
+  if (p === "/v1/pull-requests" && req.method === "GET") {
+    const st = url.searchParams.get("state"), pid = url.searchParams.get("project_id");
+    return send(res, 200, [...pulls.values()].filter((x) => (!st || x.state === st) && (!pid || x.project_id === pid)));
+  }
+  if ((r = m(/^\/v1\/pull-requests\/([^/:]+)(.*)$/))) {
+    const pr = pulls.get(decodeURIComponent(r[1]));
+    const rest = r[2];
+    if (!pr) return notFound(res);
+    if (rest === "" && req.method === "GET") return send(res, 200, pr);
+    if (rest === "/diff" && req.method === "GET") {
+      const path = url.searchParams.get("path");
+      if (path && !filesOf(pullDiffs.get(pr.id)).some((f) => f.path === path)) return notFound(res);
+      return send(res, 200, { pull_request_id: pr.id, path, patch: diffFor(pullDiffs.get(pr.id), path), truncated: false });
+    }
+    if (rest === "/comments" && req.method === "POST") {
+      const b = await readJson(req);
+      if (!b?.text?.trim()) return invalid(res, "text is required");
+      if (b.line != null && !b.path) return invalid(res, "line requires path");
+      const task = pr.task_id && tasks.get(pr.task_id);
+      if (!task) return send(res, 409, { error: { code: "no_task", message: "no task owns this pull request" } });
+      prComments.push({ pull_request_id: pr.id, text: b.text.trim(), path: b.path ?? null, line: b.line ?? null, side: b.side ?? null });
+      transcript(task, "user", `Review comment${b.path ? ` on ${b.path}${b.line != null ? `:${b.line}` : ""}` : ""}: ${b.text.trim()}`);
+      return send(res, 204);
+    }
+    if (rest === ":merge" && req.method === "POST") {
+      // Like the engine's guarded merge: open, not a draft, conflict-free and green, or refused.
+      const why = pr.state !== "open" ? `pull request is ${pr.state}` : pr.mergeable === "conflicting" ? "pull request has conflicts"
+        : pr.checks_state !== "passing" && pr.checks_state !== "none" ? "checks are not green" : null;
+      if (why) return send(res, 409, { error: { code: "merge_refused", message: why } });
+      pr.state = "merged"; pr.merged_at = pr.closed_at = pr.updated_at = now();
+      emit("pr.updated", { ...pr }, pr.project_id);
+      const task = pr.task_id && tasks.get(pr.task_id);
+      if (task) setState(task, "done", "Merged from the PR center");
+      return send(res, 200, pr);
+    }
+  }
+  if (p === "/mock/pr-comments" && req.method === "GET") return send(res, 200, prComments);
   // Unknown route: an empty 404, like axum's default, which the app reads as "not available yet".
   res.writeHead(404, cors);
   res.end();

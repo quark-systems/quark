@@ -6,8 +6,9 @@ import { href } from "../nav";
 import { loadTranscript, refreshTask, useStore } from "../store";
 import { attach, getTerm, resetTerm, TermHandle } from "../terminal";
 import { ago, errText, isActive, stateMeta } from "../util";
-import { highlight, langForPath, renderMarkdown } from "../markdown";
+import { renderMarkdown } from "../markdown";
 import { DiffFile, parseUnifiedDiff } from "../diff";
+import { FileDiff } from "../components/FileDiff";
 import { Unavailable } from "../components/Unavailable";
 
 export function WorkerView({ id }: { id: string }) {
@@ -308,27 +309,3 @@ function ChangesPanel({ taskId, stateKey }: { taskId: string; stateKey: string }
 const STATUS_LETTER: Record<string, string> = {
   added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", type_changed: "T", untracked: "U",
 };
-
-const FileDiff = memo(function FileDiff({ f }: { f: DiffFile }) {
-  const lang = langForPath(f.path);
-  const html = useMemo(() => f.lines.map((l) => (l.kind === "hunk" ? "" : highlight(l.text, lang))), [f, lang]);
-  return (
-    <div className="file">
-      <div className="file-head"><span>{f.path}</span><span className="adds">+{f.adds}</span><span className="dels">−{f.dels}</span></div>
-      <table className="diff"><tbody>
-        {f.lines.map((l, j) =>
-          l.kind === "hunk" ? (
-            <tr className="hunk" key={j}><td colSpan={4}>{l.text}</td></tr>
-          ) : (
-            <tr className={l.kind} key={j}>
-              <td className="ln">{l.old ?? ""}</td>
-              <td className="ln">{l.new ?? ""}</td>
-              <td className="sign">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</td>
-              <td dangerouslySetInnerHTML={{ __html: html[j] || " " }} />
-            </tr>
-          ),
-        )}
-      </tbody></table>
-    </div>
-  );
-});
