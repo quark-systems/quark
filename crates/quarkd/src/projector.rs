@@ -4,6 +4,8 @@
 //! task's status log (task activity) and reads its holds (decisions). Refreshes
 //! run on a timer and, when the adapter names directories to watch, as soon as
 //! a task file changes there, so the board moves while a worker reports.
+//! Each refresh also hands the engine the verification gates the Project
+//! repo's `project.yaml` declares, whenever that declaration changes.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -34,6 +36,8 @@ pub struct Projector {
     command: Option<PathBuf>,
     /// Coordinator targets last handed to the session layer, by Project id.
     coordinators: Mutex<HashMap<String, Option<String>>>,
+    /// The Project repo declaration last applied as gate config, by Project id.
+    gates: Mutex<HashMap<String, String>>,
 }
 
 impl Projector {
@@ -46,6 +50,7 @@ impl Projector {
             sessions: None,
             command: None,
             coordinators: Mutex::default(),
+            gates: Mutex::default(),
         }
     }
 
@@ -91,6 +96,9 @@ impl Projector {
                 root: PathBuf::from(path),
             };
             self.refresh(&ws).await;
+            if let Some(repo) = &project.project_repo_path {
+                self.sync_gates(&ws, PathBuf::from(repo)).await;
+            }
             workspaces.push(ws);
         }
         Ok(workspaces)
@@ -137,6 +145,53 @@ impl Projector {
             })
             .await;
             log_apply(ws, "holds", res);
+        }
+    }
+
+    /// Compile the Project repo's gate declaration and hand it to the engine
+    /// when it changed since the last success. A failure is recorded and
+    /// retried next tick.
+    pub async fn sync_gates(&self, ws: &WorkspaceRef, repo: PathBuf) {
+        let started = Instant::now();
+        let declared = {
+            let repo = repo.clone();
+            tokio::task::spawn_blocking(move || crate::gates::read_declared(&repo)).await
+        };
+        let declared = match declared {
+            Ok(Ok(Some(d))) => d,
+            Ok(Ok(None)) => return,
+            Ok(Err(e)) => {
+                let err = EngineError::Command(e);
+                self.record(ws, "gates", started, Some(&err)).await;
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "gates read task panicked");
+                return;
+            }
+        };
+        if self.gates.lock().unwrap().get(&ws.project_id) == Some(&declared.blob) {
+            return;
+        }
+        let config =
+            crate::gates::compile(&declared.project_yaml, &repo, &declared.holdout_sources)
+                .and_then(|c| serde_json::to_string(&c).map_err(|e| e.to_string()));
+        // A declaration that does not compile is recorded once and waits for
+        // the next change; an engine failure is retried.
+        let (res, done) = match config {
+            Ok(json) => {
+                let res = self.engine.set_gates(ws, &json).await;
+                let ok = res.is_ok();
+                (res, ok)
+            }
+            Err(e) => (Err(EngineError::Parse(e)), true),
+        };
+        self.record(ws, "gates", started, res.as_ref().err()).await;
+        if done {
+            self.gates
+                .lock()
+                .unwrap()
+                .insert(ws.project_id.clone(), declared.blob);
         }
     }
 

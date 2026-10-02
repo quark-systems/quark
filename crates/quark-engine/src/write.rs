@@ -16,6 +16,9 @@
 //! decision through `fm-send.sh --resolve-key`, and [`WriteOp::AnswerHold`]
 //! answers a captain hold through `fm-captain-hold.sh answer`. Both record who
 //! answered (`--answered-by`, from the quark-systems firstmate fork).
+//!
+//! Verification gates (ADR-15) add [`WriteOp::GatesConfig`], which replaces a
+//! workspace's gate config through `fm-gates.sh config-set`.
 
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -30,6 +33,14 @@ pub const SPAWN: &str = "fm-spawn.sh";
 pub const PR_MERGE: &str = "fm-pr-merge.sh";
 pub const PROJECT_YOLO: &str = "fm-project-yolo.sh";
 pub const CAPTAIN_HOLD: &str = "fm-captain-hold.sh";
+pub const GATES: &str = "fm-gates.sh";
+
+/// Largest gate config accepted, in bytes (`fm-gates.sh` refuses more).
+pub const MAX_GATES_CONFIG_BYTES: usize = 256 * 1024;
+
+/// The target name [`WriteOp::GatesConfig`] reports: it changes the
+/// workspace's config, not one task.
+pub const GATES_TARGET: &str = "gates";
 
 /// Longest charter, scope or project description accepted, in characters.
 pub const MAX_LINE_CHARS: usize = 600;
@@ -125,6 +136,10 @@ pub enum WriteOp {
     /// Set a registered project's standing merge posture (yolo), keeping its
     /// delivery mode: `fm-project-yolo.sh <name> <on|off>`.
     ProjectYolo { name: String, on: bool },
+    /// Replace the workspace's verification-gate config (`config/gates.json`,
+    /// schema `fm.gates.v1`): `fm-gates.sh config-set` with the JSON in
+    /// `FM_GATES_CONFIG_JSON`. The script validates it before writing.
+    GatesConfig { json: String },
 }
 
 /// How a pull request is merged on GitHub. GitLab uses the project's setting.
@@ -174,6 +189,7 @@ impl WriteOp {
             WriteOp::SpawnSecondmate { .. } => SPAWN,
             WriteOp::PrMerge { .. } => PR_MERGE,
             WriteOp::ProjectYolo { .. } => PROJECT_YOLO,
+            WriteOp::GatesConfig { .. } => GATES,
         }
     }
 
@@ -189,6 +205,7 @@ impl WriteOp {
             | WriteOp::PrMerge { task_id, .. } => task_id,
             WriteOp::ProjectAdd { name, .. } | WriteOp::ProjectYolo { name, .. } => name,
             WriteOp::HomeSeed { id, .. } | WriteOp::SpawnSecondmate { id, .. } => id,
+            WriteOp::GatesConfig { .. } => GATES_TARGET,
         }
     }
 
@@ -200,7 +217,8 @@ impl WriteOp {
             WriteOp::Send { .. }
             | WriteOp::ProjectYolo { .. }
             | WriteOp::Answer { .. }
-            | WriteOp::AnswerHold { .. } => Duration::from_secs(60),
+            | WriteOp::AnswerHold { .. }
+            | WriteOp::GatesConfig { .. } => Duration::from_secs(60),
             WriteOp::PrMerge { .. } => Duration::from_secs(300),
             WriteOp::Exit { .. } => Duration::from_secs(120),
             WriteOp::Relaunch { .. } | WriteOp::SpawnSecondmate { .. } => Duration::from_secs(300),
@@ -216,6 +234,7 @@ impl WriteOp {
                 ("FM_SECONDMATE_CHARTER", one_line(charter)),
                 ("FM_SECONDMATE_SCOPE", one_line(scope)),
             ],
+            WriteOp::GatesConfig { json } => vec![("FM_GATES_CONFIG_JSON", json.clone())],
             _ => Vec::new(),
         }
     }
@@ -375,6 +394,15 @@ impl WriteOp {
             }
             WriteOp::ProjectYolo { name, on } => {
                 Ok(vec![name.clone(), if *on { "on" } else { "off" }.into()])
+            }
+            WriteOp::GatesConfig { json } => {
+                check_text("gates config", json, MAX_GATES_CONFIG_BYTES).map_err(invalid)?;
+                let v: serde_json::Value = serde_json::from_str(json)
+                    .map_err(|e| invalid(format!("gates config is not JSON: {e}")))?;
+                if !v.is_object() {
+                    return Err(invalid("gates config must be a JSON object".into()));
+                }
+                Ok(vec!["config-set".into()])
             }
         }
     }
@@ -990,5 +1018,30 @@ mod tests {
             "spawned p1 harness=claude kind=secondmate"
         );
         assert!(parse_spawned("nothing").is_err());
+    }
+
+    #[test]
+    fn gates_config_passes_json_in_the_environment() {
+        let op = WriteOp::GatesConfig {
+            json: r#"{"schema":"fm.gates.v1","repos":{}}"#.into(),
+        };
+        assert_eq!(op.script(), GATES);
+        assert_eq!(op.argv().unwrap(), vec!["config-set".to_string()]);
+        assert_eq!(
+            op.env(),
+            vec![(
+                "FM_GATES_CONFIG_JSON",
+                r#"{"schema":"fm.gates.v1","repos":{}}"#.to_string()
+            )]
+        );
+        for bad in [
+            "",
+            "not json",
+            "[1]",
+            &"x".repeat(MAX_GATES_CONFIG_BYTES + 1),
+        ] {
+            let op = WriteOp::GatesConfig { json: bad.into() };
+            assert!(op.argv().is_err(), "accepted {bad:.20}");
+        }
     }
 }

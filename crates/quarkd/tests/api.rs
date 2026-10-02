@@ -650,6 +650,63 @@ async fn creating_a_project_provisions_workspace_repo_and_coordinator() {
     h.projector.refresh_all().await.unwrap();
     let (_, tasks) = call(&h.app, "GET", &format!("/v1/projects/{id}/tasks"), None).await;
     assert_eq!(tasks[0]["title"], "Fix #42");
+
+    // The refresh handed the engine the Project repo's (empty) gate config.
+    let gates = |h: &Harness| -> Vec<Value> {
+        h.engine
+            .writes()
+            .into_iter()
+            .filter_map(|w| match w {
+                StubWrite::Gates { config, .. } => Some(serde_json::from_str(&config).unwrap()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(gates(&h), [json!({"schema": "fm.gates.v1", "repos": {}})]);
+
+    // Declaring gates and adding holdout tests in the Project repo reaches
+    // the engine on the next refresh, once.
+    let checkout = workspace.join("project");
+    let yaml = std::fs::read_to_string(checkout.join("project.yaml")).unwrap();
+    let yaml = yaml.replacen(
+        "      url: \"https://github.com/quark-systems/quark.git\"\n",
+        "      url: \"https://github.com/quark-systems/quark.git\"\n      verification:\n        checks:\n          - { name: \"test\", run: \"cargo test\" }\n",
+        1,
+    );
+    std::fs::write(checkout.join("project.yaml"), yaml).unwrap();
+    std::fs::create_dir_all(checkout.join("holdout/quark/api")).unwrap();
+    std::fs::write(checkout.join("holdout/quark/api/run"), "#!/bin/sh\n").unwrap();
+    for args in [
+        &["add", "-A"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@x",
+            "commit",
+            "-qm",
+            "gates",
+        ],
+        &["push", "-q", "origin", "HEAD:main"],
+    ] {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&checkout)
+            .args(args)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+    h.projector.refresh_all().await.unwrap();
+    h.projector.refresh_all().await.unwrap();
+    let all = gates(&h);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let quark = &all[1]["repos"]["quark"];
+    assert_eq!(quark["checks"][0]["run"], "cargo test");
+    assert_eq!(quark["holdout"]["path"], "holdout/quark");
+    assert_eq!(quark["holdout"]["repo"], repo);
+    assert!(all[1]["repos"].get("engine").is_none());
 }
 
 #[tokio::test]

@@ -282,6 +282,13 @@ pub trait EngineAdapter: Send + Sync {
         agent: &AgentConfig,
     ) -> Result<(), EngineError>;
 
+    /// Replace the workspace's verification-gate config with `config`
+    /// (schema `fm.gates.v1`, see [`crate::gates`]). Engines without gates
+    /// ignore it.
+    async fn set_gates(&self, _ws: &WorkspaceRef, _config: &str) -> Result<(), EngineError> {
+        Ok(())
+    }
+
     /// Each running Project coordinator's tmux window target in the
     /// command-center workspace, keyed by Project id. Engines without
     /// coordinator windows have none.
@@ -344,6 +351,10 @@ pub enum StubWrite {
     StandingApproval {
         repos: Vec<String>,
         on: bool,
+    },
+    Gates {
+        project_id: String,
+        config: String,
     },
 }
 
@@ -586,6 +597,13 @@ impl EngineAdapter for StubEngine {
         self.accept(StubWrite::StartCoordinator {
             project_id: ws.project_id.clone(),
             harness: agent.harness.clone(),
+        })
+    }
+
+    async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        self.accept(StubWrite::Gates {
+            project_id: ws.project_id.clone(),
+            config: config.to_string(),
         })
     }
 }

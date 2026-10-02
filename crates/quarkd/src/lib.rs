@@ -9,6 +9,7 @@ pub mod chat;
 pub mod config;
 pub mod engine;
 pub mod forge;
+pub mod gates;
 pub mod harness;
 pub mod pr_center;
 pub mod project_repo;

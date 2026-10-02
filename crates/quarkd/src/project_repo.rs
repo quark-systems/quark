@@ -9,6 +9,7 @@
 //!   instructions.md  Project-level guidance for the coordinator and workers
 //!   memory/          one file per entry, with evidence and date (empty at creation)
 //!   library/         files you add and artifacts agents produce
+//!   holdout/         verification tests workers never see (ADR-15, `crate::gates`)
 //! ```
 //!
 //! Files are rendered from the [`Project`] row. YAML string values are written
@@ -36,6 +37,15 @@ pub enum RepoError {
     Unexpected(PathBuf),
 }
 
+const HOLDOUT_README: &str = "# Holdout tests\n\n\
+Tests here run before every PR, against a clean checkout of the worker's head, \
+and the worker learns only each category's name and whether it passed. \
+Workers never see this directory, so keep it to people and agents that do not work tasks.\n\n\
+Layout: `holdout/<source>/<category>/run`, an executable started in its category directory with \
+`GATE_TARGET` (the head checkout), `GATE_HEAD_SHA` and, when the source declares journeys, \
+`GATE_APP_URL`. Exit 0 passes the category.\n\n\
+Repo checks and Playwright journeys are declared per source in `project.yaml` under `verification`.\n";
+
 /// Rendered Project repo files, relative path first.
 pub fn render(p: &Project) -> Vec<(&'static str, String)> {
     vec![
@@ -44,6 +54,7 @@ pub fn render(p: &Project) -> Vec<(&'static str, String)> {
         ("instructions.md", instructions_md(p)),
         ("memory/.gitkeep", String::new()),
         ("library/.gitkeep", String::new()),
+        ("holdout/README.md", HOLDOUT_README.into()),
     ]
 }
 
