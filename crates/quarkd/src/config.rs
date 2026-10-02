@@ -20,6 +20,8 @@ pub struct Config {
     pub home: PathBuf,
     pub listen: SocketAddr,
     pub refresh_interval: Duration,
+    /// How often open pull requests are read from their forge.
+    pub pr_refresh_interval: Duration,
     /// tmux binary for terminal sessions; `tmux` from `PATH` when unset.
     pub tmux: Option<PathBuf>,
 }

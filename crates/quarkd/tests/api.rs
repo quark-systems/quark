@@ -42,6 +42,7 @@ async fn harness() -> Harness {
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(home.path()),
         chat,
+        forge: Arc::new(quarkd::forge::StubForge::new()),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

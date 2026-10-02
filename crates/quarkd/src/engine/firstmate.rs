@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use quark_systems::{AgentConfig, DeliveryPolicy, TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind, TaskState};
 
 use quark_engine::holds::decisions;
 use quark_engine::runner::CallLog;
@@ -164,6 +164,50 @@ impl EngineAdapter for FirstmateEngine {
             },
         };
         self.write(ws, op).await
+    }
+
+    async fn merge_pull_request(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        url: &str,
+        method: Option<MergeMethod>,
+    ) -> Result<(), EngineError> {
+        let op = WriteOp::PrMerge {
+            task_id: task_id.into(),
+            url: url.into(),
+            method: method.map(|m| match m {
+                MergeMethod::Squash => write::MergeMethod::Squash,
+                MergeMethod::Merge => write::MergeMethod::Merge,
+                MergeMethod::Rebase => write::MergeMethod::Rebase,
+            }),
+        };
+        self.write(ws, op).await
+    }
+
+    /// Standing approval is the registry's yolo posture for each repo, so
+    /// the coordinator merges green work itself instead of asking.
+    async fn set_standing_approval(
+        &self,
+        ws: &WorkspaceRef,
+        repos: &[String],
+        on: bool,
+    ) -> Result<(), EngineError> {
+        for name in repos {
+            let op = WriteOp::ProjectYolo {
+                name: name.clone(),
+                on,
+            };
+            let out = self.write_at(&ws.root, op).await?;
+            if write::parse_project_yolo(&out).map_err(convert)? != on {
+                return Err(EngineError::Command(format!(
+                    "{} did not record yolo={} for {name}",
+                    write::PROJECT_YOLO,
+                    if on { "on" } else { "off" }
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// `state/` holds task records and status logs; `data/` holds the backlog

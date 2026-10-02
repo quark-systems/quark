@@ -20,6 +20,10 @@ use tokio::sync::broadcast;
 
 use crate::now_rfc3339;
 
+mod pull_requests;
+
+pub use pull_requests::{PrOwner, PrSyncTarget};
+
 /// One `worker.output` event to append.
 #[derive(Debug, Clone)]
 pub struct TerminalOutput {
@@ -544,16 +548,21 @@ impl Store {
             if input.workspace_path.is_some() {
                 project.workspace_path = input.workspace_path;
             }
+            if let Some(on) = input.standing_approval {
+                project.standing_approval = on;
+            }
             project.updated_at = now_rfc3339();
             tx.execute(
-                "UPDATE projects SET name = ?2, goal = ?3, workspace_path = ?4, updated_at = ?5
+                "UPDATE projects SET name = ?2, goal = ?3, workspace_path = ?4, updated_at = ?5,
+                     standing_approval = ?6
                  WHERE id = ?1",
                 params![
                     project.id,
                     project.name,
                     project.goal,
                     project.workspace_path,
-                    project.updated_at
+                    project.updated_at,
+                    project.standing_approval
                 ],
             )?;
             append_event(

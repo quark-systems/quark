@@ -35,6 +35,8 @@ pub struct AppState {
     pub layout: crate::provision::Layout,
     /// Delivers chat input to coordinator sessions.
     pub chat: Arc<dyn CoordinatorInput>,
+    /// Reads pull requests from their forge.
+    pub forge: Arc<dyn crate::forge::Forge>,
 }
 
 pub fn router(state: AppState) -> Router {

@@ -7,13 +7,14 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    ErrorBody, MergePullRequest, PullRequest, PullRequestComment, PullRequestDiff,
-    PullRequestState,
+    ErrorBody, MergePullRequest, PullRequest, PullRequestComment, PullRequestDiff, PullRequestState,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
 
-use super::{ApiError, AppState};
+use super::{db, ApiError, AppState};
+use crate::forge::{self, ForgeError};
+use crate::pr_center::{self, PrError};
 
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -24,12 +25,25 @@ pub struct PullRequestQuery {
     pub project_id: Option<String>,
 }
 
-fn not_yet() -> ApiError {
-    ApiError::new(
-        StatusCode::NOT_IMPLEMENTED,
-        "not_implemented",
-        "the PR center is not wired up yet",
-    )
+/// Largest review comment accepted, in bytes.
+const MAX_COMMENT_BYTES: usize = 32 * 1024;
+
+fn pr_error(e: PrError) -> ApiError {
+    match e {
+        PrError::Store(e) => e.into(),
+        PrError::Engine(e) => e.into(),
+        PrError::Forge(e) => forge_error(e),
+        PrError::NoOwner(m) => ApiError::new(StatusCode::CONFLICT, "no_owner", m),
+    }
+}
+
+fn forge_error(e: ForgeError) -> ApiError {
+    let code = match e {
+        ForgeError::Unsupported(_) => "forge_unsupported",
+        ForgeError::Missing => "forge_unavailable",
+        _ => "forge_failed",
+    };
+    ApiError::new(StatusCode::BAD_GATEWAY, code, e.to_string())
 }
 
 /// Pull requests across all Projects, newest first, with their checks and
@@ -43,10 +57,15 @@ fn not_yet() -> ApiError {
     responses((status = 200, body = Vec<PullRequest>))
 )]
 pub async fn list(
-    State(_state): State<AppState>,
-    Query(_q): Query<PullRequestQuery>,
+    State(state): State<AppState>,
+    Query(q): Query<PullRequestQuery>,
 ) -> Result<Json<Vec<PullRequest>>, ApiError> {
-    Err(not_yet())
+    Ok(Json(
+        db(&state, move |s| {
+            s.list_pull_requests(q.state, q.project_id.as_deref())
+        })
+        .await?,
+    ))
 }
 
 /// One pull request.
@@ -61,10 +80,10 @@ pub async fn list(
     )
 )]
 pub async fn get(
-    State(_state): State<AppState>,
-    Path(_id): Path<String>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
 ) -> Result<Json<PullRequest>, ApiError> {
-    Err(not_yet())
+    Ok(Json(db(&state, move |s| s.get_pull_request(&id)).await?))
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -87,11 +106,28 @@ pub struct PullRequestDiffQuery {
     )
 )]
 pub async fn diff(
-    State(_state): State<AppState>,
-    Path(_id): Path<String>,
-    Query(_q): Query<PullRequestDiffQuery>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<PullRequestDiffQuery>,
 ) -> Result<Json<PullRequestDiff>, ApiError> {
-    Err(not_yet())
+    let pr = db(&state, move |s| s.get_pull_request(&id)).await?;
+    let (patch, truncated) = state.forge.diff(&pr.url).await.map_err(forge_error)?;
+    let patch = match &q.path {
+        Some(path) => forge::file_patch(&patch, path).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("the pull request does not change {path}"),
+            )
+        })?,
+        None => patch,
+    };
+    Ok(Json(PullRequestDiff {
+        pull_request_id: pr.id,
+        path: q.path,
+        patch,
+        truncated,
+    }))
 }
 
 /// Send a review comment to the worker that owns the pull request.
@@ -113,11 +149,54 @@ pub async fn diff(
     )
 )]
 pub async fn comment(
-    State(_state): State<AppState>,
-    Path(_id): Path<String>,
-    Json(_input): Json<PullRequestComment>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<PullRequestComment>,
 ) -> Result<StatusCode, ApiError> {
-    Err(not_yet())
+    if input.text.trim().is_empty() {
+        return Err(ApiError::invalid("text is empty"));
+    }
+    if input.text.len() > MAX_COMMENT_BYTES {
+        return Err(ApiError::invalid(format!(
+            "text is longer than {MAX_COMMENT_BYTES} bytes"
+        )));
+    }
+    if input.line.is_some() && input.path.is_none() {
+        return Err(ApiError::invalid("line needs a path"));
+    }
+    if input.line == Some(0) {
+        return Err(ApiError::invalid("line starts at 1"));
+    }
+    if let Some(p) = &input.path {
+        if p.trim().is_empty() || p.contains(['\n', '\r']) {
+            return Err(ApiError::invalid("path is not a file path"));
+        }
+    }
+    let owner = db(&state, move |s| s.pull_request_owner(&id)).await?;
+    let (ws, task) = pr_center::owner_target(&owner).map_err(pr_error)?;
+    let message = worker_message(&owner.pull_request.url, &input);
+    state.engine.send_message(&ws, &task, &message).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The steering message a review comment becomes. It names the pull request
+/// and, for a line comment, where in the diff the comment points.
+pub fn worker_message(url: &str, c: &PullRequestComment) -> String {
+    let place = match (&c.path, c.line) {
+        (Some(path), Some(line)) => {
+            let side = match c.side {
+                Some(quark_systems::DiffSide::Old) => " (the removed version)",
+                _ => "",
+            };
+            format!(" on {path} line {line}{side}")
+        }
+        (Some(path), None) => format!(" on {path}"),
+        _ => String::new(),
+    };
+    format!(
+        "Review comment on your pull request {url}{place}:\n\n{}\n\nAddress it on the same branch and push.",
+        c.text.trim()
+    )
 }
 
 /// Dispatches `POST /v1/pull-requests/{id}:<action>`.
@@ -168,9 +247,36 @@ pub async fn action(
     )
 )]
 pub async fn merge(
-    State(_state): State<AppState>,
-    Path(_id): Path<String>,
-    _input: Option<Json<MergePullRequest>>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Option<Json<MergePullRequest>>,
 ) -> Result<Json<PullRequest>, ApiError> {
-    Err(not_yet())
+    let method = input.and_then(|Json(i)| i.method);
+    let owner = db(&state, move |s| s.pull_request_owner(&id)).await?;
+    if owner.pull_request.state.is_final() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "merge_refused",
+            format!(
+                "the pull request is already {}",
+                owner.pull_request.state.as_str()
+            ),
+        ));
+    }
+    let merged = pr_center::merge(
+        &state.store,
+        state.engine.as_ref(),
+        state.forge.as_ref(),
+        &owner,
+        method,
+    )
+    .await
+    .map_err(|e| match e {
+        // The engine's guarded merge refuses with its reasons on stderr.
+        PrError::Engine(crate::engine::EngineError::Command(m)) => {
+            ApiError::new(StatusCode::CONFLICT, "merge_refused", m)
+        }
+        e => pr_error(e),
+    })?;
+    Ok(Json(merged))
 }

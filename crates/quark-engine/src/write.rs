@@ -22,6 +22,8 @@ pub const CONTROL: &str = "fm-control.sh";
 pub const PROJECT_ADD: &str = "fm-project-add.sh";
 pub const HOME_SEED: &str = "fm-home-seed.sh";
 pub const SPAWN: &str = "fm-spawn.sh";
+pub const PR_MERGE: &str = "fm-pr-merge.sh";
+pub const PROJECT_YOLO: &str = "fm-project-yolo.sh";
 
 /// Longest charter, scope or project description accepted, in characters.
 pub const MAX_LINE_CHARS: usize = 600;
@@ -81,6 +83,35 @@ pub enum WriteOp {
         model: Option<String>,
         effort: Option<String>,
     },
+    /// Merge a task's pull request through the engine's guarded merge, which
+    /// re-reads it live and refuses unless it is green and mergeable:
+    /// `fm-pr-merge.sh <task> <url> [-- --<method>]`.
+    PrMerge {
+        task_id: String,
+        url: String,
+        method: Option<MergeMethod>,
+    },
+    /// Set a registered project's standing merge posture (yolo), keeping its
+    /// delivery mode: `fm-project-yolo.sh <name> <on|off>`.
+    ProjectYolo { name: String, on: bool },
+}
+
+/// How a pull request is merged on GitHub. GitLab uses the project's setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMethod {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn flag(self) -> &'static str {
+        match self {
+            MergeMethod::Squash => "--squash",
+            MergeMethod::Merge => "--merge",
+            MergeMethod::Rebase => "--rebase",
+        }
+    }
 }
 
 /// How a project's changes reach its default branch, as registered with the engine.
@@ -109,6 +140,8 @@ impl WriteOp {
             WriteOp::ProjectAdd { .. } => PROJECT_ADD,
             WriteOp::HomeSeed { .. } => HOME_SEED,
             WriteOp::SpawnSecondmate { .. } => SPAWN,
+            WriteOp::PrMerge { .. } => PR_MERGE,
+            WriteOp::ProjectYolo { .. } => PROJECT_YOLO,
         }
     }
 
@@ -118,8 +151,9 @@ impl WriteOp {
         match self {
             WriteOp::Send { task_id, .. }
             | WriteOp::Exit { task_id }
-            | WriteOp::Relaunch { task_id, .. } => task_id,
-            WriteOp::ProjectAdd { name, .. } => name,
+            | WriteOp::Relaunch { task_id, .. }
+            | WriteOp::PrMerge { task_id, .. } => task_id,
+            WriteOp::ProjectAdd { name, .. } | WriteOp::ProjectYolo { name, .. } => name,
             WriteOp::HomeSeed { id, .. } | WriteOp::SpawnSecondmate { id, .. } => id,
         }
     }
@@ -129,7 +163,8 @@ impl WriteOp {
     /// and `no-mistakes init` can take minutes on a large repo.
     pub fn timeout(&self) -> Duration {
         match self {
-            WriteOp::Send { .. } => Duration::from_secs(60),
+            WriteOp::Send { .. } | WriteOp::ProjectYolo { .. } => Duration::from_secs(60),
+            WriteOp::PrMerge { .. } => Duration::from_secs(300),
             WriteOp::Exit { .. } => Duration::from_secs(120),
             WriteOp::Relaunch { .. } | WriteOp::SpawnSecondmate { .. } => Duration::from_secs(300),
             WriteOp::ProjectAdd { .. } | WriteOp::HomeSeed { .. } => Duration::from_secs(15 * 60),
@@ -256,6 +291,21 @@ impl WriteOp {
                 }
                 argv.push("--secondmate".into());
                 Ok(argv)
+            }
+            WriteOp::PrMerge {
+                task_id,
+                url,
+                method,
+            } => {
+                check_pr_url(url).map_err(invalid)?;
+                let mut argv = vec![task_id.clone(), url.clone()];
+                if let Some(m) = method {
+                    argv.extend(["--".into(), m.flag().into()]);
+                }
+                Ok(argv)
+            }
+            WriteOp::ProjectYolo { name, on } => {
+                Ok(vec![name.clone(), if *on { "on" } else { "off" }.into()])
             }
         }
     }
@@ -418,6 +468,32 @@ fn check_text(what: &str, text: &str, max: usize) -> std::result::Result<(), Str
     Ok(())
 }
 
+/// A pull request URL as `fm-pr-merge.sh` parses it: https, one token.
+fn check_pr_url(s: &str) -> std::result::Result<(), String> {
+    let ok = s.len() <= 2048
+        && s.strip_prefix("https://")
+            .is_some_and(|rest| !rest.is_empty() && !rest.starts_with('-'))
+        && !s.chars().any(|c| c.is_whitespace() || c.is_control());
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("pull request URL {s:?} is not an https URL"))
+    }
+}
+
+/// What `fm-project-yolo.sh` reported.
+pub fn parse_project_yolo(stdout: &str) -> Result<bool> {
+    let f = last_fields(PROJECT_YOLO, stdout)?;
+    match field(PROJECT_YOLO, &f, "yolo")? {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        other => Err(Error::Malformed {
+            what: PROJECT_YOLO,
+            detail: format!("yolo={other}"),
+        }),
+    }
+}
+
 /// Harness, model and effort names: `A-Za-z0-9._:/+-`, not starting with `-`.
 fn check_token(what: &str, v: &str) -> std::result::Result<(), String> {
     let ok = !v.is_empty()
@@ -436,6 +512,47 @@ fn check_token(what: &str, v: &str) -> std::result::Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pr_merge_and_yolo_argv() {
+        let op = WriteOp::PrMerge {
+            task_id: "ship-x".into(),
+            url: "https://github.com/a/b/pull/3".into(),
+            method: Some(MergeMethod::Rebase),
+        };
+        assert_eq!(op.script(), PR_MERGE);
+        assert_eq!(
+            op.argv().unwrap(),
+            ["ship-x", "https://github.com/a/b/pull/3", "--", "--rebase"]
+        );
+        for url in [
+            "http://github.com/a/b/pull/3",
+            "https://-x",
+            "https://a b",
+            "--admin",
+        ] {
+            let op = WriteOp::PrMerge {
+                task_id: "ship-x".into(),
+                url: url.into(),
+                method: None,
+            };
+            assert!(op.argv().is_err(), "{url}");
+        }
+        let op = WriteOp::ProjectYolo {
+            name: "quark".into(),
+            on: true,
+        };
+        assert_eq!(op.argv().unwrap(), ["quark", "on"]);
+        assert!(WriteOp::ProjectYolo {
+            name: "--x".into(),
+            on: true
+        }
+        .argv()
+        .is_err());
+        assert!(
+            parse_project_yolo("project=quark mode=direct-PR yolo=on result=changed\n").unwrap()
+        );
+    }
 
     fn send(text: &str) -> WriteOp {
         WriteOp::Send {

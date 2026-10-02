@@ -240,6 +240,7 @@ async fn harness_routes() {
         store: Arc::new(Store::open_in_memory().unwrap()),
         engine: Arc::new(StubEngine::new()),
         chat: Arc::new(quarkd::chat::RecordingInput::new()),
+        forge: Arc::new(quarkd::forge::StubForge::new()),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: quarkd::provision::Layout::new(dir.path().join("quark-home")),
         harnesses: Arc::new(HarnessRegistry::new(
