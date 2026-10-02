@@ -1,6 +1,7 @@
 //! Terminal sessions against a real tmux server. Skipped when tmux is not
 //! installed.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,6 +9,8 @@ use base64::Engine as _;
 use quark_systems::{
     CreateProject, Event, EventType, TerminalChunkKind, TerminalOutput, TerminalRole,
 };
+use quarkd::engine::StubEngine;
+use quarkd::projector::Projector;
 use quarkd::sessions::{SessionError, Sessions, TaskTarget, WindowSpec, RETAIN_BYTES};
 use quarkd::store::Store;
 use tokio::sync::broadcast;
@@ -369,6 +372,65 @@ async fn floods_are_recorded_and_pruned_to_a_snapshot() {
         Some(TerminalChunkKind::Snapshot),
         "replay starts from a snapshot"
     );
+
+    sessions.detach_all();
+    server.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn projector_maps_coordinators_from_the_command_center() {
+    if !tmux_installed() {
+        eprintln!("tmux is not installed; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let project = store
+        .create_project(CreateProject {
+            name: "p".into(),
+            goal: None,
+            workspace_path: Some(dir.path().join("ws").display().to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut rx = store.subscribe();
+    let engine = Arc::new(StubEngine::new());
+    let projector = |sessions: &Sessions| {
+        Projector::new(store.clone(), engine.clone())
+            .with_sessions(sessions.clone())
+            .with_command(dir.path().join("command"))
+    };
+
+    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    let server = sessions.server().unwrap().clone();
+    let target = sessions.start_window(&shell("fm-coord")).await.unwrap();
+    engine.set_coordinators(HashMap::from([(project.id.clone(), target)]));
+    projector(&sessions).refresh_all().await.unwrap();
+    wait_for(&mut rx, &project.id, "coordinator snapshot", |o, _| {
+        o.kind == TerminalChunkKind::Snapshot && o.role == TerminalRole::Coordinator
+    })
+    .await;
+
+    // After a daemon restart the first refresh maps it again.
+    sessions.detach_all();
+    drop(sessions);
+    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    assert!(sessions.list(&project.id).is_empty());
+    let p = projector(&sessions);
+    p.refresh_all().await.unwrap();
+    wait_for(&mut rx, &project.id, "reattach snapshot", |o, _| {
+        o.kind == TerminalChunkKind::Snapshot
+    })
+    .await;
+    assert_eq!(
+        sessions.list(&project.id)[0].role,
+        TerminalRole::Coordinator
+    );
+
+    // A coordinator the command center no longer records goes away.
+    engine.set_coordinators(HashMap::new());
+    p.refresh_all().await.unwrap();
+    assert!(sessions.list(&project.id).is_empty());
 
     sessions.detach_all();
     server.kill().await;

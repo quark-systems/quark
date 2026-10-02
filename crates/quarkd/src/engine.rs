@@ -17,6 +17,7 @@
 
 pub mod firstmate;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -192,6 +193,16 @@ pub trait EngineAdapter: Send + Sync {
         ws: &WorkspaceRef,
         agent: &AgentConfig,
     ) -> Result<(), EngineError>;
+
+    /// Each running Project coordinator's tmux window target in the
+    /// command-center workspace, keyed by Project id. Engines without
+    /// coordinator windows have none.
+    async fn coordinator_terminals(
+        &self,
+        _command: &Path,
+    ) -> Result<HashMap<String, String>, EngineError> {
+        Ok(HashMap::new())
+    }
 }
 
 /// A write the [`StubEngine`] received.
@@ -227,6 +238,7 @@ pub struct StubEngine {
     holds: Mutex<Vec<Hold>>,
     writes: Mutex<Vec<StubWrite>>,
     write_error: Mutex<Option<String>>,
+    coordinators: Mutex<HashMap<String, String>>,
 }
 
 impl StubEngine {
@@ -240,6 +252,11 @@ impl StubEngine {
 
     pub fn set_holds(&self, holds: Vec<Hold>) {
         *self.holds.lock().unwrap() = holds;
+    }
+
+    /// Coordinator window targets by Project id.
+    pub fn set_coordinators(&self, coordinators: HashMap<String, String>) {
+        *self.coordinators.lock().unwrap() = coordinators;
     }
 
     /// Writes received so far, oldest first.
@@ -265,6 +282,13 @@ impl StubEngine {
 impl EngineAdapter for StubEngine {
     fn name(&self) -> &'static str {
         "stub"
+    }
+
+    async fn coordinator_terminals(
+        &self,
+        _command: &Path,
+    ) -> Result<HashMap<String, String>, EngineError> {
+        Ok(self.coordinators.lock().unwrap().clone())
     }
 
     async fn snapshot(&self, _ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {

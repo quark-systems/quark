@@ -87,6 +87,25 @@ async fn snapshot_maps_to_neutral_tasks() {
 }
 
 #[tokio::test]
+async fn coordinators_are_secondmate_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (e, ws) = engine(dir.path());
+    let got = e.coordinator_terminals(&ws.root).await.unwrap();
+    assert_eq!(
+        got.into_iter().collect::<Vec<_>>(),
+        [("mate".to_string(), "firstmate:fm-mate".to_string())]
+    );
+    let none = e
+        .coordinator_terminals(&dir.path().join("missing"))
+        .await
+        .unwrap();
+    assert!(
+        none.is_empty(),
+        "no command center yet means no coordinators"
+    );
+}
+
+#[tokio::test]
 async fn holds_are_live_holds_and_open_decisions() {
     let dir = tempfile::tempdir().unwrap();
     let (e, ws) = engine(dir.path());
