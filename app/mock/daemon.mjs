@@ -465,7 +465,8 @@ const server = http.createServer(async (req, res) => {
   if ((r = m(/^\/v1\/terminals\/([^/]+)(\/\w+)?$/))) {
     const task = tasks.get(decodeURIComponent(r[1]));
     const rest = r[2] ?? "";
-    if (!task) return notFound(res);
+    // Like quarkd, a task without a worker window (queued) has no terminal.
+    if (!task || task.state === "queued") return notFound(res);
     const term = terms.get(task.id);
     const info = () => ({ id: task.id, project_id: task.project_id, role: "worker", task_id: task.id, title: task.title, cols: term.cols, rows: term.rows });
     if (rest === "" && req.method === "GET") return send(res, 200, info());

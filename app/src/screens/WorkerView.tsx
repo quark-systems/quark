@@ -43,7 +43,7 @@ export function WorkerView({ id }: { id: string }) {
       {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
       <div className="screen worker">
         <section className="worker-left">
-          <TerminalPanel taskId={id} />
+          <TerminalPanel taskId={id} taskState={task.state} />
           <SteerBox taskId={id} />
         </section>
         <section className="worker-right">
@@ -111,11 +111,17 @@ function useTermStatus(h: TermHandle) {
   return h.status;
 }
 
-function TerminalPanel({ taskId }: { taskId: string }) {
+function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: string }) {
   const [gen, setGen] = useState(0);
   const h = useMemo(() => getTerm(taskId), [taskId, gen]);
   const status = useTermStatus(h);
   const body = useRef<HTMLDivElement>(null);
+
+  // A task with no terminal gets one when its worker starts: look again
+  // whenever its state changes.
+  useEffect(() => {
+    if (h.status === "none") { resetTerm(taskId); setGen((g) => g + 1); }
+  }, [taskState]);
 
   useEffect(() => {
     if (!body.current) return;
@@ -139,7 +145,9 @@ function TerminalPanel({ taskId }: { taskId: string }) {
           </>
         )}
       </div>
-      {status === "unavailable" ? (
+      {status === "none" ? (
+        <div className="unavailable" data-testid="no-terminal"><div className="u-title">{h.error}</div></div>
+      ) : status === "unavailable" ? (
         <div className="unavailable"><div className="u-title">{h.error}</div></div>
       ) : (
         <div className="pane-body" ref={body} />
