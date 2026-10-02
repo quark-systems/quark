@@ -12,8 +12,10 @@ The same frontend runs in a plain browser.
 - **New project** (J2): name, goal, repositories, default agent (harness, model, effort) and dispatch preset.
 - **Project board** (J3): one column per task state, updated live from the event stream, beside the coordinator chat.
 - **Worker view** (J4): live terminal with input, a box to message the worker, cancel and relaunch, and tabs for the transcript and the changed files with their diff.
+- **Decisions** (J5): every open decision across Projects, oldest first, with an answer box; the answered list shows who answered and when.
+  Keys: `j`/`k` move, `r` or `Enter` answers, `Ctrl/Cmd+Enter` sends, `o`/`a` switch between open and answered, `t` opens the task that asked.
 
-`Ctrl/Cmd+K` opens a palette that jumps to any Project or task.
+`Ctrl/Cmd+K` opens a palette that jumps to any Project, task or open decision.
 
 ## Run
 

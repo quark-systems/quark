@@ -3,19 +3,22 @@
 //   #/new              create a Project
 //   #/p/<project id>   board and coordinator chat
 //   #/t/<task id>      worker view
+//   #/inbox[/<id>]     decisions inbox, optionally with one decision selected
 import { useSyncExternalStore } from "react";
 
 export type Route =
   | { name: "projects" }
   | { name: "new" }
   | { name: "project"; id: string }
-  | { name: "task"; id: string };
+  | { name: "task"; id: string }
+  | { name: "inbox"; id?: string };
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "new") return { name: "new" };
   if (parts[0] === "p" && parts[1]) return { name: "project", id: parts[1] };
   if (parts[0] === "t" && parts[1]) return { name: "task", id: parts[1] };
+  if (parts[0] === "inbox") return parts[1] ? { name: "inbox", id: parts[1] } : { name: "inbox" };
   return { name: "projects" };
 }
 
@@ -25,6 +28,7 @@ export function href(r: Route): string {
     case "new": return "#/new";
     case "project": return `#/p/${encodeURIComponent(r.id)}`;
     case "task": return `#/t/${encodeURIComponent(r.id)}`;
+    case "inbox": return r.id ? `#/inbox/${encodeURIComponent(r.id)}` : "#/inbox";
   }
 }
 

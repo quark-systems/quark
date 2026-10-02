@@ -100,7 +100,51 @@ test("command palette jumps to a task", async ({ page }) => {
   await open(page, "#/");
   await expect(page.getByTestId("project-card").first()).toBeVisible();
   await page.keyboard.press("Control+k");
-  await page.getByPlaceholder("Jump to a project or task…").fill("pricing page");
+  await page.getByPlaceholder("Jump to a project, task or decision…").fill("pricing page");
   await page.keyboard.press("Enter");
   await expect(page.locator(".header h1")).toHaveText("Pricing page on the new grid");
+});
+
+test("decisions inbox: answer from the keyboard, then see who answered", async ({ page }) => {
+  await open(page, "#/");
+  await expect(page.getByTestId("inbox-count")).toHaveText("2");
+
+  // The palette jumps straight to a decision.
+  await page.keyboard.press("Control+k");
+  await page.getByPlaceholder("Jump to a project, task or decision…").fill("answer history");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#\/inbox\/d-1$/);
+  const detail = page.getByTestId("decision-detail");
+  await expect(detail).toContainText("Keep the full answer history per decision");
+  await expect(detail).toContainText("Decision records carry who answered");
+
+  // Open decisions are listed across projects, oldest first; j/k move the selection.
+  const rows = page.getByTestId("decision-row");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1)).toContainText("Website refresh");
+  await page.keyboard.press("j");
+  await expect(page).toHaveURL(/#\/inbox\/d-2$/);
+  await page.keyboard.press("k");
+  await expect(page).toHaveURL(/#\/inbox\/d-1$/);
+
+  // r focuses the answer box; Ctrl+Enter sends and moves on to the next open decision.
+  await page.keyboard.press("r");
+  await expect(page.getByLabel("Answer", { exact: true })).toBeFocused();
+  await page.getByLabel("Answering as").fill("matt");
+  await page.getByLabel("Answer", { exact: true }).fill("Only the latest answer.");
+  await page.getByLabel("Answer", { exact: true }).press("Control+Enter");
+  await expect(page).toHaveURL(/#\/inbox\/d-2$/);
+  await expect(rows).toHaveCount(1);
+  await expect(page.getByTestId("inbox-count")).toHaveText("1");
+
+  // The answered list shows who answered.
+  await page.locator("body").click();
+  await page.keyboard.press("a");
+  await rows.filter({ hasText: "answer history" }).click();
+  await expect(page.getByTestId("decision-answer")).toContainText("Answered by matt");
+  await expect(page.getByTestId("decision-answer")).toContainText("Only the latest answer.");
+
+  // The task that asked is running again.
+  await page.getByTestId("decision-detail").getByRole("link", { name: "Decision records carry who answered" }).click();
+  await expect(page.getByTestId("task-state")).toHaveText("Running");
 });

@@ -4,7 +4,7 @@ import { repoUrl, validRepo } from "./screens/NewProject";
 
 describe("routes", () => {
   it("round-trips every route", () => {
-    for (const r of [{ name: "projects" }, { name: "new" }, { name: "project", id: "a b/c" }, { name: "task", id: "t-1" }] as const) {
+    for (const r of [{ name: "projects" }, { name: "new" }, { name: "project", id: "a b/c" }, { name: "task", id: "t-1" }, { name: "inbox" }, { name: "inbox", id: "d 1" }] as const) {
       expect(parseRoute(href(r))).toEqual(r);
     }
   });
