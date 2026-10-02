@@ -180,7 +180,7 @@ function seed() {
   // ADR-15 evidence: repo checks, Playwright journeys (with traces and screenshots), holdout tests.
   const art = (id, kind, path, content_type, body) => {
     artifacts.set(id, { content_type, body });
-    return { id, kind, path, content_type, size_bytes: Buffer.byteLength(body), url: `/v1/pull-requests/{pr}/evidence/artifacts/${id}` };
+    return { id, kind, name: path, content_type, size_bytes: Buffer.byteLength(body), url: `/v1/pull-requests/{pr}/evidence/artifacts/${id}` };
   };
   const shot = (label, color) => `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800"><rect width="100%" height="100%" fill="#0b0c10"/>` +
     `<rect x="0" y="0" width="244" height="800" fill="#111218"/><rect x="260" y="20" width="1000" height="40" rx="6" fill="#171920"/>` +
@@ -201,7 +201,7 @@ function seed() {
         : { name: "worker view: terminal resize keeps the prompt", state: "passed", duration_ms: 2210, message: null, artifacts: [] },
     ];
     const holdout = ["steer-then-cancel", "decision-roundtrip", "pr-merge-refused"].map((name, i) =>
-      ({ name, state: failing && i === 2 ? "failed" : "passed", artifacts: [] }));
+      ({ name, state: failing && i === 2 ? "failed" : "passed", duration_ms: null, message: null, artifacts: [] }));
     const st = (cases) => (cases.some((c) => c.state === "failed") ? "failed" : "passed");
     return {
       head_sha: "9f1e2d3c4b", state: failing ? "failed" : "passed", stale: false, started_at: minutesAgo(20), completed_at: minutesAgo(12),

@@ -97,23 +97,23 @@ export interface Review {
   body: string; submitted_at?: string | null; commit?: string | null;
 }
 // Verification evidence (ADR-15): repo-native checks, Playwright journeys and holdout tests.
-// The state strings are the engine's; the app colors anything it does not know as in progress.
 export type GateKind = "checks" | "journeys" | "holdout";
+export type GateState = "pending" | "running" | "passed" | "failed" | "skipped";
 export type ArtifactKind = "trace" | "screenshot" | "video" | "log" | "report";
 export interface EvidenceArtifact {
-  id: string; kind: ArtifactKind; path: string; content_type?: string | null; size_bytes: number;
+  id: string; kind: ArtifactKind; name: string; content_type: string; size_bytes?: number | null;
   /** Served by the daemon at `GET /v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`. */
   url: string;
 }
 export interface EvidenceCase {
-  name: string; state: string; duration_ms?: number | null; message?: string | null; artifacts: EvidenceArtifact[];
+  name: string; state: GateState; duration_ms?: number | null; message?: string | null; artifacts: EvidenceArtifact[];
 }
 export interface EvidenceGate {
-  kind: GateKind; state: string; summary?: string | null; started_at?: string | null; completed_at?: string | null;
+  kind: GateKind; state: GateState; summary?: string | null; started_at?: string | null; completed_at?: string | null;
   cases: EvidenceCase[];
 }
 export interface Evidence {
-  head_sha: string; state: string;
+  head_sha?: string | null; state: GateState;
   /** True when `head_sha` is not the PR's current head. */
   stale: boolean;
   started_at?: string | null; completed_at?: string | null; gates: EvidenceGate[];
@@ -235,7 +235,7 @@ export const api = {
   /** The engine's guarded merge; 409 `merge_refused` unless open, green and conflict-free. */
   mergePullRequest: (id: string, method?: MergeMethod) =>
     req<PullRequest>("POST", `/v1/pull-requests/${enc(id)}:merge`, method ? { method } : {}),
-  /** Absolute URL of an evidence artifact; the daemon may send it relative to itself. */
+  /** Absolute URL of an evidence artifact; the daemon sends it relative to itself. */
   artifactUrl: (prId: string, a: EvidenceArtifact) =>
     /^https?:\/\//.test(a.url) ? a.url
       : a.url.startsWith("/") ? daemon + a.url

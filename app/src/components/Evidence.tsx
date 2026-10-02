@@ -13,7 +13,7 @@ function StaleNote({ ev }: { ev: Evidence }) {
   if (!ev.stale) return null;
   return (
     <div className="state-note bad" data-testid="evidence-stale">
-      This evidence is for an older commit ({ev.head_sha.slice(0, 7)}), not the PR's current head.
+      This evidence is for an older commit{ev.head_sha ? ` (${ev.head_sha.slice(0, 7)})` : ""}, not the PR's current head.
     </div>
   );
 }
@@ -58,7 +58,7 @@ export function EvidencePanel({ prId, ev }: { prId: string; ev: Evidence | null 
     <div className="evidence" data-testid="evidence-panel">
       <StaleNote ev={ev} />
       <div className="faint small-text ev-head">
-        Commit <span className="mono">{ev.head_sha.slice(0, 7)}</span>
+        {ev.head_sha && <>Commit <span className="mono">{ev.head_sha.slice(0, 7)}</span></>}
         {ev.completed_at ? <> · finished {ago(ev.completed_at)}</> : ev.started_at ? <> · started {ago(ev.started_at)}</> : null}
       </div>
       {ordered(ev.gates).map((g) => <Gate key={g.kind} prId={prId} g={g} onPreview={setPreview} />)}
@@ -114,8 +114,8 @@ function Case({ prId, c, onPreview }: { prId: string; c: EvidenceCase; onPreview
               {shots.map((a) => {
                 const src = api.artifactUrl(prId, a);
                 return (
-                  <button key={a.id} className="shot" onClick={() => onPreview({ src, name: a.path })} title={a.path}>
-                    <img src={src} alt={a.path} loading="lazy" />
+                  <button key={a.id} className="shot" onClick={() => onPreview({ src, name: a.name })} title={a.name}>
+                    <img src={src} alt={a.name} loading="lazy" />
                   </button>
                 );
               })}
@@ -133,12 +133,12 @@ function Case({ prId, c, onPreview }: { prId: string; c: EvidenceCase; onPreview
 
 function ArtifactRow({ prId, a }: { prId: string; a: EvidenceArtifact }) {
   const url = api.artifactUrl(prId, a);
-  const name = a.path.split("/").pop() || a.path;
+  const name = a.name.split("/").pop() || a.name;
   return (
     <div className="artifact" data-testid="evidence-artifact">
       <span className="pill">{a.kind}</span>
-      <span className="ellipsis mono" title={a.path}>{name}</span>
-      <span className="faint small-text">{formatBytes(a.size_bytes)}</span>
+      <span className="ellipsis mono" title={a.name}>{name}</span>
+      {a.size_bytes != null && <span className="faint small-text">{formatBytes(a.size_bytes)}</span>}
       <span className="spacer" />
       {a.kind === "trace" && <a className="btn small" href={traceViewerUrl(url)} target="_blank" rel="noreferrer">Open trace</a>}
       {(a.kind === "log" || a.kind === "report") && <a className="btn small" href={url} target="_blank" rel="noreferrer">Open</a>}
