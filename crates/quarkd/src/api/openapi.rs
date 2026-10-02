@@ -16,6 +16,7 @@ use super::{events, routes};
         routes::create_project,
         routes::get_project,
         routes::update_project,
+        routes::provision_project,
         routes::list_tasks,
         routes::get_task,
         routes::send_task_message,
@@ -30,6 +31,9 @@ use super::{events, routes};
         quark_systems::TaskState,
         quark_systems::TaskKind,
         quark_systems::DecisionState,
+        quark_systems::ProjectStatus,
+        quark_systems::DeliveryPolicy,
+        quark_systems::DispatchPreset,
     )),
     tags(
         (name = "daemon"),

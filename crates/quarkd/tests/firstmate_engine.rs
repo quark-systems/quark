@@ -8,10 +8,12 @@ use std::sync::Arc;
 
 use quark_engine::runner::MemoryCallLog;
 use quark_systems::CreateProject;
-use quark_systems::{TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, TaskKind, TaskState};
 use quarkd::config::StoreCallLog;
 use quarkd::engine::firstmate::FirstmateEngine;
-use quarkd::engine::{EngineAdapter, EngineError, TaskControl, WorkspaceRef};
+use quarkd::engine::{
+    EngineAdapter, EngineError, SourceRepo, TaskControl, WorkspacePlan, WorkspaceRef,
+};
 use quarkd::store::Store;
 
 struct Fake {
@@ -161,6 +163,7 @@ async fn writes_run_allowlisted_scripts_and_are_recorded() {
             name: "Quark".into(),
             goal: None,
             workspace_path: Some(fake.home.to_string_lossy().into_owned()),
+            ..Default::default()
         })
         .unwrap();
     let e = FirstmateEngine::new(
@@ -237,4 +240,181 @@ async fn writes_run_allowlisted_scripts_and_are_recorded() {
         .iter()
         .all(|c| c.project_id.as_deref() == Some(project.id.as_str())));
     assert_eq!(calls[0].detail.as_deref(), Some("agent did not stop\n"));
+}
+
+/// Fake provisioning scripts: each logs its argv and the charter env, then
+/// prints the result line the real script prints.
+fn add_provision_scripts(engine_root: &Path) {
+    for (name, result) in [
+        (
+            "fm-project-add.sh",
+            "echo \"project=$1 path=$FM_HOME/projects/$1 mode=$4 yolo=off result=added\"",
+        ),
+        ("fm-home-seed.sh", "mkdir -p \"$2\"; echo \"home=$2\""),
+        (
+            "fm-spawn.sh",
+            "echo \"spawned $1 harness=$4 kind=secondmate window=fm:$1 worktree=$2\"",
+        ),
+    ] {
+        let p = engine_root.join("bin").join(name);
+        fs::write(
+            &p,
+            format!(
+                "#!/bin/sh\n{{ echo '--- {name}'; for a in \"$@\"; do echo \"$a\"; done; \
+                 [ -n \"$FM_SECONDMATE_CHARTER\" ] && echo \"charter=$FM_SECONDMATE_CHARTER\"; \
+                 [ -n \"$FM_SECONDMATE_SCOPE\" ] && echo \"scope=$FM_SECONDMATE_SCOPE\"; }} \
+                 >> \"$FM_HOME/calls.log\"\n{result}\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+fn plan(root: PathBuf) -> WorkspacePlan {
+    WorkspacePlan {
+        project_id: "prj_1".into(),
+        name: "Quark".into(),
+        goal: Some("Ship J2".into()),
+        sources: vec![
+            SourceRepo {
+                name: "quark".into(),
+                url: "https://github.com/quark-systems/quark.git".into(),
+            },
+            SourceRepo {
+                name: "engine".into(),
+                url: "git@github.com:quark-systems/firstmate.git".into(),
+            },
+        ],
+        root,
+    }
+}
+
+#[tokio::test]
+async fn provisioning_runs_project_add_seed_and_spawn() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_engine(dir.path());
+    add_provision_scripts(&fake.engine_root);
+    let e = FirstmateEngine::new(&fake.engine_root, Arc::new(MemoryCallLog::default()));
+    let command = fake.home.clone();
+    let plan = plan(dir.path().join("workspaces/prj_1"));
+
+    for s in &plan.sources {
+        e.add_source(&command, s, DeliveryPolicy::Gated)
+            .await
+            .unwrap();
+    }
+    let root = e.seed_workspace(&command, &plan).await.unwrap();
+    assert_eq!(root, plan.root);
+    let ws = WorkspaceRef {
+        project_id: "prj_1".into(),
+        root,
+    };
+    e.start_coordinator(
+        &command,
+        &ws,
+        &AgentConfig {
+            harness: "claude-code".into(),
+            model: Some("claude-sonnet-5".into()),
+            effort: Some("high".into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let root = plan.root.to_str().unwrap();
+    let log = fs::read_to_string(command.join("calls.log")).unwrap();
+    assert_eq!(
+        log,
+        format!(
+            "--- fm-project-add.sh\nquark\nhttps://github.com/quark-systems/quark.git\n--mode\nno-mistakes\n\
+             --desc\nhttps://github.com/quark-systems/quark.git (added by Quark)\n\
+             --- fm-project-add.sh\nengine\ngit@github.com:quark-systems/firstmate.git\n--mode\nno-mistakes\n\
+             --desc\ngit@github.com:quark-systems/firstmate.git (added by Quark)\n\
+             --- fm-home-seed.sh\nprj_1\n{root}\nquark\nengine\n\
+             charter=Coordinate the Quark Project \"Quark\" across quark, engine. Its goal: Ship J2 \
+             The Project repo checked out at project/ holds its instructions.md and memory/; \
+             read instructions.md before planning work.\n\
+             scope=All work for the Quark Project \"Quark\" (prj_1) in quark, engine.\n\
+             --- fm-spawn.sh\nprj_1\n{root}\n--harness\nclaude\n--model\nclaude-sonnet-5\n--effort\nhigh\n--secondmate\n"
+        )
+    );
+
+    // A missing command-center workspace is reported, not created.
+    let err = e
+        .add_source(
+            &dir.path().join("nope"),
+            &plan.sources[0],
+            DeliveryPolicy::Direct,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EngineError::WorkspaceNotFound(_)), "{err:?}");
+}
+
+/// Provisions against a real engine checkout with the fork's
+/// `fm-project-add.sh`: clones a local repo, seeds a workspace and checks the
+/// registry. The coordinator launch needs tmux and a harness, so it is left
+/// out. Set FIRSTMATE_ROOT, then `cargo test -- --ignored`.
+#[tokio::test]
+#[ignore]
+async fn live_engine_seeds_a_workspace() {
+    let root = PathBuf::from(std::env::var("FIRSTMATE_ROOT").expect("FIRSTMATE_ROOT"));
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let src = dir.path().join("src");
+    git(&["init", "-q", "-b", "main", src.to_str().unwrap()]);
+    fs::write(src.join("README.md"), "hi\n").unwrap();
+    git(&["-C", src.to_str().unwrap(), "add", "."]);
+    git(&[
+        "-C",
+        src.to_str().unwrap(),
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qm",
+        "init",
+    ]);
+    let bare = dir.path().join("app.git");
+    git(&[
+        "clone",
+        "-q",
+        "--bare",
+        src.to_str().unwrap(),
+        bare.to_str().unwrap(),
+    ]);
+
+    let command = dir.path().join("workspaces/command");
+    fs::create_dir_all(&command).unwrap();
+    let e = FirstmateEngine::new(&root, Arc::new(MemoryCallLog::default()));
+    let source = SourceRepo {
+        name: "app".into(),
+        url: bare.to_str().unwrap().into(),
+    };
+    e.add_source(&command, &source, DeliveryPolicy::Direct)
+        .await
+        .unwrap();
+    // Idempotent.
+    e.add_source(&command, &source, DeliveryPolicy::Direct)
+        .await
+        .unwrap();
+    let mut plan = plan(dir.path().join("workspaces/prj_1"));
+    plan.sources = vec![source];
+    let home = e.seed_workspace(&command, &plan).await.unwrap();
+    assert!(home.join("projects/app/README.md").is_file());
+    assert!(home.join("data/charter.md").is_file());
+    let registry = fs::read_to_string(command.join("data/secondmates.md")).unwrap();
+    assert!(registry.starts_with("- prj_1 - "), "{registry}");
 }
