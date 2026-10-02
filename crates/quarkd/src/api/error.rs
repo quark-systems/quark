@@ -33,6 +33,11 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, "invalid_request", message)
     }
 
+    /// The machine-readable error code.
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
     }

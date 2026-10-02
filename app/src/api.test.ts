@@ -33,3 +33,15 @@ describe("api errors", () => {
     await expect(api.steer("t1", "hi")).resolves.toBeUndefined();
   });
 });
+
+describe("decisions", () => {
+  it("answers with who answered and returns the decision", async () => {
+    const answered = { id: "d 1", project_id: "p", question: "q", state: "answered", answer: "yes", answered_by: "matt", opened_at: "t", answered_at: "t" };
+    respond(200, answered);
+    await expect(api.answerDecision("d 1", { answer: "yes", answered_by: "matt" })).resolves.toEqual(answered);
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/v1\/decisions\/d%201:answer$/);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ answer: "yes", answered_by: "matt" });
+  });
+});

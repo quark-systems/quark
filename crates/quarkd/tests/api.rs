@@ -301,6 +301,123 @@ async fn steer_cancel_and_relaunch_reach_the_engine_task() {
 }
 
 #[tokio::test]
+async fn answering_a_decision_reaches_the_engine_and_records_who() {
+    let h = harness().await;
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+    h.engine.set_holds(vec![Hold {
+        id: "fix-login:flag".into(),
+        task_id: Some("fix-login".into()),
+        question: "Ship behind a flag?".into(),
+        answer: None,
+        answered_by: None,
+    }]);
+    h.projector.refresh_all().await.unwrap();
+    let (_, open) = call(&h.app, "GET", "/v1/decisions?state=open", None).await;
+    let did = open[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(open[0]["task_id"], tid.as_str());
+    let mut live = connect(h.addr, &format!("?cursor={}", 0)).await;
+
+    for (body, want) in [
+        (
+            json!({"answer": "  ", "answered_by": "matt"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"answer": "yes", "answered_by": "a\nb"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (json!({"answered_by": "matt"}), StatusCode::BAD_REQUEST),
+    ] {
+        let (status, _) = call(
+            &h.app,
+            "POST",
+            &format!("/v1/decisions/{did}:answer"),
+            Some(body),
+        )
+        .await;
+        assert_eq!(status, want);
+    }
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        "/v1/decisions/nope:answer",
+        Some(json!({"answer": "yes", "answered_by": "matt"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(h.engine.writes().is_empty());
+
+    let (status, d) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{did}:answer"),
+        Some(json!({"answer": "Yes, behind a flag", "answered_by": "matt"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(d["state"], "answered");
+    assert_eq!(d["answer"], "Yes, behind a flag");
+    assert_eq!(d["answered_by"], "matt");
+    assert!(d["answered_at"].is_string());
+    assert_eq!(
+        h.engine.writes(),
+        vec![StubWrite::Answer {
+            hold_id: "fix-login:flag".into(),
+            answer: "Yes, behind a flag".into(),
+            answered_by: "matt".into(),
+        }]
+    );
+
+    let answered = loop {
+        let e = next_event(&mut live).await;
+        if e.event_type == EventType::DecisionAnswered {
+            break e;
+        }
+    };
+    assert_eq!(answered.payload["id"], did.as_str());
+    assert_eq!(answered.payload["answered_by"], "matt");
+
+    // The engine dropped the hold; refreshing keeps the recorded answer.
+    h.projector.refresh_all().await.unwrap();
+    assert_quiet(&mut live).await;
+    let (_, all) = call(&h.app, "GET", "/v1/decisions?state=answered", None).await;
+    assert_eq!(all[0]["answered_by"], "matt");
+
+    let (status, err) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{did}:answer"),
+        Some(json!({"answer": "no", "answered_by": "ana"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(err["error"]["code"], "already_answered");
+    let (status, _) = call(&h.app, "POST", &format!("/v1/decisions/{did}"), None).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+
+    // Without answered_by, the daemon's own user answers.
+    h.engine.set_holds(vec![Hold {
+        id: "fix-login:copy".into(),
+        task_id: Some("fix-login".into()),
+        question: "Which wording?".into(),
+        answer: None,
+        answered_by: None,
+    }]);
+    h.projector.refresh_all().await.unwrap();
+    let (_, open) = call(&h.app, "GET", "/v1/decisions?state=open", None).await;
+    let did = open[0]["id"].as_str().unwrap().to_string();
+    let (status, d) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{did}:answer"),
+        Some(json!({"answer": "the short one", "answered_by": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!d["answered_by"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn task_writes_report_errors() {
     let h = harness().await;
     let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;

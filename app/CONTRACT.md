@@ -39,6 +39,7 @@ A `404` with an `ErrorBody` is a real "not found".
 - **Decisions inbox.** The app loads every decision (`GET /v1/decisions`, no state filter) so the inbox can list answered ones with who answered, and keeps them current from `decision.opened` and `decision.answered`.
   An answer is sent with `answered_by` from the "Answering as" field (remembered per viewer), or `null` to let the daemon use its own user; the `200` body is the answered decision.
   `409 already_answered` is shown as an error on the decision.
+  A decision answered outside Quark arrives as `decision.answered` with `answer` and `answered_by` null, and a question asked again after its answer is a new decision with a new id.
 - **Cancel and relaunch** answer `204` after the engine confirms, which can take tens of seconds, so the app sets no client timeout.
 - **PR center.** The list loads every PR once and keeps it current from `pr.updated` (a whole PR); `check.updated` and `review.updated` are merged into a loaded PR, which is then refetched for its rolled-up `checks_state` and `review_decision`.
   A check for another `head_sha` than the PR's is ignored.

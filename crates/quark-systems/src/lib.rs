@@ -248,6 +248,18 @@ pub struct SendTaskMessage {
     pub text: String,
 }
 
+/// An answer to an open decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AnswerDecision {
+    /// The answer, as the worker or coordinator will read it.
+    pub answer: String,
+    /// Who is answering: one line of at most 128 bytes. Stored with the
+    /// decision and recorded with the engine's own record of the answer.
+    /// Absent or null means the daemon's own user (`$USER`).
+    #[serde(default)]
+    pub answered_by: Option<String>,
+}
+
 /// Replace a task's worker in the same worktree. Absent fields keep the
 /// worker's current harness, model and effort.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]

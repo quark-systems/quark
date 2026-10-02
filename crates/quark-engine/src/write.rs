@@ -11,6 +11,11 @@
 //! command-center workspace: [`WriteOp::ProjectAdd`] clones a repo into it,
 //! [`WriteOp::HomeSeed`] seeds the Project workspace as a local secondmate with
 //! those repos, and [`WriteOp::SpawnSecondmate`] starts its coordinator.
+//!
+//! Decisions (J5) add two: [`WriteOp::Answer`] answers a worker's open keyed
+//! decision through `fm-send.sh --resolve-key`, and [`WriteOp::AnswerHold`]
+//! answers a captain hold through `fm-captain-hold.sh answer`. Both record who
+//! answered (`--answered-by`, from the quark-systems firstmate fork).
 
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -24,6 +29,7 @@ pub const HOME_SEED: &str = "fm-home-seed.sh";
 pub const SPAWN: &str = "fm-spawn.sh";
 pub const PR_MERGE: &str = "fm-pr-merge.sh";
 pub const PROJECT_YOLO: &str = "fm-project-yolo.sh";
+pub const CAPTAIN_HOLD: &str = "fm-captain-hold.sh";
 
 /// Longest charter, scope or project description accepted, in characters.
 pub const MAX_LINE_CHARS: usize = 600;
@@ -37,10 +43,35 @@ pub const MAX_NOTE_BYTES: usize = 16 * 1024;
 /// Longest harness, model or effort token accepted.
 const MAX_TOKEN_LEN: usize = 128;
 
+/// Largest answer the engine records for a captain hold, in bytes.
+pub const MAX_HOLD_ANSWER_BYTES: usize = 8192;
+
+/// Longest answering-user identity the engine accepts, in bytes.
+pub const MAX_ANSWERED_BY_BYTES: usize = 128;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteOp {
     /// Steer a task through its durable inbox: `fm-send.sh <task> <text>`.
     Send { task_id: String, text: String },
+    /// Answer a task's open keyed decision and close it in the same act:
+    /// `fm-send.sh <task> --resolve-key=<key> --answered-by=<user> <text>`.
+    Answer {
+        task_id: String,
+        key: String,
+        text: String,
+        answered_by: String,
+    },
+    /// Answer a backlog task held for the captain, recording the answer from
+    /// `decision_file` (which the caller writes and removes):
+    /// `fm-captain-hold.sh answer <task> --decision-file <path> [--release]
+    /// --answered-by <user>`. `release` lifts the hold so held work resumes
+    /// instead of closing the task.
+    AnswerHold {
+        task_id: String,
+        decision_file: PathBuf,
+        release: bool,
+        answered_by: String,
+    },
     /// Stop a task's agent, keeping its terminal, worktree and every
     /// uncommitted change: `fm-control.sh <task> exit`.
     Exit { task_id: String },
@@ -135,7 +166,8 @@ impl DeliveryMode {
 impl WriteOp {
     pub fn script(&self) -> &'static str {
         match self {
-            WriteOp::Send { .. } => SEND,
+            WriteOp::Send { .. } | WriteOp::Answer { .. } => SEND,
+            WriteOp::AnswerHold { .. } => CAPTAIN_HOLD,
             WriteOp::Exit { .. } | WriteOp::Relaunch { .. } => CONTROL,
             WriteOp::ProjectAdd { .. } => PROJECT_ADD,
             WriteOp::HomeSeed { .. } => HOME_SEED,
@@ -150,6 +182,8 @@ impl WriteOp {
     pub fn task_id(&self) -> &str {
         match self {
             WriteOp::Send { task_id, .. }
+            | WriteOp::Answer { task_id, .. }
+            | WriteOp::AnswerHold { task_id, .. }
             | WriteOp::Exit { task_id }
             | WriteOp::Relaunch { task_id, .. }
             | WriteOp::PrMerge { task_id, .. } => task_id,
@@ -163,7 +197,10 @@ impl WriteOp {
     /// and `no-mistakes init` can take minutes on a large repo.
     pub fn timeout(&self) -> Duration {
         match self {
-            WriteOp::Send { .. } | WriteOp::ProjectYolo { .. } => Duration::from_secs(60),
+            WriteOp::Send { .. }
+            | WriteOp::ProjectYolo { .. }
+            | WriteOp::Answer { .. }
+            | WriteOp::AnswerHold { .. } => Duration::from_secs(60),
             WriteOp::PrMerge { .. } => Duration::from_secs(300),
             WriteOp::Exit { .. } => Duration::from_secs(120),
             WriteOp::Relaunch { .. } | WriteOp::SpawnSecondmate { .. } => Duration::from_secs(300),
@@ -195,17 +232,49 @@ impl WriteOp {
         }
         match self {
             WriteOp::Send { task_id, text } => {
-                check_text("message", text, MAX_MESSAGE_BYTES).map_err(invalid)?;
-                // fm-send.sh reads a leading `--` as one of its own flags, and
-                // types a leading `/` or `$` straight into the harness as a
-                // command instead of recording it in the durable inbox.
-                let lead = text.trim_start();
-                if lead.starts_with("--") || lead.starts_with('/') || lead.starts_with('$') {
-                    return Err(invalid(
-                        "a message may not start with \"--\", \"/\" or \"$\"".into(),
-                    ));
-                }
+                check_message(text).map_err(invalid)?;
                 Ok(vec![task_id.clone(), text.clone()])
+            }
+            WriteOp::Answer {
+                task_id,
+                key,
+                text,
+                answered_by,
+            } => {
+                check_decision_key(key).map_err(invalid)?;
+                check_answered_by(answered_by).map_err(invalid)?;
+                check_message(text).map_err(invalid)?;
+                Ok(vec![
+                    task_id.clone(),
+                    format!("--resolve-key={key}"),
+                    format!("--answered-by={answered_by}"),
+                    text.clone(),
+                ])
+            }
+            WriteOp::AnswerHold {
+                task_id,
+                decision_file,
+                release,
+                answered_by,
+            } => {
+                check_answered_by(answered_by).map_err(invalid)?;
+                if !decision_file.is_absolute() {
+                    return Err(invalid("the decision file path must be absolute".into()));
+                }
+                let path = decision_file
+                    .to_str()
+                    .ok_or_else(|| invalid("the decision file path is not UTF-8".into()))?;
+                let mut argv = vec![
+                    "answer".into(),
+                    task_id.clone(),
+                    "--decision-file".into(),
+                    path.to_string(),
+                ];
+                if *release {
+                    argv.push("--release".into());
+                }
+                argv.extend(["--answered-by".into(), answered_by.clone()]);
+                Ok(argv)
             }
             WriteOp::Exit { task_id } => Ok(vec![task_id.clone(), "exit".into()]),
             WriteOp::Relaunch {
@@ -452,6 +521,55 @@ fn check_home(p: &Path) -> std::result::Result<String, String> {
     Ok(s.trim_end_matches('/').to_string())
 }
 
+/// A steering message or an answer to a worker: data to `fm-send.sh`.
+fn check_message(text: &str) -> std::result::Result<(), String> {
+    check_text("message", text, MAX_MESSAGE_BYTES)?;
+    // fm-send.sh reads a leading `--` as one of its own flags, and types a
+    // leading `/` or `$` straight into the harness as a command instead of
+    // recording it in the durable inbox.
+    let lead = text.trim_start();
+    if lead.starts_with("--") || lead.starts_with('/') || lead.starts_with('$') {
+        return Err("a message may not start with \"--\", \"/\" or \"$\"".into());
+    }
+    Ok(())
+}
+
+/// The text of a captain hold answer, which the engine stores whole.
+pub fn check_hold_answer(text: &str) -> std::result::Result<(), String> {
+    check_text("answer", text, MAX_HOLD_ANSWER_BYTES)
+}
+
+/// A decision key as `fm-send.sh --resolve-key` accepts it.
+fn check_decision_key(key: &str) -> std::result::Result<(), String> {
+    let ok = !key.is_empty()
+        && key.len() <= MAX_TOKEN_LEN
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("decision key {key:?} is not valid"))
+    }
+}
+
+/// The answering user: one line of at most 128 bytes, no control characters.
+pub fn check_answered_by(user: &str) -> std::result::Result<(), String> {
+    if user.trim().is_empty() {
+        return Err("answered_by is empty".into());
+    }
+    if user.len() > MAX_ANSWERED_BY_BYTES {
+        return Err(format!(
+            "answered_by is {} bytes; the limit is {MAX_ANSWERED_BY_BYTES}",
+            user.len()
+        ));
+    }
+    if user.chars().any(char::is_control) {
+        return Err("answered_by must be one line without control characters".into());
+    }
+    Ok(())
+}
+
 fn check_text(what: &str, text: &str, max: usize) -> std::result::Result<(), String> {
     if text.trim().is_empty() {
         return Err(format!("{what} is empty"));
@@ -590,6 +708,79 @@ mod tests {
         }
         let big = "x".repeat(MAX_MESSAGE_BYTES + 1);
         assert!(send(&big).argv().is_err());
+    }
+
+    #[test]
+    fn answer_renders_flags_in_equals_form() {
+        let op = WriteOp::Answer {
+            task_id: "t1".into(),
+            key: "api-shape".into(),
+            text: "go with REST".into(),
+            answered_by: "--Matt S".into(),
+        };
+        assert_eq!(op.script(), SEND);
+        assert_eq!(
+            op.argv().unwrap(),
+            vec![
+                "t1",
+                "--resolve-key=api-shape",
+                "--answered-by=--Matt S",
+                "go with REST"
+            ]
+        );
+        for (key, user, text) in [
+            ("bad key", "m", "t"),
+            ("", "m", "t"),
+            ("k", "", "t"),
+            ("k", "a\nb", "t"),
+            ("k", "m", "--resolve-key x"),
+            ("k", "m", "/quit"),
+        ] {
+            let op = WriteOp::Answer {
+                task_id: "t1".into(),
+                key: key.into(),
+                text: text.into(),
+                answered_by: user.into(),
+            };
+            assert!(op.argv().is_err(), "{key:?} {user:?} {text:?}");
+        }
+    }
+
+    #[test]
+    fn answer_hold_renders_release_and_answerer() {
+        let op = WriteOp::AnswerHold {
+            task_id: "pick-db".into(),
+            decision_file: "/tmp/d.txt".into(),
+            release: true,
+            answered_by: "Matt".into(),
+        };
+        assert_eq!(op.script(), CAPTAIN_HOLD);
+        assert_eq!(
+            op.argv().unwrap(),
+            vec![
+                "answer",
+                "pick-db",
+                "--decision-file",
+                "/tmp/d.txt",
+                "--release",
+                "--answered-by",
+                "Matt"
+            ]
+        );
+        let op = WriteOp::AnswerHold {
+            task_id: "pick-db".into(),
+            decision_file: "d.txt".into(),
+            release: false,
+            answered_by: "Matt".into(),
+        };
+        assert!(op.argv().is_err());
+        let op = WriteOp::AnswerHold {
+            task_id: "pick-db".into(),
+            decision_file: "/tmp/d.txt".into(),
+            release: false,
+            answered_by: "x".repeat(MAX_ANSWERED_BY_BYTES + 1),
+        };
+        assert!(op.argv().is_err());
     }
 
     #[test]

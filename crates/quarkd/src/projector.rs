@@ -123,14 +123,19 @@ impl Projector {
         self.tail_statuses(ws).await;
 
         let started = Instant::now();
+        // Taken before the read, so the store can tell this read from one
+        // that saw the engine before an answer landed.
+        let observed_at = crate::now_rfc3339();
         let holds = self.engine.holds(ws).await;
         self.record(ws, "holds", started, holds.as_ref().err())
             .await;
         if let Ok(holds) = holds {
             let store = self.store.clone();
             let project_id = ws.project_id.clone();
-            let res =
-                tokio::task::spawn_blocking(move || store.apply_holds(&project_id, &holds)).await;
+            let res = tokio::task::spawn_blocking(move || {
+                store.apply_holds(&project_id, &holds, &observed_at)
+            })
+            .await;
             log_apply(ws, "holds", res);
         }
     }

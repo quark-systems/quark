@@ -75,6 +75,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/tasks/{id}/changes", get(routes::get_task_changes))
         .route("/v1/tasks/{id}/diff", get(routes::get_task_diff))
         .route("/v1/decisions", get(routes::list_decisions))
+        // POST serves the custom method `/v1/decisions/{id}:answer`.
+        .route("/v1/decisions/{id}", post(routes::decision_action))
         .route("/v1/pull-requests", get(pull_requests::list))
         // POST serves the custom method `/v1/pull-requests/{id}:merge`.
         .route(

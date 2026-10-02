@@ -279,6 +279,58 @@ async fn writes_run_allowlisted_scripts_and_are_recorded() {
     assert_eq!(calls[0].detail.as_deref(), Some("agent did not stop\n"));
 }
 
+#[tokio::test]
+async fn answers_go_to_the_inbox_or_the_hold_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_engine(dir.path());
+    add_write_scripts(&fake.engine_root);
+    // Logs its argv and the decision file's content, which must still exist.
+    let hold = fake.engine_root.join("bin/fm-captain-hold.sh");
+    fs::write(
+        &hold,
+        "#!/bin/sh
+{ echo '--- fm-captain-hold.sh'; for a in \"$@\"; do echo \"$a\"; done; \
+         echo '>>>'; cat \"$4\"; echo; } >> \"$FM_HOME/calls.log\"\necho \"answered: $2\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&hold, fs::Permissions::from_mode(0o755)).unwrap();
+    let e = FirstmateEngine::new(&fake.engine_root, Arc::new(MemoryCallLog::default()));
+    let ws = WorkspaceRef {
+        project_id: "p1".into(),
+        root: fake.home.clone(),
+    };
+
+    e.answer(&ws, "mate:race", "subscribe first", "Matt S")
+        .await
+        .unwrap();
+    e.answer(&ws, "pick-db", "SQLite", "Matt S").await.unwrap();
+
+    let log = fs::read_to_string(fake.home.join("calls.log")).unwrap();
+    let mut lines = log.lines();
+    let decision_file = log
+        .lines()
+        .skip_while(|l| *l != "--decision-file")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let want = format!(
+        "--- fm-send.sh\nmate\n--resolve-key=race\n--answered-by=Matt S\nsubscribe first\n\
+         --- fm-captain-hold.sh\nanswer\npick-db\n--decision-file\n{decision_file}\n\
+         --answered-by\nMatt S\n>>>\nSQLite"
+    );
+    assert_eq!(lines.by_ref().collect::<Vec<_>>().join("\n"), want);
+    assert!(
+        !Path::new(&decision_file).exists(),
+        "the answer file is removed once recorded"
+    );
+
+    // Only live captain holds can be answered; a deferred one is not open.
+    let err = e.answer(&ws, "later-call", "x", "Matt").await.unwrap_err();
+    assert!(matches!(err, EngineError::TaskNotFound(_)), "{err:?}");
+    let err = e.answer(&ws, "mate:race", "x", "a\nb").await.unwrap_err();
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+}
+
 /// Fake provisioning scripts: each logs its argv and the charter env, then
 /// prints the result line the real script prints.
 fn add_provision_scripts(engine_root: &Path) {

@@ -31,7 +31,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -219,6 +219,31 @@ const SCHEMA_V8: &str = r#"
 ALTER TABLE pull_requests ADD COLUMN evidence TEXT;
 "#;
 
+/// A question asked again after its answer reuses its engine id, so a
+/// Project may hold several decisions for one engine id.
+const SCHEMA_V9: &str = r#"
+CREATE TABLE decisions_v9 (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    engine_id   TEXT NOT NULL,
+    task_id     TEXT,
+    question    TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    answer      TEXT,
+    answered_by TEXT,
+    opened_at   TEXT NOT NULL,
+    answered_at TEXT
+);
+INSERT INTO decisions_v9 (id, project_id, engine_id, task_id, question, state, answer,
+                          answered_by, opened_at, answered_at)
+    SELECT id, project_id, engine_id, task_id, question, state, answer,
+           answered_by, opened_at, answered_at
+    FROM decisions;
+DROP TABLE decisions;
+ALTER TABLE decisions_v9 RENAME TO decisions;
+CREATE INDEX decisions_by_engine_id ON decisions (project_id, engine_id);
+"#;
+
 /// A task whose status log the projector tails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TailTarget {
@@ -263,6 +288,16 @@ impl TranscriptSource {
             TranscriptSource::Task { task_id } => format!("task:{task_id}"),
         }
     }
+}
+
+/// Engine coordinates of a decision, from [`Store::decision_target`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecisionTarget {
+    pub project_id: String,
+    /// The engine's id for the question ([`Hold::id`]).
+    pub engine_id: String,
+    pub open: bool,
+    pub workspace_path: Option<String>,
 }
 
 /// Engine coordinates of a task, from [`Store::task_target`].
@@ -892,94 +927,145 @@ impl Store {
         })
     }
 
-    /// Projects engine holds into decisions, emitting `decision.opened` for new
-    /// holds and `decision.answered` when an open one gains an answer.
-    pub fn apply_holds(&self, project_id: &str, holds: &[Hold]) -> Result<()> {
+    /// One decision by id.
+    pub fn get_decision(&self, id: &str) -> Result<Decision> {
+        self.read(|c| {
+            c.query_row(
+                &format!("{DECISION_SELECT} WHERE id = ?1"),
+                [id],
+                decision_from_row,
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound)
+        })
+    }
+
+    /// Where to answer a decision in its engine: the owning Project, the
+    /// engine's id for the question and the Project's workspace, if attached.
+    pub fn decision_target(&self, id: &str) -> Result<DecisionTarget> {
+        self.read(|c| {
+            c.query_row(
+                "SELECT d.project_id, d.engine_id, d.state, p.workspace_path
+                 FROM decisions d JOIN projects p ON p.id = d.project_id
+                 WHERE d.id = ?1",
+                [id],
+                |r| {
+                    Ok(DecisionTarget {
+                        project_id: r.get(0)?,
+                        engine_id: r.get(1)?,
+                        open: r.get::<_, String>(2)? == "open",
+                        workspace_path: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound)
+        })
+    }
+
+    /// Records an answer the engine has accepted, emitting
+    /// `decision.answered`. Conflicts when the decision already has an answer.
+    pub fn answer_decision(&self, id: &str, answer: &str, answered_by: &str) -> Result<Decision> {
+        self.write(|tx, events| {
+            let old = tx
+                .query_row(
+                    &format!("{DECISION_SELECT} WHERE id = ?1"),
+                    [id],
+                    decision_from_row,
+                )
+                .optional()?
+                .ok_or(StoreError::NotFound)?;
+            // A refresh that saw the hold go before this call recorded it
+            // marks the decision answered elsewhere, with no answer; this
+            // answer is the one that closed it.
+            let answered_elsewhere = old.answer.is_none() && old.answered_by.is_none();
+            if old.state != DecisionState::Open && !answered_elsewhere {
+                return Err(StoreError::Conflict(
+                    "the decision is already answered".into(),
+                ));
+            }
+            let decision = Decision {
+                state: DecisionState::Answered,
+                answer: Some(answer.to_string()),
+                answered_by: Some(answered_by.to_string()),
+                answered_at: Some(now_rfc3339()),
+                ..old
+            };
+            mark_answered(tx, events, &decision)?;
+            Ok(decision)
+        })
+    }
+
+    /// Projects the engine's open holds into decisions, as read by a refresh
+    /// that started at `observed_at` (RFC 3339), before it read the holds.
+    ///
+    /// - A new hold opens a decision (`decision.opened`).
+    /// - An open decision whose hold carries an answer, or whose hold is gone,
+    ///   becomes answered (`decision.answered`). A hold that went without an
+    ///   answer through Quark was answered elsewhere, so its `answer` and
+    ///   `answered_by` stay empty.
+    /// - A hold that comes back after its decision was answered is the
+    ///   question asked again, and opens a new decision.
+    ///
+    /// Each change also needs `observed_at` to be later than the decision's
+    /// last change, so a refresh that read the engine before an answer (or
+    /// before the decision opened) cannot undo it.
+    pub fn apply_holds(&self, project_id: &str, holds: &[Hold], observed_at: &str) -> Result<()> {
         self.write(|tx, events| {
             for hold in holds {
                 let existing = tx
                     .query_row(
-                        &format!("{DECISION_SELECT} WHERE project_id = ?1 AND engine_id = ?2"),
+                        &format!(
+                            "{DECISION_SELECT} WHERE project_id = ?1 AND engine_id = ?2
+                             ORDER BY rowid DESC LIMIT 1"
+                        ),
                         params![project_id, hold.id],
                         decision_from_row,
                     )
                     .optional()?;
-                let task_id: Option<String> = match &hold.task_id {
-                    Some(engine_task) => tx
-                        .query_row(
-                            "SELECT id FROM tasks WHERE project_id = ?1 AND engine_id = ?2",
-                            params![project_id, engine_task],
-                            |r| r.get(0),
-                        )
-                        .optional()?,
-                    None => None,
-                };
-                let now = now_rfc3339();
                 match existing {
-                    None => {
-                        let answered = hold.answer.is_some();
-                        let decision = Decision {
-                            id: new_id("dec"),
-                            project_id: project_id.to_string(),
-                            task_id,
-                            question: hold.question.clone(),
-                            state: if answered {
-                                DecisionState::Answered
-                            } else {
-                                DecisionState::Open
-                            },
-                            answer: hold.answer.clone(),
-                            answered_by: hold.answered_by.clone(),
-                            opened_at: now.clone(),
-                            answered_at: answered.then(|| now.clone()),
-                        };
-                        insert_decision(tx, &hold.id, &decision)?;
-                        append_event(
-                            tx,
-                            events,
-                            Some(project_id),
-                            EventType::DecisionOpened,
-                            serde_json::to_value(&decision)?,
-                        )?;
-                        if answered {
-                            append_event(
-                                tx,
-                                events,
-                                Some(project_id),
-                                EventType::DecisionAnswered,
-                                serde_json::to_value(&decision)?,
-                            )?;
+                    Some(old) if old.state == DecisionState::Open => {
+                        if hold.answer.is_some() {
+                            let decision = Decision {
+                                state: DecisionState::Answered,
+                                answer: hold.answer.clone(),
+                                answered_by: hold.answered_by.clone(),
+                                answered_at: Some(now_rfc3339()),
+                                ..old
+                            };
+                            mark_answered(tx, events, &decision)?;
                         }
                     }
-                    Some(old) if old.state == DecisionState::Open && hold.answer.is_some() => {
-                        let decision = Decision {
-                            state: DecisionState::Answered,
-                            answer: hold.answer.clone(),
-                            answered_by: hold.answered_by.clone(),
-                            answered_at: Some(now),
-                            ..old
-                        };
-                        tx.execute(
-                            "UPDATE decisions SET state = ?2, answer = ?3, answered_by = ?4,
-                                 answered_at = ?5 WHERE id = ?1",
-                            params![
-                                decision.id,
-                                decision_state_str(decision.state),
-                                decision.answer,
-                                decision.answered_by,
-                                decision.answered_at
-                            ],
-                        )?;
-                        append_event(
-                            tx,
-                            events,
-                            Some(project_id),
-                            EventType::DecisionAnswered,
-                            serde_json::to_value(&decision)?,
-                        )?;
-                    }
-                    Some(_) => {}
+                    Some(old)
+                        if hold.answer.is_some()
+                            || !later(observed_at, old.answered_at.as_deref()) => {}
+                    _ => open_decision(tx, events, project_id, hold)?,
                 }
+            }
+
+            let open: Vec<(String, Decision)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT engine_id, id, project_id, task_id, question, state, answer,
+                         answered_by, opened_at, answered_at
+                     FROM decisions WHERE project_id = ?1 AND state = 'open'",
+                )?;
+                let rows = stmt.query_map([project_id], |r| {
+                    Ok((r.get(0)?, decision_from_row_at(r, 1)?))
+                })?;
+                rows.collect::<std::result::Result<_, _>>()?
+            };
+            for (engine_id, old) in open {
+                if holds.iter().any(|h| h.id == engine_id)
+                    || !later(observed_at, Some(&old.opened_at))
+                {
+                    continue;
+                }
+                let decision = Decision {
+                    state: DecisionState::Answered,
+                    answered_at: Some(now_rfc3339()),
+                    ..old
+                };
+                mark_answered(tx, events, &decision)?;
             }
             Ok(())
         })
@@ -1306,6 +1392,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 8)?;
         tx.commit()?;
     }
+    if version < 9 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V9)?;
+        tx.pragma_update(None, "user_version", 9)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1449,20 +1541,116 @@ fn decision_state_str(s: DecisionState) -> &'static str {
 }
 
 fn decision_from_row(r: &Row) -> rusqlite::Result<Decision> {
+    decision_from_row_at(r, 0)
+}
+
+/// A decision whose `DECISION_SELECT` columns start at column `i`.
+fn decision_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Decision> {
     Ok(Decision {
-        id: r.get(0)?,
-        project_id: r.get(1)?,
-        task_id: r.get(2)?,
-        question: r.get(3)?,
-        state: match r.get::<_, String>(4)?.as_str() {
+        id: r.get(i)?,
+        project_id: r.get(i + 1)?,
+        task_id: r.get(i + 2)?,
+        question: r.get(i + 3)?,
+        state: match r.get::<_, String>(i + 4)?.as_str() {
             "answered" => DecisionState::Answered,
             _ => DecisionState::Open,
         },
-        answer: r.get(5)?,
-        answered_by: r.get(6)?,
-        opened_at: r.get(7)?,
-        answered_at: r.get(8)?,
+        answer: r.get(i + 5)?,
+        answered_by: r.get(i + 6)?,
+        opened_at: r.get(i + 7)?,
+        answered_at: r.get(i + 8)?,
     })
+}
+
+/// Whether RFC 3339 time `a` is strictly later than `b`. An absent `b` is
+/// the distant past; an unparsable time is never later, so nothing changes.
+fn later(a: &str, b: Option<&str>) -> bool {
+    use time::format_description::well_known::Rfc3339;
+    let Ok(a) = time::OffsetDateTime::parse(a, &Rfc3339) else {
+        return false;
+    };
+    match b {
+        None => true,
+        Some(b) => time::OffsetDateTime::parse(b, &Rfc3339).is_ok_and(|b| a > b),
+    }
+}
+
+/// Opens a decision for `hold` (answered at once when the hold already
+/// carries an answer).
+fn open_decision(
+    tx: &Transaction,
+    events: &mut Vec<Event>,
+    project_id: &str,
+    hold: &Hold,
+) -> Result<()> {
+    let task_id: Option<String> = match &hold.task_id {
+        Some(engine_task) => tx
+            .query_row(
+                "SELECT id FROM tasks WHERE project_id = ?1 AND engine_id = ?2",
+                params![project_id, engine_task],
+                |r| r.get(0),
+            )
+            .optional()?,
+        None => None,
+    };
+    let now = now_rfc3339();
+    let answered = hold.answer.is_some();
+    let decision = Decision {
+        id: new_id("dec"),
+        project_id: project_id.to_string(),
+        task_id,
+        question: hold.question.clone(),
+        state: if answered {
+            DecisionState::Answered
+        } else {
+            DecisionState::Open
+        },
+        answer: hold.answer.clone(),
+        answered_by: hold.answered_by.clone(),
+        opened_at: now.clone(),
+        answered_at: answered.then(|| now.clone()),
+    };
+    insert_decision(tx, &hold.id, &decision)?;
+    append_event(
+        tx,
+        events,
+        Some(project_id),
+        EventType::DecisionOpened,
+        serde_json::to_value(&decision)?,
+    )?;
+    if answered {
+        append_event(
+            tx,
+            events,
+            Some(project_id),
+            EventType::DecisionAnswered,
+            serde_json::to_value(&decision)?,
+        )?;
+    }
+    Ok(())
+}
+
+/// Stores `decision`'s answer fields and emits `decision.answered`.
+fn mark_answered(tx: &Transaction, events: &mut Vec<Event>, decision: &Decision) -> Result<()> {
+    tx.execute(
+        "UPDATE decisions SET state = ?2, answer = ?3, answered_by = ?4, answered_at = ?5
+         WHERE id = ?1",
+        params![
+            decision.id,
+            decision_state_str(decision.state),
+            decision.answer,
+            decision.answered_by,
+            decision.answered_at
+        ],
+    )?;
+    append_event(
+        tx,
+        events,
+        Some(&decision.project_id),
+        EventType::DecisionAnswered,
+        serde_json::to_value(decision)?,
+    )?;
+    Ok(())
 }
 
 fn insert_decision(tx: &Transaction, engine_id: &str, d: &Decision) -> Result<()> {
@@ -1626,7 +1814,7 @@ mod tests {
             answered_by: None,
         };
         store
-            .apply_holds(&p.id, std::slice::from_ref(&hold))
+            .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
             .unwrap();
         let open = store.list_decisions(Some(DecisionState::Open)).unwrap();
         assert_eq!(open.len(), 1);
@@ -1635,10 +1823,10 @@ mod tests {
         hold.answer = Some("yes".into());
         hold.answered_by = Some("user_1".into());
         store
-            .apply_holds(&p.id, std::slice::from_ref(&hold))
+            .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
             .unwrap();
         store
-            .apply_holds(&p.id, std::slice::from_ref(&hold))
+            .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
             .unwrap();
         assert!(store
             .list_decisions(Some(DecisionState::Open))
@@ -1654,6 +1842,126 @@ mod tests {
             .filter(|e| e.event_type == EventType::DecisionAnswered)
             .count();
         assert_eq!(answered, 1);
+    }
+
+    fn decision_events(store: &Store) -> Vec<Event> {
+        store
+            .events_after(0, 1000)
+            .unwrap()
+            .into_iter()
+            .filter(|e| {
+                matches!(
+                    e.event_type,
+                    EventType::DecisionOpened | EventType::DecisionAnswered
+                )
+            })
+            .collect()
+    }
+
+    fn open_hold(id: &str) -> Hold {
+        Hold {
+            id: id.into(),
+            task_id: None,
+            question: "which way?".into(),
+            answer: None,
+            answered_by: None,
+        }
+    }
+
+    #[test]
+    fn answer_records_who_answered() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_holds(&p.id, &[open_hold("t1:api")], &now_rfc3339())
+            .unwrap();
+        let open = store.list_decisions(Some(DecisionState::Open)).unwrap();
+        let target = store.decision_target(&open[0].id).unwrap();
+        assert_eq!(target.engine_id, "t1:api");
+        assert!(target.open);
+
+        let d = store.answer_decision(&open[0].id, "REST", "matt").unwrap();
+        assert_eq!(d.state, DecisionState::Answered);
+        assert_eq!(d.answered_by.as_deref(), Some("matt"));
+        assert!(d.answered_at.is_some());
+        assert_eq!(store.get_decision(&d.id).unwrap(), d);
+        assert!(!store.decision_target(&d.id).unwrap().open);
+        assert!(matches!(
+            store.answer_decision(&d.id, "RPC", "ana"),
+            Err(StoreError::Conflict(_))
+        ));
+        let events = decision_events(&store);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].event_type, EventType::DecisionAnswered);
+        assert_eq!(events[1].payload["answered_by"], "matt");
+
+        // The engine no longer lists it; a later refresh changes nothing.
+        store.apply_holds(&p.id, &[], &now_rfc3339()).unwrap();
+        assert_eq!(decision_events(&store).len(), 2);
+        assert_eq!(
+            store.get_decision(&d.id).unwrap().answer.as_deref(),
+            Some("REST")
+        );
+    }
+
+    #[test]
+    fn hold_gone_without_an_answer_was_answered_elsewhere() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_holds(&p.id, &[open_hold("h1")], &now_rfc3339())
+            .unwrap();
+        let id = store.list_decisions(None).unwrap()[0].id.clone();
+
+        // A refresh that read the engine before the decision opened does not
+        // close it.
+        store
+            .apply_holds(&p.id, &[], "2000-01-01T00:00:00Z")
+            .unwrap();
+        assert_eq!(store.get_decision(&id).unwrap().state, DecisionState::Open);
+
+        store.apply_holds(&p.id, &[], &now_rfc3339()).unwrap();
+        let d = store.get_decision(&id).unwrap();
+        assert_eq!(d.state, DecisionState::Answered);
+        assert_eq!(d.answer, None);
+        assert_eq!(d.answered_by, None);
+
+        // The answer that raced the refresh still lands on the decision.
+        let d = store.answer_decision(&id, "yes", "matt").unwrap();
+        assert_eq!(d.answered_by.as_deref(), Some("matt"));
+        assert_eq!(decision_events(&store).len(), 3);
+    }
+
+    #[test]
+    fn question_asked_again_opens_a_new_decision() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_holds(&p.id, &[open_hold("h1")], &now_rfc3339())
+            .unwrap();
+        let first = store.list_decisions(None).unwrap()[0].id.clone();
+        store.answer_decision(&first, "later", "matt").unwrap();
+
+        // A refresh that read the engine before the answer landed still sees
+        // the hold; it must not reopen anything.
+        store
+            .apply_holds(&p.id, &[open_hold("h1")], "2000-01-01T00:00:00Z")
+            .unwrap();
+        assert_eq!(store.list_decisions(None).unwrap().len(), 1);
+
+        store
+            .apply_holds(&p.id, &[open_hold("h1")], &now_rfc3339())
+            .unwrap();
+        let all = store.list_decisions(None).unwrap();
+        assert_eq!(all.len(), 2);
+        let open = store.list_decisions(Some(DecisionState::Open)).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_ne!(open[0].id, first);
+        assert_eq!(store.decision_target(&open[0].id).unwrap().engine_id, "h1");
+        assert_eq!(
+            store.get_decision(&first).unwrap().answer.as_deref(),
+            Some("later")
+        );
     }
 
     #[test]
