@@ -100,7 +100,8 @@ test("command palette jumps to a task", async ({ page }) => {
   await open(page, "#/");
   await expect(page.getByTestId("project-card").first()).toBeVisible();
   await page.keyboard.press("Control+k");
-  await page.getByPlaceholder("Jump to a project, task or decision…").fill("pricing page");
+  // "task" narrows to tasks: the draft PR of the same name is listed too.
+  await page.getByPlaceholder("Jump to a project, task, decision or pull request…").fill("task pricing page");
   await page.keyboard.press("Enter");
   await expect(page.locator(".header h1")).toHaveText("Pricing page on the new grid");
 });
@@ -111,7 +112,7 @@ test("decisions inbox: answer from the keyboard, then see who answered", async (
 
   // The palette jumps straight to a decision.
   await page.keyboard.press("Control+k");
-  await page.getByPlaceholder("Jump to a project, task or decision…").fill("answer history");
+  await page.getByPlaceholder("Jump to a project, task, decision or pull request…").fill("answer history");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#\/inbox\/d-1$/);
   const detail = page.getByTestId("decision-detail");
@@ -147,4 +148,48 @@ test("decisions inbox: answer from the keyboard, then see who answered", async (
   // The task that asked is running again.
   await page.getByTestId("decision-detail").getByRole("link", { name: "Decision records carry who answered" }).click();
   await expect(page.getByTestId("task-state")).toHaveText("Running");
+});
+
+test("PR center: list by state, checks, line comment, merge, standing approval", async ({ page }) => {
+  await open(page, "#/");
+  await page.getByTestId("nav-prs").click();
+  await expect(page).toHaveURL(/#\/prs$/);
+  const list = page.getByTestId("pr-list");
+  await expect(list.getByTestId("pr-row")).toHaveCount(2);
+  await expect(list).toContainText("Checks failing");
+  await page.getByTestId("prs-tab-draft").click();
+  await expect(list.getByTestId("pr-row")).toHaveText(/Pricing page on the new grid/);
+  await page.getByTestId("prs-tab-open").click();
+
+  // Keyboard: the newest open PR is selected first; j moves to the next, Enter opens it.
+  await page.keyboard.press("j");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".header h1")).toHaveText("OpenAPI check in CI");
+  await expect(page.getByTestId("pr-checks")).toContainText("CI / desktop-app");
+  await expect(page.getByTestId("pr-evidence")).toContainText("No verification evidence");
+
+  // A line comment goes to the worker with its path, line and side.
+  await page.getByTestId("pr-diff").locator("tr.commentable td.ln").nth(1).click();
+  await page.getByLabel("Line comment").fill("Name this constant");
+  await page.getByTestId("pr-diff").getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(page.getByTestId("line-comment")).toHaveText("Name this constant");
+  const sent = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/mock/pr-comments")).json());
+  expect(sent).toEqual([expect.objectContaining({ pull_request_id: "pr-1", text: "Name this constant", side: "new" })]);
+  expect(typeof sent[0].line).toBe("number");
+  expect(sent[0].path).toBeTruthy();
+
+  await page.getByTestId("merge").click();
+  await expect(page.getByTestId("pr-state")).toHaveText("Merged");
+
+  // A PR with failing checks cannot be merged; the reason is shown.
+  await page.goto("/?daemon=http://127.0.0.1:7392#/pr/pr-2");
+  await expect(page.getByTestId("merge-blocker")).toHaveText("Checks are failing.");
+  await expect(page.getByTestId("merge")).toBeDisabled();
+  await expect(page.getByTestId("pr-reviews")).toContainText("mattsanchez requested changes");
+
+  // Standing approval toggles per Project and sticks on the daemon.
+  await page.getByTestId("standing-approval").click();
+  await expect(page.getByTestId("standing-approval")).toHaveClass(/on/);
+  const proj = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark")).json());
+  expect(proj.standing_approval).toBe(true);
 });

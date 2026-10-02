@@ -2,7 +2,7 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  api, DaemonEvent, Decision, Health, NotAvailable, Project, Task, TerminalOutput, TranscriptEntry,
+  api, CheckUpdated, DaemonEvent, Decision, Health, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
   TranscriptItem, wsUrl,
 } from "./api";
 
@@ -20,17 +20,29 @@ export interface AppState {
   transcripts: Record<string, TranscriptItem[]>;
   /** Count of `task.event` events per task, so views can refetch what a task changed. */
   taskActivity: Record<string, number>;
+  /** PR center: pull requests across Projects by id. */
+  pullRequests: Record<string, PullRequest>;
+  /** Whether the daemon serves the PR center; null until the first load answers. */
+  prsAvailable: boolean | null;
+  /** Count of `pr.updated`, `check.updated` and `review.updated` events per PR, so views can refetch it. */
+  prActivity: Record<string, number>;
 }
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
   projects: {}, tasks: {}, decisions: {}, chat: {}, transcripts: {}, taskActivity: {},
+  pullRequests: {}, prsAvailable: null, prActivity: {},
 };
 
 function upsertById<T extends { id: string | number }>(list: T[] | undefined, item: T): T[] {
   const cur = list ?? [];
   const i = cur.findIndex((x) => x.id === item.id);
   return i >= 0 ? cur.map((x, j) => (j === i ? item : x)) : [...cur, item];
+}
+
+function upsertBy<T>(list: T[], item: T, key: keyof T): T[] {
+  const i = list.findIndex((x) => x[key] === item[key]);
+  return i >= 0 ? list.map((x, j) => (j === i ? item : x)) : [...list, item];
 }
 
 /** Applies one event. Output bytes are routed separately (see `onOutput`), not kept in state. */
@@ -62,6 +74,30 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
       const tid = p.task_id as string;
       if (!tid) return s;
       return { ...s, taskActivity: { ...s.taskActivity, [tid]: (s.taskActivity[tid] ?? 0) + 1 } };
+    }
+    case "pr.updated": {
+      if (typeof p?.id !== "string") return s;
+      return {
+        ...s,
+        pullRequests: { ...s.pullRequests, [p.id]: { ...s.pullRequests[p.id], ...(p as PullRequest) } },
+        prActivity: { ...s.prActivity, [p.id]: (s.prActivity[p.id] ?? 0) + 1 },
+      };
+    }
+    case "check.updated":
+    case "review.updated": {
+      // Merge the one check or review into a loaded PR; views also refetch it for the rolled-up states.
+      const id = p?.pull_request_id as string | undefined;
+      if (!id) return s;
+      const next = { ...s, prActivity: { ...s.prActivity, [id]: (s.prActivity[id] ?? 0) + 1 } };
+      const cur = s.pullRequests[id];
+      if (cur && e.type === "check.updated" && p.check?.name) {
+        const c = p as CheckUpdated;
+        const stale = c.head_sha && cur.head_sha && c.head_sha !== cur.head_sha;
+        if (!stale) next.pullRequests = { ...s.pullRequests, [id]: { ...cur, checks: upsertBy(cur.checks, c.check, "name") } };
+      } else if (cur && e.type === "review.updated" && p.review?.id) {
+        next.pullRequests = { ...s.pullRequests, [id]: { ...cur, reviews: upsertBy(cur.reviews, (p as ReviewUpdated).review, "id") } };
+      }
+      return next;
     }
     default:
       return s;
@@ -145,6 +181,7 @@ export async function refreshSnapshots() {
     decisions: Object.fromEntries(decisions.map((d) => [d.id, d])),
     error: null,
   });
+  await loadPullRequests().catch(() => undefined);
 }
 
 export async function refreshTask(id: string) {
@@ -183,6 +220,28 @@ export async function loadTranscript(taskId: string): Promise<"ok" | "unavailabl
 /** Records a decision the daemon returned, e.g. from answering it; the event may arrive before or after. */
 export function upsertDecision(d: Decision) {
   set({ decisions: { ...state.decisions, [d.id]: d } });
+}
+
+/** Loads every PR across Projects. Answers "unavailable" while the daemon has no PR center. */
+export async function loadPullRequests(): Promise<"ok" | "unavailable"> {
+  try {
+    const prs = await api.pullRequests();
+    set({ pullRequests: Object.fromEntries(prs.map((x) => [x.id, x])), prsAvailable: true });
+    return "ok";
+  } catch (e) {
+    if (e instanceof NotAvailable) { set({ prsAvailable: false }); return "unavailable"; }
+    throw e;
+  }
+}
+
+export async function refreshPullRequest(id: string) {
+  const pr = await api.pullRequest(id);
+  set({ pullRequests: { ...state.pullRequests, [pr.id]: pr } });
+  return pr;
+}
+
+export function setPullRequest(pr: PullRequest) {
+  set({ pullRequests: { ...state.pullRequests, [pr.id]: pr } });
 }
 
 export function addProject(p: Project) {
