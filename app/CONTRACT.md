@@ -1,117 +1,37 @@
-# What the desktop app expects from quarkd
+# What the desktop app uses from quarkd
 
-This is the slice of the daemon API v1 that the desktop app uses.
-The authority for anything already served is `api/openapi.json`; this file adds the endpoints the app needs that `quarkd` does not serve yet, with the shape the app codes against.
-Each proposed endpoint names the Phase 1 workstream expected to build it.
-When a workstream settles on a different shape, update this file and `src/api.ts` together.
+This is the slice of the daemon API v1 the desktop app calls, and where each part is defined.
+`api/openapi.json` is the authority for every shape; when a PR below lands, its endpoints join it.
+`src/api.ts` holds the matching TypeScript types, and `mock/daemon.mjs` serves all of it for development and tests.
 
-The app treats `404`, `405` and `501` from a proposed endpoint as "not available yet" and shows that in place, so each screen lights up as its endpoint lands.
+The app reads `404` with no error body (an unknown route), `405` and `501` as "not available yet" and shows that in the panel, so each screen lights up as its endpoint lands.
+A `404` with an `ErrorBody` is a real "not found".
 
-## Served today (`api/openapi.json`)
-
-| Method and path | Used for |
-| --- | --- |
-| `GET /v1/health` | connection indicator, engine name |
-| `GET /v1/projects`, `POST /v1/projects`, `GET /v1/projects/{id}` | Projects list and create flow |
-| `GET /v1/projects/{id}/tasks`, `GET /v1/tasks/{id}` | board, worker header |
-| `GET /v1/decisions` | open-decision counts on the board |
-| `GET /v1/events?cursor=<seq>` (WebSocket) | everything live |
-
-The app sends the J2 create fields as optional extras on `POST /v1/projects` (see below), which today's daemon ignores.
-
-## Proposed
-
-### Project creation (workstream 2, J2)
-
-`POST /v1/projects` adds optional fields to `CreateProject`:
-
-```
-{ name, goal?, workspace_path?,
-  repos?: string[],                       // forge URLs or owner/name
-  agent_config?: { harness, model?, effort? },
-  dispatch_preset?: string }
-```
-
-`Project` may carry `repos?: string[]`, `agent_config?` and `dispatch_preset?` back, plus `coordinator_state?: "starting" | "running" | "stopped" | "failed"`; the app shows the coordinator state when present.
-Dispatch presets come from `GET /v1/dispatch/presets` -> `[{ id, label, description? }]` when served; until then the app offers `balanced` (default), `fast` and `thorough`.
-
-### Harnesses (workstream 6)
-
-`GET /v1/harnesses` -> `[Harness]`
-
-```
-Harness { id, name, installed: bool, version?, models: string[], efforts: string[], install_hint? }
-```
-
-The create flow's agent picker uses it; until it is served the picker offers a fixed list (claude, codex, pi, opencode).
-
-### Steering and control (workstream 1)
-
-| Method and path | Body | Response |
+| Area | Endpoints | Defined in |
 | --- | --- | --- |
-| `POST /v1/tasks/{id}/messages` | `{ "text" }` | `202` (empty) |
-| `POST /v1/tasks/{id}:cancel` | none | `202` |
-| `POST /v1/tasks/{id}:relaunch` | none | `202` |
+| Projects, board, decisions, events | `GET /v1/health`, `GET/POST /v1/projects`, `GET /v1/projects/{id}`, `GET /v1/projects/{id}/tasks`, `GET /v1/tasks/{id}`, `GET /v1/decisions`, `GET /v1/events?cursor=` | main |
+| Steering and control | `POST /v1/tasks/{id}/messages`, `:cancel`, `:relaunch` | quark#5 |
+| Harnesses | `GET /v1/harnesses`, `POST /v1/harnesses:validate` | quark#6 |
+| Transcripts and coordinator chat | `GET /v1/tasks/{id}/transcript`, `GET/POST /v1/coordinators/{id}/messages` | quark#7 |
+| Changes and diff | `GET /v1/tasks/{id}/changes`, `GET /v1/tasks/{id}/diff[?path=]`, `task.event` events | quark#8 |
+| Terminals | `GET /v1/terminals/{id}`, `POST /v1/terminals/{id}/snapshot`, `/input`, `/resize` | quark#9 |
+| Project creation | `POST /v1/projects` with `repos`, `agent_config`, `dispatch_preset`, `delivery`; `Project.status`; `POST /v1/projects/{id}:provision` | quark#10 |
 
-The resulting state changes arrive as `task.state_changed` events.
-A `200` or `204` is also accepted.
-Errors use the existing `ErrorBody`, and the app shows `error.message`.
+## How the app uses them
 
-### Terminal (workstream 3)
-
-| Method and path | Body | Response |
-| --- | --- | --- |
-| `GET /v1/tasks/{id}/terminal` | | `TerminalInfo` |
-| `POST /v1/tasks/{id}/terminal/input` | `{ "data_b64" }` | `204` |
-| `POST /v1/tasks/{id}/terminal/resize` | `{ "cols", "rows" }` | `204` or `TerminalInfo` |
-
-```
-TerminalInfo { task_id, cols, rows, attached: bool, seq: int, snapshot_b64? }
-```
-
-`snapshot_b64`, when present, is bytes that redraw the pane's current screen (for example `capture-pane -e -p` output with cursor positioning), and `seq` is the last event `seq` already reflected in it.
-The app writes the snapshot, then applies only `worker.output` events with a greater `seq`, so opening a worker never replays the whole log.
-
-Event `worker.output`: `{ task_id, data_b64 }` with raw pane bytes (not aligned to lines or UTF-8).
-The POC's `worker_id` key is accepted as a fallback.
-The app keeps one input request in flight per task and coalesces keys typed meanwhile, because concurrent requests can be reordered (POC finding).
-
-### Transcript (workstream 4)
-
-`GET /v1/tasks/{id}/transcript` -> `[TranscriptEntry]`
-
-```
-TranscriptEntry { id, ts, role: "user" | "assistant" | "tool" | "system", text, tool?: string }
-```
-
-Event `worker.transcript`: `{ task_id, entry: TranscriptEntry }`.
-`text` is markdown for `user` and `assistant`, and plain text (a command and its output) for `tool`.
-
-### Coordinator chat (workstream 4, J3)
-
-The coordinator id of a Project coordinator is the Project id.
-
-| Method and path | Body | Response |
-| --- | --- | --- |
-| `GET /v1/coordinators/{id}/messages` | | `[ChatMessage]` |
-| `POST /v1/coordinators/{id}/messages` | `{ "text" }` | `202` |
-
-```
-ChatMessage { id, ts, role: "user" | "coordinator", text }
-```
-
-Event `coordinator.message`: a `ChatMessage`, with the event's `project_id` naming the coordinator (or `coordinator_id` in the payload).
-
-### Changes and diff (workstream 5, J4)
-
-| Method and path | Response |
-| --- | --- |
-| `GET /v1/tasks/{id}/changes` | `Changes` |
-| `GET /v1/tasks/{id}/diff` | `text/plain` unified diff of the task worktree against its base |
-| `GET /v1/tasks/{id}/diff?path=<path>` | the same, for one file |
-
-```
-Changes { base?, head?, files: [{ path, old_path?, status: "added" | "modified" | "deleted" | "renamed", additions, deletions }] }
-```
-
-The app refetches changes when the task's `task.state_changed` arrives and when the user presses refresh.
+- **Create flow.** The harness picker lists harnesses whose `roles` include `coordinator`, since the Project's agent config runs its coordinator.
+  The model field is free text, hinted by `models.discovery`, and hidden when `models.selection` is `automatic`.
+  Before creating, the app calls `POST /v1/harnesses:validate` with role `coordinator` and shows any errors.
+  `owner/name` repos are sent as `https://github.com/owner/name.git`.
+  The board shows `status_detail` while the Project is provisioning, and a Retry button (`:provision`) when it failed.
+- **Coordinator chat.** The chat shows `user` and `assistant` entries and collapses runs of `thinking`, `tool_call` and `tool_result` into one line.
+  A sent message is not echoed, so it shows as pending until the coordinator's session records it as a `user` entry; `confirmed: false` is shown on it.
+- **Transcripts.** Entries are keyed by `id`, the `seq` of the event that carried them; live `worker.transcript` and `coordinator.message` events use the event's `seq`.
+- **Terminals.** The terminal id of a worker is its task id.
+  To open one, the app, already subscribed to the event stream, calls `POST /v1/terminals/{id}/snapshot`, applies the returned event, then applies that terminal's `worker.output` events with a greater `seq`.
+  A `snapshot` chunk resets the emulator to its `cols` x `rows` and redraws.
+  Input is serialized per terminal, one request in flight, without the optional `seq`.
+  A `503` with code `unavailable` means the daemon has no tmux, and the panel says so.
+- **Changes.** The file list refetches when the task changes state and on each `task.event` for it.
+  `409 no_worktree` shows "no working copy yet"; a `truncated` diff is flagged.
+- **Cancel and relaunch** answer `204` after the engine confirms, which can take tens of seconds, so the app sets no client timeout.

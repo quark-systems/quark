@@ -44,11 +44,11 @@ export function Projects() {
                   <span className="pill blue">{active} active</span>
                   {decide > 0 && <span className="pill accent">{decide} need a decision</span>}
                   <span className="pill">{done} done</span>
-                  {p.coordinator_state && <span className="pill">coordinator {p.coordinator_state}</span>}
+                  {p.status && p.status !== "ready" && <span className={"pill " + (p.status === "failed" ? "red" : "yellow")}>{p.status}</span>}
                   <span className="spacer" />
                   <span>{ago(p.updated_at)}</span>
                 </div>
-                {!!p.repos?.length && <div className="pc-repos mono faint">{p.repos.join(" · ")}</div>}
+                {!!p.repos?.length && <div className="pc-repos mono faint">{p.repos.map((r) => r.name ?? r.url).join(" · ")}</div>}
               </a>
             ))}
           </div>

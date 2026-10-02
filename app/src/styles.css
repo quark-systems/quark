@@ -227,3 +227,9 @@ a.side-item { text-decoration: none; }
 .st-added { color: var(--green); } .st-deleted { color: var(--red); } .st-modified { color: var(--yellow); } .st-renamed { color: var(--blue); }
 .adds { color: var(--green); font: 11px var(--mono); } .dels { color: var(--red); font: 11px var(--mono); }
 .file-head .adds, .file-head .dels { font-size: 12px; }
+.msg.pending { opacity: .6; }
+.state-note.bad { color: var(--red); }
+.activity { margin: 0 14px 12px 52px; font-size: 12px; color: var(--fg-faint); }
+.activity summary { cursor: pointer; }
+.activity pre { margin: 4px 0 0; padding: 6px 8px; background: var(--bg-2); border-radius: 4px; font: 11px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow-y: auto; }
+.t-entry.tool.error { border-color: var(--red); }

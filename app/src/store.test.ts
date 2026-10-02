@@ -26,31 +26,31 @@ describe("applyEvent", () => {
 
   it("merges partial project updates", () => {
     let s = applyEvent(initialState, ev(1, "project.updated", { id: "p1", name: "P", created_at: "", updated_at: "" }));
-    s = applyEvent(s, ev(2, "project.updated", { id: "p1", coordinator_state: "running" }));
+    s = applyEvent(s, ev(2, "project.updated", { id: "p1", status: "ready" }));
     expect(s.projects.p1.name).toBe("P");
-    expect(s.projects.p1.coordinator_state).toBe("running");
+    expect(s.projects.p1.status).toBe("ready");
   });
 
-  it("appends coordinator messages only to a loaded chat, without duplicates", () => {
-    const m = { id: "m1", ts: "2026-10-02T10:00:00Z", role: "coordinator", text: "hi" };
-    expect(applyEvent(initialState, ev(1, "coordinator.message", m)).chat).toEqual({});
+  const entry = { role: "assistant", text: "working", is_error: false, truncated: false, ts: null };
+
+  it("appends coordinator entries only to a loaded chat, keyed by the event seq", () => {
+    expect(applyEvent(initialState, ev(7, "coordinator.message", { coordinator_id: "p1", entry })).chat).toEqual({});
     let s: AppState = { ...initialState, chat: { p1: [] } };
-    s = applyEvent(s, ev(1, "coordinator.message", m));
-    s = applyEvent(s, ev(1, "coordinator.message", m));
-    expect(s.chat.p1).toHaveLength(1);
+    s = applyEvent(s, ev(7, "coordinator.message", { coordinator_id: "p1", entry }));
+    s = applyEvent(s, ev(7, "coordinator.message", { coordinator_id: "p1", entry }));
+    expect(s.chat.p1).toEqual([{ ...entry, id: 7 }]);
   });
 
-  it("routes coordinator messages by coordinator_id when the payload carries one", () => {
-    const s = applyEvent({ ...initialState, chat: { cc: [] } },
-      ev(1, "coordinator.message", { id: "m1", ts: "", role: "user", text: "x", coordinator_id: "cc" }, null));
-    expect(s.chat.cc[0]).toEqual({ id: "m1", ts: "", role: "user", text: "x" });
+  it("appends worker transcript entries to a loaded transcript", () => {
+    expect(applyEvent(initialState, ev(3, "worker.transcript", { task_id: "t1", entry })).transcripts).toEqual({});
+    const s = applyEvent({ ...initialState, transcripts: { t1: [] } }, ev(3, "worker.transcript", { task_id: "t1", entry }));
+    expect(s.transcripts.t1).toEqual([{ ...entry, id: 3 }]);
   });
 
-  it("appends transcript entries to a loaded transcript", () => {
-    const entry = { id: "e1", ts: "", role: "assistant", text: "working" };
-    expect(applyEvent(initialState, ev(1, "worker.transcript", { task_id: "t1", entry })).transcripts).toEqual({});
-    const s = applyEvent({ ...initialState, transcripts: { t1: [] } }, ev(1, "worker.transcript", { task_id: "t1", entry }));
-    expect(s.transcripts.t1).toEqual([entry]);
+  it("counts task events so views can refetch", () => {
+    let s = applyEvent(initialState, ev(1, "task.event", { id: 1, task_id: "t1", kind: "note", note: "", ts: "" }));
+    s = applyEvent(s, ev(2, "task.event", { id: 2, task_id: "t1", kind: "note", note: "", ts: "" }));
+    expect(s.taskActivity.t1).toBe(2);
   });
 
   it("leaves state untouched for events it does not render", () => {

@@ -1,24 +1,29 @@
-// Typed client for the quarkd v1 API. Shapes follow api/openapi.json where the daemon
-// serves them today, and app/CONTRACT.md for endpoints other Phase 1 workstreams are adding.
+// Typed client for the quarkd v1 API. Shapes follow api/openapi.json and the Phase 1 PRs
+// listed in app/CONTRACT.md.
 
 export type TaskState =
   | "queued" | "running" | "needs_decision" | "blocked" | "paused"
   | "in_review" | "done" | "failed" | "unknown";
 export type TaskKind = "ship" | "scout";
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface AgentConfig { harness: string; model?: string | null; effort?: string | null }
+export interface RepoSource { url: string; name?: string | null }
+export type DispatchPreset = "single" | "light_trivial";
+export type DeliveryPolicy = "gated" | "direct";
+export type ProjectStatus = "provisioning" | "ready" | "failed";
 
 export interface Project {
   id: string; name: string; goal?: string | null; workspace_path?: string | null;
   created_at: string; updated_at: string;
-  // Proposed (CONTRACT.md, workstream 2); absent on today's daemon.
-  repos?: string[]; agent_config?: AgentConfig | null; dispatch_preset?: string | null;
-  coordinator_state?: "starting" | "running" | "stopped" | "failed" | null;
+  // From the J2 work (quark#10); absent on older daemons.
+  status?: ProjectStatus; status_detail?: string | null; repos?: RepoSource[];
+  agent_config?: AgentConfig | null; dispatch_preset?: DispatchPreset | null; delivery?: DeliveryPolicy | null;
 }
 
 export interface CreateProject {
   name: string; goal?: string | null; workspace_path?: string | null;
-  repos?: string[]; agent_config?: AgentConfig; dispatch_preset?: string;
+  repos?: RepoSource[]; agent_config?: AgentConfig; dispatch_preset?: DispatchPreset; delivery?: DeliveryPolicy;
 }
 
 export interface Task {
@@ -34,22 +39,41 @@ export interface Decision {
 
 export interface Health { status: string; version: string; engine: string; last_seq: number }
 
-export interface Harness {
-  id: string; name: string; installed: boolean; version?: string | null;
-  models: string[]; efforts: string[]; install_hint?: string | null;
+export type AgentRole = "coordinator" | "worker";
+export interface HarnessInfo {
+  id: string; name: string; roles: AgentRole[];
+  install: { installed: boolean; version?: string | null; path?: string | null; install_hint: string };
+  models: { selection: "free_form" | "provider_qualified" | "automatic"; discovery?: string | null };
+  efforts: Effort[];
+  auth: { state: "configured" | "not_configured" | "unknown"; detail?: string | null };
+  transcript: boolean;
 }
-export interface DispatchPreset { id: string; label: string; description?: string | null }
+export interface ValidationIssue { field: string; code: string; message: string }
+export interface HarnessValidation { valid: boolean; errors: ValidationIssue[]; warnings: ValidationIssue[] }
 
-export interface ChatMessage { id: string; ts: string; role: "user" | "coordinator"; text: string }
+export type TranscriptRole = "user" | "assistant" | "thinking" | "tool_call" | "tool_result";
 export interface TranscriptEntry {
-  id: string; ts: string; role: "user" | "assistant" | "tool" | "system"; text: string; tool?: string | null;
+  role: TranscriptRole; text: string; tool_name?: string | null; tool_call_id?: string | null;
+  is_error: boolean; truncated: boolean; ts?: string | null;
 }
-export interface TerminalInfo {
-  task_id: string; cols: number; rows: number; attached: boolean; seq: number; snapshot_b64?: string | null;
+/** A transcript entry with its id: the `seq` of the event that carried it. */
+export interface TranscriptItem extends TranscriptEntry { id: number }
+export interface MessageAccepted { coordinator_id: string; confirmed: boolean; accepted_at: string }
+
+export interface Terminal {
+  id: string; project_id: string; role: AgentRole; task_id?: string | null; title: string; cols: number; rows: number;
 }
-export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
-export interface ChangedFile { path: string; old_path?: string | null; status: ChangeStatus; additions: number; deletions: number }
-export interface Changes { base?: string | null; head?: string | null; files: ChangedFile[] }
+export interface TerminalOutput {
+  terminal_id: string; role: AgentRole; task_id?: string | null; kind: "output" | "snapshot";
+  data_b64: string; cols?: number | null; rows?: number | null;
+}
+
+export type ChangeStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "type_changed" | "untracked";
+export interface ChangedFile {
+  path: string; old_path?: string | null; status: ChangeStatus; additions?: number | null; deletions?: number | null;
+}
+export interface TaskChanges { task_id: string; base_ref: string; base: string; head: string; files: ChangedFile[] }
+export interface TaskDiff { task_id: string; base: string; path?: string | null; patch: string; truncated: boolean }
 
 export interface DaemonEvent<T = unknown> {
   seq: number; project_id?: string | null; type: string; ts: string; payload: T;
@@ -120,28 +144,32 @@ export const api = {
   projects: () => req<Project[]>("GET", "/v1/projects"),
   project: (id: string) => req<Project>("GET", `/v1/projects/${enc(id)}`),
   createProject: (p: CreateProject) => req<Project>("POST", "/v1/projects", p),
+  provision: (id: string) => req<void>("POST", `/v1/projects/${enc(id)}:provision`),
   tasks: (pid: string) => req<Task[]>("GET", `/v1/projects/${enc(pid)}/tasks`),
   task: (id: string) => req<Task>("GET", `/v1/tasks/${enc(id)}`),
   decisions: () => req<Decision[]>("GET", "/v1/decisions?state=open"),
-  harnesses: () => req<Harness[]>("GET", "/v1/harnesses"),
-  dispatchPresets: () => req<DispatchPreset[]>("GET", "/v1/dispatch/presets"),
+  harnesses: () => req<HarnessInfo[]>("GET", "/v1/harnesses"),
+  validateAgent: (config: AgentConfig, role: AgentRole) =>
+    req<HarnessValidation>("POST", "/v1/harnesses:validate", { config, role }),
 
-  chat: (cid: string) => req<ChatMessage[]>("GET", `/v1/coordinators/${enc(cid)}/messages`),
-  sendChat: (cid: string, text: string) => req<void>("POST", `/v1/coordinators/${enc(cid)}/messages`, { text }),
+  chat: (cid: string) => req<TranscriptItem[]>("GET", `/v1/coordinators/${enc(cid)}/messages?limit=1000`),
+  sendChat: (cid: string, text: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}/messages`, { text }),
 
   steer: (id: string, text: string) => req<void>("POST", `/v1/tasks/${enc(id)}/messages`, { text }),
   cancel: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:cancel`),
   relaunch: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:relaunch`),
 
-  transcript: (id: string) => req<TranscriptEntry[]>("GET", `/v1/tasks/${enc(id)}/transcript`),
-  changes: (id: string) => req<Changes>("GET", `/v1/tasks/${enc(id)}/changes`),
+  transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
+  changes: (id: string) => req<TaskChanges>("GET", `/v1/tasks/${enc(id)}/changes`),
   diff: (id: string, path?: string) =>
-    req<string>("GET", `/v1/tasks/${enc(id)}/diff` + (path ? `?path=${enc(path)}` : "")),
+    req<TaskDiff>("GET", `/v1/tasks/${enc(id)}/diff` + (path ? `?path=${enc(path)}` : "")),
 
-  terminal: (id: string) => req<TerminalInfo>("GET", `/v1/tasks/${enc(id)}/terminal`),
+  terminal: (id: string) => req<Terminal>("GET", `/v1/terminals/${enc(id)}`),
+  /** Appends a snapshot `worker.output` event for the terminal and returns it. */
+  terminalSnapshot: (id: string) => req<DaemonEvent<TerminalOutput>>("POST", `/v1/terminals/${enc(id)}/snapshot`),
   terminalResize: (id: string, cols: number, rows: number) =>
-    req<unknown>("POST", `/v1/tasks/${enc(id)}/terminal/resize`, { cols, rows }),
-  /** Ordered input: one request in flight per task; keys typed meanwhile are coalesced. */
+    req<Terminal>("POST", `/v1/terminals/${enc(id)}/resize`, { cols, rows }),
+  /** Ordered input: one request in flight per terminal; keys typed meanwhile are coalesced. */
   terminalInput: (id: string, data: string) => enqueueInput(id, data),
 };
 
@@ -178,7 +206,7 @@ async function pump(id: string, q: InputQueue) {
     q.buf = ""; q.waiters = [];
     let err: unknown;
     try {
-      await req<void>("POST", `/v1/tasks/${enc(id)}/terminal/input`, { data_b64: utf8ToB64(chunk) });
+      await req<void>("POST", `/v1/terminals/${enc(id)}/input`, { data_b64: utf8ToB64(chunk) });
     } catch (e) { err = e; }
     waiters.forEach((w) => w(err));
   }

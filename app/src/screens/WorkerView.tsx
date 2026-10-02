@@ -1,7 +1,7 @@
 // J4: one worker in one view. Live terminal and steering on the left; transcript and
 // changed files with their diff on the right; cancel and relaunch in the header.
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, Changes, NotAvailable, TranscriptEntry } from "../api";
+import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
 import { loadTranscript, refreshTask, useStore } from "../store";
 import { attach, getTerm, resetTerm, TermHandle } from "../terminal";
@@ -14,6 +14,7 @@ export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
   const project = useStore((s) => (task ? s.projects[task.project_id] : undefined));
   const connected = useStore((s) => s.connected);
+  const activity = useStore((s) => s.taskActivity[id] ?? 0);
   const [tab, setTab] = useState<"transcript" | "changes">("transcript");
   const [missing, setMissing] = useState(false);
 
@@ -50,7 +51,7 @@ export function WorkerView({ id }: { id: string }) {
             <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
           </div>
           <div className="tab-body">
-            {tab === "transcript" ? <TranscriptPanel taskId={id} /> : <ChangesPanel taskId={id} stateKey={task.state + task.updated_at} />}
+            {tab === "transcript" ? <TranscriptPanel taskId={id} /> : <ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} />}
           </div>
         </section>
       </div>
@@ -127,7 +128,7 @@ function TerminalPanel({ taskId }: { taskId: string }) {
     <div className="pane" data-testid="terminal">
       <div className="pane-head">
         <span>terminal</span>
-        {h.info && <span className="faint">{h.info.cols}×{h.info.rows}{h.info.attached ? "" : " · detached"}</span>}
+        {h.info && <span className="faint ellipsis">{h.info.title}</span>}
         <span className="spacer" />
         {status === "connecting" && <span className="faint">connecting…</span>}
         {status === "error" && (
@@ -138,7 +139,7 @@ function TerminalPanel({ taskId }: { taskId: string }) {
         )}
       </div>
       {status === "unavailable" ? (
-        <Unavailable what="The live terminal" endpoint={`GET /v1/tasks/${taskId}/terminal`} />
+        <div className="unavailable"><div className="u-title">{h.error}</div></div>
       ) : (
         <div className="pane-body" ref={body} />
       )}
@@ -184,7 +185,7 @@ function SteerBox({ taskId }: { taskId: string }) {
 
 // ---- transcript ----
 
-const NO_ENTRIES: TranscriptEntry[] = [];
+const NO_ENTRIES: TranscriptItem[] = [];
 
 function TranscriptPanel({ taskId }: { taskId: string }) {
   const entries = useStore((s) => s.transcripts[taskId]) ?? NO_ENTRIES;
@@ -200,8 +201,8 @@ function TranscriptPanel({ taskId }: { taskId: string }) {
     if (stick.current && log.current) log.current.scrollTop = log.current.scrollHeight;
   });
 
+  const sorted = useMemo(() => [...entries].sort((a, b) => a.id - b.id), [entries]);
   if (status === "unavailable") return <Unavailable what="The transcript" endpoint={`GET /v1/tasks/${taskId}/transcript`} />;
-  const sorted = [...entries].sort((a, b) => a.ts.localeCompare(b.ts));
   return (
     <div className="transcript" ref={log} data-testid="transcript" onScroll={(e) => {
       const el = e.currentTarget;
@@ -215,20 +216,23 @@ function TranscriptPanel({ taskId }: { taskId: string }) {
   );
 }
 
-const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
-  const html = useMemo(() => (e.role === "tool" ? "" : renderMarkdown(e.text)), [e.role, e.text]);
-  if (e.role === "tool") {
+const Entry = memo(function Entry({ e }: { e: TranscriptItem }) {
+  const markdown = e.role === "user" || e.role === "assistant";
+  const html = useMemo(() => (markdown ? renderMarkdown(e.text) : ""), [markdown, e.text]);
+  if (!markdown) {
+    const label = e.role === "thinking" ? "thinking" : (e.tool_name ?? "tool") + (e.role === "tool_result" ? " result" : "");
     return (
-      <details className="t-entry tool">
-        <summary><span className="pill">{e.tool ?? "tool"}</span> <span className="mono ellipsis">{e.text.split("\n")[0]}</span></summary>
-        <pre>{e.text}</pre>
+      <details className={"t-entry tool" + (e.is_error ? " error" : "")}>
+        <summary><span className="pill">{label}</span> <span className="mono ellipsis">{e.text.split("\n")[0]}</span></summary>
+        <pre>{e.text}{e.truncated ? "\n…" : ""}</pre>
       </details>
     );
   }
   return (
     <div className={"t-entry " + e.role}>
-      <div className="who">{e.role === "assistant" ? "worker" : e.role} <span className="faint">{ago(e.ts)}</span></div>
+      <div className="who">{e.role === "assistant" ? "worker" : "you"} <span className="faint">{ago(e.ts)}</span></div>
       <div className="md" dangerouslySetInnerHTML={{ __html: html }} />
+      {e.truncated && <div className="faint small-text">Truncated by the daemon.</div>}
     </div>
   );
 });
@@ -236,9 +240,10 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 // ---- changes and diff ----
 
 function ChangesPanel({ taskId, stateKey }: { taskId: string; stateKey: string }) {
-  const [changes, setChanges] = useState<Changes | null>(null);
-  const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
+  const [changes, setChanges] = useState<TaskChanges | null>(null);
+  const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "no-worktree" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [diff, setDiff] = useState<DiffFile[] | null>(null);
   const [diffErr, setDiffErr] = useState<string | null>(null);
@@ -248,6 +253,7 @@ function ChangesPanel({ taskId, stateKey }: { taskId: string; stateKey: string }
       .then((c) => { setChanges(c); setStatus("ok"); })
       .catch((e) => {
         if (e instanceof NotAvailable) setStatus("unavailable");
+        else if (e instanceof ApiError && e.code === "no_worktree") { setStatus("no-worktree"); setChanges(null); }
         else { setStatus("error"); setErr(errText(e)); }
       });
   }, [taskId]);
@@ -262,7 +268,7 @@ function ChangesPanel({ taskId, stateKey }: { taskId: string; stateKey: string }
     let live = true;
     setDiffErr(null);
     api.diff(taskId, path)
-      .then((d) => { if (live) setDiff(parseUnifiedDiff(d)); })
+      .then((d) => { if (live) { setDiff(parseUnifiedDiff(d.patch)); setTruncated(d.truncated); } })
       .catch((e) => { if (live) { setDiff(null); setDiffErr(e instanceof NotAvailable ? "The diff is not available from this daemon yet" : errText(e)); } });
     return () => { live = false; };
   }, [taskId, path, changes]);
@@ -273,28 +279,35 @@ function ChangesPanel({ taskId, stateKey }: { taskId: string; stateKey: string }
       <div className="change-files">
         <div className="panel-head">
           {files.length} changed {files.length === 1 ? "file" : "files"}
-          {changes?.base && <span className="faint mono"> vs {changes.base}</span>}
+          {changes && <span className="faint mono"> vs {changes.base_ref} ({changes.base.slice(0, 7)})</span>}
           <span className="spacer" />
           <button className="btn small" onClick={load}>Refresh</button>
         </div>
         {status === "error" && <div className="form-error">{err}</div>}
         {files.map((f) => (
           <button key={f.path} className={"file-row" + (f.path === path ? " on" : "")} onClick={() => setSelected(f.path)} title={f.path}>
-            <span className={"st st-" + f.status}>{f.status[0].toUpperCase()}</span>
+            <span className={"st st-" + f.status} title={f.status.replace("_", " ")}>{STATUS_LETTER[f.status] ?? "?"}</span>
             <span className="ellipsis mono">{f.path}</span>
-            <span className="adds">+{f.additions}</span><span className="dels">−{f.deletions}</span>
+            {f.additions == null ? <span className="faint small-text">binary</span>
+              : <><span className="adds">+{f.additions}</span><span className="dels">−{f.deletions ?? 0}</span></>}
           </button>
         ))}
         {status === "ok" && !files.length && <div className="empty">No changes yet.</div>}
+        {status === "no-worktree" && <div className="empty">This task has no working copy yet.</div>}
       </div>
       <div className="diff-body">
         {diffErr && <div className="form-error">{diffErr}</div>}
+        {truncated && <div className="state-note">This diff was cut at the daemon's size limit.</div>}
         {diff?.map((f, i) => <FileDiff key={f.path + i} f={f} />)}
         {diff && !diff.length && <div className="empty">No textual changes.</div>}
       </div>
     </div>
   );
 }
+
+const STATUS_LETTER: Record<string, string> = {
+  added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", type_changed: "T", untracked: "U",
+};
 
 const FileDiff = memo(function FileDiff({ f }: { f: DiffFile }) {
   const lang = langForPath(f.path);

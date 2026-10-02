@@ -1,10 +1,12 @@
-// One terminal per task, created on first view and kept outside React. Leaving the worker
-// view only detaches the host element, so coming back never replays scrollback.
+// One terminal emulator per daemon terminal (a worker's task id, or a Project id for its
+// coordinator), created on first view and kept outside React. Leaving the worker view only
+// detaches the host element, so coming back never replays scrollback.
 //
-// Opening a terminal asks the daemon for the pane's current screen (`snapshot_b64` with the
-// `seq` it reflects) and then applies only newer `worker.output` events. Without a snapshot
-// it falls back to the output buffered since the app connected.
-import { api, b64ToBytes, NotAvailable, TerminalInfo } from "./api";
+// Opening follows quarkd's terminal contract: with the event stream already subscribed, ask
+// for a snapshot (an appended `worker.output` event of kind "snapshot"), apply it, then apply
+// only that terminal's events with a greater `seq`. A snapshot arriving later (a resync)
+// resets the emulator to its size and redraws.
+import { api, ApiError, b64ToBytes, NotAvailable, Terminal, TerminalOutput } from "./api";
 import { onOutput } from "./store";
 import { AdapterOptions, TermAdapter, TERM_FONT } from "./term/types";
 
@@ -18,11 +20,12 @@ export function defaultRenderer(): string {
 export type TermStatus = "connecting" | "live" | "unavailable" | "error";
 
 export interface TermHandle {
-  taskId: string;
+  id: string;
   host: HTMLDivElement;
   adapter: TermAdapter | null;
   status: TermStatus;
-  info: TerminalInfo | null;
+  info: Terminal | null;
+  /** Why the terminal is unavailable or failed, for display. */
   error: string | null;
   onStatus: Set<() => void>;
   unsub: (() => void) | null;
@@ -30,13 +33,13 @@ export interface TermHandle {
 
 const terms = new Map<string, TermHandle>();
 
-export function getTerm(taskId: string): TermHandle {
-  let h = terms.get(taskId);
+export function getTerm(id: string): TermHandle {
+  let h = terms.get(id);
   if (h) return h;
   const host = document.createElement("div");
   host.className = "term-host";
-  h = { taskId, host, adapter: null, status: "connecting", info: null, error: null, onStatus: new Set(), unsub: null };
-  terms.set(taskId, h);
+  h = { id, host, adapter: null, status: "connecting", info: null, error: null, onStatus: new Set(), unsub: null };
+  terms.set(id, h);
   void open(h);
   return h;
 }
@@ -47,53 +50,63 @@ function setStatus(h: TermHandle, status: TermStatus, error: string | null = nul
   h.onStatus.forEach((f) => f());
 }
 
-async function open(h: TermHandle) {
-  // Buffer output (with its seq) until we know where the snapshot ends.
-  const pending: { bytes: Uint8Array; seq: number }[] = [];
-  let minSeq = -1; // apply only seq > minSeq; -1 until the snapshot question is settled
-  const unsub = onOutput(h.taskId, (bytes, seq) => {
-    if (!h.adapter || minSeq < 0) pending.push({ bytes, seq });
-    else if (seq > minSeq) h.adapter.write(bytes);
-  });
-  h.unsub = unsub;
+/** Writes one chunk; a snapshot first resets the emulator to the snapshot's size. */
+export function applyChunk(a: TermAdapter, c: TerminalOutput) {
+  if (c.kind === "snapshot") a.reset(c.cols ?? undefined, c.rows ?? undefined);
+  a.write(b64ToBytes(c.data_b64));
+}
 
-  let info: TerminalInfo | null = null;
+async function open(h: TermHandle) {
+  // Buffer chunks (with their seq) until the snapshot says where to start.
+  const pending: { chunk: TerminalOutput; seq: number }[] = [];
+  let minSeq = -1; // apply only seq > minSeq; -1 until the snapshot is in
+  h.unsub = onOutput(h.id, (chunk, seq) => {
+    if (!h.adapter || minSeq < 0) pending.push({ chunk, seq });
+    else if (seq > minSeq) { applyChunk(h.adapter, chunk); minSeq = seq; }
+  }, false);
+
+  let info: Terminal;
   try {
-    info = await api.terminal(h.taskId);
+    info = await api.terminal(h.id);
   } catch (e) {
-    if (e instanceof NotAvailable) { unsub(); setStatus(h, "unavailable"); return; }
-    setStatus(h, "error", String((e as Error).message ?? e));
-    // Keep going: live output may still arrive.
+    h.unsub?.();
+    if (e instanceof NotAvailable) setStatus(h, "unavailable", "Live terminals are not available from this daemon yet");
+    else if (e instanceof ApiError && e.code === "unavailable") setStatus(h, "unavailable", "The daemon cannot reach tmux, so live terminals are off");
+    else setStatus(h, "error", String((e as Error).message ?? e));
+    return;
   }
   h.info = info;
 
   const { createXterm } = await import("./term/xterm");
   const opts: AdapterOptions = {
-    cols: info?.cols || 120, rows: info?.rows || 36, fontFamily: TERM_FONT, fontSize: 13, lineHeight: 1.15,
+    cols: info.cols || 120, rows: info.rows || 36, fontFamily: TERM_FONT, fontSize: 13, lineHeight: 1.15,
     renderer: defaultRenderer(),
   };
   let resizeTimer = 0;
   const adapter = createXterm(opts, {
-    onData: (d) => { api.terminalInput(h.taskId, d).catch((e) => console.warn("terminal input failed", e)); },
+    onData: (d) => { api.terminalInput(h.id, d).catch((e) => console.warn("terminal input failed", e)); },
     onResize: (cols, rows) => {
       clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => api.terminalResize(h.taskId, cols, rows).catch(() => {}), 100);
+      resizeTimer = window.setTimeout(() => api.terminalResize(h.id, cols, rows).catch(() => {}), 100);
     },
   });
   // xterm measures fonts on open, so wait for the host to be in the document.
   await whenAttached(h.host);
   await adapter.open(h.host);
 
-  if (info?.snapshot_b64) {
-    adapter.write(b64ToBytes(info.snapshot_b64));
-    minSeq = info.seq;
-  } else {
+  try {
+    const snap = await api.terminalSnapshot(h.id);
+    applyChunk(adapter, snap.payload);
+    minSeq = snap.seq;
+  } catch (e) {
+    // No snapshot: show whatever streams from here on.
+    console.warn("terminal snapshot failed", e);
     minSeq = 0;
   }
-  for (const c of pending.splice(0)) if (c.seq > minSeq) adapter.write(c.bytes);
+  for (const c of pending.splice(0)) if (c.seq > minSeq) { applyChunk(adapter, c.chunk); minSeq = c.seq; }
   h.adapter = adapter;
   adapter.fit();
-  if (h.status !== "error") setStatus(h, "live");
+  setStatus(h, "live");
 }
 
 function whenAttached(el: HTMLElement): Promise<void> {
@@ -103,11 +116,11 @@ function whenAttached(el: HTMLElement): Promise<void> {
   });
 }
 
-/** Drops a task's terminal so the next view opens it afresh (e.g. after an error). */
-export function resetTerm(taskId: string) {
-  const h = terms.get(taskId);
+/** Drops a terminal so the next view opens it afresh (e.g. after an error). */
+export function resetTerm(id: string) {
+  const h = terms.get(id);
   if (!h) return;
-  terms.delete(taskId);
+  terms.delete(id);
   h.unsub?.();
   h.host.remove();
   (h.adapter?.raw() as { dispose?: () => void } | undefined)?.dispose?.();

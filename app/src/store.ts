@@ -2,8 +2,8 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  api, b64ToBytes, ChatMessage, DaemonEvent, Decision, Health, NotAvailable, Project, Task,
-  TranscriptEntry, wsUrl,
+  api, DaemonEvent, Decision, Health, NotAvailable, Project, Task, TerminalOutput, TranscriptEntry,
+  TranscriptItem, wsUrl,
 } from "./api";
 
 export interface AppState {
@@ -14,18 +14,20 @@ export interface AppState {
   projects: Record<string, Project>;
   tasks: Record<string, Task>;
   decisions: Record<string, Decision>;
-  /** Coordinator chat by coordinator id (= Project id). Absent until loaded. */
-  chat: Record<string, ChatMessage[]>;
+  /** Coordinator transcripts by coordinator id (= Project id). Absent until loaded. */
+  chat: Record<string, TranscriptItem[]>;
   /** Worker transcripts by task id. Absent until loaded. */
-  transcripts: Record<string, TranscriptEntry[]>;
+  transcripts: Record<string, TranscriptItem[]>;
+  /** Count of `task.event` events per task, so views can refetch what a task changed. */
+  taskActivity: Record<string, number>;
 }
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
-  projects: {}, tasks: {}, decisions: {}, chat: {}, transcripts: {},
+  projects: {}, tasks: {}, decisions: {}, chat: {}, transcripts: {}, taskActivity: {},
 };
 
-function upsertById<T extends { id: string }>(list: T[] | undefined, item: T): T[] {
+function upsertById<T extends { id: string | number }>(list: T[] | undefined, item: T): T[] {
   const cur = list ?? [];
   const i = cur.findIndex((x) => x.id === item.id);
   return i >= 0 ? cur.map((x, j) => (j === i ? item : x)) : [...cur, item];
@@ -44,15 +46,22 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
     case "decision.answered":
       return { ...s, decisions: { ...s.decisions, [p.id]: p as Decision } };
     case "coordinator.message": {
+      // Transcript entries are identified by the seq of the event that carried them.
       const cid = p.coordinator_id ?? e.project_id;
-      if (!cid || !(cid in s.chat)) return s; // loaded on demand; the fetch includes it
-      const { coordinator_id: _drop, ...msg } = p;
-      return { ...s, chat: { ...s.chat, [cid]: upsertById(s.chat[cid], msg as ChatMessage) } };
+      if (!cid || !(cid in s.chat) || !p.entry) return s; // loaded on demand; the fetch includes it
+      const item: TranscriptItem = { ...(p.entry as TranscriptEntry), id: e.seq };
+      return { ...s, chat: { ...s.chat, [cid]: upsertById(s.chat[cid], item) } };
     }
     case "worker.transcript": {
       const tid = p.task_id as string;
       if (!(tid in s.transcripts) || !p.entry) return s;
-      return { ...s, transcripts: { ...s.transcripts, [tid]: upsertById(s.transcripts[tid], p.entry) } };
+      const item: TranscriptItem = { ...(p.entry as TranscriptEntry), id: e.seq };
+      return { ...s, transcripts: { ...s.transcripts, [tid]: upsertById(s.transcripts[tid], item) } };
+    }
+    case "task.event": {
+      const tid = p.task_id as string;
+      if (!tid) return s;
+      return { ...s, taskActivity: { ...s.taskActivity, [tid]: (s.taskActivity[tid] ?? 0) + 1 } };
     }
     default:
       return s;
@@ -85,34 +94,35 @@ export function useStore<T>(sel: (s: AppState) => T): T {
 }
 
 // ---- terminal output: a non-React pub/sub so terminals never re-render ----
-export type OutputListener = (bytes: Uint8Array, seq: number) => void;
+export type OutputListener = (chunk: TerminalOutput, seq: number) => void;
 const outputSubs = new Map<string, Set<OutputListener>>();
-const backlog = new Map<string, { chunks: { bytes: Uint8Array; seq: number }[]; size: number }>();
+const backlog = new Map<string, { chunks: { chunk: TerminalOutput; seq: number }[]; size: number }>();
 const BACKLOG_CAP = 2 * 1024 * 1024;
 
-/** Subscribe to a task's terminal bytes. `replay` first delivers what arrived before. */
-export function onOutput(taskId: string, fn: OutputListener, replay = true): () => void {
-  if (replay) for (const c of backlog.get(taskId)?.chunks ?? []) fn(c.bytes, c.seq);
-  let subs = outputSubs.get(taskId);
-  if (!subs) outputSubs.set(taskId, (subs = new Set()));
+/** Subscribe to a terminal's `worker.output` chunks. `replay` first delivers what arrived before. */
+export function onOutput(terminalId: string, fn: OutputListener, replay = true): () => void {
+  if (replay) for (const c of backlog.get(terminalId)?.chunks ?? []) fn(c.chunk, c.seq);
+  let subs = outputSubs.get(terminalId);
+  if (!subs) outputSubs.set(terminalId, (subs = new Set()));
   subs.add(fn);
   return () => subs!.delete(fn);
 }
-function pushOutput(taskId: string, bytes: Uint8Array, seq: number) {
-  let b = backlog.get(taskId);
-  if (!b) backlog.set(taskId, (b = { chunks: [], size: 0 }));
-  b.chunks.push({ bytes, seq });
-  b.size += bytes.length;
-  while (b.size > BACKLOG_CAP && b.chunks.length > 1) b.size -= b.chunks.shift()!.bytes.length;
-  outputSubs.get(taskId)?.forEach((fn) => fn(bytes, seq));
+function pushOutput(terminalId: string, chunk: TerminalOutput, seq: number) {
+  let b = backlog.get(terminalId);
+  if (!b) backlog.set(terminalId, (b = { chunks: [], size: 0 }));
+  // A snapshot redraws the whole screen, so nothing before it is worth keeping.
+  if (chunk.kind === "snapshot") { b.chunks = []; b.size = 0; }
+  b.chunks.push({ chunk, seq });
+  b.size += chunk.data_b64.length;
+  while (b.size > BACKLOG_CAP && b.chunks.length > 1) b.size -= b.chunks.shift()!.chunk.data_b64.length;
+  outputSubs.get(terminalId)?.forEach((fn) => fn(chunk, seq));
 }
 
 export function handleEvent(e: DaemonEvent) {
   if (e.seq <= state.lastSeq) return; // duplicate across a reconnect
   if (e.type === "worker.output") {
-    const p = e.payload as { task_id?: string; worker_id?: string; data_b64: string };
-    const id = p.task_id ?? p.worker_id;
-    if (id) pushOutput(id, b64ToBytes(p.data_b64), e.seq);
+    const p = e.payload as TerminalOutput;
+    if (p.terminal_id) pushOutput(p.terminal_id, p, e.seq);
   }
   const applied = applyEvent(state, e);
   // The cursor always advances; listeners only hear about changes they can see.

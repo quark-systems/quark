@@ -12,7 +12,7 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.onData(cb.onData);
-  term.onBinary((d) => (cb.onBinary ?? cb.onData)(d));
+  term.onBinary(cb.onData);
   term.onResize(({ cols, rows }) => cb.onResize(cols, rows));
   let kind = o.renderer === "dom" ? "xterm-dom" : "xterm-webgl";
   return {
@@ -27,22 +27,13 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
         } catch (e) { console.warn("webgl addon failed", e); kind = "xterm-dom"; }
       }
     },
-    write(bytes, rendered) {
-      if (!rendered) { term.write(bytes); return; }
-      term.write(bytes, () => {
-        // parsed; the glyph is on screen after xterm's next render pass
-        let done = false;
-        const finish = () => { if (done) return; done = true; disp.dispose(); rendered(); };
-        const disp = term.onRender(finish);
-        requestAnimationFrame(() => requestAnimationFrame(finish)); // nothing to render (off-viewport)
-      });
+    write(bytes) { term.write(bytes); },
+    reset(cols, rows) {
+      term.reset();
+      if (cols && rows && (cols !== term.cols || rows !== term.rows)) term.resize(cols, rows);
     },
     fit() { try { fit.fit(); } catch { /* not laid out */ } },
     focus() { term.focus(); },
-    simulateInput(d) { term.input(d, true); },
-    getSelection() { return term.getSelection(); },
-    async cursorLine() { const b = term.buffer.active; return b.getLine(b.cursorY + b.viewportY)?.translateToString(true) ?? ""; },
-    inputElement() { return term.textarea ?? null; },
     raw() { return term; },
   };
 }

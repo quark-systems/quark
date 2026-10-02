@@ -7,15 +7,21 @@ test("creates a project and lands on its board", async ({ page }) => {
   await page.getByPlaceholder("Parser rewrite").fill("Parser rewrite");
   await page.locator("textarea[name=goal]").fill("Replace the hand-written parser.");
   await page.getByLabel("Repository 1").fill("not a repo");
-  await expect(page.getByText("is not owner/name or a clone URL")).toBeVisible();
+  await expect(page.getByText("is not owner/name, a clone URL or a local path")).toBeVisible();
   await expect(page.getByRole("button", { name: "Create project" })).toBeDisabled();
   await page.getByLabel("Repository 1").fill("quark-systems/quark");
+  // Bob cannot coordinate, so it is not offered; Pi is listed but not installed.
+  await expect(page.getByLabel("Harness", { exact: true }).locator("option")).toHaveText(["Claude Code 2.1.0", "Codex 0.50.0", "Pi (not installed)"]);
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
-  await page.getByLabel("Model", { exact: true }).selectOption("gpt-5-codex");
-  await page.getByText("Thorough").click();
+  await page.getByLabel("Model", { exact: true }).fill("gpt-5-codex");
+  await page.getByLabel("Effort", { exact: true }).selectOption("high");
+  await page.getByText("Light for trivial work").click();
   await page.getByRole("button", { name: "Create project" }).click();
 
   await expect(page).toHaveURL(/#\/p\//);
+  await expect(page.getByTestId("provision-bar")).toContainText("Cloning repositories");
+  await expect(page.getByTestId("provision-bar")).toBeHidden();
+  await expect(page.getByTestId("coordinator-chat")).toContainText("Workspace ready with quark");
   await expect(page.locator(".header h1")).toHaveText("Parser rewrite");
   await expect(page.getByTestId("col-queued")).toBeVisible();
   await expect(page.locator(".sidebar")).toContainText("Parser rewrite");
@@ -25,8 +31,9 @@ test("creates a project and lands on its board", async ({ page }) => {
     return (await r.json()).find((p: any) => p.name === "Parser rewrite");
   });
   expect(created).toMatchObject({
-    goal: "Replace the hand-written parser.", repos: ["quark-systems/quark"],
-    agent_config: { harness: "codex", model: "gpt-5-codex" }, dispatch_preset: "thorough",
+    goal: "Replace the hand-written parser.", repos: [{ url: "https://github.com/quark-systems/quark.git", name: "quark" }],
+    agent_config: { harness: "codex", model: "gpt-5-codex", effort: "high" }, dispatch_preset: "light_trivial", delivery: "gated",
+    status: "ready",
   });
 });
 
@@ -37,7 +44,9 @@ test("the board updates live when the coordinator queues a task", async ({ page 
   await expect(chat).toContainText("Dispatched two workers");
   await chat.getByLabel("Message the coordinator").fill("Add tests for the parser");
   await chat.getByLabel("Message the coordinator").press("Enter");
-  await expect(chat).toContainText("queued **Add tests".replace(/\*\*/g, ""));
+  await expect(chat.locator(".msg.pending")).toContainText("Add tests for the parser");
+  await expect(chat).toContainText("I wrote a task contract and queued Add tests");
+  await expect(chat.locator(".msg.pending")).toHaveCount(0);
   await expect(page.getByTestId("col-queued")).toContainText("Add tests for the parser");
 });
 
@@ -66,7 +75,7 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   // Changes: file list and the selected file's diff.
   await page.getByRole("tab", { name: "Changes" }).click();
   const changes = page.getByTestId("changes");
-  await expect(changes).toContainText("3 changed files");
+  await expect(changes).toContainText("3 changed files vs origin/main");
   await changes.getByRole("button", { name: /docs\/events\.md/ }).click();
   await expect(changes.locator(".file-head")).toContainText("docs/events.md");
 
@@ -78,6 +87,13 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await page.getByTestId("relaunch").click();
   await expect(page.getByTestId("task-state")).toHaveText("Running");
   await expect(term.locator(".xterm-rows")).toContainText("relaunched on");
+});
+
+test("a queued task explains that it has no changes yet", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await page.getByTestId("task-card").filter({ hasText: "Harness registry trait" }).click();
+  await page.getByRole("tab", { name: "Changes" }).click();
+  await expect(page.getByTestId("changes")).toContainText("This task has no working copy yet.");
 });
 
 test("command palette jumps to a task", async ({ page }) => {

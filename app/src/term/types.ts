@@ -1,26 +1,18 @@
-// Common surface over the three terminal implementations so input, resize, the echo
-// probe and the bench are wired identically for each.
+// The surface the app needs from a terminal emulator. xterm.js implements it today; wterm
+// is the tracked upgrade (ADR-3) and would slot in behind the same interface.
 export interface AdapterCallbacks {
   onData(data: string): void;
-  onBinary?(data: string): void;
   onResize(cols: number, rows: number): void;
 }
 export interface AdapterOptions { cols: number; rows: number; fontFamily: string; fontSize: number; lineHeight: number; renderer: string }
 export interface TermAdapter {
-  /** Label shown in the pane header and bench JSON. */
   readonly kind: string;
   open(host: HTMLElement): Promise<void>;
-  /** Write output; `rendered` fires once the bytes are painted into the DOM/canvas (next render pass). */
-  write(bytes: Uint8Array, rendered?: () => void): void;
+  write(bytes: Uint8Array): void;
+  /** Clears the screen and scrollback, optionally resizing, before a snapshot redraw. */
+  reset(cols?: number, rows?: number): void;
   fit(): void;
   focus(): void;
-  /** Same path as a keystroke after key handling: emits onData. Used by the scripted bench. */
-  simulateInput(data: string): void;
-  getSelection(): string;
-  /** Text of the cursor row (tests). */
-  cursorLine(): Promise<string>;
-  /** The element that receives keyboard focus. */
-  inputElement(): HTMLElement | null;
   /** The underlying library object, for debugging. */
   raw(): unknown;
 }

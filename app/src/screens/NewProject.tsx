@@ -1,43 +1,51 @@
 // J2: name the Project, state the goal, add repos, pick a default agent config and a
-// dispatch preset. Harnesses and presets come from the daemon when it serves them.
+// dispatch preset. The agent picker lists the harnesses the daemon reports as able to
+// coordinate, and the config is validated before the Project is created.
 import React, { useEffect, useMemo, useState } from "react";
-import { api, DispatchPreset, Harness, NotAvailable } from "../api";
+import { api, DeliveryPolicy, DispatchPreset, HarnessInfo, NotAvailable, ValidationIssue } from "../api";
 import { href } from "../nav";
 import { addProject } from "../store";
 import { errText } from "../util";
 
-/** Used until `GET /v1/harnesses` is served (workstream 6). */
-export const FALLBACK_HARNESSES: Harness[] = [
-  { id: "claude", name: "Claude Code", installed: true, models: [], efforts: [] },
-  { id: "codex", name: "Codex", installed: true, models: [], efforts: [] },
-  { id: "pi", name: "Pi", installed: true, models: [], efforts: [] },
-  { id: "opencode", name: "OpenCode", installed: true, models: [], efforts: [] },
-];
-/** Used until `GET /v1/dispatch/presets` is served. */
-export const FALLBACK_PRESETS: DispatchPreset[] = [
-  { id: "balanced", label: "Balanced", description: "Default harness for most work; strongest model for design and investigation." },
-  { id: "fast", label: "Fast", description: "Cheaper, quicker models for well-understood work." },
-  { id: "thorough", label: "Thorough", description: "Strongest models and highest effort everywhere." },
+/** Used until `GET /v1/harnesses` is served. */
+export const FALLBACK_HARNESSES: HarnessInfo[] = [
+  { id: "claude-code", name: "Claude Code" },
+  { id: "codex", name: "Codex" },
+  { id: "pi", name: "Pi" },
+].map((h) => ({
+  ...h, roles: ["coordinator", "worker"], install: { installed: true, install_hint: "" },
+  models: { selection: "free_form" }, efforts: [], auth: { state: "unknown" }, transcript: true,
+}));
+
+export const PRESETS: { id: DispatchPreset; label: string; description: string }[] = [
+  { id: "single", label: "Single", description: "Every task uses the default agent." },
+  { id: "light_trivial", label: "Light for trivial work", description: "Trivial mechanical edits run at low effort; everything else uses the default agent." },
 ];
 
-const REPO_RE = /^(https?:\/\/\S+|git@\S+:\S+|[\w.-]+\/[\w.-]+)$/;
-
+const REPO_RE = /^(https?:\/\/\S+|ssh:\/\/\S+|git@\S+:\S+|\/\S+|[\w.-]+\/[\w.-]+)$/;
 export function validRepo(s: string) { return REPO_RE.test(s.trim()); }
+
+/** `owner/name` is GitHub shorthand; anything else is passed through as a clone URL or path. */
+export function repoUrl(s: string) {
+  const t = s.trim();
+  return /^[\w.-]+\/[\w.-]+$/.test(t) ? `https://github.com/${t}.git` : t;
+}
 
 export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
   const [repos, setRepos] = useState<string[]>([""]);
-  const [harnesses, setHarnesses] = useState<Harness[] | null>(null);
+  const [harnesses, setHarnesses] = useState<HarnessInfo[] | null>(null);
   const [harnessesLive, setHarnessesLive] = useState(true);
-  const [presets, setPresets] = useState<DispatchPreset[]>(FALLBACK_PRESETS);
   const [harness, setHarness] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
-  const [preset, setPreset] = useState("balanced");
+  const [preset, setPreset] = useState<DispatchPreset>("single");
+  const [delivery, setDelivery] = useState<DeliveryPolicy>("gated");
   const [workspace, setWorkspace] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [issues, setIssues] = useState<ValidationIssue[]>([]);
 
   useEffect(() => {
     api.harnesses()
@@ -47,15 +55,15 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
         setHarnesses(FALLBACK_HARNESSES);
         setHarnessesLive(false);
       });
-    api.dispatchPresets()
-      .then((p) => { if (p.length) { setPresets(p); setPreset(p[0].id); } })
-      .catch(() => {});
   }, []);
 
-  const installed = useMemo(() => (harnesses ?? []).filter((h) => h.installed), [harnesses]);
-  useEffect(() => { if (!harness && installed[0]) setHarness(installed[0].id); }, [installed, harness]);
-  const current = harnesses?.find((h) => h.id === harness);
-  useEffect(() => { setModel(""); setEffort(""); }, [harness]);
+  // The Project's agent config runs its coordinator, so only coordinator-capable harnesses fit.
+  const options = useMemo(() => (harnesses ?? []).filter((h) => h.roles.includes("coordinator")), [harnesses]);
+  useEffect(() => {
+    if (!harness) setHarness((options.find((h) => h.install.installed) ?? options[0])?.id ?? "");
+  }, [options, harness]);
+  const current = options.find((h) => h.id === harness);
+  useEffect(() => { setModel(""); setEffort(""); setIssues([]); }, [harness]);
 
   const cleanRepos = repos.map((r) => r.trim()).filter(Boolean);
   const badRepo = cleanRepos.find((r) => !validRepo(r));
@@ -64,15 +72,27 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setIssues([]);
+    const agent_config = {
+      harness,
+      model: current?.models.selection === "automatic" ? null : model.trim() || null,
+      effort: effort || null,
+    };
     try {
+      try {
+        const v = await api.validateAgent(agent_config, "coordinator");
+        if (!v.valid) { setIssues(v.errors); return; }
+      } catch (err) {
+        if (!(err instanceof NotAvailable)) throw err; // older daemon: the create call validates
+      }
       const p = await api.createProject({
         name: name.trim(),
         goal: goal.trim() || null,
         workspace_path: workspace.trim() || null,
-        repos: cleanRepos,
-        agent_config: { harness, model: model || null, effort: effort || null },
+        repos: cleanRepos.map((r) => ({ url: repoUrl(r) })),
+        agent_config,
         dispatch_preset: preset,
+        delivery,
       });
       addProject(p);
       onCreated(p.id);
@@ -82,6 +102,8 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
       setBusy(false);
     }
   };
+
+  const modelHint = current?.models.selection === "provider_qualified" ? "provider/model" : "Model (optional)";
 
   return (
     <>
@@ -106,7 +128,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
             <span>Repositories</span>
             {repos.map((r, i) => (
               <div className="repo-row" key={i}>
-                <input value={r} placeholder="owner/name or a clone URL" aria-label={`Repository ${i + 1}`}
+                <input value={r} placeholder="owner/name, a clone URL or a local path" aria-label={`Repository ${i + 1}`}
                   className={r.trim() && !validRepo(r) ? "invalid" : ""}
                   onChange={(e) => setRepos(repos.map((x, j) => (j === i ? e.target.value : x)))} />
                 {repos.length > 1 && (
@@ -116,7 +138,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
               </div>
             ))}
             <button type="button" className="btn add" onClick={() => setRepos([...repos, ""])}>Add repository</button>
-            {badRepo && <div className="field-error">“{badRepo}” is not owner/name or a clone URL.</div>}
+            {badRepo && <div className="field-error">“{badRepo}” is not owner/name, a clone URL or a local path.</div>}
           </fieldset>
 
           <fieldset className="field">
@@ -124,41 +146,42 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
             <div className="agent-row">
               <select value={harness} onChange={(e) => setHarness(e.target.value)} aria-label="Harness" disabled={!harnesses}>
                 {!harnesses && <option>Loading…</option>}
-                {(harnesses ?? []).map((h) => (
-                  <option key={h.id} value={h.id} disabled={!h.installed}>
-                    {h.name}{h.version ? ` ${h.version}` : ""}{h.installed ? "" : " (not installed)"}
+                {options.map((h) => (
+                  <option key={h.id} value={h.id} disabled={!h.install.installed}>
+                    {h.name}{h.install.version ? ` ${h.install.version}` : ""}{h.install.installed ? "" : " (not installed)"}
                   </option>
                 ))}
               </select>
-              {current && current.models.length > 0 ? (
-                <select value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model">
-                  <option value="">Harness default model</option>
-                  {current.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              ) : (
-                <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model (optional)" aria-label="Model" />
+              {current?.models.selection !== "automatic" && (
+                <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={modelHint} aria-label="Model" />
               )}
-              {current && current.efforts.length > 0 ? (
+              {current && current.efforts.length > 0 && (
                 <select value={effort} onChange={(e) => setEffort(e.target.value)} aria-label="Effort">
                   <option value="">Default effort</option>
                   {current.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
-              ) : (
-                <input value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="Effort (optional)" aria-label="Effort" />
               )}
             </div>
+            {current?.models.discovery && <div className="hint-line">Models: {current.models.discovery}</div>}
+            {current?.models.selection === "automatic" && <div className="hint-line">{current.name} picks its model itself.</div>}
+            {current?.auth.state === "not_configured" && (
+              <div className="field-error">{current.name} is not signed in{current.auth.detail ? `: ${current.auth.detail}` : "."}</div>
+            )}
             {!harnessesLive && <div className="hint-line">The daemon does not report installed harnesses yet, so this is a fixed list.</div>}
-            {current && !current.installed && current.install_hint && <div className="hint-line">{current.install_hint}</div>}
+            {options.filter((h) => !h.install.installed && h.install.install_hint).map((h) => (
+              <div className="hint-line" key={h.id}>{h.name} is not installed: <span className="mono">{h.install.install_hint}</span></div>
+            ))}
+            {issues.map((i) => <div className="field-error" key={i.field + i.code}>{i.message}</div>)}
           </fieldset>
 
           <fieldset className="field">
             <span>Dispatch preset</span>
             <div className="presets">
-              {presets.map((p) => (
+              {PRESETS.map((p) => (
                 <label key={p.id} className={"preset" + (preset === p.id ? " on" : "")}>
                   <input type="radio" name="preset" value={p.id} checked={preset === p.id} onChange={() => setPreset(p.id)} />
                   <b>{p.label}</b>
-                  {p.description && <span className="faint">{p.description}</span>}
+                  <span className="faint">{p.description}</span>
                 </label>
               ))}
             </div>
@@ -167,8 +190,15 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
           <details className="field">
             <summary>Advanced</summary>
             <label className="field">
+              <span>Delivery</span>
+              <select value={delivery} onChange={(e) => setDelivery(e.target.value as DeliveryPolicy)} aria-label="Delivery">
+                <option value="gated">Gated: changes pass the verification gates before a PR</option>
+                <option value="direct">Direct: workers open PRs directly; CI is the only check</option>
+              </select>
+            </label>
+            <label className="field">
               <span>Workspace path</span>
-              <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Default: under the Quark home" />
+              <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Attach an existing workspace instead of creating one" />
             </label>
           </details>
 
