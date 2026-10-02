@@ -31,6 +31,7 @@ The repository is a Cargo workspace:
 | `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection, the `EngineAdapter` seam (`quarkd::engine`), and tmux terminal sessions (`quarkd::sessions`) |
 | `crates/quark-systems` | Neutral API and event types shared by the daemon and its clients |
 | `crates/quark-engine` | Typed firstmate reads and allowlisted, argument-validated script writes |
+| `crates/quark-transcript` | Parsers for harness session logs (Claude Code, Codex, Pi) that feed `coordinator.message` and `worker.transcript` events |
 
 ```sh
 cargo test --workspace

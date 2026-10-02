@@ -28,6 +28,9 @@ use super::{events, routes, terminals};
         terminals::input,
         terminals::resize,
         terminals::snapshot,
+        routes::task_transcript,
+        routes::coordinator_messages,
+        routes::send_coordinator_message,
         events::stream,
     ),
     components(schemas(
@@ -42,6 +45,8 @@ use super::{events, routes, terminals};
         quark_systems::ProjectStatus,
         quark_systems::DeliveryPolicy,
         quark_systems::DispatchPreset,
+        quark_systems::TranscriptEntry,
+        quark_systems::TranscriptRole,
     )),
     tags(
         (name = "daemon"),
@@ -49,6 +54,7 @@ use super::{events, routes, terminals};
         (name = "tasks"),
         (name = "decisions"),
         (name = "terminals"),
+        (name = "coordinators"),
         (name = "events")
     )
 )]

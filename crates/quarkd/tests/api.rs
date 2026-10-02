@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use http_body_util::BodyExt;
 use quark_systems::{Event, EventType, TaskKind, TaskState};
 use quarkd::api::{self, ApiDoc, AppState};
+use quarkd::chat::RecordingInput;
 use quarkd::engine::{EngineTask, FleetSnapshot, Hold, StubEngine, StubWrite, TaskControl};
 use quarkd::projector::Projector;
 use quarkd::provision::Layout;
@@ -28,12 +29,14 @@ struct Harness {
 async fn harness() -> Harness {
     let store = Arc::new(Store::open_in_memory().unwrap());
     let engine = Arc::new(StubEngine::new());
+    let chat = Arc::new(RecordingInput::new());
     let home = tempfile::tempdir().unwrap();
     let app = api::router(AppState {
         store: store.clone(),
         engine: engine.clone(),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(home.path()),
+        chat,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -43,7 +46,7 @@ async fn harness() -> Harness {
         _home: home,
         app,
         addr,
-        projector: Projector::new(store, engine.clone()),
+        projector: Projector::new(store, engine.clone()).with_session_roots(Default::default()),
         engine,
     }
 }
@@ -103,6 +106,7 @@ fn task(state: TaskState) -> EngineTask {
         state_note: None,
         harness: Some("claude".into()),
         pull_request_url: None,
+        worktree: None,
         terminal: None,
     }
 }
@@ -516,6 +520,7 @@ async fn creating_a_project_provisions_workspace_repo_and_coordinator() {
             state_note: None,
             harness: Some("claude".into()),
             pull_request_url: None,
+            worktree: None,
             terminal: None,
         }],
     });

@@ -9,6 +9,158 @@
     "version": "0.0.1"
   },
   "paths": {
+    "/v1/coordinators/{id}/messages": {
+      "get": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "A Project coordinator's conversation so far. The coordinator id is the\nProject id. New entries arrive as `coordinator.message` events.",
+        "operationId": "coordinator_messages",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Only entries with `id` greater than this.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many entries (default and maximum 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TranscriptItem"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Send a message to a Project's coordinator.",
+        "description": "The coordinator id is the Project id. The text is typed into the\ncoordinator's live session; its reply arrives on the event stream as\n`coordinator.message` events, which also carry this message once the\nsession records it.",
+        "operationId": "send_coordinator_message",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorMessageAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Project has no workspace yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Typing into the session failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No live coordinator session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/decisions": {
       "get": {
         "tags": [
@@ -505,6 +657,70 @@
         }
       }
     },
+    "/v1/tasks/{id}/transcript": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "A worker's transcript so far, read from its harness session log. New\nentries arrive as `worker.transcript` events.",
+        "operationId": "task_transcript",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Only entries with `id` greater than this.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many entries (default and maximum 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TranscriptItem"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}:cancel": {
       "post": {
         "tags": [
@@ -870,6 +1086,39 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "CoordinatorMessage": {
+        "type": "object",
+        "description": "A message for a coordinator, typed into its session as if at the keyboard.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "CoordinatorMessageAccepted": {
+        "type": "object",
+        "description": "The coordinator's session took the message. Its reply arrives as\n`coordinator.message` events, read from the session log.",
+        "required": [
+          "coordinator_id",
+          "confirmed",
+          "accepted_at"
+        ],
+        "properties": {
+          "accepted_at": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "`false` when the text was typed and submitted but the session did not\nconfirm the submit; check the transcript before sending again."
+          },
+          "coordinator_id": {
+            "type": "string"
           }
         }
       },
@@ -1515,6 +1764,86 @@
           "worker"
         ]
       },
+      "TranscriptEntry": {
+        "type": "object",
+        "description": "One entry of a coordinator or worker transcript, parsed from the harness's\nown session log. Payload of `coordinator.message` and `worker.transcript`.",
+        "required": [
+          "role",
+          "text",
+          "is_error",
+          "truncated"
+        ],
+        "properties": {
+          "is_error": {
+            "type": "boolean",
+            "description": "`true` when a tool reported failure."
+          },
+          "role": {
+            "$ref": "#/components/schemas/TranscriptRole"
+          },
+          "text": {
+            "type": "string",
+            "description": "Markdown for `user`, `assistant` and `thinking`; tool input or output\notherwise."
+          },
+          "tool_call_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pairs a `tool_result` with its `tool_call`."
+          },
+          "tool_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Tool name, for `tool_call` and `tool_result` when the harness records it."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "`true` when `text` was cut to the daemon's size limit."
+          },
+          "ts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339 timestamp recorded by the harness, when present."
+          }
+        }
+      },
+      "TranscriptItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TranscriptEntry"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64",
+                "description": "The `seq` of the event that carried this entry; pass it as `after` to\npage, and use it to merge history with live events."
+              }
+            }
+          }
+        ],
+        "description": "A transcript entry as listed by the history endpoints."
+      },
+      "TranscriptRole": {
+        "type": "string",
+        "description": "Who or what produced a transcript entry.",
+        "enum": [
+          "user",
+          "assistant",
+          "thinking",
+          "tool_call",
+          "tool_result"
+        ]
+      },
       "UpdateProject": {
         "type": "object",
         "description": "Partial update; absent fields are left unchanged.",
@@ -1556,6 +1885,9 @@
     },
     {
       "name": "terminals"
+    },
+    {
+      "name": "coordinators"
     },
     {
       "name": "events"

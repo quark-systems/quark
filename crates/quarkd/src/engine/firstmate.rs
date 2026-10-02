@@ -261,6 +261,13 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
                 harness: t.harness.clone(),
                 pull_request_url,
                 terminal: tmux_target(t),
+                worktree: t
+                    .paths
+                    .worktree
+                    .as_ref()
+                    .filter(|w| w.present)
+                    .and_then(|w| w.path.as_ref())
+                    .map(PathBuf::from),
             }
         })
         .collect();
@@ -284,6 +291,7 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
             harness: None,
             pull_request_url: None,
             terminal: None,
+            worktree: None,
         });
     }
     FleetSnapshot { tasks }

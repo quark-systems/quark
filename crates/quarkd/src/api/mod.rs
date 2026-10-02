@@ -8,6 +8,7 @@ mod terminals;
 
 use std::sync::Arc;
 
+use crate::chat::CoordinatorInput;
 use crate::engine::EngineAdapter;
 use crate::sessions::Sessions;
 use axum::routing::{get, post};
@@ -26,6 +27,8 @@ pub struct AppState {
     pub sessions: Sessions,
     /// Where new Project workspaces and Project repos go.
     pub layout: crate::provision::Layout,
+    /// Delivers chat input to coordinator sessions.
+    pub chat: Arc<dyn CoordinatorInput>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -59,7 +62,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/terminals/{id}/input", post(terminals::input))
         .route("/v1/terminals/{id}/resize", post(terminals::resize))
         .route("/v1/terminals/{id}/snapshot", post(terminals::snapshot))
+        .route("/v1/tasks/{id}/transcript", get(routes::task_transcript))
         .route("/v1/decisions", get(routes::list_decisions))
+        .route(
+            "/v1/coordinators/{id}/messages",
+            get(routes::coordinator_messages).post(routes::send_coordinator_message),
+        )
         .route("/v1/events", get(events::stream))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

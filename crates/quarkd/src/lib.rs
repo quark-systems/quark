@@ -5,6 +5,7 @@
 //! [`engine::EngineAdapter`].
 
 pub mod api;
+pub mod chat;
 pub mod config;
 pub mod engine;
 pub mod project_repo;
@@ -12,6 +13,7 @@ pub mod projector;
 pub mod provision;
 pub mod sessions;
 pub mod store;
+pub mod transcripts;
 
 use std::sync::Arc;
 
@@ -57,6 +59,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         engine,
         sessions: sessions.clone(),
         layout: provision::Layout::new(&config.home),
+        chat: Arc::new(chat::NoSessions),
     });
     let listener = TcpListener::bind(config.listen)
         .await
