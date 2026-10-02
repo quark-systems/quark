@@ -96,8 +96,28 @@ export interface Review {
   id: string; author?: string | null; state: "approved" | "changes_requested" | "commented" | "dismissed" | "pending";
   body: string; submitted_at?: string | null; commit?: string | null;
 }
-/** Verification evidence (ADR-15); reserved, always absent for now. */
-export interface Evidence { summary: string; url?: string | null }
+// Verification evidence (ADR-15): repo-native checks, Playwright journeys and holdout tests.
+// The state strings are the engine's; the app colors anything it does not know as in progress.
+export type GateKind = "checks" | "journeys" | "holdout";
+export type ArtifactKind = "trace" | "screenshot" | "video" | "log" | "report";
+export interface EvidenceArtifact {
+  id: string; kind: ArtifactKind; path: string; content_type?: string | null; size_bytes: number;
+  /** Served by the daemon at `GET /v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`. */
+  url: string;
+}
+export interface EvidenceCase {
+  name: string; state: string; duration_ms?: number | null; message?: string | null; artifacts: EvidenceArtifact[];
+}
+export interface EvidenceGate {
+  kind: GateKind; state: string; summary?: string | null; started_at?: string | null; completed_at?: string | null;
+  cases: EvidenceCase[];
+}
+export interface Evidence {
+  head_sha: string; state: string;
+  /** True when `head_sha` is not the PR's current head. */
+  stale: boolean;
+  started_at?: string | null; completed_at?: string | null; gates: EvidenceGate[];
+}
 export interface PullRequest {
   id: string; project_id: string; task_id?: string | null; url: string; provider: string; repo: string; number: number;
   title?: string | null; author?: string | null; state: PullRequestState;
@@ -215,6 +235,11 @@ export const api = {
   /** The engine's guarded merge; 409 `merge_refused` unless open, green and conflict-free. */
   mergePullRequest: (id: string, method?: MergeMethod) =>
     req<PullRequest>("POST", `/v1/pull-requests/${enc(id)}:merge`, method ? { method } : {}),
+  /** Absolute URL of an evidence artifact; the daemon may send it relative to itself. */
+  artifactUrl: (prId: string, a: EvidenceArtifact) =>
+    /^https?:\/\//.test(a.url) ? a.url
+      : a.url.startsWith("/") ? daemon + a.url
+      : `${daemon}/v1/pull-requests/${enc(prId)}/evidence/artifacts/${enc(a.id)}`,
   setStandingApproval: (projectId: string, on: boolean) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { standing_approval: on }),
 

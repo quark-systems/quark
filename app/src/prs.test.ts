@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PullRequest } from "./api";
 import { applyEvent, initialState } from "./store";
-import { countByState, filterPrs, mergeBlocker, sortChecks } from "./prs";
+import { caseCounts, countByState, evidenceOutcome, filterPrs, formatBytes, formatMs, mergeBlocker, sortCases, sortChecks, traceViewerUrl } from "./prs";
 import { anchorOf } from "./components/FileDiff";
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
@@ -68,5 +68,28 @@ describe("PR helpers", () => {
     expect(anchorOf({ kind: "ctx", text: "", old: 3, new: 4 })).toEqual({ line: 4, side: "new" });
     expect(anchorOf({ kind: "del", text: "", old: 7 })).toEqual({ line: 7, side: "old" });
     expect(anchorOf({ kind: "hunk", text: "@@" })).toBeNull();
+  });
+});
+
+describe("evidence helpers", () => {
+  it("colors states, treating unknown ones as in progress", () => {
+    expect(evidenceOutcome("passed").cls).toBe("green");
+    expect(evidenceOutcome("failed").cls).toBe("red");
+    expect(evidenceOutcome("skipped").cls).toBe("");
+    expect(evidenceOutcome("running")).toEqual({ cls: "yellow", glyph: "●", label: "running" });
+  });
+  it("counts and orders cases, failures first", () => {
+    const cases = [{ name: "a", state: "passed" }, { name: "b", state: "running" }, { name: "c", state: "failed" }, { name: "d", state: "passed" }];
+    expect(caseCounts(cases)).toEqual({ passed: 2, failed: 1, other: 1 });
+    expect(sortCases(cases).map((c) => c.name)).toEqual(["c", "b", "a", "d"]);
+  });
+  it("formats sizes, durations and trace viewer links", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+    expect(formatMs(450)).toBe("450 ms");
+    expect(formatMs(30000)).toBe("30 s");
+    expect(formatMs(95000)).toBe("1m 35s");
+    expect(traceViewerUrl("http://127.0.0.1:7380/a b.zip")).toBe("https://trace.playwright.dev/?trace=http%3A%2F%2F127.0.0.1%3A7380%2Fa%20b.zip");
   });
 });

@@ -1,16 +1,17 @@
-// One pull request: diff with line comments for the owning worker on the left; checks,
-// reviews, the evidence slot (ADR-15) and the Project's standing approval on the right;
-// approve and merge in the header.
+// One pull request: diff with line comments for the owning worker, and the verification
+// evidence (ADR-15), on the left; gates, checks, reviews and the Project's standing approval on
+// the right; approve and merge in the header.
 import React, { useEffect, useMemo, useState } from "react";
-import { api, ApiError, NotAvailable, PullRequest } from "../api";
+import { api, ApiError, Evidence, NotAvailable, PullRequest } from "../api";
 import { href } from "../nav";
 import { refreshPullRequest, setPullRequest, useStore } from "../store";
 import { ago, errText } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../diff";
 import { FileDiff, LineComment, OnComment } from "../components/FileDiff";
 import { StandingApproval } from "../components/StandingApproval";
+import { EvidencePanel, EvidenceSummary } from "../components/Evidence";
 import { Unavailable } from "../components/Unavailable";
-import { checkOutcome, checksMeta, mergeBlocker, prStateMeta, prTitle, reviewLabel, reviewMeta, sortChecks } from "../prs";
+import { evidenceOutcome, checkOutcome, checksMeta, mergeBlocker, prStateMeta, prTitle, reviewLabel, reviewMeta, sortChecks } from "../prs";
 
 export function PullRequestView({ id }: { id: string }) {
   const pr = useStore((s) => s.pullRequests[id]);
@@ -20,6 +21,7 @@ export function PullRequestView({ id }: { id: string }) {
   const [status, setStatus] = useState<"loading" | "ok" | "missing" | "unavailable" | "error">(pr ? "ok" : "loading");
   const [err, setErr] = useState<string | null>(null);
   const [comments, setComments] = useState<LineComment[]>([]);
+  const [tab, setTab] = useState<"diff" | "evidence">("diff");
 
   // Refetch on open and whenever a check, review or partial PR event names this PR.
   useEffect(() => {
@@ -70,18 +72,27 @@ export function PullRequestView({ id }: { id: string }) {
       {pr.sync_error && <div className="state-note bad">Could not read the forge{pr.synced_at ? ` (last read ${ago(pr.synced_at)})` : ""}: {pr.sync_error}</div>}
       <div className="screen pr-detail">
         <section className="pr-diff">
-          <DiffPanel pr={pr} comments={comments} onComment={pr.state === "merged" || pr.state === "closed" ? undefined : onComment} />
-          {pr.state !== "merged" && pr.state !== "closed" && <PrCommentBox onSend={(text) => comment({ text })} />}
+          <div className="tabs" role="tablist">
+            <button role="tab" aria-selected={tab === "diff"} className={tab === "diff" ? "on" : ""} onClick={() => setTab("diff")}>Diff</button>
+            <button role="tab" aria-selected={tab === "evidence"} className={tab === "evidence" ? "on" : ""} onClick={() => setTab("evidence")}
+              data-testid="tab-evidence">
+              Evidence{pr.evidence && <EvidenceBadge ev={pr.evidence} />}
+            </button>
+          </div>
+          {/* Both stay mounted so the diff, its scroll and open comment boxes survive a tab switch. */}
+          <div className="tab-body" hidden={tab !== "diff"}>
+            <DiffPanel pr={pr} comments={comments} onComment={pr.state === "merged" || pr.state === "closed" ? undefined : onComment} />
+            {pr.state !== "merged" && pr.state !== "closed" && <PrCommentBox onSend={(text) => comment({ text })} />}
+          </div>
+          <div className="tab-body" hidden={tab !== "evidence"}>
+            <EvidencePanel prId={pr.id} ev={pr.evidence} />
+          </div>
         </section>
         <aside className="pr-info">
+          <div className="panel-head">Verification gates</div>
+          <EvidenceSummary ev={pr.evidence} onOpen={() => setTab("evidence")} />
           <ChecksPanel pr={pr} />
           <ReviewsPanel pr={pr} />
-          <div className="panel-head">Evidence</div>
-          <div className="side-note" data-testid="pr-evidence">
-            {pr.evidence ? (
-              <>{pr.evidence.summary}{pr.evidence.url && <> · <a href={pr.evidence.url} target="_blank" rel="noreferrer">report</a></>}</>
-            ) : <span className="faint">No verification evidence attached. Repository checks above are the gate for now.</span>}
-          </div>
           {project && (
             <>
               <div className="panel-head">Standing approval</div>
@@ -92,6 +103,11 @@ export function PullRequestView({ id }: { id: string }) {
       </div>
     </>
   );
+}
+
+function EvidenceBadge({ ev }: { ev: Evidence }) {
+  const o = evidenceOutcome(ev.state);
+  return <span className={"pr-glyph " + o.cls} title={ev.stale ? "For an older commit" : o.label}>{ev.stale ? "!" : o.glyph}</span>;
 }
 
 // ---- merge ----
