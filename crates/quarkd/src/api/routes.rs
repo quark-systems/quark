@@ -3,9 +3,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
-    ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task, TranscriptItem,
-    UpdateProject,
+    AgentRole, CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision,
+    DecisionState, ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task,
+    TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -71,6 +71,16 @@ pub async fn create_project(
     Json(input): Json<CreateProject>,
 ) -> Result<(StatusCode, Json<Project>), ApiError> {
     let input = provision::normalize(input).map_err(ApiError::invalid)?;
+    if let Some(agent) = &input.agent_config {
+        let check = state.harnesses.validate(agent, AgentRole::Coordinator);
+        if !check.valid {
+            let msgs: Vec<_> = check.errors.into_iter().map(|e| e.message).collect();
+            return Err(ApiError::invalid(format!(
+                "agent_config: {}",
+                msgs.join("; ")
+            )));
+        }
+    }
     let project = db(&state, move |s| s.create_project(input)).await?;
     if project.status == ProjectStatus::Provisioning {
         start_provisioning(&state, &project.id);

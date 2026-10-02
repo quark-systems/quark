@@ -1,7 +1,7 @@
 use axum::Json;
 use utoipa::OpenApi;
 
-use super::{events, routes, terminals};
+use super::{events, harnesses, routes, terminals};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -23,6 +23,8 @@ use super::{events, routes, terminals};
         routes::cancel_task,
         routes::relaunch_task,
         routes::list_decisions,
+        harnesses::list,
+        harnesses::validate,
         terminals::list_terminals,
         terminals::get_terminal,
         terminals::input,
@@ -53,6 +55,7 @@ use super::{events, routes, terminals};
         (name = "projects"),
         (name = "tasks"),
         (name = "decisions"),
+        (name = "harnesses"),
         (name = "terminals"),
         (name = "coordinators"),
         (name = "events")

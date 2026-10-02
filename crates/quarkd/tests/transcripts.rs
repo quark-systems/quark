@@ -34,6 +34,10 @@ fn harness() -> Harness {
     let engine = Arc::new(StubEngine::new());
     let chat = Arc::new(RecordingInput::new());
     let app = api::router(AppState {
+        harnesses: Arc::new(quarkd::harness::HarnessRegistry::new(
+            quarkd::harness::builtin(),
+            quarkd::harness::HostEnv::default(),
+        )),
         store: store.clone(),
         engine: engine.clone(),
         chat: chat.clone(),
@@ -308,6 +312,10 @@ async fn coordinator_messages_are_typed_into_the_session() {
 async fn without_a_session_client_messages_are_refused() {
     let store = Arc::new(Store::open_in_memory().unwrap());
     let app = api::router(AppState {
+        harnesses: Arc::new(quarkd::harness::HarnessRegistry::new(
+            quarkd::harness::builtin(),
+            quarkd::harness::HostEnv::default(),
+        )),
         store: store.clone(),
         engine: Arc::new(StubEngine::new()),
         chat: Arc::new(quarkd::chat::NoSessions),

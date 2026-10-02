@@ -8,6 +8,7 @@ pub mod api;
 pub mod chat;
 pub mod config;
 pub mod engine;
+pub mod harness;
 pub mod project_repo;
 pub mod projector;
 pub mod provision;
@@ -65,6 +66,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let app = api::router(AppState {
         store,
         engine,
+        harnesses: Arc::new(harness::HarnessRegistry::builtin()),
         sessions: sessions.clone(),
         layout: provision::Layout::new(&config.home),
         chat: Arc::new(chat::SessionsInput::new(

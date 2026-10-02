@@ -2,6 +2,7 @@
 
 mod error;
 mod events;
+mod harnesses;
 mod openapi;
 mod routes;
 mod terminals;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 
 use crate::chat::CoordinatorInput;
 use crate::engine::EngineAdapter;
+use crate::harness::HarnessRegistry;
 use crate::sessions::Sessions;
 use axum::http::{header, HeaderValue, Method};
 use axum::routing::{get, post};
@@ -26,6 +28,7 @@ pub use openapi::ApiDoc;
 pub struct AppState {
     pub store: Arc<Store>,
     pub engine: Arc<dyn EngineAdapter>,
+    pub harnesses: Arc<HarnessRegistry>,
     pub sessions: Sessions,
     /// Where new Project workspaces and Project repos go.
     pub layout: crate::provision::Layout,
@@ -66,6 +69,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/terminals/{id}/snapshot", post(terminals::snapshot))
         .route("/v1/tasks/{id}/transcript", get(routes::task_transcript))
         .route("/v1/decisions", get(routes::list_decisions))
+        .route("/v1/harnesses", get(harnesses::list))
+        .route("/v1/harnesses:validate", post(harnesses::validate))
         .route(
             "/v1/coordinators/{id}/messages",
             get(routes::coordinator_messages).post(routes::send_coordinator_message),
