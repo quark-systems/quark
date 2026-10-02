@@ -19,7 +19,7 @@ use tokio::sync::broadcast;
 
 use crate::now_rfc3339;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -79,6 +79,16 @@ CREATE TABLE adapter_calls (
 );
 "#;
 
+/// Engine script detail on adapter-call records. Rows written by the
+/// projector per operation leave these empty.
+const SCHEMA_V2: &str = r#"
+ALTER TABLE adapter_calls ADD COLUMN kind TEXT;
+ALTER TABLE adapter_calls ADD COLUMN script TEXT;
+ALTER TABLE adapter_calls ADD COLUMN args TEXT;
+ALTER TABLE adapter_calls ADD COLUMN exit_code INTEGER;
+ALTER TABLE adapter_calls ADD COLUMN workspace TEXT;
+"#;
+
 /// Capacity of the live event channel. A subscriber that falls further behind
 /// than this catches up from the store instead.
 const BUS_CAPACITY: usize = 1024;
@@ -96,6 +106,32 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// Engine coordinates of a task, from [`Store::task_target`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskTarget {
+    pub project_id: String,
+    pub engine_id: String,
+    pub workspace_path: Option<String>,
+}
+
+/// One engine script call as stored in `adapter_calls`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptCall {
+    pub ts: String,
+    /// Filled in from the workspace on insert; ignored by `record_script_call`.
+    pub project_id: Option<String>,
+    /// `read` or `write`.
+    pub kind: String,
+    pub script: String,
+    pub args: Vec<String>,
+    pub workspace: String,
+    pub ok: bool,
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    /// Failure detail: stderr tail, or why the script could not run.
+    pub detail: Option<String>,
+}
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -297,6 +333,28 @@ impl Store {
             c.query_row(&format!("{TASK_SELECT} WHERE id = ?1"), [id], task_from_row)
                 .optional()?
                 .ok_or(StoreError::NotFound)
+        })
+    }
+
+    /// Where to reach a task in its engine: the owning Project, the engine's
+    /// own task id and the Project's workspace, if one is attached.
+    pub fn task_target(&self, id: &str) -> Result<TaskTarget> {
+        self.read(|c| {
+            c.query_row(
+                "SELECT t.project_id, t.engine_id, p.workspace_path
+                 FROM tasks t JOIN projects p ON p.id = t.project_id
+                 WHERE t.id = ?1",
+                [id],
+                |r| {
+                    Ok(TaskTarget {
+                        project_id: r.get(0)?,
+                        engine_id: r.get(1)?,
+                        workspace_path: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound)
         })
     }
 
@@ -521,6 +579,73 @@ impl Store {
 
     // Adapter calls
 
+    /// Records one engine script call. The Project is the one whose workspace
+    /// the script ran against, when the daemon knows it.
+    pub fn record_script_call(&self, call: &ScriptCall) -> Result<()> {
+        self.read(|c| {
+            let project_id: Option<String> = c
+                .query_row(
+                    "SELECT id FROM projects WHERE workspace_path = ?1",
+                    [&call.workspace],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            c.execute(
+                "INSERT INTO adapter_calls (ts, project_id, operation, ok, duration_ms, detail,
+                     kind, script, args, exit_code, workspace)
+                 VALUES (?1, ?2, 'script', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    call.ts,
+                    project_id,
+                    call.ok,
+                    call.duration_ms as i64,
+                    call.detail,
+                    call.kind,
+                    call.script,
+                    serde_json::to_string(&call.args)?,
+                    call.exit_code,
+                    call.workspace
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Most recent script calls first.
+    pub fn recent_script_calls(&self, limit: u32) -> Result<Vec<ScriptCall>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT ts, project_id, ok, duration_ms, detail, kind, script, args, exit_code,
+                        workspace
+                 FROM adapter_calls WHERE operation = 'script' ORDER BY id DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map([limit], |r| {
+                Ok((
+                    ScriptCall {
+                        ts: r.get(0)?,
+                        project_id: r.get(1)?,
+                        ok: r.get(2)?,
+                        duration_ms: r.get::<_, i64>(3)? as u64,
+                        detail: r.get(4)?,
+                        kind: r.get(5)?,
+                        script: r.get(6)?,
+                        args: Vec::new(),
+                        exit_code: r.get(8)?,
+                        workspace: r.get(9)?,
+                    },
+                    r.get::<_, String>(7)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (mut call, args) = row?;
+                call.args = serde_json::from_str(&args)?;
+                out.push(call);
+            }
+            Ok(out)
+        })
+    }
+
     pub fn record_adapter_call(
         &self,
         project_id: Option<&str>,
@@ -558,6 +683,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(SCHEMA_V1)?;
         tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+    }
+    if version < 2 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V2)?;
+        tx.pragma_update(None, "user_version", 2)?;
         tx.commit()?;
     }
     Ok(())

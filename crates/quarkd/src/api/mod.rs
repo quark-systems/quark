@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::engine::EngineAdapter;
 use axum::http::{header, HeaderValue, Method};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -38,7 +38,13 @@ pub fn router(state: AppState) -> Router {
             get(routes::get_project).patch(routes::update_project),
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
-        .route("/v1/tasks/{id}", get(routes::get_task))
+        // POST serves the custom methods `/v1/tasks/{id}:cancel` and
+        // `:relaunch`; the router allows one parameter per segment.
+        .route(
+            "/v1/tasks/{id}",
+            get(routes::get_task).post(routes::task_action),
+        )
+        .route("/v1/tasks/{id}/messages", post(routes::send_task_message))
         .route("/v1/decisions", get(routes::list_decisions))
         .route("/v1/events", get(events::stream))
         .layer(cors())
