@@ -21,3 +21,24 @@ In physics, elementary quarks never exist in isolation, they are bound together 
 * **Local & Cloud Execution Parity**: Run seamlessly in **Cloud Mode** (microVM sandboxes per project) or **Local Mode** (native processes, Seatbelt/bubblewrap sandboxes, or Docker containers).
 * **Defensible Verification Gates**: Every agent run must pass repo-native unit checks, Playwright end-to-end journeys, and independent holdout tests before opening a pull request.
 * **Git-Backed Context Store**: Project instructions, architectural decisions, and agent learnings live in their own versioned repository, making project context fully diffable, reviewable, and portable.
+
+## Development
+
+The repository is a Cargo workspace:
+
+| Crate | Purpose |
+| :--- | :--- |
+| `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection |
+| `crates/quark-systems` | Neutral API and event types shared by the daemon and its clients |
+| `crates/quark-engine` | The engine adapter seam (`EngineAdapter`) between `quarkd` and firstmate workspaces |
+
+```sh
+cargo test --workspace
+cargo run -p quarkd                 # serves http://127.0.0.1:7380, data in ~/.quark (or $QUARK_HOME)
+cargo run -p quarkd -- openapi      # prints the OpenAPI document
+```
+
+`api/openapi.json` is the committed API contract; a test fails when it drifts from the code.
+Regenerate it with `cargo run -p quarkd -- openapi > api/openapi.json`.
+
+The event stream is a WebSocket at `/v1/events?cursor=<seq>`: each frame is one JSON event with a monotonic `seq`, and a client that reconnects with its last `seq` replays everything it missed.

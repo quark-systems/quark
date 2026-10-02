@@ -1,0 +1,32 @@
+[package]
+name = "quarkd"
+description = "Quark local control plane daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quark-systems.workspace = true
+quark-engine.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+utoipa.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tokio-tungstenite.workspace = true
+tower = { version = "0.5.3", features = ["util"] }
