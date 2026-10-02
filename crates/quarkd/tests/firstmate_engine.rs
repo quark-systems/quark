@@ -77,6 +77,7 @@ async fn snapshot_maps_to_neutral_tasks() {
         "secondmates and captain-kind rows are not tasks"
     );
     let ship = &snap.tasks[2];
+    assert!(ship.worktree.is_some(), "live tasks carry their worktree");
     assert_eq!(ship.title, "Ship the thing");
     assert_eq!(ship.harness.as_deref(), Some("claude"));
     assert_eq!(
@@ -127,11 +128,27 @@ async fn holds_are_live_holds_and_open_decisions() {
 async fn status_tail_resumes_from_offset() {
     let dir = tempfile::tempdir().unwrap();
     let (e, ws) = engine(dir.path());
-    fs::write(ws.root.join("state/t.status"), "working: a\ndone: b\n").unwrap();
+    fs::write(
+        ws.root.join("state/t.status"),
+        "working: a\nneeds-decision [key=api]: pick one\n",
+    )
+    .unwrap();
     let first = e.status_tail(&ws, "t", 0).await.unwrap();
-    assert_eq!(first.lines, ["working: a", "done: b"]);
+    let got: Vec<_> = first
+        .entries
+        .iter()
+        .map(|l| (l.kind.as_str(), l.decision_key.as_deref(), l.note.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("working", Some("default"), "a"),
+            ("needs-decision", Some("api"), "pick one")
+        ]
+    );
+    assert_eq!(first.entries[1].raw, "needs-decision [key=api]: pick one");
     let again = e.status_tail(&ws, "t", first.next_offset).await.unwrap();
-    assert!(again.lines.is_empty());
+    assert!(again.entries.is_empty());
     assert_eq!(again.next_offset, first.next_offset);
     assert!(matches!(
         e.status_tail(&ws, "../x", 0).await,
@@ -477,4 +494,20 @@ async fn engine_scripts_run_on_the_daemons_tmux_server() {
             fake.home.display()
         )
     );
+}
+
+#[test]
+fn only_task_files_trigger_refresh() {
+    use quarkd::engine::firstmate::is_task_file;
+    for yes in ["state/t.status", "state/t.meta", "data/backlog.md"] {
+        assert!(is_task_file(Path::new(yes)), "{yes}");
+    }
+    for no in [
+        "state/.last-watcher-beat",
+        "state/.t.meta.spawn.123",
+        "state/t.turn-ended",
+        "state/.wake-queue",
+    ] {
+        assert!(!is_task_file(Path::new(no)), "{no}");
+    }
 }

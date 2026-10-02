@@ -5,7 +5,7 @@ use axum::Json;
 use quark_systems::{
     AgentRole, CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision,
     DecisionState, ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task,
-    TranscriptItem, UpdateProject,
+    TaskChanges, TaskDiff, TaskEvent, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -21,6 +21,7 @@ use crate::provision;
 /// Note given to a relaunched worker when the client sends none.
 const DEFAULT_RELAUNCH_NOTE: &str =
     "Relaunched from Quark. Pick up from the current state of the worktree and the task brief.";
+use crate::worktree::{self, WorktreeError};
 
 /// Daemon health and the latest event `seq`.
 #[utoipa::path(
@@ -358,6 +359,137 @@ pub async fn relaunch_task(
     let (ws, task) = engine_target(&state, id).await?;
     state.engine.control(&ws, &task, &action).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TaskEventQuery {
+    /// Only entries with a greater `id`; 0 or absent starts from the oldest.
+    pub after: Option<i64>,
+    /// At most this many entries (default 200, max 1000).
+    pub limit: Option<u32>,
+}
+
+/// A task's activity log, oldest first. Live entries arrive on the event
+/// stream as `task.event`.
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/events",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id"), TaskEventQuery),
+    responses(
+        (status = 200, body = Vec<TaskEvent>),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn list_task_events(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TaskEventQuery>,
+) -> Result<Json<Vec<TaskEvent>>, ApiError> {
+    let after = q.after.unwrap_or(0);
+    let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+    Ok(Json(
+        db(&state, move |s| s.list_task_events(&id, after, limit)).await?,
+    ))
+}
+
+/// Files the task changed: its working tree, including uncommitted and
+/// untracked work, against where it branched from the default branch.
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/changes",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 200, body = TaskChanges),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The task has no readable working tree", body = ErrorBody)
+    )
+)]
+pub async fn get_task_changes(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TaskChanges>, ApiError> {
+    let dir = task_worktree(&state, &id).await?;
+    let c = worktree::changes(&dir).await.map_err(worktree_error)?;
+    Ok(Json(TaskChanges {
+        task_id: id,
+        base_ref: c.base_ref,
+        base: c.base,
+        head: c.head,
+        files: c.files,
+    }))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DiffQuery {
+    /// One changed file, as listed by `/changes`; absent for the whole task.
+    pub path: Option<String>,
+}
+
+/// Unified diff of the task's changes, or of one changed file.
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/diff",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id"), DiffQuery),
+    responses(
+        (status = 200, body = TaskDiff),
+        (status = 404, description = "Unknown task, or a path the task did not change", body = ErrorBody),
+        (status = 409, description = "The task has no readable working tree", body = ErrorBody)
+    )
+)]
+pub async fn get_task_diff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DiffQuery>,
+) -> Result<Json<TaskDiff>, ApiError> {
+    let dir = task_worktree(&state, &id).await?;
+    let patch = worktree::diff(&dir, q.path.as_deref())
+        .await
+        .map_err(worktree_error)?;
+    Ok(Json(TaskDiff {
+        task_id: id,
+        base: patch.base,
+        path: q.path,
+        patch: patch.text,
+        truncated: patch.truncated,
+    }))
+}
+
+async fn task_worktree(state: &AppState, id: &str) -> Result<std::path::PathBuf, ApiError> {
+    let id = id.to_string();
+    db(state, move |s| s.task_worktree(&id))
+        .await?
+        .map(Into::into)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "no_worktree",
+                "the task has no working tree on this machine",
+            )
+        })
+}
+
+fn worktree_error(e: WorktreeError) -> ApiError {
+    match e {
+        WorktreeError::NotChanged(_) => {
+            ApiError::new(StatusCode::NOT_FOUND, "not_found", e.to_string())
+        }
+        WorktreeError::Missing(_) | WorktreeError::NoBase => {
+            ApiError::new(StatusCode::CONFLICT, "worktree_unavailable", e.to_string())
+        }
+        WorktreeError::Git { .. } | WorktreeError::Io(_) => {
+            tracing::warn!(error = %e, "reading a task worktree failed");
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "worktree_read_failed",
+                e.to_string(),
+            )
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
