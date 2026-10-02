@@ -165,3 +165,134 @@ In `screenshots/`:
 - `tauri-*.png`: the real Tauri binary under Xvfb against the stub.
 - `web-*.png`: the same frontend in headless Chromium via the Vite dev server, which is the "web build" story.
 - `tauri-2-terminals-before-input-order-fix.png`: shows the `ecoh` reorder bug.
+
+## Terminal renderer comparison (follow-up spike, 2026-10-02)
+
+Selected with `?renderer=` (or `QUARK_QUERY` in the desktop app).
+xterm.js WebGL stays the default.
+
+| flag | implementation | license |
+| --- | --- | --- |
+| `webgl` (default) | xterm.js 6 with the WebGL addon | MIT |
+| `dom` | xterm.js 6 with the DOM renderer | MIT |
+| `wterm` | @wterm/dom 0.5.4 (DOM renderer) with the @wterm/ghostty core (libghostty compiled to WASM) | Apache-2.0 |
+| `wterm-lite` | @wterm/dom 0.5.4 with its built-in Zig core (WASM) | Apache-2.0 |
+| `ghostty-web` | ghostty-web 0.4.0: Ghostty's VT core in WASM, xterm.js-compatible API, canvas2d renderer | MIT |
+
+All five run through one adapter interface (`src/term/`), so input, ordered POSTs, resize, the keydown capture for the echo probe, and the bench are identical for each.
+"Rendered" means:
+
+- **xterm:** the next `onRender` after the write callback, as before.
+- **wterm:** a `requestAnimationFrame` registered right after `write()`. WTerm schedules its paint in rAF during `write()`, so ours runs after its DOM update in the same frame.
+- **ghostty-web:** its write callback, which it runs in a rAF registered after its render loop's.
+
+### Numbers: Tauri desktop app (WebKitGTK, Xvfb, software rendering)
+
+Each figure is the median of 3 rounds, each round on a fresh stub (`h2h/run.sh` with `RENDERERS=... NATIVE=0`).
+Raw JSON and logs are in `../h2h/results-renderers/`; the table comes from `scripts/summarize-renderers.py`.
+The load average was about 2 to 5 during these runs, much quieter than the first round of benchmarks, so do not compare these absolute numbers with the earlier tables.
+Echo is keydown to glyph painted, p50 / p99 ms.
+
+| renderer | 4 terminals idle, typing: fps / echo p50 / p99 | 3 flooding + chat, typing: fps / echo p50 / p99 (echo bytes arrived p50) | 4 flooding + chat: fps / frame p50 | 4 flooding, chat visible: fps | terminal open ms |
+| --- | --- | --- | --- | --- | --- |
+| xterm webgl | 15.7 / 38 / 139 | 4.7 / 332 / 823 (101) | 4.4 / 212 | 27.4 | 264 |
+| xterm dom | **27.9 / 27 / 62** | **7.2 / 126 / 360 (43)** | **6.7 / 147** | 21.1 | 158 |
+| wterm (Ghostty core) | 18.4 / 33 / 85 | 4.2 / 909 / 1466 (812) | 3.2 / 307 | 10.1 | 226 |
+| wterm-lite (Zig core) | 20.4 / 35 / 80 | 4.8 / 204 / 722 (63) | 3.7 / 263 | 16.3 | 114 |
+| ghostty-web | 25.2 / 25 / 63 | 5.0 / 69 / 1619 (n=4 only) | **never finished** | **never finished** | – |
+
+**ghostty-web never finished in WebKitGTK.**
+In all 3 rounds it never got past the 4-pane flood phase, even with a 90 s limit, and once with 300 s.
+It completed the idle and 3-pane phases, which are taken from the per-phase progress lines.
+It falls behind the event stream, and WebKit's event loop then starves the phase timers.
+In the 3-flood phase only 4 or 5 of about 30 keystrokes echoed within the phase.
+The same run in Chromium completes, but at 1.7 to 2.5 fps under load.
+
+**wterm with the Ghostty core falls behind under 3 flooding panes**, without stalling:
+
+- Echo bytes arrived 812 ms after the keystroke (p50), against 43 ms for xterm DOM.
+- It processed about 1,100 events/s, against about 1,500 for the other renderers in the same phase.
+- It caught up once the terminals were hidden.
+
+wterm-lite does not have this problem, so the cost is in the Ghostty core path, not the DOM renderer.
+
+### Numbers: headless Chromium (web build, SwiftShader), 1 run each
+
+| renderer | 4 terminals idle, typing: fps / echo p50 / p99 | 3 flooding + chat, typing: fps / echo p50 / p99 (arrived p50) | 4 flooding + chat: fps | 4 flooding, chat visible: fps |
+| --- | --- | --- | --- | --- |
+| xterm webgl | 15.2 / 38 / 81 | 3.0 / 290 / 1443 (25) | 1.7 | 20.9 |
+| xterm dom | 45.1 / 15 / 36 | 7.4 / 147 / 618 (52) | 5.2 | 30.7 |
+| wterm | 56.8 / 14 / 45 | 10.9 / 758 / 898 (675) | 8.3 | 18.2 |
+| wterm-lite | **57.7 / 13 / 47** | **10.5 / 142 / 521 (61)** | **7.3** | 28.2 |
+| ghostty-web | 18.7 / 33 / 197 | 2.5 / 760 / 2466 (47) | 1.8 | 1.7 |
+
+- **Hidden ghostty-web terminals keep rendering.** With the chat screen visible, ghostty-web stays at 1.7 fps because its per-terminal rAF render loop keeps painting the detached canvases. xterm stops painting when its element is out of the document. wterm pauses only for a hidden document, or when the host sets `renderingPaused`; the POC doesn't set it.
+- **wterm's DOM rendering does much better in Chromium than in WebKitGTK.** At idle it is the best renderer in Chromium (57 fps, 13 to 14 ms echo), but in Tauri on Linux it is behind xterm DOM. On macOS, Tauri uses WKWebView, which has a different DOM and paint performance profile, so re-measure there.
+
+### Bundle and WASM cost (vite build; each renderer is its own lazy chunk)
+
+| renderer | JS | WASM | CSS | gzip total |
+| --- | --- | --- | --- | --- |
+| xterm (webgl + dom + fit) | 447 KB | – | 4 KB | about 116 KB |
+| wterm (Ghostty core) | 106 KB (DOM) + 21 KB (Ghostty bindings) | 592 KB `ghostty-vt.wasm`, a separate asset | 8 KB | about 236 KB |
+| wterm-lite | 106 KB + 37 KB (Zig core inlined as base64) | (inlined, about 26 KB raw) | 8 KB | about 47 KB |
+| ghostty-web | 637 KB (423 KB WASM inlined as base64) | (inlined) | – | about 187 KB |
+
+### Feature checks
+
+Checked with `scripts/renderer-check.mjs` (Chromium, trusted input plus CDP).
+Raw output is in `bench/renderers/features-chromium-*.json`.
+The Tauri screenshots confirm rendering in WebKitGTK.
+
+| check | xterm (webgl/dom) | wterm / wterm-lite | ghostty-web |
+| --- | --- | --- | --- |
+| Mouse selection | yes | yes (native DOM selection) | yes |
+| Copy | browser copy event (menu, Ctrl+Insert); Ctrl+C sends ^C | **Ctrl+C copies when there is a selection**, otherwise sends ^C; copy event also works | copy-on-select only; the copy event and Ctrl+Shift+C do nothing |
+| Paste | Ctrl+Shift+V and the paste event, bracketed | paste event, bracketed; **Ctrl+V and Ctrl+Shift+V send ^V**, so Linux needs a host-side paste binding | Ctrl+V, Ctrl+Shift+V and the paste event, bracketed |
+| IME (CDP composition) | preview stays local; one `日本語` on commit; echoed correctly | same | same |
+| CJK / emoji rendering | wide cells, color emoji | wide cells, color emoji (DOM text, so browser font fallback) | wide cells; emoji drawn by canvas fillText |
+| Kitty keyboard: query `CSI ? u` after `CSI > 1 u` | no reply (not supported) | replies `CSI ? 1 u` | no reply |
+| Kitty mode: Ctrl+Shift+B / Shift+Enter / Esc / Ctrl+I | (nothing) / `\r` / `ESC` / `\t` | `CSI 98;6u` / `CSI 13;2u` / `CSI 27u` / `CSI 105;5u` | `^B` / `\r` / `ESC` / `CSI 105;5u` |
+| Ctrl+Shift+A | nothing | swallowed by wterm's Select All binding, even in Kitty mode, so the requested `CSI 97;6u` check cannot pass; the encoder itself works (see Ctrl+Shift+B) | `^A` |
+| Legacy-mode oddities | Ctrl+Shift+letter sends nothing | Shift+Enter sends `CSI 13;2u` even without negotiation | **Ctrl+I sends `CSI 105;5u` even without negotiation** (bash prints `[105;5u`), a correctness bug |
+| WASM in Tauri asset protocol | n/a | works: the `.wasm` asset is fetched from `tauri://` with no changes | works: base64 `data:` URL |
+| CSP | works under `default-src 'self'` | needs `'wasm-unsafe-eval'` | needs `'wasm-unsafe-eval'` **and `data:` in `connect-src`**; without it the panes stay blank with no visible error |
+| React StrictMode | n/a | n/a | n/a |
+
+The POC keeps terminal instances outside React (one per worker, re-parented into the grid), so a StrictMode double-mount cannot create or destroy terminals.
+That is also why it uses `@wterm/dom` rather than the `@wterm/react` component: the component's lifecycle would tie terminals to mounts.
+
+### Integration friction
+
+- **wterm.** About 50 lines.
+  - The theme maps cleanly onto CSS custom properties.
+  - The default `.wterm` card styling (padding, radius, shadow) had to be zeroed.
+  - `readText()` is async, so the "cursor line" test helper is async.
+  - No problems loading WASM in Tauri.
+- **ghostty-web.** About 45 lines; it really is xterm-API compatible: `onData`, `onResize`, `write(data, cb)`, `input()`, FitAddon.
+  - Its inlined `data:` WASM collides with a strict CSP, silently.
+  - It keeps a per-terminal rAF render loop running while hidden.
+  - It is the only renderer that never completed the full bench in WebKitGTK.
+- **Bench adjustments made for these renderers.**
+  - The bench now records `timer_lag_ms` per phase.
+  - Tauri prints `QUARK_BENCH_PROGRESS` per phase, so a run that never finishes still leaves numbers.
+  - `h2h/run.sh` gained `RENDERERS`, `NATIVE`, `PORT` and `TAURI_TIMEOUT`, and keeps a `.log` per run.
+
+### Recommendation
+
+**Keep xterm.js as the default, switch it to the DOM renderer on Linux/WebKitGTK until WebGL is measured on real GPUs, and treat wterm-lite as the one alternative worth tracking.**
+Don't adopt ghostty-web.
+
+- **xterm DOM** was the most consistent under load in WebKitGTK (best fps and echo in every loaded phase). xterm WebGL may win on a real GPU; this box has none.
+- **wterm-lite** is the strongest alternative.
+  - It was the fastest renderer in Chromium (idle 58 fps, echo 13 ms) and the smallest (about 47 KB gzip).
+  - Its DOM selection, Ctrl+C-copies-when-selected behavior and Kitty keyboard support are features xterm lacks.
+  - The cost: it trails xterm DOM in WebKitGTK under load, and Linux paste needs a host-side binding.
+  - Re-measure it on macOS WKWebView before deciding; Chromium and WebKitGTK disagree here.
+- **wterm with the Ghostty core** adds the 592 KB WASM file and was slower to parse floods than the lite core (echo bytes arrived 0.7 to 0.8 s late under 3 floods). That is only worth it if the full libghostty VT feature set is needed: Kitty graphics, grapheme clusters, reflow.
+- **ghostty-web** ruled itself out:
+  - It never finished the flood bench in WebKitGTK.
+  - Hidden terminals keep rendering.
+  - Ctrl+I is wrong in legacy mode.
+  - It has no Kitty negotiation and no copy-event support.
+  - Its inlined WASM fights a strict CSP.

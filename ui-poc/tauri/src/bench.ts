@@ -43,6 +43,15 @@ async function report(result: unknown, exit: boolean) {
   }
 }
 
+async function progress(phase: string, data: unknown) {
+  const json = JSON.stringify({ phase, t: Math.round(performance.now()), ...(data as object) });
+  console.log("QUARK_BENCH_PROGRESS " + json);
+  if (inTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    invoke("bench_progress", { json }).catch(() => {});
+  }
+}
+
 async function run(phaseMs: number, exit: boolean) {
   const startedAt = new Date().toISOString();
   await waitFor(() => getState().connected && getState().workers.length > 0 && getState().projects.length > 0, 15000);
@@ -60,6 +69,7 @@ async function run(phaseMs: number, exit: boolean) {
   frames.release();
   setNav({ screen: "terminals" });
   await waitFor(() => allTerms().length >= Math.min(4, s.workers.length), 5000);
+  await Promise.race([Promise.all(allTerms().map((t) => t.ready)), sleep(15000)]);
   const probe = getProbeWorker()!;
   const probeTerm = allTerms().find((t) => t.id === probe)!;
   const others = s.workers.filter((w) => w.id !== probe).slice(0, 3).map((w) => w.id);
@@ -77,7 +87,7 @@ async function run(phaseMs: number, exit: boolean) {
     while (typing) {
       const ch = alphabet[i++ % alphabet.length];
       latency.keydown(ch);
-      probeTerm.term.input(ch, true); // same path as a real keystroke: xterm onData -> POST input
+      probeTerm.adapter!.simulateInput(ch); // same path as a keystroke after key handling: onData -> POST input
       if (++sinceClear >= 30) { await sleep(120); latency.pending = []; await api.input(probe, "\x15"); sinceClear = 0; }
       await sleep(120);
     }
@@ -95,10 +105,13 @@ async function run(phaseMs: number, exit: boolean) {
     const dur = (performance.now() - t0) / 1000;
     phases[name] = {
       ...frames.stats(rec),
+      // how late the phase timer fired: a starved event loop shows up here
+      timer_lag_ms: Math.round(performance.now() - t0 - phaseMs),
       frames_over_33ms: rec.filter((x) => x > 33.4).length,
       echo: opts.type ? latency.stats() : null,
       events_per_s: Math.round((getState().events - ev0) / dur),
     };
+    void progress(name, phases[name] as object);
     await sleep(250);
     await api.input(probe, "\x15");
   }
@@ -134,6 +147,7 @@ async function run(phaseMs: number, exit: boolean) {
     dpr: devicePixelRatio,
     viewport: [innerWidth, innerHeight],
     terminal_renderers: allTerms().map((t) => t.renderer),
+    terminal_open_ms: allTerms().map((t) => Math.round(t.openMs)),
     probe_worker: probe,
     phases,
   };

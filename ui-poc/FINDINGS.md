@@ -16,7 +16,8 @@ The native prototype works and warpui itself is fast, but it fails three of the 
 Performance does not change the answer: neither option reaches 60 fps on this GPU-less VM, and the relative results are mixed (below).
 Before closing ADR-3, run `h2h/run.sh` once on a Mac with a GPU; only a large native win there, combined with Warp relicensing the helper crates, would justify reopening this.
 
-For the terminal core, keep libghostty-vt as the lead candidate for wherever Quark runs a terminal model in Rust (the daemon's replay snapshots, a later mobile client), and track Ghostty's `ghostty-vt.wasm` as a possible xterm.js replacement in the webview.
+For terminals: render with xterm.js in the webview (DOM renderer on Linux until WebGL is measured on a GPU), run libghostty-vt in the daemon per tmux pane for snapshots, scrollback search and transcripts, and track wterm as the most promising xterm.js replacement (see Terminal in the webview).
+Embedding a native Ghostty surface in the Tauri window is out: Ghostty has no stable embedding API, and layering a native view over a webview is fragile on every platform.
 
 ## Scorecard
 
@@ -70,6 +71,23 @@ Both apps were built by agents with the same brief, so the time logs compare fra
 The Tauri app took about 38 minutes end to end; the native app took about 69 minutes, plus 24 for the libghostty backend and 25 for the web build.
 The gap comes from what warpui lacks: a reusable text editor (Warp's is in its AGPL app), a terminal grid element, markdown, typed-text and IME hooks, and any documentation beyond the examples.
 It also hit `em_width` returning ink width instead of advance, a `UniformList` panic on zero items, and no exposed frame timing.
+
+## Terminal in the webview
+
+After ADR-3 settled on Tauri, two Ghostty-based web terminals were swapped into the Tauri prototype in place of xterm.js and run through the same bench (`tauri/RESULTS.md`, "Terminal renderer comparison"; raw data in `h2h/results-renderers/`).
+Medians of 3 rounds in the Tauri desktop app, software rendering:
+
+| Renderer | 4 terminals, typing: fps / echo p50 ms | 3 panes flooding + chat: fps / echo p50 ms | 4 panes flooding: fps | Added gzip |
+| --- | --- | --- | --- | --- |
+| xterm.js DOM | 27.9 / 27 | 7.2 / 126 | 6.7 | ~116 KB |
+| xterm.js WebGL | 15.7 / 38 | 4.7 / 332 | 4.4 | ~116 KB |
+| wterm, built-in Zig core | 20.4 / 35 | 4.8 / 204 | 3.7 | ~47 KB |
+| wterm, Ghostty core | 18.4 / 33 | 4.2 / 909 | 3.2 | ~236 KB |
+| ghostty-web | 25.2 / 25 | 5.0 / 69, most keys never echoed | did not finish | ~187 KB |
+
+- **wterm** (vercel-labs/wterm, Apache-2.0, very active, labelled a Vercel Labs experiment): native DOM selection, IME, Kitty keyboard protocol, Kitty images with the Ghostty core. Its Ghostty core falls behind on parsing under flood; its lightweight core does not, and was the fastest renderer in headless Chromium. On Linux its Ctrl+V sends ^V, so Quark needs its own paste binding, and Shift+Enter sends a Kitty sequence outside Kitty mode.
+- **ghostty-web** (coder/ghostty-web, MIT, no commits since June 2026): stalls in the desktop app when all four panes flood, keeps painting hidden terminals, sends a Kitty sequence for Ctrl+I outside Kitty mode, and renders blank under a strict CSP unless `data:` is allowed. Not recommended.
+- Chromium and WebKitGTK disagree sharply about wterm's DOM rendering, so the choice between xterm.js and wterm should be re-measured on macOS (WKWebView), which is where Quark will mostly run.
 
 ## What is in this directory
 

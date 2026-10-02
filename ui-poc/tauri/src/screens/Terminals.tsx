@@ -32,13 +32,19 @@ function Pane({ w, probe, focused, onFocus, taskTitle }: { w: Worker; probe: boo
     h.probe = probe;
     attach(h, body.current!);
     setRenderer(h.renderer);
-    const ro = new ResizeObserver(() => { try { h.fit.fit(); } catch {} });
-    ro.observe(body.current!);
-    const onF = h.term.textarea;
+    let live = true;
+    let inputEl: HTMLElement | null = null;
     const f = () => onFocus();
-    onF?.addEventListener("focus", f);
-    if (probe) h.term.focus();
-    return () => { ro.disconnect(); onF?.removeEventListener("focus", f); };
+    h.ready.then(() => {
+      if (!live) return;
+      setRenderer(h.renderer);
+      inputEl = h.adapter!.inputElement();
+      inputEl?.addEventListener("focus", f);
+      if (probe) h.adapter!.focus();
+    });
+    const ro = new ResizeObserver(() => h.adapter?.fit());
+    ro.observe(body.current!);
+    return () => { live = false; ro.disconnect(); inputEl?.removeEventListener("focus", f); };
   }, [w.id, probe]);
 
   useEffect(() => {

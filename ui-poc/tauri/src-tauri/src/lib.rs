@@ -13,10 +13,16 @@ fn bench_report(json: String, exit: bool, app: tauri::AppHandle) {
     }
 }
 
+/// Per-phase progress lines, so a run that never finishes still leaves partial numbers.
+#[tauri::command]
+fn bench_progress(json: String) {
+    println!("QUARK_BENCH_PROGRESS {json}");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![bench_report])
+        .invoke_handler(tauri::generate_handler![bench_report, bench_progress])
         .setup(|app| {
             let q = std::env::var("QUARK_QUERY").unwrap_or_default();
             let path = if q.is_empty() { "index.html".to_string() } else { format!("index.html?{q}") };

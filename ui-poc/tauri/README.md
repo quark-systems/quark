@@ -35,7 +35,7 @@ The desktop app takes the same string through the `QUARK_QUERY` env var, for exa
 | `screen=board\|terminals\|chat\|diff\|inbox` | initial screen |
 | `project=<id>`, `pr=<id>` | initial project and PR |
 | `perf` | open the perf overlay |
-| `renderer=dom` | use xterm's DOM renderer instead of WebGL |
+| `renderer=dom\|wterm\|wterm-lite\|ghostty-web` | terminal implementation (default xterm.js WebGL); see RESULTS.md "Terminal renderer comparison" |
 | `probe=<worker id>` | pane used for the echo-latency probe (default: the worker titled `shell`/`bash`) |
 | `bench` | run the scripted benchmark (see below) |
 | `exit` | with `bench`: quit the desktop app when done |
@@ -116,5 +116,5 @@ Raw results from this environment are in `bench/`, and the analysis is in `RESUL
 - **Markdown.** Raw HTML is escaped rather than sanitized properly; links render as-is.
 - **Workers.** Only the first 4 are shown. There is no pane zoom or layout persistence.
 - **Inbox ordering.** Decisions sort open-first, then by id. The contract has no timestamp for decisions.
-- **Security.** Tauri `csp` is `null`, which keeps the POC simple; production would pin `connect-src` to the daemon.
+- **Security.** The Tauri CSP is `default-src 'self'`, with `'wasm-unsafe-eval'` for the WASM terminal cores, `connect-src` limited to the IPC bridge, `127.0.0.1` and `data:`, and `'unsafe-inline'` styles. `data:` is only needed by ghostty-web. The first round of benchmarks ran with `csp: null`; the CSP does not affect rendering.
 - **Window management.** Under Xvfb there is no window manager, so the screenshots show no title bar.
