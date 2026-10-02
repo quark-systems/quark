@@ -12,6 +12,7 @@ quark-systems.workspace = true
 quark-engine.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 axum.workspace = true
 clap.workspace = true
 futures-util.workspace = true

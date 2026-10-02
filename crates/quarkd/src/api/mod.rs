@@ -4,11 +4,13 @@ mod error;
 mod events;
 mod openapi;
 mod routes;
+mod terminals;
 
 use std::sync::Arc;
 
 use crate::engine::EngineAdapter;
-use axum::routing::get;
+use crate::sessions::Sessions;
+use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
@@ -21,6 +23,7 @@ pub use openapi::ApiDoc;
 pub struct AppState {
     pub store: Arc<Store>,
     pub engine: Arc<dyn EngineAdapter>,
+    pub sessions: Sessions,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -37,6 +40,14 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
         .route("/v1/tasks/{id}", get(routes::get_task))
+        .route(
+            "/v1/projects/{id}/terminals",
+            get(terminals::list_terminals),
+        )
+        .route("/v1/terminals/{id}", get(terminals::get_terminal))
+        .route("/v1/terminals/{id}/input", post(terminals::input))
+        .route("/v1/terminals/{id}/resize", post(terminals::resize))
+        .route("/v1/terminals/{id}/snapshot", post(terminals::snapshot))
         .route("/v1/decisions", get(routes::list_decisions))
         .route("/v1/events", get(events::stream))
         .layer(TraceLayer::new_for_http())

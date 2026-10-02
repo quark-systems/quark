@@ -8,6 +8,7 @@ pub mod api;
 pub mod config;
 pub mod engine;
 pub mod projector;
+pub mod sessions;
 pub mod store;
 
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use tokio::net::TcpListener;
 use crate::api::AppState;
 use crate::config::Config;
 use crate::projector::Projector;
+use crate::sessions::Sessions;
 use crate::store::Store;
 
 /// Current UTC time as RFC 3339.
@@ -42,10 +44,15 @@ pub async fn serve(config: Config, engine: Arc<dyn EngineAdapter>) -> anyhow::Re
     let store =
         Arc::new(Store::open(&db_path).with_context(|| format!("opening {}", db_path.display()))?);
 
-    let projector = Projector::new(store.clone(), engine.clone());
+    let sessions = Sessions::detect(config.tmux.as_deref(), config.run_dir(), store.clone());
+    let projector = Projector::new(store.clone(), engine.clone()).with_sessions(sessions.clone());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
-    let app = api::router(AppState { store, engine });
+    let app = api::router(AppState {
+        store,
+        engine,
+        sessions: sessions.clone(),
+    });
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("binding {}", config.listen))?;
@@ -54,6 +61,8 @@ pub async fn serve(config: Config, engine: Arc<dyn EngineAdapter>) -> anyhow::Re
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     projector_task.abort();
+    // Workspace tmux servers keep running; the next start reattaches.
+    sessions.detach_all();
     Ok(())
 }
 

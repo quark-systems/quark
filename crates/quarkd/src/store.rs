@@ -19,7 +19,14 @@ use tokio::sync::broadcast;
 
 use crate::now_rfc3339;
 
-const SCHEMA_VERSION: i64 = 1;
+/// One `worker.output` event to append.
+#[derive(Debug, Clone)]
+pub struct TerminalOutput {
+    pub project_id: Option<String>,
+    pub output: quark_systems::TerminalOutput,
+}
+
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -79,6 +86,15 @@ CREATE TABLE adapter_calls (
 );
 "#;
 
+/// Terminal output is the one high-volume event. `subject` names the terminal
+/// a `worker.output` event belongs to and `size` its byte count, so old
+/// output can be pruned per terminal.
+const SCHEMA_V2: &str = r#"
+ALTER TABLE events ADD COLUMN subject TEXT;
+ALTER TABLE events ADD COLUMN size INTEGER;
+CREATE INDEX events_subject ON events (subject, seq) WHERE subject IS NOT NULL;
+"#;
+
 /// Capacity of the live event channel. A subscriber that falls further behind
 /// than this catches up from the store instead.
 const BUS_CAPACITY: usize = 1024;
@@ -115,6 +131,10 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "busy_timeout", 5000)?;
+        // A rebuildable read model: with WAL, NORMAL can lose the last commits
+        // on power loss but never corrupts, and it keeps terminal output
+        // from costing an fsync per chunk.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         migrate(&mut conn)?;
         let (bus, _) = broadcast::channel(BUS_CAPACITY);
         Ok(Store {
@@ -519,6 +539,67 @@ impl Store {
         })
     }
 
+    /// Engine task id to daemon task id for one Project.
+    pub fn task_ids_by_engine(&self, project_id: &str) -> Result<HashMap<String, String>> {
+        self.read(|c| {
+            let mut stmt = c.prepare("SELECT engine_id, id FROM tasks WHERE project_id = ?1")?;
+            let rows = stmt.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    // Terminal output
+
+    /// Appends `worker.output` events in one transaction and returns them.
+    pub fn append_terminal_output(&self, chunks: &[TerminalOutput]) -> Result<Vec<Event>> {
+        self.write(|tx, events| {
+            for chunk in chunks {
+                let project_id = chunk.project_id.as_deref();
+                let size = chunk.output.data_b64.len() / 4 * 3;
+                append_subject_event(
+                    tx,
+                    events,
+                    project_id,
+                    EventType::WorkerOutput,
+                    serde_json::to_value(&chunk.output)?,
+                    Some((&chunk.output.terminal_id, size)),
+                )?;
+            }
+            Ok(events.clone())
+        })
+    }
+
+    /// Deletes a terminal's oldest output events so that about `keep_bytes`
+    /// remain, then everything before the oldest snapshot still kept, so a
+    /// replay of the terminal starts from a full screen. Replay after pruning
+    /// has `seq` gaps; `seq` stays strictly increasing.
+    pub fn prune_terminal_output(&self, terminal_id: &str, keep_bytes: u64) -> Result<usize> {
+        self.read(|c| {
+            let cutoff: Option<i64> = c.query_row(
+                "SELECT MIN(seq) FROM (
+                     SELECT seq, SUM(size) OVER (ORDER BY seq DESC) AS kept
+                     FROM events WHERE subject = ?1
+                 ) WHERE kept <= ?2",
+                params![terminal_id, keep_bytes as i64],
+                |r| r.get(0),
+            )?;
+            let Some(cutoff) = cutoff else {
+                return Ok(0);
+            };
+            let snapshot: Option<i64> = c.query_row(
+                "SELECT MIN(seq) FROM events
+                 WHERE subject = ?1 AND seq >= ?2
+                   AND json_extract(payload, '$.kind') = 'snapshot'",
+                params![terminal_id, cutoff],
+                |r| r.get(0),
+            )?;
+            Ok(c.execute(
+                "DELETE FROM events WHERE subject = ?1 AND seq < ?2",
+                params![terminal_id, snapshot.unwrap_or(cutoff)],
+            )?)
+        })
+    }
+
     // Adapter calls
 
     pub fn record_adapter_call(
@@ -560,6 +641,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 1)?;
         tx.commit()?;
     }
+    if version < 2 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V2)?;
+        tx.pragma_update(None, "user_version", 2)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -570,10 +657,30 @@ fn append_event(
     event_type: EventType,
     payload: serde_json::Value,
 ) -> Result<()> {
+    append_subject_event(tx, events, project_id, event_type, payload, None)
+}
+
+/// [`append_event`] tagged with a subject and size for per-subject pruning.
+fn append_subject_event(
+    tx: &Transaction,
+    events: &mut Vec<Event>,
+    project_id: Option<&str>,
+    event_type: EventType,
+    payload: serde_json::Value,
+    subject: Option<(&str, usize)>,
+) -> Result<()> {
     let ts = now_rfc3339();
     tx.execute(
-        "INSERT INTO events (project_id, type, ts, payload) VALUES (?1, ?2, ?3, ?4)",
-        params![project_id, event_type.as_str(), ts, payload.to_string()],
+        "INSERT INTO events (project_id, type, ts, payload, subject, size)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            project_id,
+            event_type.as_str(),
+            ts,
+            payload.to_string(),
+            subject.map(|s| s.0),
+            subject.map(|s| s.1 as i64)
+        ],
     )?;
     events.push(Event {
         seq: tx.last_insert_rowid(),
@@ -702,6 +809,7 @@ mod tests {
             state_note: None,
             harness: Some("claude".into()),
             pull_request_url: None,
+            terminal: None,
         }
     }
 

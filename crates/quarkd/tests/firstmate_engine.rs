@@ -78,6 +78,7 @@ async fn snapshot_maps_to_neutral_tasks() {
         ship.pull_request_url.as_deref(),
         Some("https://github.com/kunchenguid/firstmate/pull/9")
     );
+    assert_eq!(ship.terminal.as_deref(), Some("firstmate:fm-ship-task"));
 }
 
 #[tokio::test]

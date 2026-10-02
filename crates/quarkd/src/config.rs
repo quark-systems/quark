@@ -17,6 +17,8 @@ pub struct Config {
     pub home: PathBuf,
     pub listen: SocketAddr,
     pub refresh_interval: Duration,
+    /// tmux binary for terminal sessions; `tmux` from `PATH` when unset.
+    pub tmux: Option<PathBuf>,
 }
 
 impl Config {
@@ -27,6 +29,11 @@ impl Config {
     /// Pinned engine checkout, `~/.quark/engine`.
     pub fn engine_root(&self) -> PathBuf {
         self.home.join("engine")
+    }
+
+    /// Runtime files such as workspace tmux sockets, `~/.quark/run`.
+    pub fn run_dir(&self) -> PathBuf {
+        self.home.join("run")
     }
 }
 

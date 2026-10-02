@@ -5,17 +5,29 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::engine::{EngineAdapter, WorkspaceRef};
+use crate::sessions::{Sessions, TaskTarget};
 
 use crate::store::Store;
 
 pub struct Projector {
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
+    sessions: Option<Sessions>,
 }
 
 impl Projector {
     pub fn new(store: Arc<Store>, engine: Arc<dyn EngineAdapter>) -> Self {
-        Self { store, engine }
+        Self {
+            store,
+            engine,
+            sessions: None,
+        }
+    }
+
+    /// Also maps each refreshed workspace's tmux windows to its tasks.
+    pub fn with_sessions(mut self, sessions: Sessions) -> Self {
+        self.sessions = Some(sessions);
+        self
     }
 
     /// Refreshes every Project that has a workspace attached. Adapter failures
@@ -42,12 +54,18 @@ impl Projector {
         self.record(ws, "snapshot", started, snapshot.as_ref().err())
             .await;
         if let Ok(snapshot) = snapshot {
+            let terminals: Vec<(String, String)> = snapshot
+                .tasks
+                .iter()
+                .filter_map(|t| Some((t.id.clone(), t.terminal.clone()?)))
+                .collect();
             let store = self.store.clone();
             let project_id = ws.project_id.clone();
             let res =
                 tokio::task::spawn_blocking(move || store.apply_snapshot(&project_id, &snapshot))
                     .await;
             log_apply(ws, "snapshot", res);
+            self.sync_sessions(ws, terminals).await;
         }
 
         let started = Instant::now();
@@ -60,6 +78,40 @@ impl Projector {
             let res =
                 tokio::task::spawn_blocking(move || store.apply_holds(&project_id, &holds)).await;
             log_apply(ws, "holds", res);
+        }
+    }
+
+    /// Hands the workspace's task window targets to the session layer.
+    async fn sync_sessions(&self, ws: &WorkspaceRef, terminals: Vec<(String, String)>) {
+        let Some(sessions) = &self.sessions else {
+            return;
+        };
+        let store = self.store.clone();
+        let project_id = ws.project_id.clone();
+        let ids = match tokio::task::spawn_blocking(move || store.task_ids_by_engine(&project_id))
+            .await
+        {
+            Ok(Ok(ids)) => ids,
+            Ok(Err(e)) => {
+                tracing::error!(project = %ws.project_id, error = %e, "reading task ids failed");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(project = %ws.project_id, error = %e, "task id read panicked");
+                return;
+            }
+        };
+        let targets = terminals
+            .into_iter()
+            .filter_map(|(engine_id, target)| {
+                Some(TaskTarget {
+                    task_id: ids.get(&engine_id)?.clone(),
+                    target,
+                })
+            })
+            .collect();
+        if let Err(e) = sessions.sync(&ws.project_id, targets).await {
+            tracing::debug!(project = %ws.project_id, error = %e, "terminal sync skipped");
         }
     }
 

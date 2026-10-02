@@ -38,6 +38,9 @@ struct ServeArgs {
     /// Seconds between projection refreshes.
     #[arg(long, default_value_t = 5)]
     refresh_secs: u64,
+    /// tmux binary for terminal sessions [default: tmux on PATH]
+    #[arg(long, env = "QUARKD_TMUX")]
+    tmux: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -60,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
                 home: args.home.unwrap_or_else(config::default_home),
                 listen: args.listen,
                 refresh_interval: Duration::from_secs(args.refresh_secs.max(1)),
+                tmux: args.tmux,
             };
             let engine = config::build_engine(args.engine, &config)?;
             quarkd::serve(config, engine).await

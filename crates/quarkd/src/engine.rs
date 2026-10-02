@@ -52,6 +52,10 @@ pub struct EngineTask {
     pub state_note: Option<String>,
     pub harness: Option<String>,
     pub pull_request_url: Option<String>,
+    /// The tmux `session:window` target the task runs in, when it runs in
+    /// tmux. Terminal sessions map windows to tasks by it.
+    #[serde(default)]
+    pub terminal: Option<String>,
 }
 
 /// New status-log lines for one task, starting at a byte offset.

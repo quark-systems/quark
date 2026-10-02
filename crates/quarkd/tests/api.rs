@@ -29,6 +29,7 @@ async fn harness() -> Harness {
     let app = api::router(AppState {
         store: store.clone(),
         engine: engine.clone(),
+        sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -97,6 +98,7 @@ fn task(state: TaskState) -> EngineTask {
         state_note: None,
         harness: Some("claude".into()),
         pull_request_url: None,
+        terminal: None,
     }
 }
 
@@ -228,4 +230,32 @@ async fn committed_openapi_matches() {
     let (status, served) = call(&h.app, "GET", "/v1/openapi.json", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(served, serde_json::from_str::<Value>(&committed).unwrap());
+}
+
+#[tokio::test]
+async fn terminal_routes_without_tmux() {
+    let h = harness().await;
+    let (status, project) = call(&h.app, "POST", "/v1/projects", Some(json!({"name": "p"}))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = project["id"].as_str().unwrap();
+
+    let (status, list) = call(&h.app, "GET", &format!("/v1/projects/{id}/terminals"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list, json!([]));
+    let (status, _) = call(&h.app, "GET", "/v1/projects/nope/terminals", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = call(&h.app, "GET", "/v1/terminals/tsk_x", None).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "unavailable");
+
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        "/v1/terminals/tsk_x/input",
+        Some(json!({"data_b64": "not base64!"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
 }

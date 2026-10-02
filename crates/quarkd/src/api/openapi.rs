@@ -1,7 +1,7 @@
 use axum::Json;
 use utoipa::OpenApi;
 
-use super::{events, routes};
+use super::{events, routes, terminals};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -19,6 +19,11 @@ use super::{events, routes};
         routes::list_tasks,
         routes::get_task,
         routes::list_decisions,
+        terminals::list_terminals,
+        terminals::get_terminal,
+        terminals::input,
+        terminals::resize,
+        terminals::snapshot,
         events::stream,
     ),
     components(schemas(
@@ -27,12 +32,16 @@ use super::{events, routes};
         quark_systems::TaskState,
         quark_systems::TaskKind,
         quark_systems::DecisionState,
+        quark_systems::TerminalRole,
+        quark_systems::TerminalChunkKind,
+        quark_systems::TerminalOutput,
     )),
     tags(
         (name = "daemon"),
         (name = "projects"),
         (name = "tasks"),
         (name = "decisions"),
+        (name = "terminals"),
         (name = "events")
     )
 )]

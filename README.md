@@ -28,7 +28,7 @@ The repository is a Cargo workspace:
 
 | Crate | Purpose |
 | :--- | :--- |
-| `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection, and the `EngineAdapter` seam (`quarkd::engine`) |
+| `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection, the `EngineAdapter` seam (`quarkd::engine`), and tmux terminal sessions (`quarkd::sessions`) |
 | `crates/quark-systems` | Neutral API and event types shared by the daemon and its clients |
 
 ```sh
@@ -41,3 +41,9 @@ cargo run -p quarkd -- openapi      # prints the OpenAPI document
 Regenerate it with `cargo run -p quarkd -- openapi > api/openapi.json`.
 
 The event stream is a WebSocket at `/v1/events?cursor=<seq>`: each frame is one JSON event with a monotonic `seq`, and a client that reconnects with its last `seq` replays everything it missed.
+
+Terminal sessions need tmux 3.2 or newer (`--tmux` or `QUARKD_TMUX` picks the binary; without tmux the terminal routes answer 503).
+Each Project workspace runs its own tmux server on `~/.quark/run/tmux/<project id>`, and quarkd attaches to it in control mode.
+The coordinator's window and every task window firstmate opens on that server become terminals: `GET /v1/projects/{id}/terminals`, input, resize and snapshot under `/v1/terminals/{id}`, and output as `worker.output` events.
+A terminal's output starts with a `snapshot` chunk (reset the emulator, then feed the bytes), and the daemon keeps about 2 MiB of output per terminal.
+To open a terminal, subscribe to the event stream, call `POST /v1/terminals/{id}/snapshot`, apply the returned event, then the terminal's events with a greater `seq`.
