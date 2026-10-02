@@ -2,8 +2,8 @@
   "name": "Quark",
   "goal": "Build the Quark MVP: all ten journeys in the spec pass on Matt's machine with his real repos. Quark builds itself from Phase 3 on.",
   "repos": [
-    { "url": "https://github.com/quark-systems/quark.git", "name": "quark" },
-    { "url": "https://github.com/quark-systems/firstmate.git", "name": "firstmate" }
+    { "url": "git@github.com:quark-systems/quark.git", "name": "quark" },
+    { "url": "git@github.com:quark-systems/firstmate.git", "name": "firstmate" }
   ],
   "agent_config": { "harness": "claude-code", "effort": "high" },
   "dispatch_preset": "single",

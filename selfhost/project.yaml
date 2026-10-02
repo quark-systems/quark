@@ -10,7 +10,7 @@ created_at: "@CREATED_AT@"
 workspace:
   sources:
     - name: "quark"
-      url: "https://github.com/quark-systems/quark.git"
+      url: "git@github.com:quark-systems/quark.git"
       verification:
         checks:
           - { name: "rustfmt", run: "cargo fmt --all --check" }
@@ -24,7 +24,7 @@ workspace:
           url: "http://127.0.0.1:1421/"
           ready_timeout_s: 120
     - name: "firstmate"
-      url: "https://github.com/quark-systems/firstmate.git"
+      url: "git@github.com:quark-systems/firstmate.git"
       verification:
         checks:
           # Lint needs CI's pinned shellcheck and actionlint; install each pin once into a cache.
