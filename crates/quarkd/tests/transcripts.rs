@@ -37,6 +37,7 @@ fn harness() -> Harness {
         store: store.clone(),
         engine: engine.clone(),
         chat: chat.clone(),
+        sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(dir.path().join("home")),
     });
     let roots = SessionRoots {
@@ -136,6 +137,7 @@ async fn session_logs_become_coordinator_and_worker_events() {
             harness: Some("claude".into()),
             pull_request_url: None,
             worktree: Some(worktree.clone()),
+            terminal: None,
         }],
     });
 
@@ -309,6 +311,7 @@ async fn without_a_session_client_messages_are_refused() {
         store: store.clone(),
         engine: Arc::new(StubEngine::new()),
         chat: Arc::new(quarkd::chat::NoSessions),
+        sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(std::env::temp_dir().join("quark-test-home")),
     });
     let (_, project) = call(

@@ -260,6 +260,7 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
                 state_note: current.and_then(|c| c.detail.clone()),
                 harness: t.harness.clone(),
                 pull_request_url,
+                terminal: tmux_target(t),
                 worktree: t
                     .paths
                     .worktree
@@ -289,6 +290,7 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
             state_note: r.hold_reason.clone(),
             harness: None,
             pull_request_url: None,
+            terminal: None,
             worktree: None,
         });
     }
@@ -320,6 +322,19 @@ pub fn neutral_holds(s: &FmSnapshot) -> Vec<Hold> {
         answered_by: None,
     });
     held.chain(open).collect()
+}
+
+/// The task's tmux window target. Other backends' endpoints are not tmux
+/// targets, and remote ones (`remote:<id>`) are not on this machine.
+fn tmux_target(t: &Task) -> Option<String> {
+    if !matches!(t.backend.as_deref(), None | Some("tmux")) {
+        return None;
+    }
+    let target = t.endpoint.as_ref()?.target.as_deref()?;
+    if target.starts_with("remote:") || !target.contains(':') {
+        return None;
+    }
+    Some(target.to_string())
 }
 
 fn task_kind(kind: Option<&str>) -> Option<TaskKind> {

@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use quark_transcript::{SessionFormat, SessionRoots};
 
+use crate::sessions::{Sessions, TaskTarget};
+
 use crate::engine::{EngineAdapter, EngineTask, WorkspaceRef};
 
 use crate::store::{Store, TranscriptSource};
@@ -15,6 +17,7 @@ pub struct Projector {
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
     transcripts: Arc<TranscriptTap>,
+    sessions: Option<Sessions>,
 }
 
 impl Projector {
@@ -24,6 +27,7 @@ impl Projector {
             store,
             engine,
             transcripts,
+            sessions: None,
         }
     }
 
@@ -31,6 +35,12 @@ impl Projector {
     /// default harness directories.
     pub fn with_session_roots(mut self, roots: SessionRoots) -> Self {
         self.transcripts = Arc::new(TranscriptTap::new(self.store.clone(), roots));
+        self
+    }
+
+    /// Also maps each refreshed workspace's tmux windows to its tasks.
+    pub fn with_sessions(mut self, sessions: Sessions) -> Self {
+        self.sessions = Some(sessions);
         self
     }
 
@@ -60,12 +70,18 @@ impl Projector {
         let mut tasks = Vec::new();
         if let Ok(snapshot) = snapshot {
             tasks = snapshot.tasks.clone();
+            let terminals: Vec<(String, String)> = snapshot
+                .tasks
+                .iter()
+                .filter_map(|t| Some((t.id.clone(), t.terminal.clone()?)))
+                .collect();
             let store = self.store.clone();
             let project_id = ws.project_id.clone();
             let res =
                 tokio::task::spawn_blocking(move || store.apply_snapshot(&project_id, &snapshot))
                     .await;
             log_apply(ws, "snapshot", res);
+            self.sync_sessions(ws, terminals).await;
         }
         self.tap_transcripts(ws, tasks).await;
 
@@ -120,6 +136,40 @@ impl Projector {
         .await;
         if let Err(e) = res {
             tracing::error!(error = %e, "transcript task panicked");
+        }
+    }
+
+    /// Hands the workspace's task window targets to the session layer.
+    async fn sync_sessions(&self, ws: &WorkspaceRef, terminals: Vec<(String, String)>) {
+        let Some(sessions) = &self.sessions else {
+            return;
+        };
+        let store = self.store.clone();
+        let project_id = ws.project_id.clone();
+        let ids = match tokio::task::spawn_blocking(move || store.task_ids_by_engine(&project_id))
+            .await
+        {
+            Ok(Ok(ids)) => ids,
+            Ok(Err(e)) => {
+                tracing::error!(project = %ws.project_id, error = %e, "reading task ids failed");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(project = %ws.project_id, error = %e, "task id read panicked");
+                return;
+            }
+        };
+        let targets = terminals
+            .into_iter()
+            .filter_map(|(engine_id, target)| {
+                Some(TaskTarget {
+                    task_id: ids.get(&engine_id)?.clone(),
+                    target,
+                })
+            })
+            .collect();
+        if let Err(e) = sessions.sync(&ws.project_id, targets).await {
+            tracing::debug!(project = %ws.project_id, error = %e, "terminal sync skipped");
         }
     }
 

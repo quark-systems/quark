@@ -841,6 +841,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64",
  "clap",
  "futures-util",
  "http-body-util",
