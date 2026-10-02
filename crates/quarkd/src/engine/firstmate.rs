@@ -1,6 +1,7 @@
 //! [`EngineAdapter`] over a firstmate home, built on the `quark-engine`
 //! readers and its allowlisted writer.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -210,6 +211,22 @@ impl EngineAdapter for FirstmateEngine {
         write::parse_spawned(&out).map_err(convert)?;
         Ok(())
     }
+
+    /// Coordinators are the command center's secondmates, keyed by Project
+    /// id, so their windows come from its metadata and survive restarts.
+    async fn coordinator_terminals(
+        &self,
+        command: &Path,
+    ) -> Result<HashMap<String, String>, EngineError> {
+        if !command.is_dir() {
+            return Ok(HashMap::new());
+        }
+        let ws = WorkspaceRef {
+            project_id: String::new(),
+            root: command.to_path_buf(),
+        };
+        Ok(coordinator_targets(&self.read_snapshot(&ws).await?))
+    }
 }
 
 fn delivery_mode(d: DeliveryPolicy) -> DeliveryMode {
@@ -340,6 +357,16 @@ pub fn neutral_holds(s: &FmSnapshot) -> Vec<Hold> {
         answered_by: None,
     });
     held.chain(open).collect()
+}
+
+/// Secondmate window targets by secondmate id, which is the Project id for
+/// workspaces Quark seeded.
+pub fn coordinator_targets(s: &FmSnapshot) -> HashMap<String, String> {
+    s.tasks
+        .iter()
+        .filter(|t| t.kind.as_deref() == Some("secondmate"))
+        .filter_map(|t| Some((t.id.clone(), tmux_target(t)?)))
+        .collect()
 }
 
 /// The task's tmux window target. Other backends' endpoints are not tmux

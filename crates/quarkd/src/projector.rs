@@ -1,7 +1,8 @@
 //! Pulls engine state through the adapter and projects it into the store.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use quark_transcript::{SessionFormat, SessionRoots};
@@ -18,6 +19,10 @@ pub struct Projector {
     engine: Arc<dyn EngineAdapter>,
     transcripts: Arc<TranscriptTap>,
     sessions: Option<Sessions>,
+    /// Command-center workspace whose secondmates are the coordinators.
+    command: Option<PathBuf>,
+    /// Coordinator targets last handed to the session layer, by Project id.
+    coordinators: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl Projector {
@@ -28,6 +33,8 @@ impl Projector {
             engine,
             transcripts,
             sessions: None,
+            command: None,
+            coordinators: Mutex::default(),
         }
     }
 
@@ -44,11 +51,24 @@ impl Projector {
         self
     }
 
+    /// Also maps each Project's coordinator window, read from the
+    /// command-center workspace at `command`.
+    pub fn with_command(mut self, command: impl Into<PathBuf>) -> Self {
+        self.command = Some(command.into());
+        self
+    }
+
     /// Refreshes every Project that has a workspace attached. Adapter failures
     /// are recorded and logged per Project, never retried silently.
     pub async fn refresh_all(&self) -> anyhow::Result<()> {
         let store = self.store.clone();
         let projects = tokio::task::spawn_blocking(move || store.list_projects()).await??;
+        let ids: Vec<_> = projects
+            .iter()
+            .filter(|p| p.workspace_path.is_some())
+            .map(|p| p.id.clone())
+            .collect();
+        self.sync_coordinators(&ids).await;
         for project in projects {
             let Some(path) = project.workspace_path else {
                 continue;
@@ -170,6 +190,44 @@ impl Projector {
             .collect();
         if let Err(e) = sessions.sync(&ws.project_id, targets).await {
             tracing::debug!(project = %ws.project_id, error = %e, "terminal sync skipped");
+        }
+    }
+
+    /// Maps each Project's coordinator window from the command center's
+    /// records, so the mapping survives daemon restarts. Only changes reach
+    /// the session layer; a failed read leaves the last mapping in place.
+    async fn sync_coordinators(&self, project_ids: &[String]) {
+        let (Some(sessions), Some(command)) = (&self.sessions, &self.command) else {
+            return;
+        };
+        if sessions.server().is_err() {
+            return;
+        }
+        let mut found = match self.engine.coordinator_terminals(command).await {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!(error = %e, "reading coordinator windows failed");
+                return;
+            }
+        };
+        for id in project_ids {
+            let target = found.remove(id);
+            let changed = {
+                let mut last = self.coordinators.lock().unwrap();
+                if last.get(id) == Some(&target) {
+                    false
+                } else {
+                    last.insert(id.clone(), target.clone());
+                    true
+                }
+            };
+            if !changed {
+                continue;
+            }
+            if let Err(e) = sessions.set_coordinator(id, target).await {
+                tracing::debug!(project = %id, error = %e, "coordinator mapping skipped");
+                self.coordinators.lock().unwrap().remove(id);
+            }
         }
     }
 

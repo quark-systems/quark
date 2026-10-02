@@ -60,7 +60,10 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let tmux = sessions.tmux_env().ok();
     let engine: Arc<dyn EngineAdapter> =
         config::build_engine(engine, &config, store.clone(), tmux)?;
-    let projector = Projector::new(store.clone(), engine.clone()).with_sessions(sessions.clone());
+    let layout = provision::Layout::new(&config.home);
+    let projector = Projector::new(store.clone(), engine.clone())
+        .with_sessions(sessions.clone())
+        .with_command(layout.command_workspace());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
     let app = api::router(AppState {
@@ -68,7 +71,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         engine,
         harnesses: Arc::new(harness::HarnessRegistry::builtin()),
         sessions: sessions.clone(),
-        layout: provision::Layout::new(&config.home),
+        layout,
         chat: Arc::new(chat::SessionsInput::new(
             sessions.clone(),
             quark_transcript::SessionRoots::from_env(),
@@ -82,7 +85,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     projector_task.abort();
-    // Workspace tmux servers keep running; the next start reattaches.
+    // The tmux server keeps running; the next start reattaches.
     sessions.detach_all();
     Ok(())
 }
