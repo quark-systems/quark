@@ -11,9 +11,9 @@ pub struct Workspace {
     pub home: PathBuf,
     /// The pinned firstmate checkout whose `bin/` holds the engine scripts.
     pub engine_root: PathBuf,
-    /// `TMUX` for every script call, naming the tmux server the engine opens
-    /// and inspects windows in. `None` leaves the daemon's own environment.
-    pub tmux: Option<String>,
+    /// Extra environment for every script run against this workspace, such
+    /// as the `TMUX` socket the engine should open its windows on.
+    pub env: Vec<(String, String)>,
 }
 
 impl Workspace {
@@ -21,13 +21,13 @@ impl Workspace {
         Self {
             home: home.into(),
             engine_root: engine_root.into(),
-            tmux: None,
+            env: Vec::new(),
         }
     }
 
-    /// Run every script call against the tmux server named by `tmux`.
-    pub fn with_tmux(mut self, tmux: Option<String>) -> Self {
-        self.tmux = tmux;
+    /// Adds `key=value` to every script run against this workspace.
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.push((key.into(), value.into()));
         self
     }
 

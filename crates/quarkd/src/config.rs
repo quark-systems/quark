@@ -60,6 +60,8 @@ pub enum EngineKind {
     Firstmate,
 }
 
+/// `tmux` is the `TMUX` value engine scripts run with, when the daemon has
+/// terminal sessions.
 pub fn build_engine(
     kind: EngineKind,
     config: &Config,
