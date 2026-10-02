@@ -10,6 +10,68 @@
   },
   "paths": {
     "/v1/coordinators/{id}/messages": {
+      "get": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "A Project coordinator's conversation so far. The coordinator id is the\nProject id. New entries arrive as `coordinator.message` events.",
+        "operationId": "coordinator_messages",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Only entries with `id` greater than this.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many entries (default and maximum 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TranscriptItem"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "coordinators"
@@ -427,6 +489,70 @@
           }
         }
       }
+    },
+    "/v1/tasks/{id}/transcript": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "A worker's transcript so far, read from its harness session log. New\nentries arrive as `worker.transcript` events.",
+        "operationId": "task_transcript",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Only entries with `id` greater than this.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many entries (default and maximum 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TranscriptItem"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -818,6 +944,27 @@
             "description": "RFC 3339 timestamp recorded by the harness, when present."
           }
         }
+      },
+      "TranscriptItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TranscriptEntry"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64",
+                "description": "The `seq` of the event that carried this entry; pass it as `after` to\npage, and use it to merge history with live events."
+              }
+            }
+          }
+        ],
+        "description": "A transcript entry as listed by the history endpoints."
       },
       "TranscriptRole": {
         "type": "string",

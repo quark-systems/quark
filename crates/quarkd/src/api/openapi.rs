@@ -19,6 +19,8 @@ use super::{events, routes};
         routes::list_tasks,
         routes::get_task,
         routes::list_decisions,
+        routes::task_transcript,
+        routes::coordinator_messages,
         routes::send_coordinator_message,
         events::stream,
     ),

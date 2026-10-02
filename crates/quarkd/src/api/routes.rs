@@ -3,12 +3,13 @@ use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
     CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
-    ErrorBody, Health, Project, Task, UpdateProject,
+    ErrorBody, Health, Project, Task, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
 use crate::chat::{self, ChatError, Delivery};
 use crate::engine::WorkspaceRef;
+use crate::store::TranscriptSource;
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -161,6 +162,82 @@ pub async fn list_decisions(
     Query(q): Query<DecisionQuery>,
 ) -> Result<Json<Vec<Decision>>, ApiError> {
     Ok(Json(db(&state, move |s| s.list_decisions(q.state)).await?))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TranscriptQuery {
+    /// Only entries with `id` greater than this.
+    pub after: Option<i64>,
+    /// At most this many entries (default and maximum 1000).
+    pub limit: Option<u32>,
+}
+
+impl TranscriptQuery {
+    fn bounds(&self) -> (i64, u32) {
+        (
+            self.after.unwrap_or(0),
+            self.limit.unwrap_or(1000).clamp(1, 1000),
+        )
+    }
+}
+
+/// A worker's transcript so far, read from its harness session log. New
+/// entries arrive as `worker.transcript` events.
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/transcript",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id"), TranscriptQuery),
+    responses(
+        (status = 200, body = Vec<TranscriptItem>),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn task_transcript(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TranscriptQuery>,
+) -> Result<Json<Vec<TranscriptItem>>, ApiError> {
+    let (after, limit) = q.bounds();
+    Ok(Json(
+        db(&state, move |s| {
+            s.get_task(&id)?;
+            s.transcript(&TranscriptSource::Task { task_id: id }, after, limit)
+        })
+        .await?,
+    ))
+}
+
+/// A Project coordinator's conversation so far. The coordinator id is the
+/// Project id. New entries arrive as `coordinator.message` events.
+#[utoipa::path(
+    get,
+    path = "/v1/coordinators/{id}/messages",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)"), TranscriptQuery),
+    responses(
+        (status = 200, body = Vec<TranscriptItem>),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn coordinator_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TranscriptQuery>,
+) -> Result<Json<Vec<TranscriptItem>>, ApiError> {
+    let (after, limit) = q.bounds();
+    Ok(Json(
+        db(&state, move |s| {
+            s.get_project(&id)?;
+            s.transcript(
+                &TranscriptSource::Coordinator { project_id: id },
+                after,
+                limit,
+            )
+        })
+        .await?,
+    ))
 }
 
 /// Send a message to a Project's coordinator.

@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use crate::engine::{FleetSnapshot, Hold};
 use quark_systems::{
     CreateProject, Decision, DecisionState, Event, EventType, Project, Task, TaskKind, TaskState,
-    TranscriptEntry, UpdateProject,
+    TranscriptEntry, TranscriptItem, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -574,6 +574,46 @@ impl Store {
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)),
             )
             .optional()?)
+        })
+    }
+
+    /// Transcript entries already projected for `source`, oldest first, with
+    /// event `seq > after`, at most `limit`.
+    pub fn transcript(
+        &self,
+        source: &TranscriptSource,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<TranscriptItem>> {
+        let (event_type, key, id) = match source {
+            TranscriptSource::Coordinator { project_id } => (
+                EventType::CoordinatorMessage,
+                "$.coordinator_id",
+                project_id,
+            ),
+            TranscriptSource::Task { task_id } => {
+                (EventType::WorkerTranscript, "$.task_id", task_id)
+            }
+        };
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT seq, json_extract(payload, '$.entry') FROM events
+                 WHERE type = ?1 AND json_extract(payload, ?2) = ?3 AND seq > ?4
+                 ORDER BY seq LIMIT ?5",
+            )?;
+            let rows = stmt
+                .query_map(params![event_type.as_str(), key, id, after, limit], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, entry) = row?;
+                out.push(TranscriptItem {
+                    id,
+                    entry: serde_json::from_str(&entry)?,
+                });
+            }
+            Ok(out)
         })
     }
 

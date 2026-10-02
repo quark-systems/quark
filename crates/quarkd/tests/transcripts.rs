@@ -186,6 +186,32 @@ async fn session_logs_become_coordinator_and_worker_events() {
     assert_eq!(events[4].payload["entry"]["text"], "On it.");
     let last = events.last().unwrap().seq;
 
+    let (status, history) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/transcript"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history.as_array().unwrap().len(), 2);
+    assert_eq!(history[1]["id"], events[4].seq);
+    assert_eq!(history[1]["role"], "assistant");
+    assert_eq!(history[1]["text"], "On it.");
+    let (_, paged) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/tasks/{tid}/transcript?after={}", events[3].seq),
+        None,
+    )
+    .await;
+    assert_eq!(paged.as_array().unwrap().len(), 1);
+    let (_, chat) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/coordinators/{pid}/messages"),
+        None,
+    )
+    .await;
+    assert_eq!(chat.as_array().unwrap().len(), 1);
+    assert_eq!(chat[0]["role"], "user");
+    let (status, _) = call(&h.app, "GET", "/v1/tasks/tsk_missing/transcript", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     // Nothing new: nothing emitted.
     projector.refresh_all().await.unwrap();
     assert!(h.events(last).is_empty());

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::chat::CoordinatorInput;
 use crate::engine::EngineAdapter;
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
@@ -40,10 +40,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
         .route("/v1/tasks/{id}", get(routes::get_task))
+        .route("/v1/tasks/{id}/transcript", get(routes::task_transcript))
         .route("/v1/decisions", get(routes::list_decisions))
         .route(
             "/v1/coordinators/{id}/messages",
-            post(routes::send_coordinator_message),
+            get(routes::coordinator_messages).post(routes::send_coordinator_message),
         )
         .route("/v1/events", get(events::stream))
         .layer(TraceLayer::new_for_http())

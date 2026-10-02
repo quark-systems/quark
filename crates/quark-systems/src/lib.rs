@@ -182,6 +182,16 @@ pub struct TranscriptEntry {
     pub ts: Option<String>,
 }
 
+/// A transcript entry as listed by the history endpoints.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptItem {
+    /// The `seq` of the event that carried this entry; pass it as `after` to
+    /// page, and use it to merge history with live events.
+    pub id: i64,
+    #[serde(flatten)]
+    pub entry: TranscriptEntry,
+}
+
 /// A message for a coordinator, typed into its session as if at the keyboard.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CoordinatorMessage {
