@@ -108,6 +108,13 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
                 state_note: current.and_then(|c| c.detail.clone()),
                 harness: t.harness.clone(),
                 pull_request_url,
+                worktree: t
+                    .paths
+                    .worktree
+                    .as_ref()
+                    .filter(|w| w.present)
+                    .and_then(|w| w.path.as_ref())
+                    .map(PathBuf::from),
             }
         })
         .collect();
@@ -130,6 +137,7 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
             state_note: r.hold_reason.clone(),
             harness: None,
             pull_request_url: None,
+            worktree: None,
         });
     }
     FleetSnapshot { tasks }

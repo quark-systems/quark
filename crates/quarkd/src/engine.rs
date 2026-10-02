@@ -52,6 +52,10 @@ pub struct EngineTask {
     pub state_note: Option<String>,
     pub harness: Option<String>,
     pub pull_request_url: Option<String>,
+    /// The task's isolated working copy, while it exists. Its harness keys
+    /// the session log by this directory.
+    #[serde(default)]
+    pub worktree: Option<PathBuf>,
 }
 
 /// New status-log lines for one task, starting at a byte offset.

@@ -5,10 +5,12 @@
 //! [`engine::EngineAdapter`].
 
 pub mod api;
+pub mod chat;
 pub mod config;
 pub mod engine;
 pub mod projector;
 pub mod store;
+pub mod transcripts;
 
 use std::sync::Arc;
 
@@ -45,7 +47,11 @@ pub async fn serve(config: Config, engine: Arc<dyn EngineAdapter>) -> anyhow::Re
     let projector = Projector::new(store.clone(), engine.clone());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
-    let app = api::router(AppState { store, engine });
+    let app = api::router(AppState {
+        store,
+        engine,
+        chat: Arc::new(chat::NoSessions),
+    });
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("binding {}", config.listen))?;

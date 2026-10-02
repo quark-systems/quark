@@ -2,8 +2,13 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    CreateProject, Decision, DecisionState, ErrorBody, Health, Project, Task, UpdateProject,
+    CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
+    ErrorBody, Health, Project, Task, UpdateProject,
 };
+use std::path::PathBuf;
+
+use crate::chat::{self, ChatError, Delivery};
+use crate::engine::WorkspaceRef;
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -156,4 +161,69 @@ pub async fn list_decisions(
     Query(q): Query<DecisionQuery>,
 ) -> Result<Json<Vec<Decision>>, ApiError> {
     Ok(Json(db(&state, move |s| s.list_decisions(q.state)).await?))
+}
+
+/// Send a message to a Project's coordinator.
+///
+/// The coordinator id is the Project id. The text is typed into the
+/// coordinator's live session; its reply arrives on the event stream as
+/// `coordinator.message` events, which also carry this message once the
+/// session records it.
+#[utoipa::path(
+    post,
+    path = "/v1/coordinators/{id}/messages",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    request_body = CoordinatorMessage,
+    responses(
+        (status = 202, body = CoordinatorMessageAccepted),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The Project has no workspace yet", body = ErrorBody),
+        (status = 502, description = "Typing into the session failed", body = ErrorBody),
+        (status = 503, description = "No live coordinator session", body = ErrorBody)
+    )
+)]
+pub async fn send_coordinator_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<CoordinatorMessage>,
+) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
+    chat::validate(&input.text).map_err(ApiError::invalid)?;
+    let project_id = id.clone();
+    let project = db(&state, move |s| s.get_project(&project_id)).await?;
+    let Some(root) = project.workspace_path else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "no_workspace",
+            "the Project has no workspace, so it has no coordinator yet",
+        ));
+    };
+    let ws = WorkspaceRef {
+        project_id: project.id.clone(),
+        root: PathBuf::from(root),
+    };
+    let confirmed = match state.chat.send(&ws, &input.text).await {
+        Ok(Delivery::Confirmed) => true,
+        Ok(Delivery::Unconfirmed) => false,
+        Err(ChatError::Unavailable(m)) => {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session_unavailable",
+                m,
+            ))
+        }
+        Err(ChatError::Failed(m)) => {
+            tracing::warn!(coordinator = %id, error = %m, "coordinator message not delivered");
+            return Err(ApiError::new(StatusCode::BAD_GATEWAY, "delivery_failed", m));
+        }
+    };
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CoordinatorMessageAccepted {
+            coordinator_id: project.id,
+            confirmed,
+            accepted_at: crate::now_rfc3339(),
+        }),
+    ))
 }

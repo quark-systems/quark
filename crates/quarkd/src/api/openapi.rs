@@ -19,6 +19,7 @@ use super::{events, routes};
         routes::list_tasks,
         routes::get_task,
         routes::list_decisions,
+        routes::send_coordinator_message,
         events::stream,
     ),
     components(schemas(
@@ -27,12 +28,15 @@ use super::{events, routes};
         quark_systems::TaskState,
         quark_systems::TaskKind,
         quark_systems::DecisionState,
+        quark_systems::TranscriptEntry,
+        quark_systems::TranscriptRole,
     )),
     tags(
         (name = "daemon"),
         (name = "projects"),
         (name = "tasks"),
         (name = "decisions"),
+        (name = "coordinators"),
         (name = "events")
     )
 )]

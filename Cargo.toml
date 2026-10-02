@@ -12,6 +12,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 quark-systems = { path = "crates/quark-systems", version = "0.0.1" }
 quark-engine = { path = "crates/quark-engine" }
+quark-transcript = { path = "crates/quark-transcript" }
 anyhow = "1.0"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }

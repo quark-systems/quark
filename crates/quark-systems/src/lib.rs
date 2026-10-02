@@ -146,6 +146,59 @@ pub struct Decision {
     pub answered_at: Option<String>,
 }
 
+/// Who or what produced a transcript entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptRole {
+    /// Input from a person, or from the engine on a person's behalf.
+    User,
+    /// Text the agent wrote for the reader.
+    Assistant,
+    /// The agent's visible reasoning, when the harness records it.
+    Thinking,
+    /// A tool the agent invoked; `text` holds its input.
+    ToolCall,
+    /// What a tool returned; `text` holds its output.
+    ToolResult,
+}
+
+/// One entry of a coordinator or worker transcript, parsed from the harness's
+/// own session log. Payload of `coordinator.message` and `worker.transcript`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TranscriptEntry {
+    pub role: TranscriptRole,
+    /// Markdown for `user`, `assistant` and `thinking`; tool input or output
+    /// otherwise.
+    pub text: String,
+    /// Tool name, for `tool_call` and `tool_result` when the harness records it.
+    pub tool_name: Option<String>,
+    /// Pairs a `tool_result` with its `tool_call`.
+    pub tool_call_id: Option<String>,
+    /// `true` when a tool reported failure.
+    pub is_error: bool,
+    /// `true` when `text` was cut to the daemon's size limit.
+    pub truncated: bool,
+    /// RFC 3339 timestamp recorded by the harness, when present.
+    pub ts: Option<String>,
+}
+
+/// A message for a coordinator, typed into its session as if at the keyboard.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CoordinatorMessage {
+    pub text: String,
+}
+
+/// The coordinator's session took the message. Its reply arrives as
+/// `coordinator.message` events, read from the session log.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CoordinatorMessageAccepted {
+    pub coordinator_id: String,
+    /// `false` when the text was typed and submitted but the session did not
+    /// confirm the submit; check the transcript before sending again.
+    pub confirmed: bool,
+    pub accepted_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Health {
     pub status: String,
