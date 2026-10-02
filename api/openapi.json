@@ -845,6 +845,64 @@
         }
       }
     },
+    "/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "One file a verification gate produced: a Playwright trace, a screenshot,\na video, a log or a report, as listed in the pull request's `evidence`.",
+        "description": "Served with its content type, `nosniff` and a sandboxing CSP, so an HTML\nreport cannot run script against the daemon.",
+        "operationId": "artifact",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact id from the evidence",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The artifact's bytes",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "Unknown pull request or artifact, or the file is gone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No task owns the pull request, or its workspace is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/pull-requests/{id}:merge": {
       "post": {
         "tags": [
@@ -1680,6 +1738,17 @@
           "worker"
         ]
       },
+      "ArtifactKind": {
+        "type": "string",
+        "description": "What a gate artifact is.",
+        "enum": [
+          "trace",
+          "screenshot",
+          "video",
+          "log",
+          "report"
+        ]
+      },
       "AuthState": {
         "type": "string",
         "description": "Login or key health for one account.",
@@ -2115,21 +2184,83 @@
       },
       "Evidence": {
         "type": "object",
-        "description": "Verification evidence attached to a pull request (ADR-15). Reserved: the\ndaemon reports repo-native checks only and leaves `evidence` absent.",
+        "description": "Verification gate results for a pull request (ADR-15): repo checks,\nPlaywright journeys and holdout tests, with traces and screenshots.",
         "required": [
-          "summary"
+          "state",
+          "stale",
+          "gates"
         ],
         "properties": {
-          "summary": {
-            "type": "string",
-            "description": "Short summary, e.g. which journeys or holdout tests passed."
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
-          "url": {
+          "gates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Gate"
+            }
+          },
+          "head_sha": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Link to the full report."
+            "description": "The commit the gates ran on."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "True when the pull request's head has moved past `head_sha`."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/GateState"
+          }
+        }
+      },
+      "EvidenceArtifact": {
+        "type": "object",
+        "description": "A file a gate produced, served by the daemon.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "content_type",
+          "url"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable for the same file of the same pull request."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind"
+          },
+          "name": {
+            "type": "string",
+            "description": "File name, e.g. `trace.zip`."
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "`/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`."
           }
         }
       },
@@ -2144,6 +2275,105 @@
           "copied",
           "type_changed",
           "untracked"
+        ]
+      },
+      "Gate": {
+        "type": "object",
+        "description": "One verification gate's result.",
+        "required": [
+          "kind",
+          "state",
+          "cases"
+        ],
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateCase"
+            }
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/GateKind"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/GateState"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GateCase": {
+        "type": "object",
+        "description": "One case of a gate: a journey, a repo check, or a holdout category.",
+        "required": [
+          "name",
+          "state",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceArtifact"
+            }
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed; absent for holdout cases."
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/GateState"
+          }
+        }
+      },
+      "GateKind": {
+        "type": "string",
+        "description": "The verification gates of ADR-15, run in this order before a PR opens.",
+        "enum": [
+          "checks",
+          "journeys",
+          "holdout"
+        ]
+      },
+      "GateState": {
+        "type": "string",
+        "description": "Where a verification gate, or a case in it, stands.",
+        "enum": [
+          "pending",
+          "running",
+          "passed",
+          "failed",
+          "skipped"
         ]
       },
       "HarnessAuth": {
@@ -2540,7 +2770,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Evidence",
-                "description": "Reserved for verification evidence (ADR-15); absent for now."
+                "description": "Verification gate results (ADR-15); absent until the gates report."
               },
               {
                 "type": "null"

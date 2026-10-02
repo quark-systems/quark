@@ -5,8 +5,9 @@
 //! change emits `pr.updated`, `check.updated` or `review.updated` in the same
 //! transaction.
 
+use base64::Engine as _;
 use quark_systems::{
-    Check, CheckStatus, CheckUpdated, ChecksState, EventType, Mergeability, PullRequest,
+    Check, CheckStatus, CheckUpdated, ChecksState, EventType, Evidence, Mergeability, PullRequest,
     PullRequestState, Review, ReviewDecision, ReviewState, ReviewUpdated,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
@@ -38,7 +39,8 @@ pub struct PrOwner {
 
 const PR_COLUMNS: &str = "id, project_id, task_id, url, provider, repo, number, title, author, \
     state, head_ref, base_ref, head_sha, mergeable, checks_state, review_decision, additions, \
-    deletions, changed_files, opened_at, updated_at, merged_at, closed_at, synced_at, sync_error";
+    deletions, changed_files, opened_at, updated_at, merged_at, closed_at, synced_at, sync_error, \
+    evidence";
 
 impl Store {
     /// Records a pull request row for every task that reports one, links it
@@ -270,6 +272,36 @@ impl Store {
         })
     }
 
+    /// Records a pull request's gate evidence as the engine reports it.
+    /// Artifact ids and URLs are assigned here. Emits `pr.updated` only when
+    /// the evidence changed.
+    pub fn apply_evidence(&self, id: &str, evidence: Option<Evidence>) -> Result<()> {
+        let evidence = evidence.map(|mut e| {
+            e.stale = false;
+            for a in e
+                .gates
+                .iter_mut()
+                .flat_map(|g| g.cases.iter_mut())
+                .flat_map(|c| c.artifacts.iter_mut())
+            {
+                a.id = artifact_id(&a.id);
+                a.url = format!("/v1/pull-requests/{id}/evidence/artifacts/{}", a.id);
+            }
+            e
+        });
+        let json = evidence.as_ref().map(serde_json::to_string).transpose()?;
+        self.write(|tx, events| {
+            let changed = tx.execute(
+                "UPDATE pull_requests SET evidence = ?2 WHERE id = ?1 AND evidence IS NOT ?2",
+                params![id, json],
+            )?;
+            if changed > 0 {
+                emit_pr(tx, events, id)?;
+            }
+            Ok(())
+        })
+    }
+
     /// Pull requests across all Projects, newest first.
     pub fn list_pull_requests(
         &self,
@@ -342,6 +374,19 @@ impl Store {
         })?;
         ids.iter().map(|id| self.pull_request_owner(id)).collect()
     }
+}
+
+/// The public id of a gate artifact: its relative path, base64url-encoded.
+pub fn artifact_id(path: &str) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path)
+}
+
+/// The relative path an artifact id names, if it is one.
+pub fn artifact_path(id: &str) -> Option<String> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(id)
+        .ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 fn emit_pr(tx: &Transaction, events: &mut Vec<quark_systems::Event>, id: &str) -> Result<()> {
@@ -445,6 +490,18 @@ fn pr_from_row(r: &Row) -> rusqlite::Result<PullRequest> {
         closed_at: r.get(22)?,
         synced_at: r.get(23)?,
         sync_error: r.get(24)?,
+    })
+    .map(|mut pr| {
+        pr.evidence = r
+            .get::<_, Option<String>>(25)
+            .ok()
+            .flatten()
+            .and_then(|j| serde_json::from_str::<Evidence>(&j).ok())
+            .map(|mut e| {
+                e.stale = matches!((&e.head_sha, &pr.head_sha), (Some(a), Some(b)) if a != b);
+                e
+            });
+        pr
     })
 }
 

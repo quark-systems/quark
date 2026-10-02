@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind, TaskState};
+use quark_engine::gates;
+use quark_systems::{
+    AgentConfig, ArtifactKind, DeliveryPolicy, Evidence, EvidenceArtifact, Gate, GateCase,
+    GateKind, GateState, MergeMethod, TaskKind, TaskState,
+};
 
 use quark_engine::holds::decisions;
 use quark_engine::runner::CallLog;
@@ -166,6 +170,42 @@ impl EngineAdapter for FirstmateEngine {
         self.write(ws, op).await
     }
 
+    async fn gate_evidence(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<Option<Evidence>, EngineError> {
+        let reader = self.reader(ws)?;
+        let task = task_id.to_string();
+        blocking(move || {
+            let Some(m) = reader.gates(&task)? else {
+                return Ok(None);
+            };
+            let dir = reader.workspace().gates_dir(&task)?;
+            Ok(Some(neutral_evidence(&m, &dir)))
+        })
+        .await
+    }
+
+    fn gate_artifact(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        path: &str,
+    ) -> Result<PathBuf, EngineError> {
+        if !gates::safe_relative(path) {
+            return Err(EngineError::Invalid(format!("no gate artifact {path:?}")));
+        }
+        let reader = self.reader(ws)?;
+        let m = reader
+            .gates(task_id)
+            .map_err(convert)?
+            .ok_or_else(|| EngineError::TaskNotFound(task_id.into()))?;
+        let dir = reader.workspace().gates_dir(task_id).map_err(convert)?;
+        super::listed_artifact(&neutral_evidence(&m, &dir), path)?;
+        Ok(dir.join(path))
+    }
+
     async fn merge_pull_request(
         &self,
         ws: &WorkspaceRef,
@@ -288,6 +328,96 @@ impl EngineAdapter for FirstmateEngine {
             root: command.to_path_buf(),
         };
         Ok(coordinator_targets(&self.read_snapshot(&ws).await?))
+    }
+}
+
+/// Gate results in neutral names. Artifact ids are their relative paths; the
+/// daemon assigns public ids and URLs.
+pub fn neutral_evidence(m: &gates::GateManifest, dir: &Path) -> Evidence {
+    let state = |s: gates::State| match s {
+        gates::State::Pending => GateState::Pending,
+        gates::State::Running => GateState::Running,
+        gates::State::Passed => GateState::Passed,
+        gates::State::Failed => GateState::Failed,
+        gates::State::Skipped => GateState::Skipped,
+    };
+    Evidence {
+        head_sha: m.head_sha.clone(),
+        state: state(m.state),
+        stale: false,
+        started_at: m.started_at.clone(),
+        completed_at: m.completed_at.clone(),
+        gates: m
+            .gates
+            .iter()
+            .map(|g| Gate {
+                kind: match g.kind {
+                    gates::Kind::Checks => GateKind::Checks,
+                    gates::Kind::Journeys => GateKind::Journeys,
+                    gates::Kind::Holdout => GateKind::Holdout,
+                },
+                state: state(g.state),
+                summary: g.summary.clone(),
+                started_at: g.started_at.clone(),
+                completed_at: g.completed_at.clone(),
+                cases: g
+                    .cases
+                    .iter()
+                    .map(|c| GateCase {
+                        name: c.name.clone(),
+                        state: state(c.state),
+                        duration_ms: c.duration_ms,
+                        message: c.message.clone(),
+                        artifacts: c
+                            .artifacts
+                            .iter()
+                            .map(|a| EvidenceArtifact {
+                                id: a.path.clone(),
+                                kind: match a.kind {
+                                    gates::ArtifactKind::Trace => ArtifactKind::Trace,
+                                    gates::ArtifactKind::Screenshot => ArtifactKind::Screenshot,
+                                    gates::ArtifactKind::Video => ArtifactKind::Video,
+                                    gates::ArtifactKind::Log => ArtifactKind::Log,
+                                    gates::ArtifactKind::Report => ArtifactKind::Report,
+                                },
+                                name: Path::new(&a.path)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                                content_type: a
+                                    .content_type
+                                    .clone()
+                                    .unwrap_or_else(|| content_type_for(&a.path).into()),
+                                size_bytes: std::fs::metadata(dir.join(&a.path))
+                                    .ok()
+                                    .filter(|m| m.is_file())
+                                    .map(|m| m.len()),
+                                url: String::new(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// A content type from a file extension, for artifacts that name none.
+pub fn content_type_for(path: &str) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webm") => "video/webm",
+        Some("mp4") => "video/mp4",
+        Some("zip") => "application/zip",
+        Some("html" | "htm") => "text/html",
+        Some("json") => "application/json",
+        Some("txt" | "log") => "text/plain",
+        _ => "application/octet-stream",
     }
 }
 

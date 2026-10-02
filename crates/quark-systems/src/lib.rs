@@ -479,14 +479,91 @@ pub struct Review {
     pub commit: Option<String>,
 }
 
-/// Verification evidence attached to a pull request (ADR-15). Reserved: the
-/// daemon reports repo-native checks only and leaves `evidence` absent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+/// Where a verification gate, or a case in it, stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GateState {
+    Pending,
+    Running,
+    Passed,
+    Failed,
+    Skipped,
+}
+
+/// The verification gates of ADR-15, run in this order before a PR opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GateKind {
+    /// The repo's own checks (lint, tests) through the engine's validation.
+    Checks,
+    /// Playwright journeys declared for the repo in `project.yaml`.
+    Journeys,
+    /// Holdout tests from the Project repo, never shown to workers. Cases
+    /// carry only a category and pass or fail.
+    Holdout,
+}
+
+/// What a gate artifact is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    /// A Playwright `trace.zip`; opens in the Playwright trace viewer.
+    Trace,
+    Screenshot,
+    Video,
+    Log,
+    /// A rendered report, e.g. Playwright's HTML report.
+    Report,
+}
+
+/// A file a gate produced, served by the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct EvidenceArtifact {
+    /// Stable for the same file of the same pull request.
+    pub id: String,
+    pub kind: ArtifactKind,
+    /// File name, e.g. `trace.zip`.
+    pub name: String,
+    pub content_type: String,
+    pub size_bytes: Option<u64>,
+    /// `/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`.
+    pub url: String,
+}
+
+/// One case of a gate: a journey, a repo check, or a holdout category.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GateCase {
+    pub name: String,
+    pub state: GateState,
+    pub duration_ms: Option<u64>,
+    /// Why it failed; absent for holdout cases.
+    pub message: Option<String>,
+    pub artifacts: Vec<EvidenceArtifact>,
+}
+
+/// One verification gate's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Gate {
+    pub kind: GateKind,
+    pub state: GateState,
+    pub summary: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub cases: Vec<GateCase>,
+}
+
+/// Verification gate results for a pull request (ADR-15): repo checks,
+/// Playwright journeys and holdout tests, with traces and screenshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Evidence {
-    /// Short summary, e.g. which journeys or holdout tests passed.
-    pub summary: String,
-    /// Link to the full report.
-    pub url: Option<String>,
+    /// The commit the gates ran on.
+    pub head_sha: Option<String>,
+    pub state: GateState,
+    /// True when the pull request's head has moved past `head_sha`.
+    pub stale: bool,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub gates: Vec<Gate>,
 }
 
 /// A pull request opened by one of a Project's tasks, with its checks and
@@ -520,7 +597,7 @@ pub struct PullRequest {
     pub changed_files: Option<u64>,
     pub checks: Vec<Check>,
     pub reviews: Vec<Review>,
-    /// Reserved for verification evidence (ADR-15); absent for now.
+    /// Verification gate results (ADR-15); absent until the gates report.
     pub evidence: Option<Evidence>,
     /// When the forge reports the PR was opened, updated, merged and closed.
     pub opened_at: Option<String>,

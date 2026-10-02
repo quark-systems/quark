@@ -83,6 +83,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/pull-requests/{id}/diff", get(pull_requests::diff))
         .route(
+            "/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}",
+            get(pull_requests::artifact),
+        )
+        .route(
             "/v1/pull-requests/{id}/comments",
             post(pull_requests::comment),
         )

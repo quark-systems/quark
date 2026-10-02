@@ -59,6 +59,16 @@ impl Workspace {
         self.task_file(task_id, "pr-poll-merge-notified")
     }
 
+    /// The gate runner's manifest for a task (`quark.gates.v1`).
+    pub fn gates_manifest_path(&self, task_id: &str) -> Result<PathBuf> {
+        self.task_file(task_id, "gates.json")
+    }
+
+    /// Where a task's gate artifacts live; manifest paths are relative to it.
+    pub fn gates_dir(&self, task_id: &str) -> Result<PathBuf> {
+        self.task_file(task_id, "gates")
+    }
+
     fn task_file(&self, task_id: &str, suffix: &str) -> Result<PathBuf> {
         validate_task_id(task_id)?;
         Ok(self.state_dir().join(format!("{task_id}.{suffix}")))
