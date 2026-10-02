@@ -5,8 +5,9 @@
 //! run on a timer and, when the adapter names directories to watch, as soon as
 //! a task file changes there, so the board moves while a worker reports.
 //! Each refresh also hands the engine the verification gates the Project
-//! repo's `project.yaml` declares, whenever that declaration changes, and
-//! turns what finished tasks learned into memory proposals.
+//! repo's `project.yaml` declares and the dispatch profiles its
+//! `dispatch.yaml` declares, whenever either declaration changes, and turns
+//! what finished tasks learned into memory proposals.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -41,6 +42,8 @@ pub struct Projector {
     coordinators: Mutex<HashMap<String, Option<String>>>,
     /// The Project repo declaration last applied as gate config, by Project id.
     gates: Mutex<HashMap<String, String>>,
+    /// The `dispatch.yaml` blob last applied as dispatch profiles, by Project id.
+    dispatch: Mutex<HashMap<String, String>>,
 }
 
 impl Projector {
@@ -54,6 +57,7 @@ impl Projector {
             command: None,
             coordinators: Mutex::default(),
             gates: Mutex::default(),
+            dispatch: Mutex::default(),
         }
     }
 
@@ -101,6 +105,7 @@ impl Projector {
             self.refresh(&ws).await;
             if let Some(repo) = &project.project_repo_path {
                 self.sync_gates(&ws, PathBuf::from(repo)).await;
+                self.sync_dispatch(&ws, PathBuf::from(repo)).await;
             }
             workspaces.push(ws);
         }
@@ -193,6 +198,47 @@ impl Projector {
         self.record(ws, "gates", started, res.as_ref().err()).await;
         if done {
             self.gates
+                .lock()
+                .unwrap()
+                .insert(ws.project_id.clone(), declared.blob);
+        }
+    }
+
+    /// Compile the Project repo's `dispatch.yaml` and hand it to the engine
+    /// when it changed since it was last applied. A file that does not compile,
+    /// or that the engine refuses as invalid, is recorded once and waits for
+    /// the next change, leaving the last good config in place; any other
+    /// engine failure is recorded and retried next tick.
+    pub async fn sync_dispatch(&self, ws: &WorkspaceRef, repo: PathBuf) {
+        let started = Instant::now();
+        let declared =
+            tokio::task::spawn_blocking(move || crate::crew_dispatch::read_declared(&repo)).await;
+        let declared = match declared {
+            Ok(Ok(Some(d))) => d,
+            Ok(Ok(None)) => return,
+            Ok(Err(e)) => {
+                let err = EngineError::Command(e);
+                self.record(ws, "dispatch", started, Some(&err)).await;
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "dispatch read task panicked");
+                return;
+            }
+        };
+        if self.dispatch.lock().unwrap().get(&ws.project_id) == Some(&declared.blob) {
+            return;
+        }
+        let res = match crate::crew_dispatch::compile(&declared.dispatch_yaml)
+            .and_then(|c| serde_json::to_string(&c).map_err(|e| e.to_string()))
+        {
+            Ok(json) => self.engine.set_crew_dispatch(ws, &json).await,
+            Err(e) => Err(EngineError::Invalid(e)),
+        };
+        self.record(ws, "dispatch", started, res.as_ref().err())
+            .await;
+        if matches!(res, Ok(()) | Err(EngineError::Invalid(_))) {
+            self.dispatch
                 .lock()
                 .unwrap()
                 .insert(ws.project_id.clone(), declared.blob);

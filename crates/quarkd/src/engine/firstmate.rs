@@ -210,6 +210,38 @@ impl EngineAdapter for FirstmateEngine {
         self.write(ws, op).await
     }
 
+    /// `fm-crew-dispatch.sh config-set` exits 1 when the config is invalid,
+    /// leaving the old file in place; that is a refusal, not a failed run.
+    async fn set_crew_dispatch(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        let op = WriteOp::CrewDispatchConfig {
+            json: config.to_string(),
+        };
+        if !ws.root.is_dir() {
+            return Err(EngineError::WorkspaceNotFound(ws.root.clone()));
+        }
+        let writer = EngineWriter::new(self.at(&ws.root), self.log.clone());
+        let refused = blocking(move || match writer.write(&op) {
+            Ok(_) => Ok(None),
+            Err(Error::ScriptFailed {
+                exit_code: Some(1),
+                stderr,
+                ..
+            }) => Ok(Some(stderr)),
+            Err(e) => Err(e),
+        })
+        .await?;
+        match refused {
+            None => Ok(()),
+            Some(stderr) => {
+                let reason = stderr.trim();
+                let reason = reason.strip_prefix("error: ").unwrap_or(reason);
+                Err(EngineError::Invalid(format!(
+                    "crew dispatch config refused: {reason}"
+                )))
+            }
+        }
+    }
+
     /// Cancel is `exit`, never teardown: the worktree and its changes stay.
     async fn control(
         &self,

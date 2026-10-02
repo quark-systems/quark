@@ -1336,6 +1336,27 @@ impl Store {
         })
     }
 
+    /// Outcomes of a Project's most recent adapter calls for `operation`
+    /// (`snapshot`, `gates`, `dispatch`...), newest first: whether each
+    /// succeeded and its failure detail.
+    pub fn recent_adapter_calls(
+        &self,
+        project_id: &str,
+        operation: &str,
+        limit: u32,
+    ) -> Result<Vec<(bool, Option<String>)>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT ok, detail FROM adapter_calls
+                 WHERE project_id = ?1 AND operation = ?2 ORDER BY id DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![project_id, operation, limit], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     /// Most recent script calls first.
     pub fn recent_script_calls(&self, limit: u32) -> Result<Vec<ScriptCall>> {
         self.read(|c| {
