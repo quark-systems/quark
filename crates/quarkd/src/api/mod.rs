@@ -8,8 +8,10 @@ mod routes;
 use std::sync::Arc;
 
 use crate::engine::EngineAdapter;
+use axum::http::{header, HeaderValue, Method};
 use axum::routing::get;
 use axum::Router;
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::store::Store;
@@ -39,8 +41,31 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/tasks/{id}", get(routes::get_task))
         .route("/v1/decisions", get(routes::list_decisions))
         .route("/v1/events", get(events::stream))
+        .layer(cors())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Origins of the desktop app: the Tauri webview (macOS/Linux and Windows) and the
+/// Vite dev server. Browsers do not send `Origin` for WebSocket upgrades through CORS,
+/// so this only governs REST calls.
+pub const APP_ORIGINS: &[&str] = &[
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+];
+
+fn cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(
+            APP_ORIGINS
+                .iter()
+                .map(|o| HeaderValue::from_static(o))
+                .collect::<Vec<_>>(),
+        )
+        .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        .allow_headers([header::CONTENT_TYPE])
 }
 
 /// Runs a blocking store call off the async runtime.

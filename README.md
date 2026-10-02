@@ -41,3 +41,14 @@ cargo run -p quarkd -- openapi      # prints the OpenAPI document
 Regenerate it with `cargo run -p quarkd -- openapi > api/openapi.json`.
 
 The event stream is a WebSocket at `/v1/events?cursor=<seq>`: each frame is one JSON event with a monotonic `seq`, and a client that reconnects with its last `seq` replays everything it missed.
+
+### Desktop app
+
+`app/` is the desktop app: Tauri 2 with React, TypeScript and xterm.js, talking to `quarkd` over the `/v1` API and event stream.
+See [`app/README.md`](app/README.md) for running it, and [`app/CONTRACT.md`](app/CONTRACT.md) for the endpoints it expects.
+
+```sh
+cd app && npm install
+npm run dev                         # web build on http://127.0.0.1:1420, against quarkd on :7380
+npm run tauri dev                   # desktop app
+```

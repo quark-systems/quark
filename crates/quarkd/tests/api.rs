@@ -229,3 +229,33 @@ async fn committed_openapi_matches() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(served, serde_json::from_str::<Value>(&committed).unwrap());
 }
+
+#[tokio::test]
+async fn cors_allows_only_the_desktop_app() {
+    let h = harness().await;
+    let preflight = |origin: &'static str| {
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/v1/projects")
+            .header("origin", origin)
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "content-type")
+            .body(Body::empty())
+            .unwrap()
+    };
+    for origin in api::APP_ORIGINS {
+        let res = h.app.clone().oneshot(preflight(origin)).await.unwrap();
+        assert_eq!(
+            res.headers().get("access-control-allow-origin").unwrap(),
+            origin,
+            "{origin}"
+        );
+    }
+    let res = h
+        .app
+        .clone()
+        .oneshot(preflight("https://example.com"))
+        .await
+        .unwrap();
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+}
