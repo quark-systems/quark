@@ -166,7 +166,7 @@ test("PR center: list by state, checks, line comment, merge, standing approval",
   await page.keyboard.press("Enter");
   await expect(page.locator(".header h1")).toHaveText("OpenAPI check in CI");
   await expect(page.getByTestId("pr-checks")).toContainText("CI / desktop-app");
-  await expect(page.getByTestId("pr-evidence")).toContainText("No verification evidence");
+  await expect(page.getByTestId("pr-evidence")).toContainText("Playwright journeys");
 
   // A line comment goes to the worker with its path, line and side.
   await page.getByTestId("pr-diff").locator("tr.commentable td.ln").nth(1).click();
@@ -192,4 +192,36 @@ test("PR center: list by state, checks, line comment, merge, standing approval",
   await expect(page.getByTestId("standing-approval")).toHaveClass(/on/);
   const proj = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark")).json());
   expect(proj.standing_approval).toBe(true);
+});
+
+test("PR center: verification evidence with failing journeys, screenshots and traces", async ({ page }) => {
+  await open(page, "#/pr/pr-2");
+  const summary = page.getByTestId("pr-evidence");
+  await expect(summary).toContainText("Playwright journeys");
+  await expect(summary).toContainText("1 failed");
+  await summary.getByRole("button", { name: /Playwright journeys/ }).click();
+
+  const journeys = page.getByTestId("gate-journeys");
+  await expect(journeys).toContainText("1 of 2 journeys passed");
+  // The failing case comes first and opens with its message and artifacts.
+  const failing = journeys.getByTestId("evidence-case").first();
+  await expect(failing).toContainText("terminal resize keeps the prompt");
+  await expect(failing.locator(".case-msg")).toContainText("Timeout: 30000ms");
+  const trace = failing.getByRole("link", { name: "Open trace" });
+  await expect(trace).toHaveAttribute("href", /^https:\/\/trace\.playwright\.dev\/\?trace=.*evidence%2Fartifacts%2Fpr-2-a3$/);
+  const img = failing.locator(".shot img");
+  await expect(img).toHaveJSProperty("complete", true);
+  expect(await img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  await failing.locator(".shot").click();
+  await expect(page.getByTestId("lightbox")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("lightbox")).toBeHidden();
+
+  // Passing cases stay collapsed; holdout cases are just names and results.
+  await expect(journeys.getByTestId("evidence-case").nth(1).locator(".case-body")).toHaveCount(0);
+  await expect(page.getByTestId("gate-holdout")).toContainText("pr-merge-refused");
+
+  // The diff is still there behind its tab.
+  await page.getByRole("tab", { name: "Diff" }).click();
+  await expect(page.getByTestId("pr-diff")).toBeVisible();
 });

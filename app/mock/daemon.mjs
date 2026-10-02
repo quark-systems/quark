@@ -41,6 +41,7 @@ const terms = new Map(); // task id -> { cols, rows, screen: string, line: strin
 const diffOf = new Map(); // task id -> unified diff text
 const pulls = new Map(); // PR id -> PullRequest
 const pullDiffs = new Map(); // PR id -> unified diff text
+const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
 
 const events = []; // { seq, ... } bounded
@@ -176,16 +177,53 @@ function seed() {
     });
     pulls.set(id, pr);
   };
+  // ADR-15 evidence: repo checks, Playwright journeys (with traces and screenshots), holdout tests.
+  const art = (id, kind, path, content_type, body) => {
+    artifacts.set(id, { content_type, body });
+    return { id, kind, name: path, content_type, size_bytes: Buffer.byteLength(body), url: `/v1/pull-requests/{pr}/evidence/artifacts/${id}` };
+  };
+  const shot = (label, color) => `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800"><rect width="100%" height="100%" fill="#0b0c10"/>` +
+    `<rect x="0" y="0" width="244" height="800" fill="#111218"/><rect x="260" y="20" width="1000" height="40" rx="6" fill="#171920"/>` +
+    `<text x="640" y="420" fill="${color}" font-family="sans-serif" font-size="40" text-anchor="middle">${label}</text></svg>`;
+  const evidence = (prId, failing) => {
+    const fix = (a) => ({ ...a, url: a.url.replace("{pr}", prId) });
+    const journeys = [
+      { name: "creates a project and lands on its board", state: "passed", duration_ms: 1320, message: null,
+        artifacts: [fix(art(`${prId}-a1`, "screenshot", "journeys/create-project/final.png", "image/svg+xml", shot("Board: Parser rewrite", "#7bd88f")))] },
+      failing
+        ? { name: "worker view: terminal resize keeps the prompt", state: "failed", duration_ms: 30000,
+          message: "Error: expect(locator).toContainText(expected) failed\n\nLocator: getByTestId('terminal').locator('.xterm-rows')\nExpected substring: \"$ \"\nTimeout: 30000ms",
+          artifacts: [
+            fix(art(`${prId}-a2`, "screenshot", "journeys/terminal-resize/failure.png", "image/svg+xml", shot("Terminal pane is blank after resize", "#f2777a"))),
+            fix(art(`${prId}-a3`, "trace", "journeys/terminal-resize/trace.zip", "application/zip", "PK\x05\x06" + "\0".repeat(18))),
+            fix(art(`${prId}-a4`, "log", "journeys/terminal-resize/console.log", "text/plain", "[quarkd] resize 120x36 -> 80x24\n[app] terminal snapshot timed out\n")),
+          ] }
+        : { name: "worker view: terminal resize keeps the prompt", state: "passed", duration_ms: 2210, message: null, artifacts: [] },
+    ];
+    const holdout = ["steer-then-cancel", "decision-roundtrip", "pr-merge-refused"].map((name, i) =>
+      ({ name, state: failing && i === 2 ? "failed" : "passed", duration_ms: null, message: null, artifacts: [] }));
+    const st = (cases) => (cases.some((c) => c.state === "failed") ? "failed" : "passed");
+    return {
+      head_sha: "9f1e2d3c4b", state: failing ? "failed" : "passed", stale: false, started_at: minutesAgo(20), completed_at: minutesAgo(12),
+      gates: [
+        { kind: "checks", state: failing ? "failed" : "passed", summary: null, started_at: minutesAgo(20), completed_at: minutesAgo(18),
+          cases: [{ name: "CI / rust", state: "passed", artifacts: [] }, { name: "CI / desktop-app", state: failing ? "failed" : "passed", artifacts: [] }] },
+        { kind: "journeys", state: st(journeys), summary: `${journeys.filter((c) => c.state === "passed").length} of ${journeys.length} journeys passed`,
+          started_at: minutesAgo(18), completed_at: minutesAgo(15), cases: journeys },
+        { kind: "holdout", state: st(holdout), summary: null, started_at: minutesAgo(15), completed_at: minutesAgo(12), cases: holdout },
+      ],
+    };
+  };
   const ok = (name) => ({ name, status: "success", conclusion: null, details_url: `https://github.com/quark-systems/quark/actions/runs/1#${name}`, started_at: minutesAgo(50), completed_at: minutesAgo(45) });
   const inReview = [...tasks.values()].find((t) => t.title === "OpenAPI check in CI");
   PR("pr-1", quark, inReview, {
     number: 2, title: "OpenAPI check in CI", head_ref: "quark/openapi-check", base_ref: "main", diff: DIFFS[0],
-    checks: [ok("CI / rust"), ok("CI / desktop-app")], updated_at: minutesAgo(40),
+    checks: [ok("CI / rust"), ok("CI / desktop-app")], updated_at: minutesAgo(40), evidence: evidence("pr-1", false),
   });
   PR("pr-2", quark, b, {
     number: 15, title: "Terminal sessions over tmux control mode", head_ref: "quark/tmux-control", base_ref: "main", diff: DIFFS[1],
     checks: [ok("CI / rust"), { name: "CI / desktop-app", status: "failure", conclusion: "timed_out", details_url: null }], checks_state: "failing",
-    review_decision: "changes_requested", updated_at: minutesAgo(6),
+    review_decision: "changes_requested", updated_at: minutesAgo(6), evidence: evidence("pr-2", true),
     reviews: [{ id: "r-1", author: "mattsanchez", state: "changes_requested", body: "Resize should debounce; the pane flickers.", submitted_at: minutesAgo(15), commit: "9f1e2d3c4b" }],
   });
   PR("pr-3", site, null, {
@@ -499,6 +537,12 @@ const server = http.createServer(async (req, res) => {
       const path = url.searchParams.get("path");
       if (path && !filesOf(pullDiffs.get(pr.id)).some((f) => f.path === path)) return notFound(res);
       return send(res, 200, { pull_request_id: pr.id, path, patch: diffFor(pullDiffs.get(pr.id), path), truncated: false });
+    }
+    if ((r = /^\/evidence\/artifacts\/([^/]+)$/.exec(rest)) && req.method === "GET") {
+      const a = artifacts.get(decodeURIComponent(r[1]));
+      if (!a) return notFound(res);
+      res.writeHead(200, { "content-type": a.content_type, ...cors });
+      return res.end(a.body);
     }
     if (rest === "/comments" && req.method === "POST") {
       const b = await readJson(req);

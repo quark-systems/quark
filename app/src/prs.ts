@@ -87,3 +87,46 @@ export function mergeBlocker(pr: PullRequest): { reason: string; hard: boolean }
 
 /** The PR's title, or its number until the forge has been read. */
 export const prTitle = (pr: PullRequest) => pr.title ?? `${pr.repo}#${pr.number}`;
+
+// ---- verification evidence (ADR-15) ----
+
+export const GATE_LABEL: Record<string, string> = { checks: "Repository checks", journeys: "Playwright journeys", holdout: "Holdout tests" };
+
+/** Colors an evidence state (run, gate or case); unknown states read as in progress. */
+export function evidenceOutcome(state: string): { cls: string; glyph: string; label: string } {
+  const s = state.toLowerCase();
+  if (["passed", "pass", "success", "succeeded", "ok"].includes(s)) return { cls: "green", glyph: "✓", label: "passed" };
+  if (["failed", "fail", "failure", "error", "errored", "timed_out", "cancelled"].includes(s)) return { cls: "red", glyph: "✗", label: s.replace(/_/g, " ") };
+  if (["skipped", "neutral", "not_run"].includes(s)) return { cls: "", glyph: "–", label: s.replace(/_/g, " ") };
+  return { cls: "yellow", glyph: "●", label: s.replace(/_/g, " ") };
+}
+
+export function caseCounts(cases: { state: string }[]): { passed: number; failed: number; other: number } {
+  const out = { passed: 0, failed: 0, other: 0 };
+  for (const c of cases) {
+    const o = evidenceOutcome(c.state).cls;
+    if (o === "green") out.passed++; else if (o === "red") out.failed++; else out.other++;
+  }
+  return out;
+}
+
+/** Failing cases first, then running, then the rest, keeping the engine's order within each. */
+export function sortCases<T extends { state: string }>(cases: T[]): T[] {
+  const rank = (c: T) => ({ red: 0, yellow: 1 } as Record<string, number>)[evidenceOutcome(c.state).cls] ?? 2;
+  return cases.map((c, i) => [c, i] as const).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([c]) => c);
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+/** Playwright's hosted trace viewer loads a trace.zip by URL, in the browser. */
+export const traceViewerUrl = (traceUrl: string) => `https://trace.playwright.dev/?trace=${encodeURIComponent(traceUrl)}`;
