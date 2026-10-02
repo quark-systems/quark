@@ -5,13 +5,16 @@
 //! [`engine::EngineAdapter`].
 
 pub mod api;
+pub mod chat;
 pub mod config;
 pub mod engine;
+pub mod harness;
 pub mod project_repo;
 pub mod projector;
 pub mod provision;
 pub mod sessions;
 pub mod store;
+pub mod transcripts;
 
 use std::sync::Arc;
 
@@ -46,9 +49,17 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let db_path = config.db_path();
     let store =
         Arc::new(Store::open(&db_path).with_context(|| format!("opening {}", db_path.display()))?);
-    let engine: Arc<dyn EngineAdapter> = config::build_engine(engine, &config, store.clone())?;
-
     let sessions = Sessions::detect(config.tmux.as_deref(), config.run_dir(), store.clone());
+    // The engine opens its windows on the shared server, so it must be up
+    // before the first engine write.
+    if engine == EngineKind::Firstmate {
+        if let Err(e) = sessions.ensure_server().await {
+            tracing::warn!(error = %e, "terminal sessions unavailable");
+        }
+    }
+    let tmux = sessions.tmux_env().ok();
+    let engine: Arc<dyn EngineAdapter> =
+        config::build_engine(engine, &config, store.clone(), tmux)?;
     let layout = provision::Layout::new(&config.home);
     let projector = Projector::new(store.clone(), engine.clone())
         .with_sessions(sessions.clone())
@@ -58,8 +69,13 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let app = api::router(AppState {
         store,
         engine,
+        harnesses: Arc::new(harness::HarnessRegistry::builtin()),
         sessions: sessions.clone(),
         layout,
+        chat: Arc::new(chat::SessionsInput::new(
+            sessions.clone(),
+            quark_transcript::SessionRoots::from_env(),
+        )),
     });
     let listener = TcpListener::bind(config.listen)
         .await

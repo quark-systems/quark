@@ -31,6 +31,7 @@ The repository is a Cargo workspace:
 | `crates/quarkd` | The local control plane daemon: `/v1` REST API, WebSocket event stream, SQLite projection, the `EngineAdapter` seam (`quarkd::engine`), and tmux terminal sessions (`quarkd::sessions`) |
 | `crates/quark-systems` | Neutral API and event types shared by the daemon and its clients |
 | `crates/quark-engine` | Typed firstmate reads and allowlisted, argument-validated script writes |
+| `crates/quark-transcript` | Parsers for harness session logs (Claude Code, Codex, Pi) that feed `coordinator.message` and `worker.transcript` events |
 
 ```sh
 cargo test --workspace
@@ -53,3 +54,14 @@ quarkd runs one private tmux server on `~/.quark/run/tmux/quark` and attaches to
 Each Project's coordinator window (the command center's secondmate window for that Project, re-read on every refresh so it survives restarts) and task windows become its terminals: `GET /v1/projects/{id}/terminals`, input, resize and snapshot under `/v1/terminals/{id}`, and output as `worker.output` events.
 A terminal's output starts with a `snapshot` chunk (reset the emulator, then feed the bytes), and the daemon keeps about 2 MiB of output per terminal.
 To open a terminal, subscribe to the event stream, call `POST /v1/terminals/{id}/snapshot`, apply the returned event, then the terminal's events with a greater `seq`.
+
+### Desktop app
+
+`app/` is the desktop app: Tauri 2 with React, TypeScript and xterm.js, talking to `quarkd` over the `/v1` API and event stream.
+See [`app/README.md`](app/README.md) for running it, and [`app/CONTRACT.md`](app/CONTRACT.md) for the endpoints it expects.
+
+```sh
+cd app && npm install
+npm run dev                         # web build on http://127.0.0.1:1420, against quarkd on :7380
+npm run tauri dev                   # desktop app
+```

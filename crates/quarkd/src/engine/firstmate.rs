@@ -25,6 +25,7 @@ use super::{
 pub struct FirstmateEngine {
     engine_root: PathBuf,
     log: Arc<dyn CallLog>,
+    tmux: Option<String>,
 }
 
 impl FirstmateEngine {
@@ -32,6 +33,23 @@ impl FirstmateEngine {
         Self {
             engine_root: engine_root.into(),
             log,
+            tmux: None,
+        }
+    }
+
+    /// Runs every engine script with `TMUX` set to `value`, so the engine
+    /// opens and finds windows on quarkd's tmux server rather than the
+    /// user's own.
+    pub fn with_tmux(mut self, value: Option<String>) -> Self {
+        self.tmux = value;
+        self
+    }
+
+    fn at(&self, home: &Path) -> Workspace {
+        let ws = Workspace::new(home, &self.engine_root);
+        match &self.tmux {
+            Some(t) => ws.with_env("TMUX", t.clone()),
+            None => ws,
         }
     }
 
@@ -43,7 +61,7 @@ impl FirstmateEngine {
         if !ws.root.is_dir() {
             return Err(EngineError::WorkspaceNotFound(ws.root.clone()));
         }
-        Ok(Workspace::new(&ws.root, &self.engine_root))
+        Ok(self.at(&ws.root))
     }
 
     async fn write(&self, ws: &WorkspaceRef, op: WriteOp) -> Result<(), EngineError> {
@@ -55,7 +73,7 @@ impl FirstmateEngine {
         if !home.is_dir() {
             return Err(EngineError::WorkspaceNotFound(home.to_path_buf()));
         }
-        let writer = EngineWriter::new(Workspace::new(home, &self.engine_root), self.log.clone());
+        let writer = EngineWriter::new(self.at(home), self.log.clone());
         blocking(move || writer.write(&op)).await
     }
 
@@ -278,6 +296,13 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
                 harness: t.harness.clone(),
                 pull_request_url,
                 terminal: tmux_target(t),
+                worktree: t
+                    .paths
+                    .worktree
+                    .as_ref()
+                    .filter(|w| w.present)
+                    .and_then(|w| w.path.as_ref())
+                    .map(PathBuf::from),
             }
         })
         .collect();
@@ -301,6 +326,7 @@ pub fn neutral_snapshot(s: &FmSnapshot) -> FleetSnapshot {
             harness: None,
             pull_request_url: None,
             terminal: None,
+            worktree: None,
         });
     }
     FleetSnapshot { tasks }

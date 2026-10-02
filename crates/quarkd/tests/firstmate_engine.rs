@@ -438,3 +438,43 @@ async fn live_engine_seeds_a_workspace() {
     let registry = fs::read_to_string(command.join("data/secondmates.md")).unwrap();
     assert!(registry.starts_with("- prj_1 - "), "{registry}");
 }
+
+#[tokio::test]
+async fn engine_scripts_run_on_the_daemons_tmux_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_engine(dir.path());
+    let spawn = fake.engine_root.join("bin/fm-spawn.sh");
+    fs::write(
+        &spawn,
+        "#!/bin/sh\necho \"TMUX=$TMUX FM_HOME=$FM_HOME\" > \"$FM_HOME/env.log\"\n\
+         echo \"spawned $1 harness=$4 kind=secondmate window=fm:$1 worktree=$2\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&spawn, fs::Permissions::from_mode(0o755)).unwrap();
+    let e = FirstmateEngine::new(&fake.engine_root, Arc::new(MemoryCallLog::default()))
+        .with_tmux(Some("/run/quark/tmux/quark,0,0".into()));
+    let root = dir.path().join("workspaces/prj_1");
+    fs::create_dir_all(&root).unwrap();
+    let ws = WorkspaceRef {
+        project_id: "prj_1".into(),
+        root,
+    };
+    e.start_coordinator(
+        &fake.home,
+        &ws,
+        &AgentConfig {
+            harness: "claude-code".into(),
+            model: None,
+            effort: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(fake.home.join("env.log")).unwrap(),
+        format!(
+            "TMUX=/run/quark/tmux/quark,0,0 FM_HOME={}\n",
+            fake.home.display()
+        )
+    );
+}

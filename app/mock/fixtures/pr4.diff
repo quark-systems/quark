@@ -1,0 +1,192 @@
+diff --git a/content/changelog.md b/content/changelog.md
+index e22d362..592573a 100644
+--- a/content/changelog.md
++++ b/content/changelog.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## 0.4.0
++
++- **New pricing page** with Solo, Team and Enterprise plans.
++- Open Graph images are generated per page by `tools/og-image`.
++- Team plan price changes from $20 to $24 per seat; existing teams keep
++  their current price until renewal.
++
+ ## 0.3.0
+ 
+ - Workers survive daemon restarts.
+diff --git a/src/lib/plans.ts b/src/lib/plans.ts
+index 304e631..fd961e2 100644
+--- a/src/lib/plans.ts
++++ b/src/lib/plans.ts
+@@ -1,4 +1,40 @@
+-export const plans = [
+-  { name: "Solo", price: 0 },
+-  { name: "Team", price: 20 },
++export interface Plan {
++  id: "solo" | "team" | "enterprise";
++  name: string;
++  /** Monthly price in USD per seat; null means "talk to us". */
++  price: number | null;
++  workers: number | "unlimited";
++  features: string[];
++  highlighted?: boolean;
++}
++
++export const plans: Plan[] = [
++  {
++    id: "solo",
++    name: "Solo",
++    price: 0,
++    workers: 2,
++    features: ["Local daemon", "Two parallel workers", "Community support"],
++  },
++  {
++    id: "team",
++    name: "Team",
++    price: 24,
++    workers: 8,
++    features: ["Shared decisions inbox", "PR review queue", "Slack relay"],
++    highlighted: true,
++  },
++  {
++    id: "enterprise",
++    name: "Enterprise",
++    price: null,
++    workers: "unlimited",
++    features: ["SSO and audit log", "Self-hosted relay", "Priority support"],
++  },
+ ];
++
++export function formatPrice(plan: Plan): string {
++  if (plan.price === null) return "Contact us";
++  if (plan.price === 0) return "Free";
++  return `$${plan.price} / seat / mo`;
++}
+diff --git a/src/pages/pricing.tsx b/src/pages/pricing.tsx
+index f6a7e47..0ce81dd 100644
+--- a/src/pages/pricing.tsx
++++ b/src/pages/pricing.tsx
+@@ -1,16 +1,35 @@
+-import { plans } from "../lib/plans";
++import { formatPrice, plans, type Plan } from "../lib/plans";
++
++function PlanCard({ plan }: { plan: Plan }) {
++  return (
++    <section className={plan.highlighted ? "plan plan--highlighted" : "plan"}>
++      <h2>{plan.name}</h2>
++      <p className="plan__price">{formatPrice(plan)}</p>
++      <p className="plan__workers">
++        {plan.workers === "unlimited" ? "Unlimited" : plan.workers} workers
++      </p>
++      <ul>
++        {plan.features.map((f) => (
++          <li key={f}>{f}</li>
++        ))}
++      </ul>
++      <a className="button" href={plan.id === "enterprise" ? "/contact" : "/download"}>
++        {plan.id === "enterprise" ? "Talk to us" : "Get started"}
++      </a>
++    </section>
++  );
++}
+ 
+ export default function Pricing() {
+   return (
+-    <main>
++    <main className="pricing">
+       <h1>Pricing</h1>
+-      <ul>
++      <p className="lede">Start free. Upgrade when your fleet grows.</p>
++      <div className="pricing__grid">
+         {plans.map((p) => (
+-          <li key={p.name}>
+-            {p.name}: ${p.price}/mo
+-          </li>
++          <PlanCard key={p.id} plan={p} />
+         ))}
+-      </ul>
++      </div>
+     </main>
+   );
+ }
+diff --git a/tools/og-image/src/main.rs b/tools/og-image/src/main.rs
+index c6bd0e3..eee44fa 100644
+--- a/tools/og-image/src/main.rs
++++ b/tools/og-image/src/main.rs
+@@ -1,8 +1,70 @@
++//! Render Open Graph images for every page that declares a title.
++//!
++//! Usage: `og-image [--out-dir public/og] <page-title>...`
++
+ use std::path::PathBuf;
++use std::process::ExitCode;
++
++struct Args {
++    out_dir: PathBuf,
++    titles: Vec<String>,
++}
++
++fn parse_args() -> Result<Args, String> {
++    let mut out_dir = PathBuf::from("public/og");
++    let mut titles = Vec::new();
++    let mut args = std::env::args().skip(1);
++    while let Some(arg) = args.next() {
++        match arg.as_str() {
++            "--out-dir" => {
++                out_dir = args.next().ok_or("--out-dir needs a value")?.into();
++            }
++            _ => titles.push(arg),
++        }
++    }
++    if titles.is_empty() {
++        titles.push("Quark".into());
++    }
++    Ok(Args { out_dir, titles })
++}
++
++/// `"Pricing & Plans"` -> `"pricing-plans"`.
++fn slug(title: &str) -> String {
++    title
++        .split(|c: char| !c.is_ascii_alphanumeric())
++        .filter(|s| !s.is_empty())
++        .map(str::to_ascii_lowercase)
++        .collect::<Vec<_>>()
++        .join("-")
++}
++
++fn main() -> ExitCode {
++    let args = match parse_args() {
++        Ok(a) => a,
++        Err(e) => {
++            eprintln!("og-image: {e}");
++            return ExitCode::from(2);
++        }
++    };
++    std::fs::create_dir_all(&args.out_dir).expect("create output dir");
++    for title in &args.titles {
++        let out = args.out_dir.join(format!("{}.png", slug(title)));
++        if let Err(e) = og_image::render(title, &out) {
++            eprintln!("og-image: {title}: {e}");
++            return ExitCode::FAILURE;
++        }
++        println!("wrote {}", out.display());
++    }
++    ExitCode::SUCCESS
++}
++
++#[cfg(test)]
++mod tests {
++    use super::slug;
+ 
+-fn main() {
+-    let out = PathBuf::from("public/og.png");
+-    let title = std::env::args().nth(1).unwrap_or_else(|| "Quark".into());
+-    og_image::render(&title, &out).expect("render og image");
+-    println!("wrote {}", out.display());
++    #[test]
++    fn slugs() {
++        assert_eq!(slug("Pricing & Plans"), "pricing-plans");
++        assert_eq!(slug("  Quark  "), "quark");
++    }
+ }

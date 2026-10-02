@@ -12,7 +12,8 @@ use std::sync::Mutex;
 use crate::engine::{FleetSnapshot, Hold};
 use quark_systems::{
     AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset, Event,
-    EventType, Project, ProjectStatus, RepoSource, Task, TaskKind, TaskState, UpdateProject,
+    EventType, Project, ProjectStatus, RepoSource, Task, TaskKind, TaskState, TranscriptEntry,
+    TranscriptItem, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -26,7 +27,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -114,6 +115,19 @@ ALTER TABLE events ADD COLUMN size INTEGER;
 CREATE INDEX events_subject ON events (subject, seq) WHERE subject IS NOT NULL;
 "#;
 
+/// Where each transcript source was last read. The session logs stay the
+/// source of truth: this holds offsets, not copies, and moves in the same
+/// transaction as the events read from them.
+const SCHEMA_V5: &str = r#"
+CREATE TABLE transcript_index (
+    source     TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    path       TEXT NOT NULL,
+    "offset"   INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"#;
+
 /// Capacity of the live event channel. A subscriber that falls further behind
 /// than this catches up from the store instead.
 const BUS_CAPACITY: usize = 1024;
@@ -133,6 +147,24 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// A transcript the daemon projects into events.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TranscriptSource {
+    /// A Project's coordinator; its id is the Project id.
+    Coordinator { project_id: String },
+    /// A worker, by API task id.
+    Task { task_id: String },
+}
+
+impl TranscriptSource {
+    fn key(&self) -> String {
+        match self {
+            TranscriptSource::Coordinator { project_id } => format!("coordinator:{project_id}"),
+            TranscriptSource::Task { task_id } => format!("task:{task_id}"),
+        }
+    }
+}
 
 /// Engine coordinates of a task, from [`Store::task_target`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -706,6 +738,116 @@ impl Store {
         })
     }
 
+    // Transcripts
+
+    /// The API id of the task the engine knows as `engine_id`.
+    pub fn task_id_for_engine(&self, project_id: &str, engine_id: &str) -> Result<Option<String>> {
+        self.read(|c| {
+            Ok(c.query_row(
+                "SELECT id FROM tasks WHERE project_id = ?1 AND engine_id = ?2",
+                params![project_id, engine_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })
+    }
+
+    /// The session log a transcript source was last read from, and the offset
+    /// to continue at.
+    pub fn transcript_cursor(&self, source: &TranscriptSource) -> Result<Option<(String, u64)>> {
+        self.read(|c| {
+            Ok(c.query_row(
+                r#"SELECT path, "offset" FROM transcript_index WHERE source = ?1"#,
+                [source.key()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)),
+            )
+            .optional()?)
+        })
+    }
+
+    /// Transcript entries already projected for `source`, oldest first, with
+    /// event `seq > after`, at most `limit`.
+    pub fn transcript(
+        &self,
+        source: &TranscriptSource,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<TranscriptItem>> {
+        let (event_type, key, id) = match source {
+            TranscriptSource::Coordinator { project_id } => (
+                EventType::CoordinatorMessage,
+                "$.coordinator_id",
+                project_id,
+            ),
+            TranscriptSource::Task { task_id } => {
+                (EventType::WorkerTranscript, "$.task_id", task_id)
+            }
+        };
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT seq, json_extract(payload, '$.entry') FROM events
+                 WHERE type = ?1 AND json_extract(payload, ?2) = ?3 AND seq > ?4
+                 ORDER BY seq LIMIT ?5",
+            )?;
+            let rows = stmt
+                .query_map(params![event_type.as_str(), key, id, after, limit], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, entry) = row?;
+                out.push(TranscriptItem {
+                    id,
+                    entry: serde_json::from_str(&entry)?,
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    /// Appends one event per entry read from `path` and moves the source's
+    /// cursor to `next_offset`, atomically, so a restart neither repeats nor
+    /// skips an entry.
+    pub fn apply_transcript(
+        &self,
+        project_id: &str,
+        source: &TranscriptSource,
+        path: &str,
+        next_offset: u64,
+        entries: &[TranscriptEntry],
+    ) -> Result<()> {
+        self.write(|tx, events| {
+            for entry in entries {
+                let (event_type, payload) = match source {
+                    TranscriptSource::Coordinator { project_id } => (
+                        EventType::CoordinatorMessage,
+                        serde_json::json!({ "coordinator_id": project_id, "entry": entry }),
+                    ),
+                    TranscriptSource::Task { task_id } => (
+                        EventType::WorkerTranscript,
+                        serde_json::json!({ "task_id": task_id, "entry": entry }),
+                    ),
+                };
+                append_event(tx, events, Some(project_id), event_type, payload)?;
+            }
+            tx.execute(
+                r#"INSERT INTO transcript_index (source, project_id, path, "offset", updated_at)
+                   VALUES (?1, ?2, ?3, ?4, ?5)
+                   ON CONFLICT (source) DO UPDATE SET
+                       path = excluded.path, "offset" = excluded."offset",
+                       updated_at = excluded.updated_at"#,
+                params![
+                    source.key(),
+                    project_id,
+                    path,
+                    next_offset as i64,
+                    now_rfc3339()
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Engine task id to daemon task id for one Project.
     pub fn task_ids_by_engine(&self, project_id: &str) -> Result<HashMap<String, String>> {
         self.read(|c| {
@@ -891,6 +1033,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(SCHEMA_V4)?;
         tx.pragma_update(None, "user_version", 4)?;
+        tx.commit()?;
+    }
+    if version < 5 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V5)?;
+        tx.pragma_update(None, "user_version", 5)?;
         tx.commit()?;
     }
     Ok(())
@@ -1085,6 +1233,7 @@ mod tests {
             state_note: None,
             harness: Some("claude".into()),
             pull_request_url: None,
+            worktree: None,
             terminal: None,
         }
     }
