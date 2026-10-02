@@ -1,7 +1,7 @@
 use axum::Json;
 use utoipa::OpenApi;
 
-use super::{events, harnesses, routes, terminals};
+use super::{events, harnesses, pull_requests, routes, terminals};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -26,6 +26,11 @@ use super::{events, harnesses, routes, terminals};
         routes::get_task_changes,
         routes::get_task_diff,
         routes::list_decisions,
+        pull_requests::list,
+        pull_requests::get,
+        pull_requests::diff,
+        pull_requests::comment,
+        pull_requests::merge,
         harnesses::list,
         harnesses::validate,
         terminals::list_terminals,
@@ -54,12 +59,23 @@ use super::{events, harnesses, routes, terminals};
         quark_systems::DispatchPreset,
         quark_systems::TranscriptEntry,
         quark_systems::TranscriptRole,
+        quark_systems::PullRequestState,
+        quark_systems::Mergeability,
+        quark_systems::ChecksState,
+        quark_systems::ReviewDecision,
+        quark_systems::CheckStatus,
+        quark_systems::ReviewState,
+        quark_systems::CheckUpdated,
+        quark_systems::ReviewUpdated,
+        quark_systems::DiffSide,
+        quark_systems::MergeMethod,
     )),
     tags(
         (name = "daemon"),
         (name = "projects"),
         (name = "tasks"),
         (name = "decisions"),
+        (name = "pull-requests"),
         (name = "harnesses"),
         (name = "terminals"),
         (name = "coordinators"),

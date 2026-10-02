@@ -31,6 +31,10 @@ pub struct Project {
     /// Local path of the Project repo (bare), which holds `project.yaml`,
     /// `dispatch.yaml`, `instructions.md` and `memory/`.
     pub project_repo_path: Option<String>,
+    /// Merge this Project's pull requests as soon as they are green, without
+    /// asking. Maps to the engine's merge posture for the Project's repos.
+    #[serde(default)]
+    pub standing_approval: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -65,6 +69,9 @@ pub struct UpdateProject {
     pub name: Option<String>,
     pub goal: Option<String>,
     pub workspace_path: Option<String>,
+    /// Turn standing approval on or off. Needs the Project's workspace when
+    /// the Project has repos.
+    pub standing_approval: Option<bool>,
 }
 
 /// Where a Project is in its lifecycle.
@@ -342,6 +349,265 @@ pub struct Decision {
     pub answered_by: Option<String>,
     pub opened_at: String,
     pub answered_at: Option<String>,
+}
+
+/// Where a pull request is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestState {
+    Open,
+    /// Open but marked as a draft.
+    Draft,
+    Merged,
+    /// Closed without merging.
+    Closed,
+}
+
+impl PullRequestState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PullRequestState::Open => "open",
+            PullRequestState::Draft => "draft",
+            PullRequestState::Merged => "merged",
+            PullRequestState::Closed => "closed",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<PullRequestState> {
+        match s {
+            "open" => Some(PullRequestState::Open),
+            "draft" => Some(PullRequestState::Draft),
+            "merged" => Some(PullRequestState::Merged),
+            "closed" => Some(PullRequestState::Closed),
+            _ => None,
+        }
+    }
+
+    /// Merged and closed pull requests no longer change.
+    pub fn is_final(self) -> bool {
+        matches!(self, PullRequestState::Merged | PullRequestState::Closed)
+    }
+}
+
+/// Whether the forge can merge the head into the base without conflicts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Mergeability {
+    Mergeable,
+    Conflicting,
+    /// Not computed yet, or not reported.
+    Unknown,
+}
+
+/// One state for all of a pull request's checks on its current head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChecksState {
+    /// Every check finished and none failed.
+    Passing,
+    /// At least one check failed.
+    Failing,
+    /// None failed and at least one has not finished.
+    Pending,
+    /// No check has reported on the head.
+    None,
+}
+
+/// What reviewers decided, as the forge sums it up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    /// An approving review is required and has not been given.
+    ReviewRequired,
+    /// The repo requires no review and none decided.
+    None,
+}
+
+/// The state of one check on a pull request's head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    /// Queued or running.
+    Pending,
+    Success,
+    Failure,
+    /// Finished without passing or failing (neutral, skipped).
+    Neutral,
+    Cancelled,
+}
+
+/// One CI check or commit status on a pull request's current head.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Check {
+    /// Unique per pull request; for GitHub Actions, `workflow / job`.
+    pub name: String,
+    pub status: CheckStatus,
+    /// The forge's own conclusion, e.g. `timed_out`, when it says more than `status`.
+    pub conclusion: Option<String>,
+    /// Link to the run or its log.
+    pub details_url: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+/// What a review said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+    /// Started and not submitted yet.
+    Pending,
+}
+
+/// One submitted review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Review {
+    /// The forge's review id.
+    pub id: String,
+    /// Forge login of the reviewer.
+    pub author: Option<String>,
+    pub state: ReviewState,
+    /// Markdown; may be empty.
+    pub body: String,
+    pub submitted_at: Option<String>,
+    /// Head commit the review was left on.
+    pub commit: Option<String>,
+}
+
+/// Verification evidence attached to a pull request (ADR-15). Reserved: the
+/// daemon reports repo-native checks only and leaves `evidence` absent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Evidence {
+    /// Short summary, e.g. which journeys or holdout tests passed.
+    pub summary: String,
+    /// Link to the full report.
+    pub url: Option<String>,
+}
+
+/// A pull request opened by one of a Project's tasks, with its checks and
+/// reviews as last read from the forge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct PullRequest {
+    pub id: String,
+    pub project_id: String,
+    /// The task that opened it.
+    pub task_id: Option<String>,
+    pub url: String,
+    /// `github` or `gitlab`.
+    pub provider: String,
+    /// Repository path, e.g. `quark-systems/quark`.
+    pub repo: String,
+    pub number: u64,
+    /// Absent until the forge has been read.
+    pub title: Option<String>,
+    /// Forge login of the author.
+    pub author: Option<String>,
+    pub state: PullRequestState,
+    pub head_ref: Option<String>,
+    pub base_ref: Option<String>,
+    /// Head commit the checks and mergeability refer to.
+    pub head_sha: Option<String>,
+    pub mergeable: Mergeability,
+    pub checks_state: ChecksState,
+    pub review_decision: ReviewDecision,
+    pub additions: Option<u64>,
+    pub deletions: Option<u64>,
+    pub changed_files: Option<u64>,
+    pub checks: Vec<Check>,
+    pub reviews: Vec<Review>,
+    /// Reserved for verification evidence (ADR-15); absent for now.
+    pub evidence: Option<Evidence>,
+    /// When the forge reports the PR was opened, updated, merged and closed.
+    pub opened_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub merged_at: Option<String>,
+    pub closed_at: Option<String>,
+    /// When the daemon last read the forge successfully.
+    pub synced_at: Option<String>,
+    /// Why the last forge read failed, until one succeeds.
+    pub sync_error: Option<String>,
+}
+
+/// Payload of `check.updated`: one check that appeared or changed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CheckUpdated {
+    pub pull_request_id: String,
+    pub task_id: Option<String>,
+    pub head_sha: Option<String>,
+    pub check: Check,
+}
+
+/// Payload of `review.updated`: one review that appeared or changed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ReviewUpdated {
+    pub pull_request_id: String,
+    pub task_id: Option<String>,
+    pub review: Review,
+}
+
+/// A unified diff of a pull request, or of one of its files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct PullRequestDiff {
+    pub pull_request_id: String,
+    /// The file this diff covers; absent for the whole pull request.
+    pub path: Option<String>,
+    pub patch: String,
+    /// True when `patch` was cut at the size limit.
+    pub truncated: bool,
+}
+
+/// Which side of a diff a line comment is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffSide {
+    /// The changed version (added or context lines).
+    New,
+    /// The base version (removed lines).
+    Old,
+}
+
+/// A review comment for the worker that owns the pull request. It is
+/// delivered to the worker as a steering message, not posted on the forge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct PullRequestComment {
+    pub text: String,
+    /// File the comment is about, as it appears in the diff.
+    pub path: Option<String>,
+    /// Line in `path` on `side`; requires `path`.
+    pub line: Option<u64>,
+    /// Default `new`.
+    pub side: Option<DiffSide>,
+}
+
+/// How to merge a pull request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMethod {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeMethod::Squash => "squash",
+            MergeMethod::Merge => "merge",
+            MergeMethod::Rebase => "rebase",
+        }
+    }
+}
+
+/// Request body for `POST /v1/pull-requests/{id}:merge`; may be empty.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MergePullRequest {
+    /// Default `squash` on GitHub; GitLab uses the project's own setting.
+    pub method: Option<MergeMethod>,
 }
 
 /// Who or what produced a transcript entry.
@@ -680,10 +946,13 @@ pub enum EventType {
     DecisionOpened,
     #[serde(rename = "decision.answered")]
     DecisionAnswered,
+    /// A pull request appeared or changed; payload is a [`PullRequest`].
     #[serde(rename = "pr.updated")]
     PrUpdated,
+    /// A check appeared or changed; payload is a [`CheckUpdated`].
     #[serde(rename = "check.updated")]
     CheckUpdated,
+    /// A review appeared or changed; payload is a [`ReviewUpdated`].
     #[serde(rename = "review.updated")]
     ReviewUpdated,
     #[serde(rename = "dispatch.recorded")]

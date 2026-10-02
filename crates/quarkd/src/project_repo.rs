@@ -178,8 +178,9 @@ fn project_yaml(p: &Project) -> String {
         DeliveryPolicy::Direct => "direct",
     };
     y.push_str(&format!(
-        "delivery:\n  policy: {}\n  standing_approval: false\n",
-        q(delivery)
+        "delivery:\n  policy: {}\n  standing_approval: {}\n",
+        q(delivery),
+        p.standing_approval
     ));
     y
 }
@@ -310,6 +311,7 @@ mod tests {
             dispatch_preset: Some(DispatchPreset::LightTrivial),
             delivery: Some(DeliveryPolicy::Direct),
             project_repo_path: None,
+            standing_approval: false,
             created_at: "2026-10-02T00:00:00Z".into(),
             updated_at: "2026-10-02T00:00:00Z".into(),
         }

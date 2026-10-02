@@ -27,7 +27,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -149,6 +149,64 @@ CREATE INDEX task_events_by_task ON task_events (task_id, id);
 CREATE TABLE status_cursors (
     task_id     TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
     byte_offset INTEGER NOT NULL
+);
+"#;
+
+/// The PR center: pull requests opened by tasks, with the checks and reviews
+/// last read from the forge, and each Project's standing approval.
+const SCHEMA_V7: &str = r#"
+ALTER TABLE projects ADD COLUMN standing_approval INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE pull_requests (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task_id         TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    url             TEXT NOT NULL,
+    provider        TEXT NOT NULL,
+    repo            TEXT NOT NULL,
+    number          INTEGER NOT NULL,
+    title           TEXT,
+    author          TEXT,
+    state           TEXT NOT NULL,
+    head_ref        TEXT,
+    base_ref        TEXT,
+    head_sha        TEXT,
+    mergeable       TEXT NOT NULL,
+    checks_state    TEXT NOT NULL,
+    review_decision TEXT NOT NULL,
+    additions       INTEGER,
+    deletions       INTEGER,
+    changed_files   INTEGER,
+    opened_at       TEXT,
+    updated_at      TEXT,
+    merged_at       TEXT,
+    closed_at       TEXT,
+    synced_at       TEXT,
+    sync_error      TEXT,
+    created_at      TEXT NOT NULL,
+    UNIQUE (project_id, url)
+);
+
+CREATE TABLE checks (
+    pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    conclusion      TEXT,
+    details_url     TEXT,
+    started_at      TEXT,
+    completed_at    TEXT,
+    PRIMARY KEY (pull_request_id, name)
+);
+
+CREATE TABLE reviews (
+    pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+    id              TEXT NOT NULL,
+    author          TEXT,
+    state           TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    submitted_at    TEXT,
+    commit_sha      TEXT,
+    PRIMARY KEY (pull_request_id, id)
 );
 "#;
 
@@ -359,6 +417,7 @@ impl Store {
                 dispatch_preset: input.dispatch_preset,
                 delivery: input.delivery,
                 project_repo_path: None,
+                standing_approval: false,
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -1221,6 +1280,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 6)?;
         tx.commit()?;
     }
+    if version < 7 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V7)?;
+        tx.pragma_update(None, "user_version", 7)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1271,7 +1336,8 @@ fn new_id(prefix: &str) -> String {
 }
 
 const PROJECT_SELECT: &str = "SELECT id, name, goal, workspace_path, created_at, updated_at, \
-                              status, status_detail, spec, project_repo_path FROM projects";
+                              status, status_detail, spec, project_repo_path, \
+                              standing_approval FROM projects";
 
 /// The creation inputs kept with a Project row.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -1321,6 +1387,7 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         dispatch_preset: spec.dispatch_preset,
         delivery: spec.delivery,
         project_repo_path: r.get(9)?,
+        standing_approval: r.get(10)?,
     })
 }
 
