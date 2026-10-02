@@ -1,0 +1,22 @@
+[package]
+name = "quark-term-bench"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Benchmark harness comparing libghostty-vt and alacritty_terminal as Quark's terminal core"
+
+[workspace]
+
+[dependencies]
+# libghostty-rs master (workspace version 0.2.1) at a pinned rev. It pins Ghostty
+# 22d13172 (Zig 0.16) and exposes line-based scrollback limits; the crates.io
+# 0.2.1/0.2.2 releases pin an older Ghostty (Zig 0.15.2) whose `max_scrollback`
+# is really a byte budget. See RESULTS.md "Build friction".
+libghostty-vt = { git = "https://github.com/Uzaaft/libghostty-rs", rev = "8953a740bc378cec3e07e1f6ca949f0595eab19b" }
+alacritty_terminal = { version = "0.26.0", default-features = false }
+
+[profile.release]
+debug = false
+codegen-units = 1
+lto = "thin"

@@ -1,0 +1,98 @@
+{
+  "app": "native-warpui",
+  "input_path": "xdotool -> X11 -> winit -> warpui",
+  "panes": 4,
+  "phases": [
+    {
+      "coordinator_deltas": 0,
+      "echo_ws_thread_to_ui_thread_ms": {
+        "p50": 0.15,
+        "p99": 45.91
+      },
+      "events_applied": 273,
+      "fps_avg": 22.38,
+      "frame_cpu_ms_layout_to_present": {
+        "max": 53.91,
+        "p50": 34.95,
+        "p99": 50.68
+      },
+      "frame_interval_ms": {
+        "p50": 42.18,
+        "p99": 119.86
+      },
+      "frame_split_p50_ms": {
+        "gpu_submit_present": 33.63,
+        "layout_paint": 1.05,
+        "view_render": 0.14
+      },
+      "frame_split_p99_ms": {
+        "gpu_submit_present": 49.19,
+        "layout_paint": 2.06,
+        "view_render": 0.29
+      },
+      "frames": 236,
+      "key_to_echo_painted_ms": {
+        "p50": 41.14,
+        "p99": 86.7
+      },
+      "key_to_echo_received_on_ws_thread_ms": {
+        "p50": 0.89,
+        "p99": 4.57
+      },
+      "keystrokes_measured": 70,
+      "phase": "idle_typing",
+      "seconds": 10.55,
+      "terminal_core_feed_ms_total": 4.01,
+      "terminal_core_ms_per_mb": 196.91,
+      "terminal_core_snapshot_ms_total": 11.84,
+      "terminal_rows_rebuilt": 2078,
+      "worker_output_bytes": 80446
+    },
+    {
+      "coordinator_deltas": 393,
+      "echo_ws_thread_to_ui_thread_ms": {
+        "p50": 21.96,
+        "p99": 82.42
+      },
+      "events_applied": 52021,
+      "fps_avg": 7.87,
+      "frame_cpu_ms_layout_to_present": {
+        "max": 136.31,
+        "p50": 73.47,
+        "p99": 110.44
+      },
+      "frame_interval_ms": {
+        "p50": 125.69,
+        "p99": 218.41
+      },
+      "frame_split_p50_ms": {
+        "gpu_submit_present": 70.81,
+        "layout_paint": 2.42,
+        "view_render": 0.32
+      },
+      "frame_split_p99_ms": {
+        "gpu_submit_present": 107.44,
+        "layout_paint": 5.65,
+        "view_render": 4.15
+      },
+      "frames": 154,
+      "key_to_echo_painted_ms": {
+        "p50": 138.46,
+        "p99": 268.65
+      },
+      "key_to_echo_received_on_ws_thread_ms": {
+        "p50": 24.06,
+        "p99": 43.43
+      },
+      "keystrokes_measured": 67,
+      "phase": "stress_4_terminals_plus_chat",
+      "seconds": 19.56,
+      "terminal_core_feed_ms_total": 3181.33,
+      "terminal_core_ms_per_mb": 80.93,
+      "terminal_core_snapshot_ms_total": 4043.64,
+      "terminal_rows_rebuilt": 861258,
+      "worker_output_bytes": 89278275
+    }
+  ],
+  "terminal_core": "libghostty-vt"
+}
