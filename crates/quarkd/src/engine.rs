@@ -110,6 +110,9 @@ pub enum TaskControl {
         model: Option<String>,
         effort: Option<String>,
         note: String,
+        /// The account to run under, as the harness's account variable and
+        /// its config directory; empty keeps the ambient account.
+        account_env: Vec<(String, String)>,
     },
 }
 
@@ -274,13 +277,23 @@ pub trait EngineAdapter: Send + Sync {
         plan: &WorkspacePlan,
     ) -> Result<PathBuf, EngineError>;
 
-    /// Start the coordinator of a seeded Project workspace with `agent`.
+    /// Start the coordinator of a seeded Project workspace with `agent`,
+    /// under the account `account_env` selects (empty keeps the ambient
+    /// account). Workers the coordinator starts inherit its account.
     async fn start_coordinator(
         &self,
         command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
+        account_env: &[(String, String)],
     ) -> Result<(), EngineError>;
+
+    /// Account variables (`CLAUDE_CONFIG_DIR` and equivalents) this engine
+    /// carries into the agents it launches. A harness whose variable is not
+    /// listed runs only under its default account.
+    fn account_envs(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Replace the workspace's verification-gate config with `config`
     /// (schema `fm.gates.v1`, see [`crate::gates`]). Engines without gates
@@ -315,6 +328,14 @@ pub fn listed_artifact(e: &Evidence, path: &str) -> Result<(), EngineError> {
     }
 }
 
+/// The stub carries every built-in harness's account variable.
+const STUB_ACCOUNT_ENVS: &[&str] = &[
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "PI_CODING_AGENT_DIR",
+    "GROK_HOME",
+];
+
 /// A write the [`StubEngine`] received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StubWrite {
@@ -342,6 +363,7 @@ pub enum StubWrite {
     StartCoordinator {
         project_id: String,
         harness: String,
+        account_env: Vec<(String, String)>,
     },
     MergePullRequest {
         task_id: String,
@@ -593,11 +615,17 @@ impl EngineAdapter for StubEngine {
         _command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
+        account_env: &[(String, String)],
     ) -> Result<(), EngineError> {
         self.accept(StubWrite::StartCoordinator {
             project_id: ws.project_id.clone(),
             harness: agent.harness.clone(),
+            account_env: account_env.to_vec(),
         })
+    }
+
+    fn account_envs(&self) -> &'static [&'static str] {
+        STUB_ACCOUNT_ENVS
     }
 
     async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {

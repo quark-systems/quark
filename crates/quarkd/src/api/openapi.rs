@@ -1,7 +1,7 @@
 use axum::Json;
 use utoipa::OpenApi;
 
-use super::{events, harnesses, pull_requests, routes, terminals};
+use super::{accounts, events, harnesses, pull_requests, routes, terminals};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -35,6 +35,11 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         pull_requests::artifact,
         harnesses::list,
         harnesses::validate,
+        accounts::list,
+        accounts::get,
+        accounts::create,
+        accounts::update,
+        accounts::delete,
         terminals::list_terminals,
         terminals::get_terminal,
         terminals::input,
@@ -74,6 +79,8 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         quark_systems::GateState,
         quark_systems::GateKind,
         quark_systems::ArtifactKind,
+        quark_systems::QuotaState,
+        quark_systems::AccountQuotaChanged,
     )),
     tags(
         (name = "daemon"),
@@ -82,6 +89,7 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         (name = "decisions"),
         (name = "pull-requests"),
         (name = "harnesses"),
+        (name = "accounts"),
         (name = "terminals"),
         (name = "coordinators"),
         (name = "events")

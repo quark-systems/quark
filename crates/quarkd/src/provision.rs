@@ -8,7 +8,8 @@
 //!    command center, ADR-6);
 //! 3. write the Project repo (`project.yaml`, `dispatch.yaml`,
 //!    `instructions.md`, `memory/`) and check it out inside the workspace;
-//! 4. start the Project coordinator with the Project's agent config.
+//! 4. start the Project coordinator with the Project's agent config, under
+//!    an account from its pool when it names one.
 //!
 //! Each step emits a `project.updated` event with what is happening, and is
 //! recorded as an adapter call. A failure stops provisioning with status
@@ -23,6 +24,7 @@ use quark_systems::{
     CreateProject, DeliveryPolicy, DispatchPreset, Project, ProjectStatus, RepoSource,
 };
 
+use crate::accounts::{Accounts, Holder};
 use crate::engine::{EngineAdapter, SourceRepo, WorkspacePlan, WorkspaceRef};
 use crate::project_repo;
 use crate::store::Store;
@@ -163,12 +165,14 @@ fn token(s: &str, model: bool) -> bool {
 pub async fn provision(
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
+    accounts: Arc<Accounts>,
     layout: Layout,
     project_id: String,
 ) {
     let p = Provisioner {
         store,
         engine,
+        accounts,
         layout,
         project_id,
     };
@@ -187,6 +191,7 @@ pub async fn provision(
 struct Provisioner {
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
+    accounts: Arc<Accounts>,
     layout: Layout,
     project_id: String,
 }
@@ -252,10 +257,18 @@ impl Provisioner {
             project_id: project.id.clone(),
             root: root.clone(),
         };
+        // A retry keeps the account an earlier attempt chose.
+        let lease = self
+            .accounts
+            .lease(&Holder::Coordinator(project.id.clone()), &agent)
+            .await
+            .map_err(|e| format!("Choosing the coordinator's account: {e}"))?;
+        let account_env = lease.map(|l| l.env).unwrap_or_default();
         self.step(
             "Starting the coordinator",
             "start_coordinator",
-            self.engine.start_coordinator(&command, &ws, &agent),
+            self.engine
+                .start_coordinator(&command, &ws, &agent, &account_env),
         )
         .await?;
 
@@ -354,6 +367,7 @@ mod tests {
             harness: "claude-code".into(),
             model: None,
             effort: None,
+            pool: None,
         }
     }
 

@@ -44,6 +44,12 @@ struct ServeArgs {
     /// tmux binary for terminal sessions [default: tmux on PATH]
     #[arg(long, env = "QUARKD_TMUX")]
     tmux: Option<PathBuf>,
+    /// Seconds between reads of each account's quota.
+    #[arg(long, default_value_t = 300)]
+    quota_refresh_secs: u64,
+    /// quota-axi binary that reads account quota.
+    #[arg(long, env = "QUARKD_QUOTA_AXI", default_value = "quota-axi")]
+    quota_axi: PathBuf,
 }
 
 #[tokio::main]
@@ -68,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
                 refresh_interval: Duration::from_secs(args.refresh_secs.max(1)),
                 pr_refresh_interval: Duration::from_secs(args.pr_refresh_secs.max(5)),
                 tmux: args.tmux,
+                quota_refresh_interval: Duration::from_secs(args.quota_refresh_secs.max(30)),
+                quota_axi: args.quota_axi,
             };
             quarkd::serve(config, args.engine).await
         }

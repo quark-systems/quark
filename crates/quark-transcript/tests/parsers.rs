@@ -121,7 +121,8 @@ fn locates_each_harness_log_by_working_directory() {
     std::fs::write(&old, "").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(20));
     let new = claude_dir.join("new.jsonl");
-    std::fs::copy(fixture("claude.jsonl"), &new).unwrap();
+    // Written rather than copied: a copy keeps the fixture's older mtime on macOS.
+    std::fs::write(&new, std::fs::read(fixture("claude.jsonl")).unwrap()).unwrap();
     assert_eq!(locate(SessionFormat::Claude, cwd, &roots), Some(new));
 
     let pi_dir = home.path().join(".pi/agent/sessions/--work-fix-42--");

@@ -33,10 +33,17 @@ fn harness() -> Harness {
     let store = Arc::new(Store::open_in_memory().unwrap());
     let engine = Arc::new(StubEngine::new());
     let chat = Arc::new(RecordingInput::new());
+    let harnesses = Arc::new(quarkd::harness::HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        quarkd::harness::HostEnv::default(),
+    ));
     let app = api::router(AppState {
-        harnesses: Arc::new(quarkd::harness::HarnessRegistry::new(
-            quarkd::harness::builtin(),
-            quarkd::harness::HostEnv::default(),
+        harnesses: harnesses.clone(),
+        accounts: Arc::new(quarkd::accounts::Accounts::new(
+            store.clone(),
+            harnesses,
+            Arc::new(quarkd::accounts::StubQuota::new()),
+            &["CLAUDE_CONFIG_DIR"],
         )),
         store: store.clone(),
         engine: engine.clone(),
@@ -312,10 +319,17 @@ async fn coordinator_messages_are_typed_into_the_session() {
 #[tokio::test]
 async fn without_a_session_client_messages_are_refused() {
     let store = Arc::new(Store::open_in_memory().unwrap());
+    let harnesses = Arc::new(quarkd::harness::HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        quarkd::harness::HostEnv::default(),
+    ));
     let app = api::router(AppState {
-        harnesses: Arc::new(quarkd::harness::HarnessRegistry::new(
-            quarkd::harness::builtin(),
-            quarkd::harness::HostEnv::default(),
+        harnesses: harnesses.clone(),
+        accounts: Arc::new(quarkd::accounts::Accounts::new(
+            store.clone(),
+            harnesses,
+            Arc::new(quarkd::accounts::StubQuota::new()),
+            &["CLAUDE_CONFIG_DIR"],
         )),
         store: store.clone(),
         engine: Arc::new(StubEngine::new()),

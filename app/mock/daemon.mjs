@@ -43,6 +43,7 @@ const pulls = new Map(); // PR id -> PullRequest
 const pullDiffs = new Map(); // PR id -> unified diff text
 const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
+const accounts = new Map(); // account id -> Account, in the daemon's order (default first per harness)
 
 const events = []; // { seq, ... } bounded
 let seq = 0;
@@ -75,6 +76,7 @@ function addTask(projectId, t, { silent = false } = {}) {
     id: t.id ?? nextId("t"), project_id: projectId, title: t.title, state: t.state ?? "queued",
     kind: t.kind ?? "ship", state_note: t.state_note ?? null, harness: t.harness ?? "claude-code",
     pull_request_url: t.pull_request_url ?? null, created_at: t.created_at ?? now(), updated_at: t.updated_at ?? now(),
+    account_id: t.account_id ?? (ACCOUNT_ENV[t.harness ?? "claude-code"] ? `default-${t.harness ?? "claude-code"}` : null),
   };
   tasks.set(task.id, task);
   transcripts.set(task.id, []);
@@ -126,6 +128,11 @@ function output(task, text) {
 // ---------------------------------------------------------------- seed
 
 function seed() {
+  addAccount({ id: "default-claude-code", harness: "claude-code", label: "Default", config_dir: "/home/demo/.claude", default: true,
+    quota: quotaReading(62, "max") });
+  addAccount({ id: "default-codex", harness: "codex", label: "Default", config_dir: "/home/demo/.codex", default: true,
+    health: { state: "configured", detail: "found /home/demo/.codex/auth.json" }, quota: quotaReading(88, "plus") });
+
   const quark = addProject({
     id: "quark", name: "Quark MVP", goal: "Ship Phase 1: one Project end to end, from creation to a reviewed PR.",
     repos: [{ url: "https://github.com/quark-systems/quark.git" }, { url: "https://github.com/quark-systems/firstmate.git" }],
@@ -292,7 +299,7 @@ function send(res, status, body, type = "application/json") {
 }
 const cors = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PATCH, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
   "access-control-allow-headers": "content-type",
 };
 const notFound = (res) => send(res, 404, { error: { code: "not_found", message: "resource not found" } });
@@ -347,6 +354,47 @@ function terminalInput(task, data) {
   if (out) output(task, out);
 }
 
+// Harnesses that take an account directory, like quarkd's harness registry.
+const ACCOUNT_ENV = { "claude-code": "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", pi: "PI_CODING_AGENT_DIR" };
+const QUOTA_PROVIDER = { "claude-code": "claude", codex: "codex" };
+
+const quotaReading = (remaining, plan, minutesToReset = 140) => ({
+  state: "known", remaining_percent: remaining, plan, detail: null, checked_at: now(),
+  windows: [
+    { id: "five_hour", label: "session", percent_remaining: remaining, resets_at: new Date(Date.now() + minutesToReset * 60_000).toISOString() },
+    { id: "weekly", label: "week", percent_remaining: Math.min(100, remaining + 21), resets_at: new Date(Date.now() + 5 * 86_400_000).toISOString() },
+  ],
+});
+
+function addAccount(a) {
+  const account = {
+    id: a.id ?? nextId("acc"), harness: a.harness, label: a.label, config_dir: a.config_dir, default: !!a.default,
+    pools: [...new Set(a.pools ?? [])].sort(), health: a.health ?? { state: "configured", detail: `found ${a.config_dir}/.credentials.json` },
+    quota: a.quota ?? (QUOTA_PROVIDER[a.harness]
+      ? { state: "pending", remaining_percent: null, plan: null, windows: [], detail: null, checked_at: null }
+      : { state: "unsupported", remaining_percent: null, plan: null, windows: [], detail: "quota is read per account for Claude Code and Codex only", checked_at: null }),
+    active_tasks: 0, launchable: a.launchable ?? (a.default || a.harness === "claude-code"), created_at: a.default ? null : now(),
+  };
+  accounts.set(account.id, account);
+  return account;
+}
+
+// Like quarkd's one quota-axi --profile-only read per account, then account.quota_changed.
+function readQuota(account, reading) {
+  account.quota = reading;
+  emit("account.quota_changed", { account_id: account.id, harness: account.harness, quota: reading });
+}
+
+function accountList() {
+  const busy = {};
+  for (const t of tasks.values()) if (t.account_id && t.state !== "done" && t.state !== "failed") busy[t.account_id] = (busy[t.account_id] ?? 0) + 1;
+  // Grouped by harness in the registry's order, default first, like quarkd.
+  const order = Object.keys(ACCOUNT_ENV);
+  return [...accounts.values()]
+    .map((a) => ({ ...a, active_tasks: busy[a.id] ?? 0 }))
+    .sort((a, b) => order.indexOf(a.harness) - order.indexOf(b.harness) || Number(b.default) - Number(a.default));
+}
+
 const HARNESSES = [
   { id: "claude-code", name: "Claude Code", roles: ["coordinator", "worker"], efforts: ["low", "medium", "high", "xhigh", "max"],
     install: { installed: true, version: "2.1.0", install_hint: "npm install -g @anthropic-ai/claude-code" },
@@ -359,7 +407,10 @@ const HARNESSES = [
     models: { selection: "provider_qualified", discovery: "pi --list-models" } },
   { id: "bob", name: "IBM Bob", roles: ["worker"], efforts: [],
     install: { installed: true, version: "1.0", install_hint: "" }, models: { selection: "automatic" } },
-].map((h) => ({ auth: { state: "configured", detail: null }, supervision: { confidence: "high", source: "hooks" }, transcript: true, ...h }));
+].map((h) => ({
+  auth: { state: "configured", detail: null }, supervision: { confidence: "high", source: "hooks" }, transcript: true,
+  account_env: ACCOUNT_ENV[h.id] ?? null, ...h,
+}));
 
 function provision(proj) {
   proj.status = "provisioning"; proj.status_detail = "Cloning repositories"; proj.updated_at = now();
@@ -441,6 +492,59 @@ const server = http.createServer(async (req, res) => {
         errors.push({ field: "model", code: "model_format", message: `${h.name} needs a provider/model id.` });
     }
     return send(res, 200, { valid: errors.length === 0, errors, warnings: [] });
+  }
+
+  if (p === "/v1/accounts" && req.method === "GET") {
+    if (url.searchParams.get("refresh") === "true") {
+      for (const a of accounts.values()) if (a.quota.state === "known") readQuota(a, { ...a.quota, checked_at: now() });
+    }
+    const h = url.searchParams.get("harness");
+    return send(res, 200, accountList().filter((a) => !h || a.harness === h));
+  }
+  if (p === "/v1/accounts" && req.method === "POST") {
+    const b = await readJson(req);
+    const h = HARNESSES.find((x) => x.id === b?.harness);
+    if (!h) return invalid(res, `unknown harness \`${b?.harness}\``);
+    if (!ACCOUNT_ENV[h.id]) return invalid(res, `${h.name} supports only its default account`);
+    const dir = typeof b.config_dir === "string" ? b.config_dir.trim().replace(/(.)\/+$/, "$1") : "";
+    if (!dir.startsWith("/") || dir.split("/").includes("..")) return invalid(res, `config_dir must be an absolute directory path, got "${b.config_dir ?? ""}"`);
+    const pools = [...new Set((b.pools ?? []).map((x) => String(x).trim()))];
+    const bad = pools.find((x) => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(x));
+    if (bad !== undefined) return invalid(res, `pool \`${bad}\` must be lowercase letters, digits and dashes`);
+    const taken = [...accounts.values()].find((a) => a.harness === h.id && a.config_dir === dir);
+    if (taken) return send(res, 409, { error: { code: "conflict", message: taken.default ? `${dir} is ${h.name}'s default account` : `${dir} is already an account for ${h.id}` } });
+    const label = b.label?.trim() || dir.split("/").pop();
+    const account = addAccount({ harness: h.id, label, config_dir: dir, pools });
+    // Read its quota shortly after, like quarkd does in the background.
+    if (QUOTA_PROVIDER[h.id]) setTimeout(() => readQuota(account, quotaReading(100, "max", 300)), QUIET ? 150 : 900);
+    return send(res, 201, accountList().find((a) => a.id === account.id));
+  }
+  if ((r = m(/^\/v1\/accounts\/([^/]+)$/))) {
+    const a = accounts.get(decodeURIComponent(r[1]));
+    if (!a) return notFound(res);
+    if (req.method === "GET") return send(res, 200, accountList().find((x) => x.id === a.id));
+    if (req.method === "PATCH") {
+      const b = await readJson(req);
+      if (b?.label != null) {
+        if (a.default) return invalid(res, "a default account's label cannot change");
+        if (!String(b.label).trim()) return invalid(res, "label must be one line of 1 to 100 characters");
+      }
+      if (b?.pools != null) {
+        const pools = [...new Set(b.pools.map((x) => String(x).trim()))];
+        const bad = pools.find((x) => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(x));
+        if (bad !== undefined) return invalid(res, `pool \`${bad}\` must be lowercase letters, digits and dashes`);
+        a.pools = pools.sort();
+      }
+      if (b?.label != null) a.label = String(b.label).trim();
+      return send(res, 200, accountList().find((x) => x.id === a.id));
+    }
+    if (req.method === "DELETE") {
+      if (a.default) return send(res, 409, { error: { code: "conflict", message: "a harness's default account cannot be removed" } });
+      const busy = accountList().find((x) => x.id === a.id).active_tasks;
+      if (busy) return send(res, 409, { error: { code: "conflict", message: `the account is in use by ${busy} running task(s)` } });
+      accounts.delete(a.id);
+      return send(res, 204);
+    }
   }
 
   if ((r = m(/^\/v1\/coordinators\/([^/]+)\/messages$/))) {

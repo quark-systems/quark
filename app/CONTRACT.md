@@ -17,6 +17,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Terminals | `GET /v1/terminals/{id}`, `POST /v1/terminals/{id}/snapshot`, `/input`, `/resize` | quark#9 |
 | Answering decisions | `POST /v1/decisions/{id}:answer` with `answer` and optional `answered_by`; `Decision.answered_by`, `answered_at` | Phase 2 workstream 1 (decisions answer path) |
 | Project creation | `POST /v1/projects` with `repos`, `agent_config`, `dispatch_preset`, `delivery`; `Project.status`; `POST /v1/projects/{id}:provision` | quark#10 |
+| Accounts and pools | `GET/POST /v1/accounts`, `GET/PATCH/DELETE /v1/accounts/{id}`, `account.quota_changed` events; `AgentConfig.pool`, `Task.account_id`, `RelaunchTask.pool`, `HarnessInfo.account_env` | quark#23 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 
 ## How the app uses them
@@ -49,3 +50,11 @@ A `404` with an `ErrorBody` is a real "not found".
   The side panel shows one line per gate; the Evidence tab shows every case, failures first and expanded, with screenshots inline (click to enlarge), videos playable, and traces opened in trace.playwright.dev or downloaded.
   Artifact bytes come from `GET /v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`; an artifact `url` is relative to the daemon.
   `stale` evidence (for another `head_sha`) is flagged; `pending` and `running` gates show as in progress.
+- **Accounts (ADR-11).** The Accounts screen lists `GET /v1/accounts` grouped by harness, the harness's default account first, each with its credential health (`health`, from the harness adapter) and latest quota (`quota`); `account.quota_changed` replaces one account's `quota` live.
+  "Refresh quota" calls `GET /v1/accounts?refresh=true`, which reads every account's quota (one `quota-axi --provider claude|codex --profile-only` call each) before answering.
+  Adding an account sends `harness`, an absolute `config_dir`, an optional `label` and `pools`; only harnesses with an `account_env` take one, and the form shows the login line (`CLAUDE_CONFIG_DIR=<dir> claude`).
+  The new account's quota is `pending` until its `account.quota_changed` arrives.
+  `409 conflict` means the directory is already an account (or the harness's default); removing answers `409` for a default account or one a running task uses.
+  Pools are replaced with `PATCH /v1/accounts/{id}` `{pools}`; a default account can join pools but keeps its label.
+  `launchable: false` marks an account the engine cannot start its harness under yet (today every non-default Codex, Pi and Grok account); its quota is still read.
+- **Pools.** The New project form offers the pools of the chosen harness's accounts as `agent_config.pool`. The daemon starts the coordinator under the pool's least busy ready account, its workers inherit it, and each task records the account it started under in `Task.account_id`.

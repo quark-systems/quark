@@ -24,6 +24,10 @@ pub struct Config {
     pub pr_refresh_interval: Duration,
     /// tmux binary for terminal sessions; `tmux` from `PATH` when unset.
     pub tmux: Option<PathBuf>,
+    /// How often each account's quota is read.
+    pub quota_refresh_interval: Duration,
+    /// The `quota-axi` binary that reads account quota.
+    pub quota_axi: PathBuf,
 }
 
 impl Config {
