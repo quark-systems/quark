@@ -25,7 +25,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind, TaskState};
+use quark_systems::{
+    AgentConfig, DeliveryPolicy, DispatchCandidate, DispatchChoice, DispatchRule, DispatchStatus,
+    Evidence, MergeMethod, TaskKind, TaskState,
+};
 use serde::{Deserialize, Serialize};
 
 /// Addresses one engine workspace (a firstmate home). Location-neutral so a
@@ -63,6 +66,40 @@ pub struct EngineTask {
     /// the session log by this directory.
     #[serde(default)]
     pub worktree: Option<PathBuf>,
+}
+
+/// Which agent a task's current worker was started with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineSpawn {
+    /// Changes on every spawn and relaunch of the task's worker.
+    pub generation: String,
+    pub harness: String,
+    /// `None` for the harness default.
+    pub model: Option<String>,
+    /// `None` for the harness default.
+    pub effort: Option<String>,
+    /// When the worker was spawned, in Unix seconds, if the engine says.
+    pub spawned_at: Option<i64>,
+    /// The repo the task works in, as the engine names it.
+    pub project: Option<String>,
+}
+
+/// The engine's dispatch resolution for a task's brief, in neutral fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineResolution {
+    pub status: DispatchStatus,
+    pub rule: Option<DispatchRule>,
+    pub reason: Option<String>,
+    pub notes: Vec<String>,
+    pub candidates: Vec<DispatchCandidate>,
+    /// The profile the resolution selected, when `status` is clear.
+    pub profile: Option<DispatchChoice>,
+    /// Whether the classifier was asked, and what it answered.
+    pub classifier_consulted: bool,
+    pub classifier_model: Option<String>,
+    pub confidence: Option<f64>,
+    /// The resolution's output as printed, when it printed any.
+    pub output: Option<String>,
 }
 
 /// One status-log line, parsed by the adapter into neutral fields.
@@ -289,6 +326,28 @@ pub trait EngineAdapter: Send + Sync {
         Ok(())
     }
 
+    /// Which agent the task's current worker was started with; `None` until
+    /// it has been spawned, or when the engine does not say.
+    async fn spawn(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+    ) -> Result<Option<EngineSpawn>, EngineError> {
+        Ok(None)
+    }
+
+    /// Run the engine's dispatch resolution on the task's brief, as the
+    /// coordinator does before a spawn. `None` when the engine has no
+    /// resolution or the task no brief.
+    async fn resolve_dispatch(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+        _project: Option<&str>,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        Ok(None)
+    }
+
     /// Each running Project coordinator's tmux window target in the
     /// command-center workspace, keyed by Project id. Engines without
     /// coordinator windows have none.
@@ -371,6 +430,12 @@ pub struct StubEngine {
     status: Mutex<HashMap<String, Vec<StatusEntry>>>,
     /// Gate evidence and its artifact directory per engine task id.
     evidence: Mutex<HashMap<String, (Evidence, PathBuf)>>,
+    /// Current worker spawn per engine task id.
+    spawns: Mutex<HashMap<String, EngineSpawn>>,
+    /// Dispatch resolution per engine task id, or the error to fail with.
+    resolutions: Mutex<HashMap<String, Result<EngineResolution, String>>>,
+    /// Engine task ids the dispatch resolution ran for, in order.
+    resolved: Mutex<Vec<String>>,
 }
 
 impl StubEngine {
@@ -407,6 +472,27 @@ impl StubEngine {
             .lock()
             .unwrap()
             .insert(task_id.to_string(), (evidence, dir));
+    }
+
+    /// The current worker spawn of an engine task.
+    pub fn set_spawn(&self, task_id: &str, spawn: EngineSpawn) {
+        self.spawns
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), spawn);
+    }
+
+    /// What the dispatch resolution reports for an engine task.
+    pub fn set_resolution(&self, task_id: &str, resolution: Result<EngineResolution, String>) {
+        self.resolutions
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), resolution);
+    }
+
+    /// Engine task ids the dispatch resolution ran for, oldest first.
+    pub fn resolved(&self) -> Vec<String> {
+        self.resolved.lock().unwrap().clone()
     }
 
     /// Writes received so far, oldest first.
@@ -598,6 +684,28 @@ impl EngineAdapter for StubEngine {
             project_id: ws.project_id.clone(),
             harness: agent.harness.clone(),
         })
+    }
+
+    async fn spawn(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<Option<EngineSpawn>, EngineError> {
+        Ok(self.spawns.lock().unwrap().get(task_id).cloned())
+    }
+
+    async fn resolve_dispatch(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        _project: Option<&str>,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        self.resolved.lock().unwrap().push(task_id.to_string());
+        match self.resolutions.lock().unwrap().get(task_id) {
+            None => Ok(None),
+            Some(Ok(r)) => Ok(Some(r.clone())),
+            Some(Err(e)) => Err(EngineError::Command(e.clone())),
+        }
     }
 
     async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {

@@ -18,6 +18,7 @@ use crate::write::WriteOp;
 use crate::{Error, Result, Workspace};
 
 pub const FLEET_SNAPSHOT: &str = "fm-fleet-snapshot.sh";
+pub const DISPATCH_RESOLVE: &str = "fm-dispatch-resolve.sh";
 
 /// Read scripts and the exact argument vectors each may be called with.
 const READ_ALLOWLIST: &[(&str, &[&[&str]])] = &[(FLEET_SNAPSHOT, &[&["--json"]])];
@@ -116,6 +117,24 @@ impl ScriptRunner {
         check_allowed(script, args)?;
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         self.exec(CallKind::Read, script, args, &[], self.timeout)
+    }
+
+    /// Run the engine's dispatch resolution on one task's brief and return
+    /// its stdout. The argument vector is built here from a validated task id
+    /// and project name; no caller string becomes an option.
+    pub fn run_dispatch_resolve(&self, task_id: &str, project: Option<&str>) -> Result<Vec<u8>> {
+        let brief = self.workspace.brief_path(task_id)?;
+        let mut args = vec![brief.to_string_lossy().into_owned()];
+        if let Some(p) = project {
+            if !safe_name(p) {
+                return Err(Error::InvalidArgument {
+                    script: DISPATCH_RESOLVE,
+                    reason: format!("project name {p:?} is not path-safe"),
+                });
+            }
+            args.extend(["--project".to_string(), p.to_string()]);
+        }
+        self.exec(CallKind::Read, DISPATCH_RESOLVE, args, &[], self.timeout)
     }
 
     /// Validate a write operation, run its script and return its stdout.
@@ -251,6 +270,14 @@ impl ScriptRunner {
         }
         Ok(path)
     }
+}
+
+/// A repo registry name: `A-Za-z0-9._-`, not starting with `-` or `.`.
+fn safe_name(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(['-', '.'])
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 fn check_allowed(script: &str, args: &[&str]) -> Result<()> {

@@ -78,6 +78,26 @@ export type ChangeStatus = "added" | "modified" | "deleted" | "renamed" | "copie
 export interface ChangedFile {
   path: string; old_path?: string | null; status: ChangeStatus; additions?: number | null; deletions?: number | null;
 }
+// Why this agent (ADR-11, quark#27): one record per worker spawn, kept after the task ends.
+export type DispatchTrigger = "spawn" | "relaunch";
+export type DispatchDecider = "classifier" | "coordinator" | "relaunch";
+export type DispatchStatus = "clear" | "ambiguous" | "escalate" | "error" | "off" | "not_consulted";
+export interface DispatchCandidate {
+  harness: string; model?: string | null; passed: boolean; reason: string; evidence?: string | null;
+}
+export interface DispatchRecord {
+  id: string; task_id: string; project_id: string; trigger: DispatchTrigger; decided_by: DispatchDecider;
+  summary: string;
+  rule?: { id: string; when?: string | null } | null;
+  resolution: { status: DispatchStatus; reason?: string | null; notes: string[]; output?: string | null };
+  candidates: DispatchCandidate[];
+  /** `account` is filled once accounts and pools land (quark#23); null means the harness's default account. */
+  chosen: { harness: string; model?: string | null; effort?: string | null; account?: string | null };
+  /** `provider` is "none" when no classifier was consulted (the coordinator picked). */
+  classifier: { provider: string; model?: string | null; confidence?: number | null };
+  recorded_at: string;
+}
+
 export interface TaskChanges { task_id: string; base_ref: string; base: string; head: string; files: ChangedFile[] }
 export interface TaskDiff { task_id: string; base: string; path?: string | null; patch: string; truncated: boolean }
 
@@ -223,6 +243,8 @@ export const api = {
   relaunch: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:relaunch`),
 
   transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
+  /** Every dispatch of the task, oldest first: its first spawn, then each relaunch. */
+  dispatch: (id: string) => req<DispatchRecord[]>("GET", `/v1/tasks/${enc(id)}/dispatch`),
   changes: (id: string) => req<TaskChanges>("GET", `/v1/tasks/${enc(id)}/changes`),
   diff: (id: string, path?: string) =>
     req<TaskDiff>("GET", `/v1/tasks/${enc(id)}/diff` + (path ? `?path=${enc(path)}` : "")),

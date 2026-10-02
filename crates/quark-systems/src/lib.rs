@@ -290,6 +290,135 @@ pub struct TaskEvent {
     pub ts: String,
 }
 
+/// Why a task got its agent (ADR-11): one record per spawn of the task's
+/// worker. Records are history: they are kept after the task ends, for later
+/// scoring, and never change once recorded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchRecord {
+    pub id: String,
+    pub task_id: String,
+    pub project_id: String,
+    /// What started this worker.
+    pub trigger: DispatchTrigger,
+    /// Who chose the agent.
+    pub decided_by: DispatchDecider,
+    /// One sentence on why this agent, for people.
+    pub summary: String,
+    /// The dispatch rule the classifier matched; absent when none matched or
+    /// no classifier was consulted.
+    pub rule: Option<DispatchRule>,
+    /// What the engine's dispatch resolution reported.
+    pub resolution: DispatchResolution,
+    /// Every profile the resolution weighed, in the rule's order, each with
+    /// whether it passed and why.
+    pub candidates: Vec<DispatchCandidate>,
+    /// The agent the worker was actually started with.
+    pub chosen: DispatchChoice,
+    pub classifier: DispatchClassifier,
+    /// When the daemon recorded the dispatch (RFC 3339 UTC).
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchTrigger {
+    /// The task's first worker.
+    Spawn,
+    /// A replacement worker in the same worktree.
+    Relaunch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchDecider {
+    /// The classifier matched a rule confidently and the worker was started
+    /// with the profile its resolution selected.
+    Classifier,
+    /// The coordinator picked: no classifier, a resolution that was not
+    /// clear, or a selected profile the coordinator overrode.
+    Coordinator,
+    /// The worker was relaunched in its worktree; dispatch rules were not
+    /// consulted again.
+    Relaunch,
+}
+
+/// A dispatch rule, as the Project's dispatch rules name it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchRule {
+    /// The rule's id in the resolution, e.g. `rule_2`, or `default`.
+    pub id: String,
+    /// The rule's `when` condition.
+    pub when: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchStatus {
+    /// A profile was selected.
+    Clear,
+    /// The classifier's confidence was below its floor.
+    Ambiguous,
+    /// The rule needs approval, no candidate qualified, there was a tie, or
+    /// there were no rules to match.
+    Escalate,
+    /// The classifier or the quota read failed.
+    Error,
+    /// No classifier is configured (`provider: none`).
+    Off,
+    /// The resolution was not run for this worker: a relaunch, or a worker
+    /// that started before the daemon saw it.
+    NotConsulted,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchResolution {
+    pub status: DispatchStatus,
+    /// Why the status is not `clear`.
+    pub reason: Option<String>,
+    /// Further notes from the resolution, such as an unranked candidate.
+    pub notes: Vec<String>,
+    /// The resolution's output as the engine printed it, kept for scoring.
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchCandidate {
+    pub harness: String,
+    pub model: Option<String>,
+    /// Whether the candidate was eligible.
+    pub passed: bool,
+    /// Why it passed or failed, e.g. `eligible` or `profile floor
+    /// all_models below 15%`.
+    pub reason: String,
+    /// The quota evidence it was judged on, e.g. `provider=claude
+    /// scope=all_models remaining=79%`.
+    pub evidence: Option<String>,
+}
+
+/// The agent a worker was started with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchChoice {
+    pub harness: String,
+    /// Absent for the harness's default model.
+    pub model: Option<String>,
+    /// Absent for the harness's default effort.
+    pub effort: Option<String>,
+    /// The account the worker runs under; absent for the harness's default
+    /// account.
+    pub account: Option<String>,
+}
+
+/// The classifier behind the System-1 API, as consulted for this dispatch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchClassifier {
+    /// `none` when no classifier was consulted and the coordinator picked.
+    pub provider: String,
+    /// The model that answered, e.g. `jev-1.13.0`.
+    pub model: Option<String>,
+    /// The classifier's confidence in the matched rule, from 0 to 1.
+    pub confidence: Option<f64>,
+}
+
 /// How a file differs between a task's base and its working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1044,6 +1173,7 @@ pub enum EventType {
     /// A review appeared or changed; payload is a [`ReviewUpdated`].
     #[serde(rename = "review.updated")]
     ReviewUpdated,
+    /// A worker was dispatched; payload is a [`DispatchRecord`].
     #[serde(rename = "dispatch.recorded")]
     DispatchRecorded,
     #[serde(rename = "account.quota_changed")]

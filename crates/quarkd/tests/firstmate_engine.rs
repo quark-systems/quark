@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use quark_engine::runner::MemoryCallLog;
 use quark_systems::CreateProject;
-use quark_systems::{AgentConfig, DeliveryPolicy, TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, DispatchStatus, TaskKind, TaskState};
 use quarkd::config::StoreCallLog;
 use quarkd::engine::firstmate::FirstmateEngine;
 use quarkd::engine::{
@@ -154,6 +154,92 @@ async fn status_tail_resumes_from_offset() {
         e.status_tail(&ws, "../x", 0).await,
         Err(EngineError::TaskNotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn spawns_and_dispatch_resolution_come_from_the_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let (e, ws) = engine(dir.path());
+    let state = ws.root.join("state");
+    fs::write(
+        state.join("ship-task.meta"),
+        "harness=codex\nkind=ship\nmodel=gpt-5.6-luna\neffort=default\n\
+         spawn_gen=s1790000000.7.1\nproject=/h/projects/quark\n",
+    )
+    .unwrap();
+    fs::write(
+        state.join("mate.meta"),
+        "harness=claude\nkind=secondmate\nspawn_gen=s1.1.1\n",
+    )
+    .unwrap();
+    let spawn = e.spawn(&ws, "ship-task").await.unwrap().unwrap();
+    assert_eq!(spawn.harness, "codex");
+    assert_eq!(spawn.model.as_deref(), Some("gpt-5.6-luna"));
+    assert_eq!(spawn.effort, None);
+    assert_eq!(spawn.spawned_at, Some(1_790_000_000));
+    assert_eq!(spawn.project.as_deref(), Some("quark"));
+    assert!(
+        e.spawn(&ws, "mate").await.unwrap().is_none(),
+        "secondmates are not workers"
+    );
+    assert!(e.spawn(&ws, "scout-x").await.unwrap().is_none());
+
+    // No brief: the resolution is not run.
+    assert!(e
+        .resolve_dispatch(&ws, "ship-task", Some("quark"))
+        .await
+        .unwrap()
+        .is_none());
+
+    let script = ws_engine_bin(dir.path()).join("fm-dispatch-resolve.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\n[ \"$3\" = quark ] || exit 2\ncat <<'OUT'\ndispatch-resolve:\n  status: clear\n\
+         model: jev-1.13.0   latency_ms: 200   tokens: 1/1\n\
+         rule: rule_1 (A trivial edit.)   confidence: 0.88\n\
+         candidate: codex:gpt-5.6-luna  provider=codex  scope=all_models  remaining=55%  spendPriority=0.2  runway=through_reset  -> eligible\n\
+         candidate: claude:opus  provider=claude  -> not eligible: runway exhausted_now at all_models\n\
+         profile: --harness 'codex' --model 'gpt-5.6-luna'\nOUT\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::create_dir_all(ws.root.join("data/ship-task")).unwrap();
+    fs::write(ws.root.join("data/ship-task/brief.md"), "rename a field\n").unwrap();
+
+    let r = e
+        .resolve_dispatch(&ws, "ship-task", Some("quark"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.status, DispatchStatus::Clear);
+    assert_eq!(r.rule.as_ref().unwrap().id, "rule_1");
+    assert_eq!(
+        r.rule.as_ref().unwrap().when.as_deref(),
+        Some("A trivial edit.")
+    );
+    assert!(r.classifier_consulted);
+    assert_eq!(r.classifier_model.as_deref(), Some("jev-1.13.0"));
+    assert_eq!(r.confidence, Some(0.88));
+    assert_eq!(r.candidates.len(), 2);
+    assert!(r.candidates[0].passed);
+    assert!(!r.candidates[1].passed);
+    assert_eq!(r.candidates[1].reason, "runway exhausted_now at all_models");
+    let p = r.profile.unwrap();
+    assert_eq!(
+        (p.harness.as_str(), p.model.as_deref()),
+        ("codex", Some("gpt-5.6-luna"))
+    );
+    assert!(r.output.unwrap().starts_with("dispatch-resolve:"));
+
+    // A configuration error (exit 2) is an engine failure, not a result.
+    assert!(e
+        .resolve_dispatch(&ws, "ship-task", Some("other"))
+        .await
+        .is_err());
+}
+
+fn ws_engine_bin(dir: &Path) -> PathBuf {
+    dir.join("engine/bin")
 }
 
 #[tokio::test]

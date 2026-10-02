@@ -89,6 +89,43 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await expect(term.locator(".xterm-rows")).toContainText("relaunched on");
 });
 
+test("worker view: why this agent, live on relaunch and kept after the task ends", async ({ page }) => {
+  // No classifier configured: the coordinator picked.
+  await open(page, "#/p/quark");
+  await page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).click();
+  await page.getByRole("tab", { name: "Why this agent" }).click();
+  const why = page.getByTestId("why-this-agent");
+  await expect(why.getByTestId("why-summary").first()).toHaveText("No classifier is configured (provider: none), so the coordinator picked codex.");
+  await expect(why.getByTestId("why-classifier").first()).toHaveText("none (the coordinator picked)");
+  await expect(why.getByTestId("why-agent").first()).toContainText("account default");
+
+  // A relaunch is recorded and streams in; the first spawn stays listed below it.
+  await page.getByTestId("relaunch").click();
+  await expect(why.locator("section.why-record")).toContainText("Relaunch");
+  await expect(why.locator("section.why-record").getByTestId("why-summary")).toContainText("dispatch rules were not consulted again");
+  await expect(why.locator("details.why-record")).toHaveCount(1);
+  await why.locator("details.why-record summary").click();
+  await expect(why.locator("details.why-record").getByTestId("why-summary")).toContainText("the coordinator picked codex");
+
+  // The classifier matched a rule: every candidate with its pass or fail reason.
+  await open(page, "#/p/quark");
+  await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
+  await page.getByRole("tab", { name: "Why this agent" }).click();
+  await expect(why).toContainText("The classifier matched rule rule_1 (A focused change inside one crate with tests.) at 0.91 confidence.");
+  await expect(why).toContainText("system1 · jev-1.13.0 · 91% confidence");
+  const cands = why.getByTestId("why-candidate");
+  await expect(cands).toHaveCount(3);
+  await expect(why.getByTestId("why-candidates").first()).toContainText("2 of 3 passed");
+  await expect(cands.filter({ hasText: "cursor:cursor-grok-4.6-medium" }).first()).toContainText("profile floor all_models below 15%");
+  await expect(cands.filter({ hasText: "claude-code:claude-sonnet-5" }).first()).toContainText("chosen");
+
+  // A finished task keeps its record.
+  await open(page, "#/p/quark");
+  await page.getByTestId("task-card").filter({ hasText: "Daemon skeleton" }).click();
+  await page.getByRole("tab", { name: "Why this agent" }).click();
+  await expect(why.getByTestId("why-summary")).toContainText("the coordinator picked claude-code");
+});
+
 test("a queued task explains that it has no terminal or changes yet", async ({ page }) => {
   await open(page, "#/p/quark");
   await page.getByTestId("task-card").filter({ hasText: "Harness registry trait" }).click();

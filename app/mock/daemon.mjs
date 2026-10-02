@@ -43,6 +43,7 @@ const pulls = new Map(); // PR id -> PullRequest
 const pullDiffs = new Map(); // PR id -> unified diff text
 const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
+const dispatches = new Map(); // task id -> DispatchRecord[], oldest first; kept after the task ends
 
 const events = []; // { seq, ... } bounded
 let seq = 0;
@@ -82,6 +83,43 @@ function addTask(projectId, t, { silent = false } = {}) {
   diffOf.set(task.id, t.diff ?? "");
   if (!silent) emit("task.created", task, projectId);
   return task;
+}
+
+// Why this agent (ADR-11): one record per worker spawn. `how` is "classifier" (a confident rule match
+// whose selected profile was used), "coordinator" (no classifier: provider none) or "relaunch".
+const DEMO_RULE = { id: "rule_1", when: "A focused change inside one crate with tests." };
+const DEMO_CANDIDATES = [
+  { harness: "claude-code", model: "claude-sonnet-5", passed: true, reason: "eligible",
+    evidence: "provider=claude scope=all_models remaining=79% spendPriority=0.42 runway=through_reset" },
+  { harness: "codex", model: "gpt-5.6-luna", passed: true, reason: "eligible",
+    evidence: "provider=codex scope=all_models remaining=55% spendPriority=0.18 runway=through_reset" },
+  { harness: "cursor", model: "cursor-grok-4.6-medium", passed: false, reason: "profile floor all_models below 15%",
+    evidence: "provider=cursor scope=all_models remaining=9% spendPriority=-0.9 runway=projected_exhaustion" },
+];
+function recordDispatch(task, how, { silent = false, ts = now(), model = null, effort = null } = {}) {
+  const chosen = { harness: task.harness, model, effort, account: null };
+  const agent = task.harness + (model ? `:${model}` : "") + (effort ? ` (${effort} effort)` : "");
+  const base = {
+    id: nextId("dsp"), task_id: task.id, project_id: task.project_id, chosen, recorded_at: ts,
+    trigger: how === "relaunch" ? "relaunch" : "spawn", decided_by: how, rule: null, candidates: [],
+    classifier: { provider: "none", model: null, confidence: null },
+  };
+  const rec = how === "classifier" ? {
+    ...base, rule: DEMO_RULE, candidates: DEMO_CANDIDATES,
+    classifier: { provider: "system1", model: "jev-1.13.0", confidence: 0.91 },
+    resolution: { status: "clear", reason: null, notes: ["rule matched"], output: "dispatch-resolve:\n  status: clear" },
+    summary: `The classifier matched rule ${DEMO_RULE.id} (${DEMO_RULE.when}) at 0.91 confidence. The resolution selected ${agent}.`,
+  } : how === "relaunch" ? {
+    ...base, resolution: { status: "not_consulted", reason: "relaunched in the same worktree", notes: [], output: null },
+    summary: `Relaunched in the same worktree with ${agent}; dispatch rules were not consulted again.`,
+  } : {
+    ...base, resolution: { status: "off", reason: null, notes: [], output: null },
+    summary: `No classifier is configured (provider: none), so the coordinator picked ${agent}.`,
+  };
+  if (!dispatches.has(task.id)) dispatches.set(task.id, []);
+  dispatches.get(task.id).push(rec);
+  if (!silent) emit("dispatch.recorded", rec, task.project_id);
+  return rec;
 }
 
 let taskEventId = 0;
@@ -146,6 +184,13 @@ function seed() {
   T(quark, "Daemon skeleton", "done", { updated_at: minutesAgo(300) });
   T(site, "Pricing page on the new grid", "running", { diff: DIFFS[3], harness: "codex", updated_at: minutesAgo(8) });
   T(site, "Changelog feed", "failed", { state_note: "Build failed: missing RSS dependency", updated_at: minutesAgo(70) });
+
+  // Every spawned task has its dispatch record, finished ones included.
+  recordDispatch(a, "classifier", { silent: true, ts: minutesAgo(31), model: "claude-sonnet-5", effort: "high" });
+  recordDispatch(b, "coordinator", { silent: true, ts: minutesAgo(31) });
+  for (const t of tasks.values()) {
+    if (t.state !== "queued" && !dispatches.has(t.id)) recordDispatch(t, "coordinator", { silent: true, ts: t.updated_at });
+  }
 
   const D = (id, p, question, extra = {}) => decisions.set(id, {
     id, project_id: p.id, task_id: null, question, state: "open", answer: null, answered_by: null, answered_at: null, ...extra,
@@ -280,6 +325,7 @@ function shuffleStates() {
   if (queued.length && Math.random() < 0.5) {
     const t = queued[0];
     setState(t, "running", "Worker started");
+    recordDispatch(t, "coordinator");
     output(t, `\x1b[1;35m${t.harness}\x1b[0m starting \x1b[1m${t.title}\x1b[0m\r\n`);
   }
 }
@@ -506,12 +552,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (rest === ":relaunch" && req.method === "POST") {
       setState(task, "running", "Relaunched from the app");
+      recordDispatch(task, dispatches.has(task.id) ? "relaunch" : "coordinator");
       terms.get(task.id).screen = "";
       outputEvent(task, "snapshot", "\x1b[2J\x1b[H");
       output(task, `\x1b[1;35m${task.harness}\x1b[0m relaunched on \x1b[1m${task.title}\x1b[0m\r\n$ `);
       return send(res, 204);
     }
     if (rest === "/transcript" && req.method === "GET") return send(res, 200, transcripts.get(task.id));
+    if (rest === "/dispatch" && req.method === "GET") return send(res, 200, dispatches.get(task.id) ?? []);
     if ((rest === "/changes" || rest === "/diff") && task.state === "queued") {
       return send(res, 409, { error: { code: "no_worktree", message: "the task has no worktree yet" } });
     }

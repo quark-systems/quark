@@ -17,6 +17,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Terminals | `GET /v1/terminals/{id}`, `POST /v1/terminals/{id}/snapshot`, `/input`, `/resize` | quark#9 |
 | Answering decisions | `POST /v1/decisions/{id}:answer` with `answer` and optional `answered_by`; `Decision.answered_by`, `answered_at` | Phase 2 workstream 1 (decisions answer path) |
 | Project creation | `POST /v1/projects` with `repos`, `agent_config`, `dispatch_preset`, `delivery`; `Project.status`; `POST /v1/projects/{id}:provision` | quark#10 |
+| Why this agent | `GET /v1/tasks/{id}/dispatch`, `dispatch.recorded` events | quark#27 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 
 ## How the app uses them
@@ -36,6 +37,9 @@ A `404` with an `ErrorBody` is a real "not found".
   A `503` with code `unavailable` means the daemon has no tmux, and the panel says so.
 - **Changes.** The file list refetches when the task changes state and on each `task.event` for it.
   `409 no_worktree` shows "no working copy yet"; a `truncated` diff is flagged.
+- **Why this agent (ADR-11).** The worker view's "Why this agent" tab loads `GET /v1/tasks/{id}/dispatch` (one record per spawn, oldest first) and appends `dispatch.recorded` events for that task.
+  The newest record is shown in full: its summary, the chosen harness, model, effort and account (`null` is the default account), who decided (`classifier`, `coordinator` or `relaunch`), the matched rule, the classifier's provider, model and confidence (`provider: "none"` when the coordinator picked), the resolution's status and reason, and every candidate with its pass or fail reason and quota evidence; earlier records (the first spawn before a relaunch) are collapsed below it.
+  An empty list means the worker has not started. Records outlive the task, so a finished task still shows its own.
 - **Decisions inbox.** The app loads every decision (`GET /v1/decisions`, no state filter) so the inbox can list answered ones with who answered, and keeps them current from `decision.opened` and `decision.answered`.
   An answer is sent with `answered_by` from the "Answering as" field (remembered per viewer), or `null` to let the daemon use its own user; the `200` body is the answered decision.
   `409 already_answered` is shown as an error on the decision.
