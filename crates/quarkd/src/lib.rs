@@ -7,7 +7,9 @@
 pub mod api;
 pub mod config;
 pub mod engine;
+pub mod project_repo;
 pub mod projector;
+pub mod provision;
 pub mod store;
 
 use std::sync::Arc;
@@ -47,7 +49,11 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let projector = Projector::new(store.clone(), engine.clone());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
-    let app = api::router(AppState { store, engine });
+    let app = api::router(AppState {
+        store,
+        engine,
+        layout: provision::Layout::new(&config.home),
+    });
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("binding {}", config.listen))?;
