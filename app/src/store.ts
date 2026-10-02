@@ -52,8 +52,13 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
     case "project.updated":
       return { ...s, projects: { ...s.projects, [p.id]: { ...s.projects[p.id], ...p } } };
     case "task.created":
-    case "task.state_changed":
       return { ...s, tasks: { ...s.tasks, [p.id]: { ...s.tasks[p.id], ...p } } };
+    case "task.state_changed": {
+      // quarkd sends `{ task, previous_state }`.
+      const t = p?.task as Task | undefined;
+      if (typeof t?.id !== "string") return s;
+      return { ...s, tasks: { ...s.tasks, [t.id]: { ...s.tasks[t.id], ...t } } };
+    }
     case "decision.opened":
     case "decision.answered":
       return { ...s, decisions: { ...s.decisions, [p.id]: p as Decision } };
