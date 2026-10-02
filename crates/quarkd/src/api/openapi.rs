@@ -1,7 +1,7 @@
 use axum::Json;
 use utoipa::OpenApi;
 
-use super::{events, harnesses, pull_requests, routes, terminals};
+use super::{events, harnesses, memory, pull_requests, routes, terminals};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -27,6 +27,10 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         routes::get_task_diff,
         routes::list_decisions,
         routes::answer_decision,
+        memory::list_proposals,
+        memory::accept,
+        memory::reject,
+        memory::list_entries,
         pull_requests::list,
         pull_requests::get,
         pull_requests::diff,
@@ -74,12 +78,15 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         quark_systems::GateState,
         quark_systems::GateKind,
         quark_systems::ArtifactKind,
+        quark_systems::MemorySource,
+        quark_systems::MemoryProposalState,
     )),
     tags(
         (name = "daemon"),
         (name = "projects"),
         (name = "tasks"),
         (name = "decisions"),
+        (name = "memory"),
         (name = "pull-requests"),
         (name = "harnesses"),
         (name = "terminals"),

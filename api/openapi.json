@@ -572,6 +572,280 @@
         }
       }
     },
+    "/v1/projects/{id}/memory": {
+      "get": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "The Project's memory: every entry on the Project repo's `main` under\n`memory/`, by path, including files people added by hand. Empty for a\nProject without a Project repo.",
+        "operationId": "list_entries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryEntry"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`project_repo_failed`: the repo could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/memory/proposals": {
+      "get": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "A Project's memory proposals, oldest first.",
+        "description": "A learning a finished task reported becomes a proposal and also arrives\nas a `memory.proposed` event.",
+        "operationId": "list_proposals",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only proposals in this state.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MemoryProposalState"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryProposal"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/memory/proposals/{proposal_id}:accept": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Accept a memory proposal, optionally edited.",
+        "description": "The entry is written as one new file under the Project repo's `memory/`,\nin its own commit on `main`, and the Project's coordinator is told about\nit so it reads it on its next turn. The accepted proposal, with its\n`entry`, is returned and also arrives as a `memory.accepted` event.",
+        "operationId": "accept",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "description": "Memory proposal id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptMemoryProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The entry is committed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryProposal"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`already_decided`, or `no_project_repo`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`project_repo_failed`: the commit failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/memory/proposals/{proposal_id}:reject": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Reject a memory proposal. The rejected proposal is returned and also\narrives as a `memory.rejected` event.",
+        "operationId": "reject",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "description": "Memory proposal id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectMemoryProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryProposal"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`already_decided`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/tasks": {
       "get": {
         "tags": [
@@ -1757,6 +2031,26 @@
   },
   "components": {
     "schemas": {
+      "AcceptMemoryProposal": {
+        "type": "object",
+        "description": "Accept a memory proposal, optionally edited.",
+        "properties": {
+          "decided_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is accepting: one line of at most 128 bytes. Absent or null means\nthe daemon's own user (`$USER`)."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The text to keep instead of the proposed one."
+          }
+        }
+      },
       "AgentConfig": {
         "type": "object",
         "description": "A harness with its model and effort.",
@@ -2280,7 +2574,10 @@
           "check.updated",
           "review.updated",
           "dispatch.recorded",
-          "account.quota_changed"
+          "account.quota_changed",
+          "memory.proposed",
+          "memory.accepted",
+          "memory.rejected"
         ]
       },
       "Evidence": {
@@ -2644,6 +2941,188 @@
             "type": "string"
           }
         }
+      },
+      "MemoryEntry": {
+        "type": "object",
+        "description": "One accepted memory entry: a file under the Project repo's `memory/`.",
+        "required": [
+          "id",
+          "project_id",
+          "path",
+          "text"
+        ],
+        "properties": {
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accepted_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project repo commit that added it, when known."
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was learned (RFC 3339 UTC); absent for a file written by hand\nwithout one."
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/MemoryEvidence"
+          },
+          "id": {
+            "type": "string",
+            "description": "The file name without its extension."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path in the Project repo, e.g. `memory/2026-10-02-run-the-gates.md`."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "proposal_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The proposal it was accepted from."
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemorySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "MemoryEvidence": {
+        "type": "object",
+        "description": "What a learning rests on.",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Files the learning is about: the ones the report names, else the\nfiles the task changed."
+          },
+          "pull_request_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The task's pull request when the learning was proposed."
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The task it was learned in."
+          },
+          "task_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MemoryProposal": {
+        "type": "object",
+        "description": "A learning from a finished task, waiting for review before it becomes\nProject memory.",
+        "required": [
+          "id",
+          "project_id",
+          "text",
+          "evidence",
+          "source",
+          "state",
+          "proposed_at"
+        ],
+        "properties": {
+          "decided_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decided_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemoryEntry",
+                "description": "The entry it became, once accepted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/MemoryEvidence"
+          },
+          "id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "proposed_at": {
+            "type": "string",
+            "description": "When it was proposed (RFC 3339 UTC)."
+          },
+          "source": {
+            "$ref": "#/components/schemas/MemorySource"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MemoryProposalState"
+          },
+          "text": {
+            "type": "string",
+            "description": "The text as proposed, or as accepted when it was edited."
+          }
+        }
+      },
+      "MemoryProposalState": {
+        "type": "string",
+        "enum": [
+          "proposed",
+          "accepted",
+          "rejected"
+        ]
+      },
+      "MemorySource": {
+        "type": "string",
+        "description": "Where a memory proposal came from.",
+        "enum": [
+          "worker",
+          "coordinator"
+        ]
       },
       "MergeMethod": {
         "type": "string",
@@ -3053,6 +3532,19 @@
           "merged",
           "closed"
         ]
+      },
+      "RejectMemoryProposal": {
+        "type": "object",
+        "description": "Reject a memory proposal.",
+        "properties": {
+          "decided_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is rejecting, as for [`AcceptMemoryProposal::decided_by`]."
+          }
+        }
       },
       "RelaunchTask": {
         "type": "object",
@@ -3699,6 +4191,9 @@
     },
     {
       "name": "decisions"
+    },
+    {
+      "name": "memory"
     },
     {
       "name": "pull-requests"

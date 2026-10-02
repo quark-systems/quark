@@ -423,7 +423,11 @@ async fn provisioning_runs_project_add_seed_and_spawn() {
              --- fm-home-seed.sh\nprj_1\n{root}\nquark\nengine\n\
              charter=Coordinate the Quark Project \"Quark\" across quark, engine. Its goal: Ship J2 \
              The Project repo checked out at project/ holds its instructions.md and memory/; \
-             read instructions.md before planning work.\n\
+             read instructions.md and every entry in memory/ before planning work, and reread memory/ \
+             when told a new entry landed. Have workers report what a task taught them that is worth \
+             keeping as `learned: <text>` status lines before done:, and add your own for a finished \
+             task as `learned [source=coordinator]: <text>` in its status log; each becomes a memory \
+             proposal for review.\n\
              scope=All work for the Quark Project \"Quark\" (prj_1) in quark, engine.\n\
              --- fm-spawn.sh\nprj_1\n{root}\n--harness\nclaude\n--model\nclaude-sonnet-5\n--effort\nhigh\n--secondmate\n"
         )

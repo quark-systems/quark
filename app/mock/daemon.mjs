@@ -43,6 +43,8 @@ const pulls = new Map(); // PR id -> PullRequest
 const pullDiffs = new Map(); // PR id -> unified diff text
 const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
+const memoryProposals = new Map(); // proposal id -> MemoryProposal
+const memoryEntries = new Map(); // project id -> MemoryEntry[] (the Project repo's memory/)
 
 const events = []; // { seq, ... } bounded
 let seq = 0;
@@ -249,6 +251,22 @@ function seed() {
       `\x1b[33m…\x1b[0m writing the failing test\r\n\r\n$ `;
   }
 
+  // Project memory (quark#29): learnings from finished tasks awaiting review, and one accepted entry.
+  const done = [...tasks.values()].find((t) => t.title === "Daemon skeleton");
+  const MP = (id, p, task, text, extra = {}) => memoryProposals.set(id, {
+    id, project_id: p.id, text, source: "worker", state: "proposed", proposed_at: minutesAgo(30), decided_at: null, decided_by: null, entry: null,
+    evidence: { task_id: task?.id ?? null, task_title: task?.title ?? null, pull_request_url: task?.pull_request_url ?? null, files: [] }, ...extra,
+  });
+  MP("mp-1", quark, inReview, "Regenerate api/openapi.json with `cargo run -p quarkd -- openapi` whenever a route or shape changes; CI compares it.", {
+    evidence: { task_id: inReview.id, task_title: inReview.title, pull_request_url: inReview.pull_request_url, files: ["api/openapi.json", "crates/quarkd/tests/api.rs"] },
+  });
+  MP("mp-2", quark, done, "SQLite runs in WAL mode with a 5s busy timeout; keep long work outside store transactions.", { source: "coordinator", proposed_at: minutesAgo(25) });
+  memoryEntries.set(quark.id, [{
+    id: "2026-10-01-one-task-one-pr-against-main", project_id: quark.id, path: "memory/2026-10-01-one-task-one-pr-against-main.md",
+    text: "One task, one PR against main; never stack PRs.", source: "coordinator", date: minutesAgo(900), accepted_at: minutesAgo(880),
+    accepted_by: "matt", proposal_id: null, commit: null, evidence: { task_id: done.id, task_title: done.title, pull_request_url: null, files: [] },
+  }]);
+
   chat(quark.id, "user", "Split Phase 1 into tasks and start the event stream and terminal work.", { ts: minutesAgo(35) });
   chat(quark.id, "thinking", "Two independent workstreams; dispatch both.", { ts: minutesAgo(35) });
   chat(quark.id, "assistant", "Dispatched two workers:\n\n- **Event stream**: resync slow clients from the store (Claude Code)\n- **Terminal sessions** over tmux control mode (Codex)\n\nThe decision-records task is waiting on a question for you.", { ts: minutesAgo(34) });
@@ -427,6 +445,41 @@ const server = http.createServer(async (req, res) => {
     const task = d.task_id && tasks.get(d.task_id);
     if (task && task.state === "needs_decision") setState(task, "running", `Answered: ${answer.slice(0, 60)}`);
     return send(res, 200, d);
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/memory$/)) && req.method === "GET") {
+    const pid = decodeURIComponent(r[1]);
+    if (!projects.has(pid)) return notFound(res);
+    return send(res, 200, memoryEntries.get(pid) ?? []);
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/memory\/proposals$/)) && req.method === "GET") {
+    const pid = decodeURIComponent(r[1]), st = url.searchParams.get("state");
+    if (!projects.has(pid)) return notFound(res);
+    return send(res, 200, [...memoryProposals.values()].filter((x) => x.project_id === pid && (!st || x.state === st)));
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/memory\/proposals\/([^/:]+):(accept|reject)$/)) && req.method === "POST") {
+    const mp = memoryProposals.get(decodeURIComponent(r[2]));
+    if (!mp || mp.project_id !== decodeURIComponent(r[1])) return notFound(res);
+    if (mp.state !== "proposed") return send(res, 409, { error: { code: "already_decided", message: "the proposal is already decided" } });
+    const b = (await readJson(req)) ?? {};
+    const by = b.decided_by?.trim() || "mock-user";
+    if (r[3] === "reject") {
+      Object.assign(mp, { state: "rejected", decided_at: now(), decided_by: by });
+      emit("memory.rejected", { ...mp }, mp.project_id);
+      return send(res, 200, mp);
+    }
+    if (b.text !== undefined && b.text !== null && !String(b.text).trim()) return invalid(res, "text must not be empty");
+    const text = b.text?.trim() || mp.text;
+    const slug = text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join("-").slice(0, 48) || "entry";
+    const id = `${mp.proposed_at.slice(0, 10)}-${slug}`;
+    const entry = {
+      id, project_id: mp.project_id, path: `memory/${id}.md`, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
+      accepted_at: now(), accepted_by: by, proposal_id: mp.id, commit: Math.random().toString(16).slice(2, 12).padEnd(10, "0"),
+    };
+    Object.assign(mp, { text, state: "accepted", decided_at: entry.accepted_at, decided_by: by, entry });
+    if (!memoryEntries.has(mp.project_id)) memoryEntries.set(mp.project_id, []);
+    memoryEntries.get(mp.project_id).push(entry);
+    emit("memory.accepted", { ...mp }, mp.project_id);
+    return send(res, 200, mp);
   }
   if (p === "/v1/harnesses" && req.method === "GET") return send(res, 200, HARNESSES);
   if (p === "/v1/harnesses:validate" && req.method === "POST") {
