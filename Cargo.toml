@@ -14,6 +14,7 @@ quark-systems = { path = "crates/quark-systems", version = "0.0.1" }
 quark-engine = { path = "crates/quark-engine" }
 anyhow = "1.0"
 async-trait = "0.1"
+base64 = "0.22"
 axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4.6", features = ["derive", "env"] }
 futures-util = "0.3"

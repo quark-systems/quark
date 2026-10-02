@@ -298,6 +298,49 @@
         }
       }
     },
+    "/v1/projects/{id}/terminals": {
+      "get": {
+        "tags": [
+          "terminals"
+        ],
+        "summary": "Live terminals of one Project: its coordinator and its workers.",
+        "operationId": "list_terminals",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Terminal"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}:provision": {
       "post": {
         "tags": [
@@ -577,6 +620,219 @@
           },
           "502": {
             "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/terminals/{id}": {
+      "get": {
+        "tags": [
+          "terminals"
+        ],
+        "summary": "One terminal. Its id is the task id for a worker and the Project id for\na coordinator.",
+        "operationId": "get_terminal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Terminal id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminal"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/terminals/{id}/input": {
+      "post": {
+        "tags": [
+          "terminals"
+        ],
+        "summary": "Type raw bytes into a terminal.",
+        "description": "Requests for one terminal are applied in the order they arrive, and HTTP\nrequests can overtake each other, so keep one request in flight per\nterminal and coalesce keys typed meanwhile, or send `seq`.",
+        "operationId": "input",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Terminal id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Typed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`seq` is not after the last applied one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/terminals/{id}/resize": {
+      "post": {
+        "tags": [
+          "terminals"
+        ],
+        "summary": "Resize a terminal. The last size set wins for every viewer.",
+        "operationId": "resize",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Terminal id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalResize"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminal"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/terminals/{id}/snapshot": {
+      "post": {
+        "tags": [
+          "terminals"
+        ],
+        "summary": "Snapshot a terminal's screen.",
+        "description": "Appends a `worker.output` snapshot event and returns it. To open a\nterminal, subscribe to the event stream, call this, apply the returned\nsnapshot, then apply the terminal's events with a greater `seq`.",
+        "operationId": "snapshot",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Terminal id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -1111,6 +1367,154 @@
           "unknown"
         ]
       },
+      "Terminal": {
+        "type": "object",
+        "description": "A live terminal: one session pane the daemon streams as `worker.output`.",
+        "required": [
+          "id",
+          "project_id",
+          "role",
+          "title",
+          "cols",
+          "rows"
+        ],
+        "properties": {
+          "cols": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "The task id for a worker, the Project id for a coordinator."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/TerminalRole"
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set for worker terminals."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "TerminalChunkKind": {
+        "type": "string",
+        "description": "What a `worker.output` event carries.",
+        "enum": [
+          "output",
+          "snapshot"
+        ]
+      },
+      "TerminalInput": {
+        "type": "object",
+        "description": "Raw bytes to type into a terminal.",
+        "required": [
+          "data_b64"
+        ],
+        "properties": {
+          "data_b64": {
+            "type": "string",
+            "description": "Base64 of the bytes, exactly as a terminal would send them\n(`\\r` for Enter, escape sequences for keys)."
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional per-terminal sequence number. When given, it must be greater\nthan the last one applied, so a retried request is not typed twice.",
+            "minimum": 0
+          }
+        }
+      },
+      "TerminalOutput": {
+        "type": "object",
+        "description": "Payload of a `worker.output` event.",
+        "required": [
+          "terminal_id",
+          "role",
+          "kind",
+          "data_b64"
+        ],
+        "properties": {
+          "cols": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Terminal size; set on snapshots.",
+            "minimum": 0
+          },
+          "data_b64": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TerminalChunkKind"
+          },
+          "role": {
+            "$ref": "#/components/schemas/TerminalRole"
+          },
+          "rows": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terminal_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TerminalResize": {
+        "type": "object",
+        "required": [
+          "cols",
+          "rows"
+        ],
+        "properties": {
+          "cols": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TerminalRole": {
+        "type": "string",
+        "description": "Who a terminal belongs to.",
+        "enum": [
+          "coordinator",
+          "worker"
+        ]
+      },
       "UpdateProject": {
         "type": "object",
         "description": "Partial update; absent fields are left unchanged.",
@@ -1149,6 +1553,9 @@
     },
     {
       "name": "decisions"
+    },
+    {
+      "name": "terminals"
     },
     {
       "name": "events"
