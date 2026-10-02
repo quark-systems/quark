@@ -1,0 +1,3 @@
+- pane pid before 3716, after control client was killed 3716 (same = survived)
+- capture-pane -e (visible screen, with SGR): 36 rows in 7 ms
+- capture-pane -e -S - (all history): 1869 rows in 9 ms

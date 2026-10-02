@@ -1,0 +1,63 @@
+[package]
+name = "quark-ui-native-poc"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Standalone workspace: kept out of the repo's root workspace on purpose.
+[workspace]
+
+# The desktop app is the `quark-ui-native-poc` binary (src/main.rs). The library target only has
+# content on wasm32 (src/lib.rs is `#![cfg(target_family = "wasm")]`): it is the web build.
+[lib]
+name = "quark_ui_web"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+warpui = { git = "https://github.com/warpdotdev/warp", rev = "2a8604fb2e78a26b18cfefdebe908bee79031530" }
+anyhow = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+async-channel = "2"
+futures = "0.3"
+
+web-time = "1"
+# Optional terminal core (feature `ghostty`); needs Zig 0.16 on PATH to build.
+libghostty-vt = { git = "https://github.com/Uzaaft/libghostty-rs", rev = "8953a740bc378cec3e07e1f6ca949f0595eab19b", optional = true }
+
+# Desktop daemon client: blocking HTTP + WebSocket on background threads.
+# alacritty_terminal pulls in `polling` (its PTY event loop) unconditionally, which does not build
+# for wasm32, so the web build has no terminal core.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+alacritty_terminal = "0.25"
+ureq = { version = "2", default-features = false, features = ["json"] }
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+
+# Web daemon client: fetch + WebSocket through web-sys. wasm-bindgen is pinned to the installed
+# wasm-bindgen-cli version.
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen = "=0.2.117"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Location", "UrlSearchParams", "Request", "RequestInit", "RequestMode", "Response", "Headers", "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "BinaryType", "Blob"] }
+console_error_panic_hook = "0.1"
+console_log = "1"
+log = "0.4"
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+[features]
+ghostty = ["dep:libghostty-vt"]
+
+# Mirrors the [patch] entries in Warp's root Cargo.toml that the UI crates need;
+# git dependencies do not inherit a foreign workspace's patches.
+[patch.crates-io]
+pathfinder_simd = { git = "https://github.com/warpdotdev/pathfinder.git", rev = "34128a129ca6aee168fbc5060a4f21b4f7e486a9" }
+yaml-rust = { git = "https://github.com/warpdotdev/yaml-rust.git", rev = "51684719d0102ca85ff4b21cec39877a0c669e19" }
+
+[profile.release]
+debug = false

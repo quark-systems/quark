@@ -1,0 +1,147 @@
+diff --git a/crates/quarkd/src/workers/tmux.rs b/crates/quarkd/src/workers/tmux.rs
+index ee41028..a95a464 100644
+--- a/crates/quarkd/src/workers/tmux.rs
++++ b/crates/quarkd/src/workers/tmux.rs
+@@ -1,9 +1,14 @@
+ //! Thin wrapper around a tmux control-mode client.
+ 
++use std::fmt::Write as _;
+ use std::io::Write;
+ use std::process::{Child, ChildStdin, Command, Stdio};
+ 
+-use anyhow::{Context, Result};
++use anyhow::{bail, Context, Result};
++
++/// Smallest pane we will ask tmux for; below this most TUIs misrender.
++pub const MIN_COLS: u16 = 20;
++pub const MIN_ROWS: u16 = 5;
+ 
+ pub struct ControlClient {
+     child: Child,
+@@ -22,15 +27,46 @@ impl ControlClient {
+         Ok(Self { child, stdin })
+     }
+ 
+-    /// Send literal keys to a pane.
+-    pub fn send_keys(&mut self, pane: &str, keys: &str) -> Result<()> {
+-        writeln!(self.stdin, "send-keys -t {pane} -l '{keys}'")?;
++    /// Send raw bytes to a pane.
++    ///
++    /// Bytes are hex-encoded with `send-keys -H`, which sidesteps every
++    /// quoting problem the old `-l '...'` form had with quotes, escapes
++    /// and control characters.
++    pub fn send_bytes(&mut self, pane: &str, bytes: &[u8]) -> Result<()> {
++        if bytes.is_empty() {
++            return Ok(());
++        }
++        let mut cmd = format!("send-keys -t {pane} -H");
++        for b in bytes {
++            write!(cmd, " {b:02x}").expect("write to String");
++        }
++        writeln!(self.stdin, "{cmd}")?;
++        Ok(())
++    }
++
++    /// Resize the window holding `pane` so full-screen apps redraw.
++    pub fn resize(&mut self, window: &str, cols: u16, rows: u16) -> Result<()> {
++        if cols < MIN_COLS || rows < MIN_ROWS {
++            bail!("refusing resize to {cols}x{rows}: below {MIN_COLS}x{MIN_ROWS}");
++        }
++        writeln!(self.stdin, "resize-window -t {window} -x {cols} -y {rows}")?;
+         Ok(())
+     }
+ }
+ 
+ impl Drop for ControlClient {
+     fn drop(&mut self) {
++        let _ = writeln!(self.stdin, "detach-client");
+         let _ = self.child.kill();
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    #[test]
++    fn hex_encoding_matches_tmux_expectation() {
++        let bytes = b"ls\r";
++        let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
++        assert_eq!(hex.join(" "), "6c 73 0d");
++    }
++}
+diff --git a/docs/workers.md b/docs/workers.md
+index 09872a6..4b067eb 100644
+--- a/docs/workers.md
++++ b/docs/workers.md
+@@ -2,3 +2,21 @@
+ 
+ Each worker runs in its own tmux window on the private `quark` socket.
+ The UI renders pane output with xterm.js.
++
++## Input
++
++Keystrokes are sent as raw bytes. The daemon forwards them with
++`send-keys -H`, so any byte sequence (including `Ctrl-C`, arrow keys and
++bracketed paste) reaches the pane unchanged.
++
++## Resizing
++
++The pane follows the size of its UI container:
++
++1. A `ResizeObserver` notices the container change (debounced 50 ms).
++2. The fit addon computes the new `cols` x `rows`.
++3. The UI calls `POST /v1/workers/{id}/resize`.
++4. The daemon runs `resize-window`, and full-screen apps such as `top`
++   receive `SIGWINCH` and redraw.
++
++Sizes below 20x5 are rejected.
+diff --git a/ui/src/components/TerminalPane.tsx b/ui/src/components/TerminalPane.tsx
+index 4d6109d..a4c8232 100644
+--- a/ui/src/components/TerminalPane.tsx
++++ b/ui/src/components/TerminalPane.tsx
+@@ -1,22 +1,42 @@
+ import { useEffect, useRef } from "react";
+ import { Terminal } from "@xterm/xterm";
+-import { sendInput } from "../api/workers";
++import { FitAddon } from "@xterm/addon-fit";
++import { resizeWorker, sendInput } from "../api/workers";
+ 
+ interface Props {
+   workerId: string;
+   output: Uint8Array[];
+ }
+ 
++const encoder = new TextEncoder();
++
+ export function TerminalPane({ workerId, output }: Props) {
+   const host = useRef<HTMLDivElement>(null);
+   const term = useRef<Terminal>();
+ 
+   useEffect(() => {
+-    const t = new Terminal({ cols: 120, rows: 36 });
++    const t = new Terminal({ cols: 120, rows: 36, scrollback: 5000 });
++    const fit = new FitAddon();
++    t.loadAddon(fit);
+     t.open(host.current!);
+-    t.onData((data) => sendInput(workerId, data));
++    t.onData((data) => sendInput(workerId, encoder.encode(data)));
++    t.onResize(({ cols, rows }) => resizeWorker(workerId, cols, rows));
+     term.current = t;
+-    return () => t.dispose();
++
++    // Debounce: dragging a splitter fires dozens of resize observations.
++    let pending: ReturnType<typeof setTimeout> | undefined;
++    const observer = new ResizeObserver(() => {
++      clearTimeout(pending);
++      pending = setTimeout(() => fit.fit(), 50);
++    });
++    observer.observe(host.current!);
++    fit.fit();
++
++    return () => {
++      clearTimeout(pending);
++      observer.disconnect();
++      t.dispose();
++    };
+   }, [workerId]);
+ 
+   useEffect(() => {

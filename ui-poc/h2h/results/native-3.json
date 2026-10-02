@@ -1,0 +1,98 @@
+{
+  "app": "native-warpui",
+  "input_path": "in-process synthetic TypedCharacters",
+  "panes": 4,
+  "phases": [
+    {
+      "coordinator_deltas": 0,
+      "echo_ws_thread_to_ui_thread_ms": {
+        "p50": 34.1,
+        "p99": 51.08
+      },
+      "events_applied": 173,
+      "fps_avg": 20.47,
+      "frame_cpu_ms_layout_to_present": {
+        "max": 53.5,
+        "p50": 37.43,
+        "p99": 53.07
+      },
+      "frame_interval_ms": {
+        "p50": 44.14,
+        "p99": 125.39
+      },
+      "frame_split_p50_ms": {
+        "gpu_submit_present": 36.02,
+        "layout_paint": 1.33,
+        "view_render": 0.19
+      },
+      "frame_split_p99_ms": {
+        "gpu_submit_present": 51.26,
+        "layout_paint": 2.59,
+        "view_render": 2.05
+      },
+      "frames": 144,
+      "key_to_echo_painted_ms": {
+        "p50": 75.03,
+        "p99": 108.81
+      },
+      "key_to_echo_received_on_ws_thread_ms": {
+        "p50": 1.14,
+        "p99": 6.5
+      },
+      "keystrokes_measured": 47,
+      "phase": "idle_typing",
+      "seconds": 7.04,
+      "terminal_core_feed_ms_total": 2.65,
+      "terminal_core_ms_per_mb": 86.3,
+      "terminal_core_snapshot_ms_total": 1.75,
+      "terminal_rows_rebuilt": 1012,
+      "worker_output_bytes": 50893
+    },
+    {
+      "coordinator_deltas": 253,
+      "echo_ws_thread_to_ui_thread_ms": {
+        "p50": 61.28,
+        "p99": 98.39
+      },
+      "events_applied": 30303,
+      "fps_avg": 10.94,
+      "frame_cpu_ms_layout_to_present": {
+        "max": 115.1,
+        "p50": 72.74,
+        "p99": 108.41
+      },
+      "frame_interval_ms": {
+        "p50": 89.19,
+        "p99": 141.16
+      },
+      "frame_split_p50_ms": {
+        "gpu_submit_present": 69.51,
+        "layout_paint": 2.92,
+        "view_render": 0.35
+      },
+      "frame_split_p99_ms": {
+        "gpu_submit_present": 104.18,
+        "layout_paint": 10.36,
+        "view_render": 26.59
+      },
+      "frames": 142,
+      "key_to_echo_painted_ms": {
+        "p50": 165.98,
+        "p99": 225.95
+      },
+      "key_to_echo_received_on_ws_thread_ms": {
+        "p50": 21.67,
+        "p99": 35.39
+      },
+      "keystrokes_measured": 71,
+      "phase": "stress_4_terminals_plus_chat",
+      "seconds": 12.98,
+      "terminal_core_feed_ms_total": 1281.67,
+      "terminal_core_ms_per_mb": 27.46,
+      "terminal_core_snapshot_ms_total": 403.17,
+      "terminal_rows_rebuilt": 558088,
+      "worker_output_bytes": 61358998
+    }
+  ],
+  "terminal_core": "alacritty_terminal"
+}
