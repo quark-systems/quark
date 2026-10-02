@@ -3,8 +3,9 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { App } from "./App";
 import { start, getState } from "./store";
+import { terminalText } from "./terminal";
 
 void start();
 // Automation handle for the end-to-end tests.
-(window as any).__quark = { getState };
+(window as any).__quark = { getState, terminalText };
 createRoot(document.getElementById("root")!).render(<App />);

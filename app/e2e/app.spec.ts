@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 const open = (page: import("@playwright/test").Page, hash: string) => page.goto("/?daemon=http://127.0.0.1:7392" + hash);
+// The open task's terminal text, read from the emulator's buffer: the WebGL renderer draws no DOM rows.
+const terminalText = (page: import("@playwright/test").Page) => () =>
+  page.evaluate(() => (window as any).__quark.terminalText(decodeURIComponent(location.hash.split("/")[2] ?? "")) ?? "");
 
 test("creates a project and lands on its board", async ({ page }) => {
   await open(page, "#/new");
@@ -57,11 +60,12 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
 
   // Terminal: the snapshot is drawn, and typed keys echo back through the daemon.
   const term = page.getByTestId("terminal");
-  await expect(term.locator(".xterm-rows")).toContainText("writing the failing test");
+  const termText = terminalText(page);
+  await expect.poll(termText).toContain("writing the failing test");
   await term.locator(".xterm").click();
   await page.keyboard.type("ls -la");
   await page.keyboard.press("Enter");
-  await expect(term.locator(".xterm-rows")).toContainText("you typed: ls -la");
+  await expect.poll(termText).toContain("you typed: ls -la");
 
   // Transcript shows history; steering lands in it.
   const transcript = page.getByTestId("transcript");
@@ -86,7 +90,7 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await expect(page.locator(".state-note")).toContainText("Cancelled from the app");
   await page.getByTestId("relaunch").click();
   await expect(page.getByTestId("task-state")).toHaveText("Running");
-  await expect(term.locator(".xterm-rows")).toContainText("relaunched on");
+  await expect.poll(termText).toContain("relaunched on");
 });
 
 test("a queued task explains that it has no terminal or changes yet", async ({ page }) => {
