@@ -89,6 +89,7 @@ fn setup(workspace: &Path) -> Setup {
             sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
             layout: Layout::new(home.path()),
             chat: Arc::new(RecordingInput::new()),
+            forge: Arc::new(quarkd::forge::StubForge::new()),
         }),
         _home: home,
         projector: Projector::new(store.clone(), engine.clone())
@@ -194,6 +195,25 @@ impl EngineAdapter for Watched {
         action: &TaskControl,
     ) -> Result<(), EngineError> {
         self.inner.control(ws, task_id, action).await
+    }
+    async fn merge_pull_request(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        url: &str,
+        method: Option<quark_systems::MergeMethod>,
+    ) -> Result<(), EngineError> {
+        self.inner
+            .merge_pull_request(ws, task_id, url, method)
+            .await
+    }
+    async fn set_standing_approval(
+        &self,
+        ws: &WorkspaceRef,
+        repos: &[String],
+        on: bool,
+    ) -> Result<(), EngineError> {
+        self.inner.set_standing_approval(ws, repos, on).await
     }
     async fn add_source(
         &self,

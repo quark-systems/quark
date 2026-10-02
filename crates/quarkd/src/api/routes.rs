@@ -166,7 +166,9 @@ pub async fn get_project(
     responses(
         (status = 200, body = Project),
         (status = 400, body = ErrorBody),
-        (status = 404, body = ErrorBody)
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "Standing approval needs the Project's workspace", body = ErrorBody),
+        (status = 502, description = "The engine refused or failed the call", body = ErrorBody)
     )
 )]
 pub async fn update_project(
@@ -174,9 +176,45 @@ pub async fn update_project(
     Path(id): Path<String>,
     Json(input): Json<UpdateProject>,
 ) -> Result<Json<Project>, ApiError> {
+    if let Some(on) = input.standing_approval {
+        let pid = id.clone();
+        let project = db(&state, move |s| s.get_project(&pid)).await?;
+        set_standing_approval(&state, &project, on).await?;
+    }
     Ok(Json(
         db(&state, move |s| s.update_project(&id, input)).await?,
     ))
+}
+
+/// Applies standing approval to the engine for the Project's repos, so its
+/// coordinator merges green work too. A Project without repos has nothing
+/// registered with the engine; the daemon alone applies it.
+async fn set_standing_approval(
+    state: &AppState,
+    project: &Project,
+    on: bool,
+) -> Result<(), ApiError> {
+    let repos: Vec<String> = project
+        .repos
+        .iter()
+        .filter_map(|r| r.name.clone())
+        .collect();
+    if repos.is_empty() || project.standing_approval == on {
+        return Ok(());
+    }
+    let Some(root) = &project.workspace_path else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "workspace_missing",
+            "the Project has no workspace yet; retry once it is provisioned",
+        ));
+    };
+    let ws = WorkspaceRef {
+        project_id: project.id.clone(),
+        root: root.into(),
+    };
+    state.engine.set_standing_approval(&ws, &repos, on).await?;
+    Ok(())
 }
 
 /// The task board for one Project.

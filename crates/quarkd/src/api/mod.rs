@@ -4,6 +4,7 @@ mod error;
 mod events;
 mod harnesses;
 mod openapi;
+mod pull_requests;
 mod routes;
 mod terminals;
 
@@ -34,6 +35,8 @@ pub struct AppState {
     pub layout: crate::provision::Layout,
     /// Delivers chat input to coordinator sessions.
     pub chat: Arc<dyn CoordinatorInput>,
+    /// Reads pull requests from their forge.
+    pub forge: Arc<dyn crate::forge::Forge>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -72,6 +75,17 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/tasks/{id}/changes", get(routes::get_task_changes))
         .route("/v1/tasks/{id}/diff", get(routes::get_task_diff))
         .route("/v1/decisions", get(routes::list_decisions))
+        .route("/v1/pull-requests", get(pull_requests::list))
+        // POST serves the custom method `/v1/pull-requests/{id}:merge`.
+        .route(
+            "/v1/pull-requests/{id}",
+            get(pull_requests::get).post(pull_requests::action),
+        )
+        .route("/v1/pull-requests/{id}/diff", get(pull_requests::diff))
+        .route(
+            "/v1/pull-requests/{id}/comments",
+            post(pull_requests::comment),
+        )
         .route("/v1/harnesses", get(harnesses::list))
         .route("/v1/harnesses:validate", post(harnesses::validate))
         .route(

@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use quark_systems::{AgentConfig, DeliveryPolicy, TaskKind, TaskState};
+use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind, TaskState};
 use serde::{Deserialize, Serialize};
 
 /// Addresses one engine workspace (a firstmate home). Location-neutral so a
@@ -198,6 +198,26 @@ pub trait EngineAdapter: Send + Sync {
         action: &TaskControl,
     ) -> Result<(), EngineError>;
 
+    /// Merge the pull request at `url`, which `task_id` opened, through the
+    /// engine's guarded merge. `Ok` means the engine confirmed the merge; a
+    /// refusal (not green, conflicting, held) is a [`EngineError::Command`].
+    async fn merge_pull_request(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        url: &str,
+        method: Option<MergeMethod>,
+    ) -> Result<(), EngineError>;
+
+    /// Set whether green pull requests for the workspace's `repos` merge
+    /// without asking a person (standing approval).
+    async fn set_standing_approval(
+        &self,
+        ws: &WorkspaceRef,
+        repos: &[String],
+        on: bool,
+    ) -> Result<(), EngineError>;
+
     /// Clone `source` into the command-center workspace and register it, so
     /// a Project workspace can be seeded from it. Idempotent for the same
     /// name and URL.
@@ -258,6 +278,15 @@ pub enum StubWrite {
     StartCoordinator {
         project_id: String,
         harness: String,
+    },
+    MergePullRequest {
+        task_id: String,
+        url: String,
+        method: Option<MergeMethod>,
+    },
+    StandingApproval {
+        repos: Vec<String>,
+        on: bool,
     },
 }
 
@@ -378,6 +407,32 @@ impl EngineAdapter for StubEngine {
         self.accept(StubWrite::Control {
             task_id: task_id.into(),
             action: action.clone(),
+        })
+    }
+
+    async fn merge_pull_request(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        url: &str,
+        method: Option<MergeMethod>,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::MergePullRequest {
+            task_id: task_id.into(),
+            url: url.into(),
+            method,
+        })
+    }
+
+    async fn set_standing_approval(
+        &self,
+        _ws: &WorkspaceRef,
+        repos: &[String],
+        on: bool,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::StandingApproval {
+            repos: repos.to_vec(),
+            on,
         })
     }
 

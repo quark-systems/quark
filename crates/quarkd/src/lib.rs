@@ -8,7 +8,9 @@ pub mod api;
 pub mod chat;
 pub mod config;
 pub mod engine;
+pub mod forge;
 pub mod harness;
+pub mod pr_center;
 pub mod project_repo;
 pub mod projector;
 pub mod provision;
@@ -66,6 +68,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_sessions(sessions.clone())
         .with_command(layout.command_workspace());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
+    let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
+    let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
+    let pr_task = tokio::spawn(pr_center.run(config.pr_refresh_interval));
 
     let app = api::router(AppState {
         store,
@@ -77,6 +82,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             sessions.clone(),
             quark_transcript::SessionRoots::from_env(),
         )),
+        forge,
     });
     let listener = TcpListener::bind(config.listen)
         .await
@@ -86,6 +92,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     projector_task.abort();
+    pr_task.abort();
     // The tmux server keeps running; the next start reattaches.
     sessions.detach_all();
     Ok(())

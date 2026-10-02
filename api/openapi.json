@@ -467,6 +467,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Standing approval needs the Project's workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -597,6 +617,303 @@
           },
           "409": {
             "description": "The Project is not in a failed state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pull-requests": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "Pull requests across all Projects, newest first, with their checks and\nreviews. Changes arrive as `pr.updated`, `check.updated` and\n`review.updated` events.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only pull requests in this state.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/PullRequestState"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Only this Project's pull requests.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PullRequest"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pull-requests/{id}": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "One pull request.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pull-requests/{id}/comments": {
+      "post": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "Send a review comment to the worker that owns the pull request.",
+        "description": "The comment, with its file and line, is durably recorded for the worker\nas a steering message; it is not posted on the forge.",
+        "operationId": "comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PullRequestComment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Comment recorded for the worker"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No task owns the pull request, or its workspace is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pull-requests/{id}/diff": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "The pull request's diff as the forge shows it, or one file of it.",
+        "operationId": "diff",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "One file, as named in the diff; absent for the whole pull request.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestDiff"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown pull request, or a file the diff does not touch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The forge could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pull-requests/{id}:merge": {
+      "post": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "Merge a pull request through the engine's guarded merge.",
+        "description": "The engine re-reads the pull request live and refuses unless it is open,\nnot a draft, free of conflicts and green on its current head. Returns the\npull request as read from the forge after the merge.",
+        "operationId": "merge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergePullRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The merge was refused: not green, conflicting, already merged, or no owning task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine failed the call",
             "content": {
               "application/json": {
                 "schema": {
@@ -1412,6 +1729,98 @@
           }
         }
       },
+      "Check": {
+        "type": "object",
+        "description": "One CI check or commit status on a pull request's current head.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conclusion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The forge's own conclusion, e.g. `timed_out`, when it says more than `status`."
+          },
+          "details_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Link to the run or its log."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique per pull request; for GitHub Actions, `workflow / job`."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus"
+          }
+        }
+      },
+      "CheckStatus": {
+        "type": "string",
+        "description": "The state of one check on a pull request's head.",
+        "enum": [
+          "pending",
+          "success",
+          "failure",
+          "neutral",
+          "cancelled"
+        ]
+      },
+      "CheckUpdated": {
+        "type": "object",
+        "description": "Payload of `check.updated`: one check that appeared or changed.",
+        "required": [
+          "pull_request_id",
+          "check"
+        ],
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/Check"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pull_request_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ChecksState": {
+        "type": "string",
+        "description": "One state for all of a pull request's checks on its current head.",
+        "enum": [
+          "passing",
+          "failing",
+          "pending",
+          "none"
+        ]
+      },
       "ConfigIssue": {
         "type": "object",
         "description": "One problem with an agent config.",
@@ -1597,6 +2006,14 @@
           "direct"
         ]
       },
+      "DiffSide": {
+        "type": "string",
+        "description": "Which side of a diff a line comment is on.",
+        "enum": [
+          "new",
+          "old"
+        ]
+      },
       "DispatchPreset": {
         "type": "string",
         "description": "Starting dispatch rules for a new Project. Both route to the Project's\nagent config; rules can be edited afterwards.",
@@ -1695,6 +2112,26 @@
           "dispatch.recorded",
           "account.quota_changed"
         ]
+      },
+      "Evidence": {
+        "type": "object",
+        "description": "Verification evidence attached to a pull request (ADR-15). Reserved: the\ndaemon reports repo-native checks only and leaves `evidence` absent.",
+        "required": [
+          "summary"
+        ],
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Short summary, e.g. which journeys or holdout tests passed."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Link to the full report."
+          }
+        }
       },
       "FileChangeStatus": {
         "type": "string",
@@ -1877,6 +2314,41 @@
           }
         }
       },
+      "MergeMethod": {
+        "type": "string",
+        "description": "How to merge a pull request.",
+        "enum": [
+          "squash",
+          "merge",
+          "rebase"
+        ]
+      },
+      "MergePullRequest": {
+        "type": "object",
+        "description": "Request body for `POST /v1/pull-requests/{id}:merge`; may be empty.",
+        "properties": {
+          "method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MergeMethod",
+                "description": "Default `squash` on GitHub; GitLab uses the project's own setting."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Mergeability": {
+        "type": "string",
+        "description": "Whether the forge can merge the head into the base without conflicts.",
+        "enum": [
+          "mergeable",
+          "conflicting",
+          "unknown"
+        ]
+      },
       "ModelSelection": {
         "type": "string",
         "description": "How a harness chooses its model.",
@@ -1959,6 +2431,10 @@
             },
             "description": "Code repos in the Project workspace."
           },
+          "standing_approval": {
+            "type": "boolean",
+            "description": "Merge this Project's pull requests as soon as they are green, without\nasking. Maps to the engine's merge posture for the Project's repos."
+          },
           "status": {
             "$ref": "#/components/schemas/ProjectStatus"
           },
@@ -1988,6 +2464,263 @@
           "provisioning",
           "ready",
           "failed"
+        ]
+      },
+      "PullRequest": {
+        "type": "object",
+        "description": "A pull request opened by one of a Project's tasks, with its checks and\nreviews as last read from the forge.",
+        "required": [
+          "id",
+          "project_id",
+          "url",
+          "provider",
+          "repo",
+          "number",
+          "state",
+          "mergeable",
+          "checks_state",
+          "review_decision",
+          "checks",
+          "reviews"
+        ],
+        "properties": {
+          "additions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Forge login of the author."
+          },
+          "base_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_files": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            }
+          },
+          "checks_state": {
+            "$ref": "#/components/schemas/ChecksState"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deletions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "evidence": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Evidence",
+                "description": "Reserved for verification evidence (ADR-15); absent for now."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "head_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Head commit the checks and mergeability refer to."
+          },
+          "id": {
+            "type": "string"
+          },
+          "mergeable": {
+            "$ref": "#/components/schemas/Mergeability"
+          },
+          "merged_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "opened_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the forge reports the PR was opened, updated, merged and closed."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "description": "`github` or `gitlab`."
+          },
+          "repo": {
+            "type": "string",
+            "description": "Repository path, e.g. `quark-systems/quark`."
+          },
+          "review_decision": {
+            "$ref": "#/components/schemas/ReviewDecision"
+          },
+          "reviews": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Review"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/PullRequestState"
+          },
+          "sync_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last forge read failed, until one succeeds."
+          },
+          "synced_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the daemon last read the forge successfully."
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The task that opened it."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent until the forge has been read."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "PullRequestComment": {
+        "type": "object",
+        "description": "A review comment for the worker that owns the pull request. It is\ndelivered to the worker as a steering message, not posted on the forge.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Line in `path` on `side`; requires `path`.",
+            "minimum": 0
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File the comment is about, as it appears in the diff."
+          },
+          "side": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DiffSide",
+                "description": "Default `new`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "PullRequestDiff": {
+        "type": "object",
+        "description": "A unified diff of a pull request, or of one of its files.",
+        "required": [
+          "pull_request_id",
+          "patch",
+          "truncated"
+        ],
+        "properties": {
+          "patch": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file this diff covers; absent for the whole pull request."
+          },
+          "pull_request_id": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when `patch` was cut at the size limit."
+          }
+        }
+      },
+      "PullRequestState": {
+        "type": "string",
+        "description": "Where a pull request is in its life.",
+        "enum": [
+          "open",
+          "draft",
+          "merged",
+          "closed"
         ]
       },
       "RelaunchTask": {
@@ -2038,6 +2771,91 @@
           "url": {
             "type": "string",
             "description": "Clone URL (https, ssh, scp-like or an absolute local path)."
+          }
+        }
+      },
+      "Review": {
+        "type": "object",
+        "description": "One submitted review.",
+        "required": [
+          "id",
+          "state",
+          "body"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Forge login of the reviewer."
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown; may be empty."
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Head commit the review was left on."
+          },
+          "id": {
+            "type": "string",
+            "description": "The forge's review id."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReviewState"
+          },
+          "submitted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReviewDecision": {
+        "type": "string",
+        "description": "What reviewers decided, as the forge sums it up.",
+        "enum": [
+          "approved",
+          "changes_requested",
+          "review_required",
+          "none"
+        ]
+      },
+      "ReviewState": {
+        "type": "string",
+        "description": "What a review said.",
+        "enum": [
+          "approved",
+          "changes_requested",
+          "commented",
+          "dismissed",
+          "pending"
+        ]
+      },
+      "ReviewUpdated": {
+        "type": "object",
+        "description": "Payload of `review.updated`: one review that appeared or changed.",
+        "required": [
+          "pull_request_id",
+          "review"
+        ],
+        "properties": {
+          "pull_request_id": {
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/Review"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -2498,6 +3316,13 @@
               "null"
             ]
           },
+          "standing_approval": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Turn standing approval on or off. Needs the Project's workspace when\nthe Project has repos."
+          },
           "workspace_path": {
             "type": [
               "string",
@@ -2543,6 +3368,9 @@
     },
     {
       "name": "decisions"
+    },
+    {
+      "name": "pull-requests"
     },
     {
       "name": "harnesses"

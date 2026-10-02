@@ -47,13 +47,17 @@ The event stream is a WebSocket at `/v1/events?cursor=<seq>`: each frame is one 
 `POST /v1/projects` with `repos` and an `agent_config` provisions a Project in the background (`crates/quarkd/src/provision.rs`).
 It clones each repo into the command-center workspace (`~/.quark/workspaces/command`), seeds the Project workspace at `~/.quark/workspaces/<project-id>`, writes the Project repo (`~/.quark/projects/<project-id>.git`, checked out at `<workspace>/project`) and starts the coordinator.
 `project.updated` events report each step and the final `ready` or `failed` status; `POST /v1/projects/{id}:provision` retries a failed Project.
-The engine checkout under `~/.quark/engine` must be the quark-systems firstmate fork, which provides `fm-project-add.sh`.
+The engine checkout under `~/.quark/engine` must be the quark-systems firstmate fork, which provides `fm-project-add.sh` and `fm-project-yolo.sh`.
 
 Terminal sessions need tmux 3.2 or newer (`--tmux` or `QUARKD_TMUX` picks the binary; without tmux the terminal routes answer 503).
 quarkd runs one private tmux server on `~/.quark/run/tmux/quark` and attaches to it in control mode; engine calls point `TMUX` at it, so the command center, every coordinator and every worker run there (firstmate records no tmux socket per task, so the server is shared rather than one per Project).
 Each Project's coordinator window (the command center's secondmate window for that Project, re-read on every refresh so it survives restarts) and task windows become its terminals: `GET /v1/projects/{id}/terminals`, input, resize and snapshot under `/v1/terminals/{id}`, and output as `worker.output` events.
 A terminal's output starts with a `snapshot` chunk (reset the emulator, then feed the bytes), and the daemon keeps about 2 MiB of output per terminal.
 To open a terminal, subscribe to the event stream, call `POST /v1/terminals/{id}/snapshot`, apply the returned event, then the terminal's events with a greater `seq`.
+
+The PR center (`crates/quarkd/src/pr_center.rs`) lists every pull request a task reports at `GET /v1/pull-requests`, with checks and reviews read from GitHub through the `gh` CLI every 30 seconds (`--pr-refresh-secs`), and streams changes as `pr.updated`, `check.updated` and `review.updated`.
+Review comments (`POST /v1/pull-requests/{id}/comments`) go to the owning worker as steering messages, and `:merge` runs the engine's guarded `fm-pr-merge.sh`.
+A Project's `standing_approval` merges its green pull requests without asking; turning it on also sets the engine's yolo posture for the Project's repos through `fm-project-yolo.sh` from the firstmate fork.
 
 ### Desktop app
 
