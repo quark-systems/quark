@@ -14,6 +14,9 @@
 //!   readers (fleet snapshot, status-log tails, hold records, PR poll records)
 //!   mapped onto the neutral [`TaskState`], and allowlisted `fm-*.sh` writes
 //!   with argument validation, so nothing engine-specific reaches the API.
+//!
+//! Adapters also name the directories worth watching, so the projector can
+//! refresh a workspace as soon as a worker reports, not only on its timer.
 
 pub mod firstmate;
 
@@ -62,10 +65,21 @@ pub struct EngineTask {
     pub worktree: Option<PathBuf>,
 }
 
+/// One status-log line, parsed by the adapter into neutral fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatusEntry {
+    /// What was reported, e.g. `working` or `needs-decision`.
+    pub kind: String,
+    pub decision_key: Option<String>,
+    pub note: String,
+    /// The line as written, for the projection's audit trail.
+    pub raw: String,
+}
+
 /// New status-log lines for one task, starting at a byte offset.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StatusTail {
-    pub lines: Vec<String>,
+    pub entries: Vec<StatusEntry>,
     /// Offset to pass on the next call.
     pub next_offset: u64,
 }
@@ -153,6 +167,19 @@ pub trait EngineAdapter: Send + Sync {
 
     /// Open and recently answered holds in the workspace.
     async fn holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError>;
+
+    /// Directories whose changes should trigger an immediate refresh of the
+    /// workspace. Empty means the timer alone drives refreshes.
+    fn watch_dirs(&self, _ws: &WorkspaceRef) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// Whether a change to `path` (inside a [`EngineAdapter::watch_dirs`]
+    /// directory) can change tasks. Filters out the engine's own bookkeeping
+    /// so it does not cause refresh churn.
+    fn is_task_change(&self, _path: &Path) -> bool {
+        false
+    }
 
     /// Deliver a steering message to a task's worker. `Ok` means the message
     /// is durably recorded for the worker, not that it has been read.
@@ -243,6 +270,8 @@ pub struct StubEngine {
     writes: Mutex<Vec<StubWrite>>,
     write_error: Mutex<Option<String>>,
     coordinators: Mutex<HashMap<String, String>>,
+    /// Status entries per engine task id; the offset is an index.
+    status: Mutex<HashMap<String, Vec<StatusEntry>>>,
 }
 
 impl StubEngine {
@@ -261,6 +290,16 @@ impl StubEngine {
     /// Coordinator window targets by Project id.
     pub fn set_coordinators(&self, coordinators: HashMap<String, String>) {
         *self.coordinators.lock().unwrap() = coordinators;
+    }
+
+    /// Appends a status entry to an engine task's log.
+    pub fn push_status(&self, task_id: &str, entry: StatusEntry) {
+        self.status
+            .lock()
+            .unwrap()
+            .entry(task_id.to_string())
+            .or_default()
+            .push(entry);
     }
 
     /// Writes received so far, oldest first.
@@ -302,12 +341,15 @@ impl EngineAdapter for StubEngine {
     async fn status_tail(
         &self,
         _ws: &WorkspaceRef,
-        _task_id: &str,
+        task_id: &str,
         offset: u64,
     ) -> Result<StatusTail, EngineError> {
+        let status = self.status.lock().unwrap();
+        let log = status.get(task_id).map(Vec::as_slice).unwrap_or_default();
+        let start = (offset as usize).min(log.len());
         Ok(StatusTail {
-            lines: Vec::new(),
-            next_offset: offset,
+            entries: log[start..].to_vec(),
+            next_offset: log.len() as u64,
         })
     }
 

@@ -15,6 +15,7 @@ pub mod provision;
 pub mod sessions;
 pub mod store;
 pub mod transcripts;
+pub mod worktree;
 
 use std::sync::Arc;
 

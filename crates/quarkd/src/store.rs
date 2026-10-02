@@ -9,11 +9,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::engine::{FleetSnapshot, Hold};
+use crate::engine::{FleetSnapshot, Hold, StatusEntry};
 use quark_systems::{
     AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset, Event,
-    EventType, Project, ProjectStatus, RepoSource, Task, TaskKind, TaskState, TranscriptEntry,
-    TranscriptItem, UpdateProject,
+    EventType, Project, ProjectStatus, RepoSource, Task, TaskEvent, TaskKind, TaskState,
+    TranscriptEntry, TranscriptItem, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -27,7 +27,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -127,6 +127,38 @@ CREATE TABLE transcript_index (
     updated_at TEXT NOT NULL
 );
 "#;
+
+/// Task activity from status logs. `status_cursors` keeps each task's read
+/// offset in the same transaction as the entries it covers, so a restart
+/// resumes exactly where the last projection stopped.
+const SCHEMA_V6: &str = r#"
+ALTER TABLE tasks ADD COLUMN worktree_path TEXT;
+
+CREATE TABLE task_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id      TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    project_id   TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    decision_key TEXT,
+    note         TEXT NOT NULL,
+    raw          TEXT NOT NULL,
+    ts           TEXT NOT NULL
+);
+CREATE INDEX task_events_by_task ON task_events (task_id, id);
+
+CREATE TABLE status_cursors (
+    task_id     TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    byte_offset INTEGER NOT NULL
+);
+"#;
+
+/// A task whose status log the projector tails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TailTarget {
+    pub task_id: String,
+    pub engine_id: String,
+    pub offset: u64,
+}
 
 /// Capacity of the live event channel. A subscriber that falls further behind
 /// than this catches up from the store instead.
@@ -540,6 +572,10 @@ impl Store {
 
             for et in &snapshot.tasks {
                 let now = now_rfc3339();
+                let worktree = et
+                    .worktree
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned());
                 match existing.get(&et.id) {
                     None => {
                         let task = Task {
@@ -556,8 +592,9 @@ impl Store {
                         };
                         tx.execute(
                             "INSERT INTO tasks (id, project_id, engine_id, title, kind, state,
-                                 state_note, harness, pull_request_url, created_at, updated_at)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                 state_note, harness, pull_request_url, created_at, updated_at,
+                                 worktree_path)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                             params![
                                 task.id,
                                 task.project_id,
@@ -569,7 +606,8 @@ impl Store {
                                 task.harness,
                                 task.pull_request_url,
                                 task.created_at,
-                                task.updated_at
+                                task.updated_at,
+                                worktree
                             ],
                         )?;
                         append_event(
@@ -587,6 +625,14 @@ impl Store {
                             || old.state_note != et.state_note
                             || old.harness != et.harness
                             || old.pull_request_url != et.pull_request_url;
+                        // The worktree is not part of the API's task, so a
+                        // move alone updates the row without an event.
+                        tx.execute(
+                            "UPDATE tasks SET worktree_path = ?3
+                             WHERE project_id = ?1 AND engine_id = ?2
+                               AND worktree_path IS NOT ?3",
+                            params![project_id, et.id, worktree],
+                        )?;
                         if !changed {
                             continue;
                         }
@@ -629,6 +675,134 @@ impl Store {
                 }
             }
             Ok(())
+        })
+    }
+
+    /// The task's working tree on this machine, if the engine reported one.
+    pub fn task_worktree(&self, id: &str) -> Result<Option<String>> {
+        self.read(|c| {
+            c.query_row("SELECT worktree_path FROM tasks WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .ok_or(StoreError::NotFound)
+        })
+    }
+
+    /// Every task of a Project with the offset its status log was read to.
+    pub fn tail_targets(&self, project_id: &str) -> Result<Vec<TailTarget>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT t.id, t.engine_id, COALESCE(s.byte_offset, 0)
+                 FROM tasks t LEFT JOIN status_cursors s ON s.task_id = t.id
+                 WHERE t.project_id = ?1 ORDER BY t.created_at, t.id",
+            )?;
+            let rows = stmt.query_map([project_id], |r| {
+                Ok(TailTarget {
+                    task_id: r.get(0)?,
+                    engine_id: r.get(1)?,
+                    offset: r.get::<_, i64>(2)? as u64,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    /// Records new status entries for a task and advances its cursor,
+    /// emitting one `task.event` per entry. `from` must be the offset the
+    /// entries were read from; a stale call (another refresh already moved the
+    /// cursor) is dropped so entries are never recorded twice.
+    pub fn apply_status(
+        &self,
+        task_id: &str,
+        from: u64,
+        entries: &[StatusEntry],
+        next_offset: u64,
+    ) -> Result<()> {
+        self.write(|tx, events| {
+            let (project_id, current): (String, Option<i64>) = tx
+                .query_row(
+                    "SELECT t.project_id, s.byte_offset
+                     FROM tasks t LEFT JOIN status_cursors s ON s.task_id = t.id
+                     WHERE t.id = ?1",
+                    [task_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?
+                .ok_or(StoreError::NotFound)?;
+            if current.unwrap_or(0) as u64 != from {
+                return Ok(());
+            }
+            for entry in entries {
+                let ts = now_rfc3339();
+                tx.execute(
+                    "INSERT INTO task_events (task_id, project_id, kind, decision_key, note, raw, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        task_id,
+                        project_id,
+                        entry.kind,
+                        entry.decision_key,
+                        entry.note,
+                        entry.raw,
+                        ts
+                    ],
+                )?;
+                let event = TaskEvent {
+                    id: tx.last_insert_rowid(),
+                    task_id: task_id.to_string(),
+                    project_id: project_id.clone(),
+                    kind: entry.kind.clone(),
+                    decision_key: entry.decision_key.clone(),
+                    note: entry.note.clone(),
+                    ts,
+                };
+                append_event(
+                    tx,
+                    events,
+                    Some(&project_id),
+                    EventType::TaskEvent,
+                    serde_json::to_value(&event)?,
+                )?;
+            }
+            if current.map(|c| c as u64) != Some(next_offset) {
+                tx.execute(
+                    "INSERT INTO status_cursors (task_id, byte_offset) VALUES (?1, ?2)
+                     ON CONFLICT (task_id) DO UPDATE SET byte_offset = excluded.byte_offset",
+                    params![task_id, next_offset as i64],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    /// A task's activity log, oldest first, entries with `id > after`.
+    pub fn list_task_events(
+        &self,
+        task_id: &str,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<TaskEvent>> {
+        self.read(|c| {
+            c.query_row("SELECT 1 FROM tasks WHERE id = ?1", [task_id], |_| Ok(()))
+                .optional()?
+                .ok_or(StoreError::NotFound)?;
+            let mut stmt = c.prepare(
+                "SELECT id, task_id, project_id, kind, decision_key, note, ts FROM task_events
+                 WHERE task_id = ?1 AND id > ?2 ORDER BY id LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![task_id, after, limit], |r| {
+                Ok(TaskEvent {
+                    id: r.get(0)?,
+                    task_id: r.get(1)?,
+                    project_id: r.get(2)?,
+                    kind: r.get(3)?,
+                    decision_key: r.get(4)?,
+                    note: r.get(5)?,
+                    ts: r.get(6)?,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
         })
     }
 
@@ -1041,6 +1215,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 5)?;
         tx.commit()?;
     }
+    if version < 6 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V6)?;
+        tx.pragma_update(None, "user_version", 6)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1236,6 +1416,62 @@ mod tests {
             worktree: None,
             terminal: None,
         }
+    }
+
+    fn entry(kind: &str, note: &str) -> StatusEntry {
+        StatusEntry {
+            kind: kind.into(),
+            decision_key: Some("default".into()),
+            note: note.into(),
+            raw: format!("{kind}: {note}"),
+        }
+    }
+
+    #[test]
+    fn status_entries_project_once_and_resume() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        let mut et = engine_task("a", TaskState::Running);
+        et.worktree = Some("/wt/a".into());
+        store
+            .apply_snapshot(&p.id, &FleetSnapshot { tasks: vec![et] })
+            .unwrap();
+        let targets = store.tail_targets(&p.id).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].offset, 0);
+        let task_id = targets[0].task_id.clone();
+        assert_eq!(
+            store.task_worktree(&task_id).unwrap().as_deref(),
+            Some("/wt/a")
+        );
+
+        let entries = [entry("working", "a"), entry("done", "b")];
+        store.apply_status(&task_id, 0, &entries, 20).unwrap();
+        // A second refresh that read from the old offset is dropped.
+        store.apply_status(&task_id, 0, &entries, 20).unwrap();
+        assert_eq!(store.tail_targets(&p.id).unwrap()[0].offset, 20);
+
+        let log = store.list_task_events(&task_id, 0, 100).unwrap();
+        assert_eq!(
+            log.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+            ["working", "done"]
+        );
+        let page = store.list_task_events(&task_id, log[0].id, 100).unwrap();
+        assert_eq!(page.len(), 1);
+
+        let streamed: Vec<_> = store
+            .events_after(0, 100)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.event_type == EventType::TaskEvent)
+            .collect();
+        assert_eq!(streamed.len(), 2);
+        assert_eq!(streamed[1].payload["note"], "b");
+        assert_eq!(streamed[1].payload["task_id"], task_id.as_str());
+        assert!(matches!(
+            store.list_task_events("tsk_missing", 0, 10),
+            Err(StoreError::NotFound)
+        ));
     }
 
     fn project(store: &Store) -> Project {

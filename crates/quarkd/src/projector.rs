@@ -1,18 +1,29 @@
 //! Pulls engine state through the adapter and projects it into the store.
+//!
+//! Each refresh of a workspace reads its snapshot (the board), tails every
+//! task's status log (task activity) and reads its holds (decisions). Refreshes
+//! run on a timer and, when the adapter names directories to watch, as soon as
+//! a task file changes there, so the board moves while a worker reports.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use quark_transcript::{SessionFormat, SessionRoots};
+use tokio::sync::mpsc;
 
 use crate::sessions::{Sessions, TaskTarget};
 
-use crate::engine::{EngineAdapter, EngineTask, WorkspaceRef};
+use crate::engine::{EngineAdapter, EngineError, EngineTask, WorkspaceRef};
 
 use crate::store::{Store, TranscriptSource};
 use crate::transcripts::TranscriptTap;
+
+/// How long to wait after a file change for the rest of a burst (an atomic
+/// rename, several status lines) before refreshing.
+const DEBOUNCE: Duration = Duration::from_millis(250);
 
 pub struct Projector {
     store: Arc<Store>,
@@ -58,9 +69,10 @@ impl Projector {
         self
     }
 
-    /// Refreshes every Project that has a workspace attached. Adapter failures
-    /// are recorded and logged per Project, never retried silently.
-    pub async fn refresh_all(&self) -> anyhow::Result<()> {
+    /// Refreshes every Project that has a workspace attached and returns those
+    /// workspaces. Adapter failures are recorded and logged per Project, never
+    /// retried silently.
+    pub async fn refresh_all(&self) -> anyhow::Result<Vec<WorkspaceRef>> {
         let store = self.store.clone();
         let projects = tokio::task::spawn_blocking(move || store.list_projects()).await??;
         let ids: Vec<_> = projects
@@ -69,6 +81,7 @@ impl Projector {
             .map(|p| p.id.clone())
             .collect();
         self.sync_coordinators(&ids).await;
+        let mut workspaces = Vec::new();
         for project in projects {
             let Some(path) = project.workspace_path else {
                 continue;
@@ -78,11 +91,13 @@ impl Projector {
                 root: PathBuf::from(path),
             };
             self.refresh(&ws).await;
+            workspaces.push(ws);
         }
-        Ok(())
+        Ok(workspaces)
     }
 
-    async fn refresh(&self, ws: &WorkspaceRef) {
+    /// Refreshes one workspace: board, task activity, then decisions.
+    pub async fn refresh(&self, ws: &WorkspaceRef) {
         let started = Instant::now();
         let snapshot = self.engine.snapshot(ws).await;
         self.record(ws, "snapshot", started, snapshot.as_ref().err())
@@ -104,6 +119,8 @@ impl Projector {
             self.sync_sessions(ws, terminals).await;
         }
         self.tap_transcripts(ws, tasks).await;
+
+        self.tail_statuses(ws).await;
 
         let started = Instant::now();
         let holds = self.engine.holds(ws).await;
@@ -231,12 +248,56 @@ impl Projector {
         }
     }
 
+    /// Reads every task's status log from its stored cursor. One adapter-call
+    /// record covers the pass and carries the first failure.
+    async fn tail_statuses(&self, ws: &WorkspaceRef) {
+        let store = self.store.clone();
+        let project_id = ws.project_id.clone();
+        let targets =
+            match tokio::task::spawn_blocking(move || store.tail_targets(&project_id)).await {
+                Ok(Ok(t)) => t,
+                res => {
+                    log_apply(ws, "status", res.map(|r| r.map(|_| ())));
+                    return;
+                }
+            };
+
+        let started = Instant::now();
+        let mut first_err = None;
+        for target in targets {
+            match self
+                .engine
+                .status_tail(ws, &target.engine_id, target.offset)
+                .await
+            {
+                Ok(tail) if tail.entries.is_empty() && tail.next_offset == target.offset => {}
+                Ok(tail) => {
+                    let store = self.store.clone();
+                    let res = tokio::task::spawn_blocking(move || {
+                        store.apply_status(
+                            &target.task_id,
+                            target.offset,
+                            &tail.entries,
+                            tail.next_offset,
+                        )
+                    })
+                    .await;
+                    log_apply(ws, "status", res);
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        self.record(ws, "status", started, first_err.as_ref()).await;
+    }
+
     async fn record(
         &self,
         ws: &WorkspaceRef,
         operation: &'static str,
         started: Instant,
-        err: Option<&crate::engine::EngineError>,
+        err: Option<&EngineError>,
     ) {
         let elapsed = started.elapsed().as_millis() as u64;
         let detail = err.map(|e| e.to_string());
@@ -262,16 +323,107 @@ impl Projector {
         }
     }
 
-    /// Refreshes on start and then every `interval` until the task is dropped.
+    /// Refreshes on start, every `interval`, and shortly after a task file
+    /// changes in a watched workspace, until the task is dropped.
     pub async fn run(self, interval: Duration) {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut watches = Watches::new(self.engine.clone(), tx);
+        let mut workspaces: HashMap<String, WorkspaceRef> = HashMap::new();
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            ticker.tick().await;
-            if let Err(e) = self.refresh_all().await {
-                tracing::error!(error = %e, "projection refresh failed");
+            tokio::select! {
+                _ = ticker.tick() => match self.refresh_all().await {
+                    Ok(list) => {
+                        watches.sync(&list);
+                        workspaces = list.into_iter().map(|ws| (ws.project_id.clone(), ws)).collect();
+                    }
+                    Err(e) => tracing::error!(error = %e, "projection refresh failed"),
+                },
+                Some(project_id) = rx.recv() => {
+                    tokio::time::sleep(DEBOUNCE).await;
+                    let mut due = HashSet::from([project_id]);
+                    while let Ok(p) = rx.try_recv() {
+                        due.insert(p);
+                    }
+                    for ws in due.iter().filter_map(|p| workspaces.get(p)) {
+                        self.refresh(ws).await;
+                    }
+                }
             }
         }
+    }
+}
+
+/// Filesystem watchers, one per workspace, that send the Project id when a
+/// task file changes.
+struct Watches {
+    engine: Arc<dyn EngineAdapter>,
+    tx: mpsc::UnboundedSender<String>,
+    by_project: HashMap<String, (Vec<PathBuf>, RecommendedWatcher)>,
+}
+
+impl Watches {
+    fn new(engine: Arc<dyn EngineAdapter>, tx: mpsc::UnboundedSender<String>) -> Self {
+        Self {
+            engine,
+            tx,
+            by_project: HashMap::new(),
+        }
+    }
+
+    /// Watches exactly `workspaces`. A workspace whose directories cannot all
+    /// be watched yet (not created, say) is retried on the next sync and
+    /// meanwhile refreshed by the timer alone.
+    fn sync(&mut self, workspaces: &[WorkspaceRef]) {
+        let mut keep = HashSet::new();
+        for ws in workspaces {
+            keep.insert(ws.project_id.clone());
+            let dirs = self.engine.watch_dirs(ws);
+            if dirs.is_empty() {
+                self.by_project.remove(&ws.project_id);
+                continue;
+            }
+            if self
+                .by_project
+                .get(&ws.project_id)
+                .is_some_and(|(watched, _)| *watched == dirs)
+            {
+                continue;
+            }
+            self.by_project.remove(&ws.project_id);
+            match self.watch(ws, &dirs) {
+                Ok(w) => {
+                    self.by_project.insert(ws.project_id.clone(), (dirs, w));
+                }
+                Err(e) => {
+                    tracing::debug!(project = %ws.project_id, error = %e, "workspace not watched yet")
+                }
+            }
+        }
+        self.by_project.retain(|p, _| keep.contains(p));
+    }
+
+    fn watch(&self, ws: &WorkspaceRef, dirs: &[PathBuf]) -> notify::Result<RecommendedWatcher> {
+        let engine = self.engine.clone();
+        let tx = self.tx.clone();
+        let project_id = ws.project_id.clone();
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                let Ok(event) = res else {
+                    return;
+                };
+                if matches!(event.kind, EventKind::Access(_)) {
+                    return;
+                }
+                if event.paths.iter().any(|p| engine.is_task_change(p)) {
+                    let _ = tx.send(project_id.clone());
+                }
+            })?;
+        for dir in dirs {
+            watcher.watch(dir, RecursiveMode::NonRecursive)?;
+        }
+        Ok(watcher)
     }
 }
 

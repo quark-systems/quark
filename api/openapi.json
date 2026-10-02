@@ -648,6 +648,180 @@
         }
       }
     },
+    "/v1/tasks/{id}/changes": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Files the task changed: its working tree, including uncommitted and\nuntracked work, against where it branched from the default branch.",
+        "operationId": "get_task_changes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskChanges"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The task has no readable working tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tasks/{id}/diff": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Unified diff of the task's changes, or of one changed file.",
+        "operationId": "get_task_diff",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "One changed file, as listed by `/changes`; absent for the whole task.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDiff"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown task, or a path the task did not change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The task has no readable working tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tasks/{id}/events": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "A task's activity log, oldest first. Live entries arrive on the event\nstream as `task.event`.",
+        "operationId": "list_task_events",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Only entries with a greater `id`; 0 or absent starts from the oldest.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many entries (default 200, max 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskEvent"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}/messages": {
       "post": {
         "tags": [
@@ -1198,6 +1372,46 @@
           "unknown"
         ]
       },
+      "ChangedFile": {
+        "type": "object",
+        "required": [
+          "path",
+          "status"
+        ],
+        "properties": {
+          "additions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Added lines; absent for binary files.",
+            "minimum": 0
+          },
+          "deletions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Removed lines; absent for binary files.",
+            "minimum": 0
+          },
+          "old_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Previous path of a renamed or copied file."
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FileChangeStatus"
+          }
+        }
+      },
       "ConfigIssue": {
         "type": "object",
         "description": "One problem with an agent config.",
@@ -1464,11 +1678,12 @@
       },
       "EventType": {
         "type": "string",
-        "description": "Every event type the stream can carry. Phase 0 emits the project, task and\ndecision events; the rest are reserved so clients can be generated now.",
+        "description": "Every event type the stream can carry. The daemon emits the project, task\nand decision events; the rest are reserved so clients can be generated now.",
         "enum": [
           "project.updated",
           "task.created",
           "task.state_changed",
+          "task.event",
           "coordinator.message",
           "worker.transcript",
           "worker.output",
@@ -1479,6 +1694,19 @@
           "review.updated",
           "dispatch.recorded",
           "account.quota_changed"
+        ]
+      },
+      "FileChangeStatus": {
+        "type": "string",
+        "description": "How a file differs between a task's base and its working tree.",
+        "enum": [
+          "added",
+          "modified",
+          "deleted",
+          "renamed",
+          "copied",
+          "type_changed",
+          "untracked"
         ]
       },
       "HarnessAuth": {
@@ -1891,6 +2119,115 @@
           },
           "updated_at": {
             "type": "string"
+          }
+        }
+      },
+      "TaskChanges": {
+        "type": "object",
+        "description": "Files a task changed: its working tree, including uncommitted and\nuntracked work, compared with where it branched from the default branch.",
+        "required": [
+          "task_id",
+          "base_ref",
+          "base",
+          "head",
+          "files"
+        ],
+        "properties": {
+          "base": {
+            "type": "string",
+            "description": "Commit the task branched from (merge base with `base_ref`)."
+          },
+          "base_ref": {
+            "type": "string",
+            "description": "The default-branch ref the task is compared against, e.g. `origin/main`."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedFile"
+            }
+          },
+          "head": {
+            "type": "string",
+            "description": "Commit checked out in the task's working tree."
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskDiff": {
+        "type": "object",
+        "description": "A unified diff for a whole task or one of its files.",
+        "required": [
+          "task_id",
+          "base",
+          "patch",
+          "truncated"
+        ],
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "patch": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file this diff covers; absent for the whole task."
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when `patch` was cut at the size limit."
+          }
+        }
+      },
+      "TaskEvent": {
+        "type": "object",
+        "description": "One entry of a task's activity log: something the worker or the engine\nreported about the task. History, not current state; the task's `state`\nis the reconciled truth.",
+        "required": [
+          "id",
+          "task_id",
+          "project_id",
+          "kind",
+          "note",
+          "ts"
+        ],
+        "properties": {
+          "decision_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The decision this entry opens or closes, when it names one."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic per daemon; pass the last one seen as `after` to page."
+          },
+          "kind": {
+            "type": "string",
+            "description": "What was reported, e.g. `working`, `needs-decision`, `done`."
+          },
+          "note": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string",
+            "description": "When the daemon read the entry (RFC 3339 UTC)."
           }
         }
       },

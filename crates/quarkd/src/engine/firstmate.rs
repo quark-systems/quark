@@ -16,8 +16,8 @@ use quark_engine::write::{self, DeliveryMode, WriteOp};
 use quark_engine::{EngineReader, EngineWriter, Error, Workspace};
 
 use super::{
-    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, SourceRepo, StatusTail,
-    TaskControl, WorkspacePlan, WorkspaceRef,
+    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, SourceRepo, StatusEntry,
+    StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
 };
 
 /// Reads firstmate homes with scripts from one pinned engine checkout.
@@ -108,7 +108,15 @@ impl EngineAdapter for FirstmateEngine {
             let mut tail = FmTail::resume(path, offset);
             let lines = tail.read_new()?;
             Ok(StatusTail {
-                lines: lines.into_iter().map(|l| l.event.raw).collect(),
+                entries: lines
+                    .into_iter()
+                    .map(|l| StatusEntry {
+                        decision_key: l.event.key.fold_key().map(str::to_string),
+                        kind: l.event.verb,
+                        note: l.event.note,
+                        raw: l.event.raw,
+                    })
+                    .collect(),
                 next_offset: tail.offset(),
             })
         })
@@ -156,6 +164,16 @@ impl EngineAdapter for FirstmateEngine {
             },
         };
         self.write(ws, op).await
+    }
+
+    /// `state/` holds task records and status logs; `data/` holds the backlog
+    /// that queued tasks come from.
+    fn watch_dirs(&self, ws: &WorkspaceRef) -> Vec<PathBuf> {
+        vec![ws.root.join("state"), ws.root.join("data")]
+    }
+
+    fn is_task_change(&self, path: &Path) -> bool {
+        is_task_file(path)
     }
 
     async fn add_source(
@@ -269,6 +287,19 @@ pub fn charter(plan: &WorkspacePlan) -> (String, String) {
         repos.join(", ")
     );
     (charter, scope)
+}
+
+/// Task records (`<id>.meta`), status logs (`<id>.status`) and the backlog.
+/// Dot-files are the engine's own bookkeeping (watcher beats, cursors, temp
+/// files before an atomic rename) and never mean a task changed by themselves.
+pub fn is_task_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name.starts_with('.') {
+        return false;
+    }
+    name == "backlog.md" || name.ends_with(".status") || name.ends_with(".meta")
 }
 
 /// Live tasks from metadata, plus queued backlog work that has not started.

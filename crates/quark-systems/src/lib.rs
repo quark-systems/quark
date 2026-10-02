@@ -253,6 +253,76 @@ pub struct RelaunchTask {
     pub note: Option<String>,
 }
 
+/// One entry of a task's activity log: something the worker or the engine
+/// reported about the task. History, not current state; the task's `state`
+/// is the reconciled truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TaskEvent {
+    /// Monotonic per daemon; pass the last one seen as `after` to page.
+    pub id: i64,
+    pub task_id: String,
+    pub project_id: String,
+    /// What was reported, e.g. `working`, `needs-decision`, `done`.
+    pub kind: String,
+    /// The decision this entry opens or closes, when it names one.
+    pub decision_key: Option<String>,
+    pub note: String,
+    /// When the daemon read the entry (RFC 3339 UTC).
+    pub ts: String,
+}
+
+/// How a file differs between a task's base and its working tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangeStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    TypeChanged,
+    /// New and not yet added to version control.
+    Untracked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ChangedFile {
+    pub path: String,
+    /// Previous path of a renamed or copied file.
+    pub old_path: Option<String>,
+    pub status: FileChangeStatus,
+    /// Added lines; absent for binary files.
+    pub additions: Option<u64>,
+    /// Removed lines; absent for binary files.
+    pub deletions: Option<u64>,
+}
+
+/// Files a task changed: its working tree, including uncommitted and
+/// untracked work, compared with where it branched from the default branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TaskChanges {
+    pub task_id: String,
+    /// The default-branch ref the task is compared against, e.g. `origin/main`.
+    pub base_ref: String,
+    /// Commit the task branched from (merge base with `base_ref`).
+    pub base: String,
+    /// Commit checked out in the task's working tree.
+    pub head: String,
+    pub files: Vec<ChangedFile>,
+}
+
+/// A unified diff for a whole task or one of its files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TaskDiff {
+    pub task_id: String,
+    pub base: String,
+    /// The file this diff covers; absent for the whole task.
+    pub path: Option<String>,
+    pub patch: String,
+    /// True when `patch` was cut at the size limit.
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionState {
@@ -587,8 +657,8 @@ pub struct HarnessInfo {
     pub account_env: Option<String>,
 }
 
-/// Every event type the stream can carry. Phase 0 emits the project, task and
-/// decision events; the rest are reserved so clients can be generated now.
+/// Every event type the stream can carry. The daemon emits the project, task
+/// and decision events; the rest are reserved so clients can be generated now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 pub enum EventType {
     #[serde(rename = "project.updated")]
@@ -597,6 +667,9 @@ pub enum EventType {
     TaskCreated,
     #[serde(rename = "task.state_changed")]
     TaskStateChanged,
+    /// A new entry in a task's activity log; payload is a [`TaskEvent`].
+    #[serde(rename = "task.event")]
+    TaskEvent,
     #[serde(rename = "coordinator.message")]
     CoordinatorMessage,
     #[serde(rename = "worker.transcript")]
@@ -620,10 +693,11 @@ pub enum EventType {
 }
 
 impl EventType {
-    pub const ALL: [EventType; 13] = [
+    pub const ALL: [EventType; 14] = [
         EventType::ProjectUpdated,
         EventType::TaskCreated,
         EventType::TaskStateChanged,
+        EventType::TaskEvent,
         EventType::CoordinatorMessage,
         EventType::WorkerTranscript,
         EventType::WorkerOutput,
@@ -641,6 +715,7 @@ impl EventType {
             EventType::ProjectUpdated => "project.updated",
             EventType::TaskCreated => "task.created",
             EventType::TaskStateChanged => "task.state_changed",
+            EventType::TaskEvent => "task.event",
             EventType::CoordinatorMessage => "coordinator.message",
             EventType::WorkerTranscript => "worker.transcript",
             EventType::WorkerOutput => "worker.output",
