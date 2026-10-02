@@ -4,6 +4,8 @@
 //! on-disk state into typed values and never writes engine files itself:
 //!
 //! - [`snapshot`]: `fm-fleet-snapshot.sh --json` (schema `fm-fleet-snapshot.v1`).
+//! - [`meta`]: the spawn fields of `state/<id>.meta` (harness, model, effort).
+//! - [`dispatch`]: `fm-dispatch-resolve.sh` output for a task's brief.
 //! - [`status`]: `state/<id>.status` wake-event lines and an incremental tail.
 //! - [`holds`]: captain holds and open decisions derived from a snapshot.
 //! - [`pr`]: `state/<id>.pr-poll` sidecars and merge-notified markers.
@@ -18,9 +20,11 @@
 //! Status lines are wake-event history, not current state. Current task state
 //! comes from the snapshot's `current_state`, which the engine reconciles.
 
+pub mod dispatch;
 mod error;
 pub mod gates;
 pub mod holds;
+pub mod meta;
 pub mod pr;
 pub mod runner;
 pub mod snapshot;
@@ -64,6 +68,31 @@ impl EngineReader {
     pub fn fleet_snapshot(&self) -> Result<snapshot::FleetSnapshot> {
         let out = self.runner.run(runner::FLEET_SNAPSHOT, &["--json"])?;
         snapshot::parse(&out)
+    }
+
+    /// Which agent a task's current worker was started with, if it has been
+    /// spawned.
+    pub fn spawn_meta(&self, task_id: &str) -> Result<Option<meta::SpawnMeta>> {
+        meta::read(&self.workspace.meta_path(task_id)?)
+    }
+
+    /// Run the engine's dispatch resolution on a task's brief. A brief that
+    /// does not exist reads as `None`.
+    pub fn dispatch_resolve(
+        &self,
+        task_id: &str,
+        project: Option<&str>,
+    ) -> Result<Option<dispatch::Resolution>> {
+        if !self.workspace.brief_path(task_id)?.is_file() {
+            return Ok(None);
+        }
+        let out = self.runner.run_dispatch_resolve(task_id, project)?;
+        dispatch::parse(&String::from_utf8_lossy(&out))
+            .map(Some)
+            .ok_or_else(|| Error::Malformed {
+                what: "dispatch resolution",
+                detail: "no status line".into(),
+            })
     }
 
     /// Read the published `state/home-summary.json`, if this home has one.

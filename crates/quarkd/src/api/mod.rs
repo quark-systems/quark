@@ -72,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/terminals/{id}/snapshot", post(terminals::snapshot))
         .route("/v1/tasks/{id}/transcript", get(routes::task_transcript))
         .route("/v1/tasks/{id}/events", get(routes::list_task_events))
+        .route("/v1/tasks/{id}/dispatch", get(routes::list_task_dispatch))
         .route("/v1/tasks/{id}/changes", get(routes::get_task_changes))
         .route("/v1/tasks/{id}/diff", get(routes::get_task_diff))
         .route("/v1/decisions", get(routes::list_decisions))

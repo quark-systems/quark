@@ -6,10 +6,16 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use futures_util::StreamExt;
 use http_body_util::BodyExt;
-use quark_systems::{Event, EventType, TaskKind, TaskState};
+use quark_systems::{
+    DispatchCandidate, DispatchChoice, DispatchRule, DispatchStatus, Event, EventType, TaskKind,
+    TaskState,
+};
 use quarkd::api::{self, ApiDoc, AppState};
 use quarkd::chat::RecordingInput;
-use quarkd::engine::{EngineTask, FleetSnapshot, Hold, StubEngine, StubWrite, TaskControl};
+use quarkd::engine::{
+    EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold, StubEngine, StubWrite,
+    TaskControl,
+};
 use quarkd::harness::{HarnessRegistry, HostEnv};
 use quarkd::projector::Projector;
 use quarkd::provision::Layout;
@@ -232,6 +238,177 @@ async fn project_with_task(h: &Harness, workspace_path: Option<&str>) -> String 
     let pid = tasks[0]["id"].as_str().unwrap();
     let (_, tasks) = call(&h.app, "GET", &format!("/v1/projects/{pid}/tasks"), None).await;
     tasks[0]["id"].as_str().unwrap().to_string()
+}
+
+fn spawn_now(generation: &str, harness: &str, model: Option<&str>) -> EngineSpawn {
+    EngineSpawn {
+        generation: generation.into(),
+        harness: harness.into(),
+        model: model.map(str::to_string),
+        effort: Some("high".into()),
+        spawned_at: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
+        project: Some("quark".into()),
+    }
+}
+
+#[tokio::test]
+async fn each_spawn_records_why_this_agent() {
+    let h = harness().await;
+    let mut live = connect(h.addr, "").await;
+    h.engine
+        .set_spawn("fix-login", spawn_now("s1", "claude", Some("sonnet")));
+    h.engine.set_resolution(
+        "fix-login",
+        Ok(EngineResolution {
+            status: DispatchStatus::Clear,
+            rule: Some(DispatchRule {
+                id: "rule_1".into(),
+                when: Some("A trivial mechanical edit.".into()),
+            }),
+            reason: None,
+            notes: vec!["rule matched".into()],
+            candidates: vec![
+                DispatchCandidate {
+                    harness: "claude".into(),
+                    model: Some("sonnet".into()),
+                    passed: true,
+                    reason: "eligible".into(),
+                    evidence: Some("provider=claude remaining=79%".into()),
+                },
+                DispatchCandidate {
+                    harness: "codex".into(),
+                    model: Some("gpt-5.6-luna".into()),
+                    passed: false,
+                    reason: "0% remaining at all_models".into(),
+                    evidence: None,
+                },
+            ],
+            profile: Some(DispatchChoice {
+                harness: "claude".into(),
+                model: Some("sonnet".into()),
+                effort: Some("high".into()),
+                account: None,
+            }),
+            classifier_consulted: true,
+            classifier_model: Some("jev-1.13.0".into()),
+            confidence: Some(0.93),
+            output: Some("dispatch-resolve:\n  status: clear".into()),
+        }),
+    );
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+
+    let e = next_event(&mut live).await;
+    assert_eq!(e.event_type, EventType::ProjectUpdated);
+    assert_eq!(
+        next_event(&mut live).await.event_type,
+        EventType::TaskCreated
+    );
+    let e = next_event(&mut live).await;
+    assert_eq!(e.event_type, EventType::DispatchRecorded);
+    assert_eq!(e.payload["task_id"], tid.as_str());
+    assert_eq!(e.payload["decided_by"], "classifier");
+    assert_eq!(e.payload["rule"]["id"], "rule_1");
+    assert_eq!(e.payload["classifier"]["provider"], "system1");
+    assert_eq!(e.payload["classifier"]["confidence"], 0.93);
+    assert_eq!(e.payload["chosen"]["harness"], "claude");
+    assert_eq!(e.payload["chosen"]["effort"], "high");
+    assert_eq!(e.payload["chosen"]["account"], Value::Null);
+    assert_eq!(e.payload["candidates"][1]["passed"], false);
+    assert_eq!(
+        e.payload["candidates"][1]["reason"],
+        "0% remaining at all_models"
+    );
+
+    // The same spawn is recorded once, and the resolution ran once.
+    h.projector.refresh_all().await.unwrap();
+    assert_quiet(&mut live).await;
+    assert_eq!(h.engine.resolved(), ["fix-login"]);
+
+    let (status, records) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/dispatch"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(records.as_array().unwrap().len(), 1);
+    assert_eq!(records[0], e.payload);
+
+    // A relaunch is a new spawn: recorded without running the resolution.
+    h.engine
+        .set_spawn("fix-login", spawn_now("s2", "codex", None));
+    h.projector.refresh_all().await.unwrap();
+    let e = next_event(&mut live).await;
+    assert_eq!(e.event_type, EventType::DispatchRecorded);
+    assert_eq!(e.payload["trigger"], "relaunch");
+    assert_eq!(e.payload["decided_by"], "relaunch");
+    assert_eq!(e.payload["resolution"]["status"], "not_consulted");
+    assert_eq!(e.payload["classifier"]["provider"], "none");
+    assert_eq!(h.engine.resolved(), ["fix-login"]);
+
+    // Records outlive the task: gone from the engine, still served.
+    h.engine.set_snapshot(FleetSnapshot { tasks: vec![] });
+    h.projector.refresh_all().await.unwrap();
+    let (_, records) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/dispatch"), None).await;
+    assert_eq!(records.as_array().unwrap().len(), 2);
+    assert_eq!(records[0]["trigger"], "spawn");
+    assert_eq!(records[1]["chosen"]["harness"], "codex");
+
+    let (status, body) = call(&h.app, "GET", "/v1/tasks/tsk_nope/dispatch", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn without_a_classifier_the_coordinator_picked() {
+    let h = harness().await;
+    h.engine
+        .set_spawn("fix-login", spawn_now("s1", "claude", None));
+    h.engine.set_resolution(
+        "fix-login",
+        Ok(EngineResolution {
+            status: DispatchStatus::Off,
+            rule: None,
+            reason: None,
+            notes: vec![],
+            candidates: vec![],
+            profile: None,
+            classifier_consulted: false,
+            classifier_model: None,
+            confidence: None,
+            output: None,
+        }),
+    );
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+    let (_, records) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/dispatch"), None).await;
+    let r = &records[0];
+    assert_eq!(r["decided_by"], "coordinator");
+    assert_eq!(r["resolution"]["status"], "off");
+    assert_eq!(r["classifier"]["provider"], "none");
+    assert_eq!(r["classifier"]["model"], Value::Null);
+    assert_eq!(r["classifier"]["confidence"], Value::Null);
+    assert!(r["summary"]
+        .as_str()
+        .unwrap()
+        .contains("coordinator picked claude"));
+
+    // A worker older than the freshness window is recorded without resolving.
+    let h = harness().await;
+    let mut old = spawn_now("s1", "claude", None);
+    old.spawned_at = Some(old.spawned_at.unwrap() - 3600);
+    h.engine.set_spawn("fix-login", old);
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+    let (_, records) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/dispatch"), None).await;
+    assert_eq!(records[0]["resolution"]["status"], "not_consulted");
+    assert!(h.engine.resolved().is_empty());
+
+    // A failing resolution is recorded as an error, not retried.
+    let h = harness().await;
+    h.engine
+        .set_spawn("fix-login", spawn_now("s1", "claude", None));
+    h.engine
+        .set_resolution("fix-login", Err("quota-axi --json failed".into()));
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+    h.projector.refresh_all().await.unwrap();
+    let (_, records) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/dispatch"), None).await;
+    assert_eq!(records.as_array().unwrap().len(), 1);
+    assert_eq!(records[0]["resolution"]["status"], "error");
+    assert_eq!(h.engine.resolved().len(), 1);
 }
 
 #[tokio::test]

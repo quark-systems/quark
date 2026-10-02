@@ -8,10 +8,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use quark_engine::gates;
 use quark_systems::{
-    AgentConfig, ArtifactKind, DeliveryPolicy, Evidence, EvidenceArtifact, Gate, GateCase,
-    GateKind, GateState, MergeMethod, TaskKind, TaskState,
+    AgentConfig, ArtifactKind, DeliveryPolicy, DispatchCandidate, DispatchChoice, DispatchRule,
+    DispatchStatus, Evidence, EvidenceArtifact, Gate, GateCase, GateKind, GateState, MergeMethod,
+    TaskKind, TaskState,
 };
 
+use quark_engine::dispatch::Resolution;
 use quark_engine::holds::decisions;
 use quark_engine::runner::CallLog;
 use quark_engine::snapshot::{BacklogState, FleetSnapshot as FmSnapshot, Task};
@@ -20,9 +22,13 @@ use quark_engine::write::{self, DeliveryMode, WriteOp};
 use quark_engine::{EngineReader, EngineWriter, Error, Workspace};
 
 use super::{
-    EngineAdapter, EngineError, EngineTask, FleetSnapshot, Hold, SourceRepo, StatusEntry,
-    StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
+    EngineAdapter, EngineError, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold,
+    SourceRepo, StatusEntry, StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
 };
+
+/// Bound on one dispatch resolution: the classifier request, one quota
+/// snapshot and any local quota reading.
+const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Reads firstmate homes with scripts from one pinned engine checkout.
 /// `WorkspaceRef::root` is the home (`FM_HOME`).
@@ -185,6 +191,43 @@ impl EngineAdapter for FirstmateEngine {
         let res = self.write(ws, op).await;
         drop(file);
         res
+    }
+
+    /// Read from the task's metadata record. Secondmates are workspaces,
+    /// not workers, so they have no spawn here.
+    async fn spawn(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<Option<EngineSpawn>, EngineError> {
+        let reader = self.reader(ws)?;
+        let task = task_id.to_string();
+        let meta = blocking(move || reader.spawn_meta(&task)).await?;
+        Ok(meta
+            .filter(|m| m.kind.as_deref() != Some("secondmate"))
+            .map(|m| EngineSpawn {
+                spawned_at: m.spawned_at(),
+                project: m.project_name().map(str::to_string),
+                generation: m.generation,
+                harness: m.harness,
+                model: m.model,
+                effort: m.effort,
+            }))
+    }
+
+    /// `fm-dispatch-resolve.sh` on the task's brief, the resolution the
+    /// engine's own intake runs before a spawn.
+    async fn resolve_dispatch(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        project: Option<&str>,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        let reader = self.reader(ws)?.with_timeout(RESOLVE_TIMEOUT);
+        let task = task_id.to_string();
+        let project = project.map(str::to_string);
+        let r = blocking(move || reader.dispatch_resolve(&task, project.as_deref())).await?;
+        Ok(r.map(neutral_resolution))
     }
 
     async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
@@ -378,6 +421,53 @@ impl EngineAdapter for FirstmateEngine {
             root: command.to_path_buf(),
         };
         Ok(coordinator_targets(&self.read_snapshot(&ws).await?))
+    }
+}
+
+/// A dispatch resolution in neutral names. A status word the engine adds
+/// later reads as an error naming it, never as a clear result.
+pub fn neutral_resolution(r: Resolution) -> EngineResolution {
+    let classifier_consulted = r.classifier_consulted();
+    let (status, reason) = match r.status.as_str() {
+        "clear" => (DispatchStatus::Clear, r.reason),
+        "ambiguous" => (DispatchStatus::Ambiguous, r.reason),
+        "escalate" => (DispatchStatus::Escalate, r.reason),
+        "error" => (DispatchStatus::Error, r.reason),
+        "off" => (DispatchStatus::Off, r.reason),
+        other => (
+            DispatchStatus::Error,
+            Some(format!("unrecognized resolution status {other:?}")),
+        ),
+    };
+    EngineResolution {
+        status,
+        rule: r.rule.map(|id| DispatchRule {
+            id,
+            when: r.rule_when,
+        }),
+        reason,
+        notes: r.notes,
+        candidates: r
+            .candidates
+            .into_iter()
+            .map(|c| DispatchCandidate {
+                harness: c.harness,
+                model: c.model,
+                passed: c.eligible,
+                reason: c.reason,
+                evidence: c.evidence,
+            })
+            .collect(),
+        profile: r.profile.map(|p| DispatchChoice {
+            harness: p.harness,
+            model: p.model,
+            effort: p.effort,
+            account: None,
+        }),
+        classifier_consulted,
+        classifier_model: r.model,
+        confidence: r.confidence,
+        output: Some(r.raw).filter(|o| !o.is_empty()),
     }
 }
 
