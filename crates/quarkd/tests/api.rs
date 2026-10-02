@@ -9,6 +9,7 @@ use http_body_util::BodyExt;
 use quark_systems::{Event, EventType, TaskKind, TaskState};
 use quarkd::api::{self, ApiDoc, AppState};
 use quarkd::engine::{EngineTask, FleetSnapshot, Hold, StubEngine};
+use quarkd::harness::{HarnessRegistry, HostEnv};
 use quarkd::projector::Projector;
 use quarkd::store::Store;
 use serde_json::{json, Value};
@@ -29,6 +30,7 @@ async fn harness() -> Harness {
     let app = api::router(AppState {
         store: store.clone(),
         engine: engine.clone(),
+        harnesses: Arc::new(HarnessRegistry::new(Vec::new(), HostEnv::default())),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

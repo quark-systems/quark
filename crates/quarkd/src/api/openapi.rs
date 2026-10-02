@@ -1,7 +1,7 @@
 use axum::Json;
 use utoipa::OpenApi;
 
-use super::{events, routes};
+use super::{events, harnesses, routes};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -19,6 +19,8 @@ use super::{events, routes};
         routes::list_tasks,
         routes::get_task,
         routes::list_decisions,
+        harnesses::list,
+        harnesses::validate,
         events::stream,
     ),
     components(schemas(
@@ -33,6 +35,7 @@ use super::{events, routes};
         (name = "projects"),
         (name = "tasks"),
         (name = "decisions"),
+        (name = "harnesses"),
         (name = "events")
     )
 )]

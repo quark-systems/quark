@@ -7,6 +7,7 @@
 pub mod api;
 pub mod config;
 pub mod engine;
+pub mod harness;
 pub mod projector;
 pub mod store;
 
@@ -45,7 +46,11 @@ pub async fn serve(config: Config, engine: Arc<dyn EngineAdapter>) -> anyhow::Re
     let projector = Projector::new(store.clone(), engine.clone());
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
-    let app = api::router(AppState { store, engine });
+    let app = api::router(AppState {
+        store,
+        engine,
+        harnesses: Arc::new(harness::HarnessRegistry::builtin()),
+    });
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("binding {}", config.listen))?;

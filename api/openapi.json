@@ -77,6 +77,70 @@
         }
       }
     },
+    "/v1/harnesses": {
+      "get": {
+        "tags": [
+          "harnesses"
+        ],
+        "summary": "Every harness the daemon can run, with install state, accepted models\nand effort, and credential health for the default account.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "description": "Probe the executables again instead of using the recent result.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HarnessInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/harnesses:validate": {
+      "post": {
+        "tags": [
+          "harnesses"
+        ],
+        "summary": "Check an agent config before it is saved. Problems come back in the body\nwith `valid: false`, not as an error status, so a picker can show them.",
+        "operationId": "validate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateAgentConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConfigValidation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/health": {
       "get": {
         "tags": [
@@ -341,6 +405,104 @@
   },
   "components": {
     "schemas": {
+      "AgentConfig": {
+        "type": "object",
+        "description": "Which harness, model and effort runs an agent.",
+        "required": [
+          "harness"
+        ],
+        "properties": {
+          "effort": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Effort",
+                "description": "Absent means the harness default."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness": {
+            "type": "string",
+            "description": "Harness id from `GET /v1/harnesses`, e.g. `claude-code`."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model id as the harness names it; absent means the harness default."
+          }
+        }
+      },
+      "AgentConfigValidation": {
+        "type": "object",
+        "description": "The outcome of validating an agent config.",
+        "required": [
+          "valid",
+          "errors",
+          "warnings"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigIssue"
+            }
+          },
+          "valid": {
+            "type": "boolean",
+            "description": "True when there are no errors; warnings do not block."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigIssue"
+            },
+            "description": "Settings the harness will ignore, e.g. an effort it has no control for."
+          }
+        }
+      },
+      "AgentRole": {
+        "type": "string",
+        "description": "The role an agent plays in a Project.",
+        "enum": [
+          "coordinator",
+          "worker"
+        ]
+      },
+      "AuthState": {
+        "type": "string",
+        "description": "Login or key health for one account.",
+        "enum": [
+          "configured",
+          "not_configured",
+          "unknown"
+        ]
+      },
+      "ConfigIssue": {
+        "type": "object",
+        "description": "One problem with an agent config.",
+        "required": [
+          "field",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code, e.g. `unknown_harness`."
+          },
+          "field": {
+            "type": "string",
+            "description": "The config field the issue is about: `harness`, `model`, `effort` or `role`."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "CreateProject": {
         "type": "object",
         "required": [
@@ -423,6 +585,17 @@
           "answered"
         ]
       },
+      "Effort": {
+        "type": "string",
+        "description": "Reasoning effort, shared across harnesses. Each harness accepts a subset.",
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
       "ErrorBody": {
         "type": "object",
         "required": [
@@ -502,6 +675,148 @@
           "account.quota_changed"
         ]
       },
+      "HarnessAuth": {
+        "type": "object",
+        "required": [
+          "state",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "What was checked, e.g. the credential file or environment variable."
+          },
+          "state": {
+            "$ref": "#/components/schemas/AuthState"
+          }
+        }
+      },
+      "HarnessInfo": {
+        "type": "object",
+        "description": "A harness the daemon can run agents with.",
+        "required": [
+          "id",
+          "name",
+          "roles",
+          "install",
+          "models",
+          "efforts",
+          "auth",
+          "supervision",
+          "transcript"
+        ],
+        "properties": {
+          "account_env": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Environment variable that selects an account's config directory, when\nthe harness supports more than one account."
+          },
+          "auth": {
+            "$ref": "#/components/schemas/HarnessAuth",
+            "description": "Credential health for the default account."
+          },
+          "efforts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Effort"
+            },
+            "description": "Accepted effort levels; empty when the harness has no effort control."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable id used in agent configs and dispatch rules, e.g. `claude-code`."
+          },
+          "install": {
+            "$ref": "#/components/schemas/HarnessInstall"
+          },
+          "models": {
+            "$ref": "#/components/schemas/HarnessModels"
+          },
+          "name": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentRole"
+            }
+          },
+          "supervision": {
+            "$ref": "#/components/schemas/HarnessSupervision"
+          },
+          "transcript": {
+            "type": "boolean",
+            "description": "True when chat output can be read from the harness session log."
+          }
+        }
+      },
+      "HarnessInstall": {
+        "type": "object",
+        "description": "Whether a harness is installed on this machine.",
+        "required": [
+          "installed",
+          "install_hint"
+        ],
+        "properties": {
+          "install_hint": {
+            "type": "string",
+            "description": "How to install it, shown when it is missing."
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved executable path."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version string the harness reports, when it could be read."
+          }
+        }
+      },
+      "HarnessModels": {
+        "type": "object",
+        "required": [
+          "selection"
+        ],
+        "properties": {
+          "discovery": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to find the current model list for this harness and account."
+          },
+          "selection": {
+            "$ref": "#/components/schemas/ModelSelection"
+          }
+        }
+      },
+      "HarnessSupervision": {
+        "type": "object",
+        "required": [
+          "confidence",
+          "source"
+        ],
+        "properties": {
+          "confidence": {
+            "$ref": "#/components/schemas/SupervisionConfidence"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where busy and turn-end state come from."
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -527,6 +842,15 @@
             "type": "string"
           }
         }
+      },
+      "ModelSelection": {
+        "type": "string",
+        "description": "How a harness chooses its model.",
+        "enum": [
+          "free_form",
+          "provider_qualified",
+          "automatic"
+        ]
       },
       "Project": {
         "type": "object",
@@ -564,6 +888,14 @@
             "description": "Local path of the Project workspace, when one is attached."
           }
         }
+      },
+      "SupervisionConfidence": {
+        "type": "string",
+        "description": "How confidently the daemon can tell when an agent is busy or done.",
+        "enum": [
+          "high",
+          "low"
+        ]
       },
       "Task": {
         "type": "object",
@@ -671,6 +1003,29 @@
             ]
           }
         }
+      },
+      "ValidateAgentConfig": {
+        "type": "object",
+        "description": "Request body for `POST /v1/harnesses:validate`.",
+        "required": [
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "role": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentRole",
+                "description": "The role the config is for; absent checks it as a worker."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       }
     }
   },
@@ -686,6 +1041,9 @@
     },
     {
       "name": "decisions"
+    },
+    {
+      "name": "harnesses"
     },
     {
       "name": "events"

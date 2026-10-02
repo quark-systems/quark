@@ -2,13 +2,15 @@
 
 mod error;
 mod events;
+mod harnesses;
 mod openapi;
 mod routes;
 
 use std::sync::Arc;
 
 use crate::engine::EngineAdapter;
-use axum::routing::get;
+use crate::harness::HarnessRegistry;
+use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
@@ -21,6 +23,7 @@ pub use openapi::ApiDoc;
 pub struct AppState {
     pub store: Arc<Store>,
     pub engine: Arc<dyn EngineAdapter>,
+    pub harnesses: Arc<HarnessRegistry>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -38,6 +41,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
         .route("/v1/tasks/{id}", get(routes::get_task))
         .route("/v1/decisions", get(routes::list_decisions))
+        .route("/v1/harnesses", get(harnesses::list))
+        .route("/v1/harnesses:validate", post(harnesses::validate))
         .route("/v1/events", get(events::stream))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
