@@ -1,0 +1,206 @@
+diff --git a/crates/quarkd/src/events.rs b/crates/quarkd/src/events.rs
+index 5090224..84f03b9 100644
+--- a/crates/quarkd/src/events.rs
++++ b/crates/quarkd/src/events.rs
+@@ -1,20 +1,37 @@
+ //! Event fan-out for connected UI clients.
++//!
++//! Every event is appended to the bounded [`EventStore`] before it is
++//! broadcast, so a client that falls behind can always resynchronise from
++//! the store instead of stalling the publisher.
+ 
+ use std::sync::Arc;
+ 
+ use tokio::sync::{broadcast, Mutex};
++use tracing::{debug, warn};
+ 
+ use crate::store::EventStore;
+ use crate::types::Event;
+ 
+-/// Capacity of the live broadcast channel.
+-const CHANNEL_CAPACITY: usize = 1024;
++/// Capacity of the live broadcast channel. Slow receivers that fall more
++/// than this many events behind are lagged and must resync from the store.
++const CHANNEL_CAPACITY: usize = 4096;
+ 
+ pub struct EventBus {
+     store: Arc<Mutex<EventStore>>,
+     tx: broadcast::Sender<Arc<Event>>,
+ }
+ 
++/// What a subscriber should do after a receive attempt.
++#[derive(Debug)]
++pub enum Next {
++    /// A live event, in order.
++    Event(Arc<Event>),
++    /// The subscriber lagged; these events were recovered from the store.
++    Resync(Vec<Arc<Event>>),
++    /// The bus has shut down.
++    Closed,
++}
++
+ impl EventBus {
+     pub fn new(store: Arc<Mutex<EventStore>>) -> Self {
+         let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+@@ -22,13 +39,18 @@ impl EventBus {
+     }
+ 
+     /// Append an event to the store and publish it to every subscriber.
++    ///
++    /// The store lock is held across the send so that `seq` order in the
++    /// store and on the channel can never disagree.
+     pub async fn publish(&self, event: Event) {
+         let event = Arc::new(event);
+-        self.store.lock().await.append(event.clone());
+-        let _ = self.tx.send(event);
++        let mut store = self.store.lock().await;
++        store.append(event.clone());
++        if self.tx.send(event).is_err() {
++            debug!("no live subscribers");
++        }
+     }
+ 
+-    /// Subscribe to live events. Callers are expected to keep up.
+     pub fn subscribe(&self) -> broadcast::Receiver<Arc<Event>> {
+         self.tx.subscribe()
+     }
+@@ -36,6 +58,26 @@ impl EventBus {
+     pub async fn replay(&self, cursor: u64) -> Vec<Arc<Event>> {
+         self.store.lock().await.since(cursor)
+     }
++
++    /// Receive the next event for a subscriber whose last delivered event
++    /// was `last_seq`, transparently recovering from lag.
++    pub async fn next(
++        &self,
++        rx: &mut broadcast::Receiver<Arc<Event>>,
++        last_seq: u64,
++    ) -> Next {
++        loop {
++            match rx.recv().await {
++                Ok(ev) if ev.seq <= last_seq => continue,
++                Ok(ev) => return Next::Event(ev),
++                Err(broadcast::error::RecvError::Lagged(n)) => {
++                    warn!(skipped = n, last_seq, "subscriber lagged; resyncing");
++                    return Next::Resync(self.replay(last_seq).await);
++                }
++                Err(broadcast::error::RecvError::Closed) => return Next::Closed,
++            }
++        }
++    }
+ }
+ 
+ #[cfg(test)]
+@@ -49,4 +91,20 @@ mod tests {
+         bus.publish(Event::test(1)).await;
+         assert_eq!(rx.recv().await.unwrap().seq, 1);
+     }
++
++    #[tokio::test]
++    async fn lagged_subscriber_resyncs_from_store() {
++        let bus = EventBus::new(Default::default());
++        let mut rx = bus.subscribe();
++        for seq in 1..=(CHANNEL_CAPACITY as u64 + 10) {
++            bus.publish(Event::test(seq)).await;
++        }
++        match bus.next(&mut rx, 0).await {
++            Next::Resync(events) => {
++                assert_eq!(events.first().unwrap().seq, 1);
++                assert_eq!(events.len(), CHANNEL_CAPACITY + 10);
++            }
++            other => panic!("expected resync, got {other:?}"),
++        }
++    }
+ }
+diff --git a/docs/events.md b/docs/events.md
+index 80189d4..4a0962f 100644
+--- a/docs/events.md
++++ b/docs/events.md
+@@ -1,7 +1,25 @@
+ # Event stream
+ 
+-Clients connect to `/v1/events` and receive every event as it is published.
++Clients connect to `/v1/events?cursor=<seq>` and first receive every
++retained event with `seq > cursor`, then live events as they are published.
+ 
+ ## Ordering
+ 
+-Events carry a monotonically increasing `seq`.
++Events carry a strictly increasing `seq`. Clients should remember the last
++`seq` they processed and pass it as `cursor` when reconnecting.
++
++## Backpressure
++
++The daemon never blocks on a slow client:
++
++- Live delivery uses a bounded broadcast channel (4096 events).
++- A client that falls further behind is **lagged**: the daemon replays the
++  missed events from the store and continues live.
++- If the missed events have already aged out of the store, the client
++  receives what is retained and should refetch snapshots over REST.
++
++| Situation | Daemon behaviour |
++| --- | --- |
++| Client keeps up | Live events only |
++| Client lags | Resync from store, then live |
++| Store evicted gap | Partial replay; client refetches |
+diff --git a/ui/src/hooks/useEvents.ts b/ui/src/hooks/useEvents.ts
+index 42b3923..1671ab8 100644
+--- a/ui/src/hooks/useEvents.ts
++++ b/ui/src/hooks/useEvents.ts
+@@ -2,20 +2,48 @@ import { useEffect, useRef } from "react";
+ import type { DaemonEvent } from "../api/types";
+ 
+ const DAEMON_WS = "ws://127.0.0.1:7420/v1/events";
++const MAX_BACKOFF_MS = 10_000;
+ 
++/**
++ * Subscribe to the daemon event stream.
++ *
++ * Reconnects with exponential backoff and resumes from the last seen
++ * `seq`, so a dropped socket never loses or duplicates events.
++ */
+ export function useEvents(onEvent: (ev: DaemonEvent) => void) {
+   const handler = useRef(onEvent);
+   handler.current = onEvent;
+ 
+   useEffect(() => {
+-    const ws = new WebSocket(DAEMON_WS);
+-    ws.onmessage = (msg) => {
+-      const ev = JSON.parse(msg.data) as DaemonEvent;
+-      handler.current(ev);
++    let cursor = 0;
++    let backoff = 250;
++    let ws: WebSocket | null = null;
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    let disposed = false;
++
++    const connect = () => {
++      ws = new WebSocket(`${DAEMON_WS}?cursor=${cursor}`);
++      ws.onopen = () => {
++        backoff = 250;
++      };
++      ws.onmessage = (msg) => {
++        const ev = JSON.parse(msg.data) as DaemonEvent;
++        if (ev.seq <= cursor) return; // duplicate after resync
++        cursor = ev.seq;
++        handler.current(ev);
++      };
++      ws.onclose = () => {
++        if (disposed) return;
++        timer = setTimeout(connect, backoff);
++        backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
++      };
+     };
+-    ws.onclose = () => {
+-      console.warn("event stream closed");
++
++    connect();
++    return () => {
++      disposed = true;
++      clearTimeout(timer);
++      ws?.close();
+     };
+-    return () => ws.close();
+   }, []);
+ }

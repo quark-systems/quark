@@ -1,0 +1,184 @@
+diff --git a/docs/decisions.md b/docs/decisions.md
+index 1d5f3f9..e8bbdbe 100644
+--- a/docs/decisions.md
++++ b/docs/decisions.md
+@@ -1,3 +1,30 @@
+ # Decisions
+ 
+ A decision is a question a worker cannot answer alone.
++
++## Shape
++
++Each decision offers **2 to 4 options**. Every option has a short `label`
++and a one-line `consequence` so the captain can choose without reading the
++whole task log. The worker marks one option as `recommended`.
++
++```json
++{
++  "id": "d-17",
++  "question": "Drop support for Node 18?",
++  "options": [
++    { "label": "Drop it", "consequence": "CI matrix shrinks by a third" },
++    { "label": "Keep it", "consequence": "Polyfill stays until April" }
++  ],
++  "recommended": 0,
++  "state": "open",
++  "answer": null
++}
++```
++
++## Answering
++
++`POST /v1/decisions/{id}:answer` with `{"option": <index>}`.
++
++- Answers are final; a second answer returns `409`.
++- An index outside `options` returns `422`.
+diff --git a/src/decision.rs b/src/decision.rs
+index eda8980..dc3f894 100644
+--- a/src/decision.rs
++++ b/src/decision.rs
+@@ -1,15 +1,92 @@
+ use serde::{Deserialize, Serialize};
++use thiserror::Error;
++
++/// One choice offered to the captain, with what happens if it is picked.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct DecisionOption {
++    pub label: String,
++    pub consequence: String,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(rename_all = "snake_case")]
++pub enum DecisionState {
++    Open,
++    Answered,
++}
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct Decision {
+     pub id: String,
++    pub project_id: String,
++    pub task_id: String,
+     pub question: String,
+-    pub options: Vec<String>,
+-    pub answer: Option<String>,
++    pub context: String,
++    pub options: Vec<DecisionOption>,
++    /// Index into `options` of the option the worker recommends.
++    pub recommended: usize,
++    pub state: DecisionState,
++    /// Index into `options`, set once answered.
++    pub answer: Option<usize>,
++}
++
++#[derive(Debug, Error, PartialEq, Eq)]
++pub enum AnswerError {
++    #[error("decision {0} is already answered")]
++    AlreadyAnswered(String),
++    #[error("option {index} out of range (decision has {len} options)")]
++    OutOfRange { index: usize, len: usize },
+ }
+ 
+ impl Decision {
+-    pub fn answer(&mut self, choice: &str) {
+-        self.answer = Some(choice.to_string());
++    /// Record the captain's answer. Answers are final.
++    pub fn answer(&mut self, index: usize) -> Result<(), AnswerError> {
++        if self.state == DecisionState::Answered {
++            return Err(AnswerError::AlreadyAnswered(self.id.clone()));
++        }
++        if index >= self.options.len() {
++            return Err(AnswerError::OutOfRange {
++                index,
++                len: self.options.len(),
++            });
++        }
++        self.answer = Some(index);
++        self.state = DecisionState::Answered;
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn sample() -> Decision {
++        Decision {
++            id: "d1".into(),
++            project_id: "firstmate".into(),
++            task_id: "t1".into(),
++            question: "Merge now?".into(),
++            context: String::new(),
++            options: vec![
++                DecisionOption { label: "Yes".into(), consequence: "Ships today".into() },
++                DecisionOption { label: "No".into(), consequence: "Waits a day".into() },
++            ],
++            recommended: 0,
++            state: DecisionState::Open,
++            answer: None,
++        }
++    }
++
++    #[test]
++    fn answers_are_final() {
++        let mut d = sample();
++        assert_eq!(d.answer(1), Ok(()));
++        assert_eq!(d.answer(0), Err(AnswerError::AlreadyAnswered("d1".into())));
++    }
++
++    #[test]
++    fn rejects_out_of_range() {
++        let mut d = sample();
++        assert_eq!(d.answer(5), Err(AnswerError::OutOfRange { index: 5, len: 2 }));
+     }
+ }
+diff --git a/web/src/api/decisions.ts b/web/src/api/decisions.ts
+index a933b80..2070ec8 100644
+--- a/web/src/api/decisions.ts
++++ b/web/src/api/decisions.ts
+@@ -1,13 +1,38 @@
++export interface DecisionOption {
++  label: string;
++  consequence: string;
++}
++
+ export interface Decision {
+   id: string;
++  project_id: string;
++  task_id: string;
+   question: string;
+-  options: string[];
+-  answer: string | null;
++  context: string;
++  options: DecisionOption[];
++  recommended: number;
++  state: "open" | "answered";
++  answer: number | null;
++}
++
++export class DecisionError extends Error {
++  constructor(readonly status: number, message: string) {
++    super(message);
++  }
+ }
+ 
+-export async function answerDecision(id: string, choice: string) {
+-  await fetch(`/v1/decisions/${id}:answer`, {
++export async function answerDecision(id: string, option: number): Promise<Decision> {
++  const res = await fetch(`/v1/decisions/${encodeURIComponent(id)}:answer`, {
+     method: "POST",
+-    body: JSON.stringify({ choice }),
++    headers: { "content-type": "application/json" },
++    body: JSON.stringify({ option }),
+   });
++  if (!res.ok) {
++    throw new DecisionError(res.status, await res.text());
++  }
++  return (await res.json()) as Decision;
++}
++
++export function isOpen(d: Decision): boolean {
++  return d.state === "open";
+ }

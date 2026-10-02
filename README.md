@@ -54,3 +54,14 @@ quarkd runs one private tmux server on `~/.quark/run/tmux/quark` and attaches to
 Each Project's coordinator window and task windows become its terminals: `GET /v1/projects/{id}/terminals`, input, resize and snapshot under `/v1/terminals/{id}`, and output as `worker.output` events.
 A terminal's output starts with a `snapshot` chunk (reset the emulator, then feed the bytes), and the daemon keeps about 2 MiB of output per terminal.
 To open a terminal, subscribe to the event stream, call `POST /v1/terminals/{id}/snapshot`, apply the returned event, then the terminal's events with a greater `seq`.
+
+### Desktop app
+
+`app/` is the desktop app: Tauri 2 with React, TypeScript and xterm.js, talking to `quarkd` over the `/v1` API and event stream.
+See [`app/README.md`](app/README.md) for running it, and [`app/CONTRACT.md`](app/CONTRACT.md) for the endpoints it expects.
+
+```sh
+cd app && npm install
+npm run dev                         # web build on http://127.0.0.1:1420, against quarkd on :7380
+npm run tauri dev                   # desktop app
+```

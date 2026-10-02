@@ -1,0 +1,25 @@
+[package]
+name = "quark-desktop"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Quark desktop app"
+
+# Built on its own, not as a member of the repository's Cargo workspace.
+[workspace]
+
+[lib]
+name = "quark_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
