@@ -188,6 +188,15 @@ impl EngineAdapter for Watched {
     ) -> Result<(), EngineError> {
         self.inner.send_message(ws, task_id, text).await
     }
+    async fn answer(
+        &self,
+        ws: &WorkspaceRef,
+        hold_id: &str,
+        answer: &str,
+        answered_by: &str,
+    ) -> Result<(), EngineError> {
+        self.inner.answer(ws, hold_id, answer, answered_by).await
+    }
     async fn control(
         &self,
         ws: &WorkspaceRef,

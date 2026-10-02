@@ -26,6 +26,7 @@ use super::{events, harnesses, pull_requests, routes, terminals};
         routes::get_task_changes,
         routes::get_task_diff,
         routes::list_decisions,
+        routes::answer_decision,
         pull_requests::list,
         pull_requests::get,
         pull_requests::diff,

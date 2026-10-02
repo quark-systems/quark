@@ -3,9 +3,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    AgentRole, CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision,
-    DecisionState, ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task,
-    TaskChanges, TaskDiff, TaskEvent, TranscriptItem, UpdateProject,
+    AgentRole, AnswerDecision, CoordinatorMessage, CoordinatorMessageAccepted, CreateProject,
+    Decision, DecisionState, ErrorBody, Health, Project, ProjectStatus, RelaunchTask,
+    SendTaskMessage, Task, TaskChanges, TaskDiff, TaskEvent, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -550,6 +550,121 @@ pub async fn list_decisions(
     Query(q): Query<DecisionQuery>,
 ) -> Result<Json<Vec<Decision>>, ApiError> {
     Ok(Json(db(&state, move |s| s.list_decisions(q.state)).await?))
+}
+
+/// Dispatches `POST /v1/decisions/{id}:<action>`.
+pub async fn decision_action(
+    state: State<AppState>,
+    Path(target): Path<String>,
+    body: Bytes,
+) -> Result<Json<Decision>, ApiError> {
+    let Some((id, action)) = target.rsplit_once(':') else {
+        return Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "use POST /v1/decisions/{id}:answer",
+        ));
+    };
+    match action {
+        "answer" => {
+            let input = serde_json::from_slice(&body)
+                .map_err(|e| ApiError::invalid(format!("invalid answer body: {e}")))?;
+            answer_decision(state, Path(id.to_string()), Json(input)).await
+        }
+        _ => Err(ApiError::not_found()),
+    }
+}
+
+/// Longest `answered_by` accepted, in bytes.
+const MAX_ANSWERED_BY_BYTES: usize = 128;
+
+/// Answer an open decision.
+///
+/// The engine records the answer with who gave it, which unblocks the task
+/// that asked. The answered decision is returned and also arrives as a
+/// `decision.answered` event.
+#[utoipa::path(
+    post,
+    path = "/v1/decisions/{id}:answer",
+    tag = "decisions",
+    params(("id" = String, Path, description = "Decision id")),
+    request_body = AnswerDecision,
+    responses(
+        (status = 200, body = Decision, description = "The answer is recorded"),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody, description = "`already_answered`, or `workspace_missing`"),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn answer_decision(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<AnswerDecision>,
+) -> Result<Json<Decision>, ApiError> {
+    if input.answer.trim().is_empty() {
+        return Err(ApiError::invalid("answer is empty"));
+    }
+    let answered_by = match input.answered_by.as_deref().map(str::trim) {
+        Some(user) if !user.is_empty() => user.to_string(),
+        _ => daemon_user(),
+    };
+    if answered_by.is_empty()
+        || answered_by.len() > MAX_ANSWERED_BY_BYTES
+        || answered_by.chars().any(char::is_control)
+    {
+        return Err(ApiError::invalid(
+            "answered_by must be one line of at most 128 bytes",
+        ));
+    }
+    let target = {
+        let id = id.clone();
+        db(&state, move |s| s.decision_target(&id)).await?
+    };
+    if !target.open {
+        return Err(already_answered());
+    }
+    let Some(root) = target.workspace_path else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "workspace_missing",
+            "the decision's Project has no workspace attached",
+        ));
+    };
+    let ws = WorkspaceRef {
+        project_id: target.project_id,
+        root: root.into(),
+    };
+    state
+        .engine
+        .answer(&ws, &target.engine_id, &input.answer, &answered_by)
+        .await?;
+    let decision = db(&state, move |s| {
+        s.answer_decision(&id, &input.answer, &answered_by)
+    })
+    .await
+    .map_err(|e| match e.code() {
+        "conflict" => already_answered(),
+        _ => e,
+    })?;
+    Ok(Json(decision))
+}
+
+fn already_answered() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "already_answered",
+        "the decision is already answered",
+    )
+}
+
+/// Who answers when the client names no one: the user running the daemon.
+fn daemon_user() -> String {
+    ["USER", "USERNAME", "LOGNAME"]
+        .iter()
+        .find_map(|v| std::env::var(v).ok().filter(|u| !u.trim().is_empty()))
+        .map(|u| u.trim().to_string())
+        .unwrap_or_else(|| "local".into())
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

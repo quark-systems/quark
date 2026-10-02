@@ -195,6 +195,87 @@
         }
       }
     },
+    "/v1/decisions/{id}:answer": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Answer an open decision.",
+        "description": "The engine records the answer with who gave it, which unblocks the task\nthat asked. The answered decision is returned and also arrives as a\n`decision.answered` event.",
+        "operationId": "answer_decision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Decision id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer is recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decision"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`already_answered`, or `workspace_missing`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/events": {
       "get": {
         "tags": [
@@ -1737,6 +1818,26 @@
           "coordinator",
           "worker"
         ]
+      },
+      "AnswerDecision": {
+        "type": "object",
+        "description": "An answer to an open decision.",
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "The answer, as the worker or coordinator will read it."
+          },
+          "answered_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is answering: one line of at most 128 bytes. Stored with the\ndecision and recorded with the engine's own record of the answer.\nAbsent or null means the daemon's own user (`$USER`)."
+          }
+        }
       },
       "ArtifactKind": {
         "type": "string",

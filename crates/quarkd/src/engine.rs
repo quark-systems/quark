@@ -5,8 +5,8 @@
 //! returns into SQLite and the event stream.
 //!
 //! Every write goes through it too, as a neutral operation (steer a task,
-//! cancel it, relaunch it, provision a Project workspace) that the adapter
-//! maps onto its own engine calls.
+//! cancel it, relaunch it, answer a decision, provision a Project workspace)
+//! that the adapter maps onto its own engine calls.
 //!
 //! - [`StubEngine`] is an in-memory adapter for tests and for running the
 //!   daemon without an engine checkout.
@@ -87,6 +87,9 @@ pub struct StatusTail {
 /// A question the engine is holding for a person.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hold {
+    /// Stable for the life of the question, and what
+    /// [`EngineAdapter::answer`] takes. A question asked again after an
+    /// answer may reuse it.
     pub id: String,
     pub task_id: Option<String>,
     pub question: String,
@@ -188,6 +191,18 @@ pub trait EngineAdapter: Send + Sync {
         ws: &WorkspaceRef,
         task_id: &str,
         text: &str,
+    ) -> Result<(), EngineError>;
+
+    /// Answer the open hold `hold_id` with `answer`, recording `answered_by`
+    /// as the person who answered. `Ok` means the engine durably recorded the
+    /// answer and the question is no longer waiting; the hold leaves later
+    /// [`EngineAdapter::holds`] results.
+    async fn answer(
+        &self,
+        ws: &WorkspaceRef,
+        hold_id: &str,
+        answer: &str,
+        answered_by: &str,
     ) -> Result<(), EngineError>;
 
     /// Apply a lifecycle action. `Ok` means the engine verified the result.
@@ -303,6 +318,11 @@ pub enum StubWrite {
     Control {
         task_id: String,
         action: TaskControl,
+    },
+    Answer {
+        hold_id: String,
+        answer: String,
+        answered_by: String,
     },
     AddSource {
         name: String,
@@ -443,6 +463,28 @@ impl EngineAdapter for StubEngine {
             task_id: task_id.into(),
             text: text.into(),
         })
+    }
+
+    /// Records the answer and drops the hold, as an engine would.
+    async fn answer(
+        &self,
+        _ws: &WorkspaceRef,
+        hold_id: &str,
+        answer: &str,
+        answered_by: &str,
+    ) -> Result<(), EngineError> {
+        if !self.holds.lock().unwrap().iter().any(|h| h.id == hold_id) {
+            return Err(EngineError::Invalid(format!(
+                "no open question {hold_id} in the engine"
+            )));
+        }
+        self.accept(StubWrite::Answer {
+            hold_id: hold_id.into(),
+            answer: answer.into(),
+            answered_by: answered_by.into(),
+        })?;
+        self.holds.lock().unwrap().retain(|h| h.id != hold_id);
+        Ok(())
     }
 
     async fn control(

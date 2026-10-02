@@ -144,6 +144,49 @@ impl EngineAdapter for FirstmateEngine {
         self.write(ws, op).await
     }
 
+    /// Open keyed decisions (`<task>:<key>`) are answered through the task's
+    /// inbox, which closes the key in the same act. Captain holds (a backlog
+    /// task id) are answered with the engine's hold record: a held work item
+    /// (ship or scout) is released to resume, any other held task is closed.
+    async fn answer(
+        &self,
+        ws: &WorkspaceRef,
+        hold_id: &str,
+        answer: &str,
+        answered_by: &str,
+    ) -> Result<(), EngineError> {
+        if let Some((task_id, key)) = hold_id.split_once(':') {
+            let op = WriteOp::Answer {
+                task_id: task_id.into(),
+                key: key.into(),
+                text: answer.into(),
+                answered_by: answered_by.into(),
+            };
+            return self.write(ws, op).await;
+        }
+        write::check_hold_answer(answer).map_err(EngineError::Invalid)?;
+        let snapshot = self.read_snapshot(ws).await?;
+        let held = snapshot
+            .backlog_items()
+            .find(|r| r.id.as_deref() == Some(hold_id) && r.captain_actionable)
+            .ok_or_else(|| EngineError::TaskNotFound(hold_id.to_string()))?;
+        let release = task_kind(held.kind.as_deref()).is_some();
+        let mut file = tempfile::Builder::new()
+            .prefix("quark-answer-")
+            .tempfile()?;
+        std::io::Write::write_all(&mut file, answer.as_bytes())?;
+        let op = WriteOp::AnswerHold {
+            task_id: hold_id.to_string(),
+            decision_file: file.path().to_path_buf(),
+            release,
+            answered_by: answered_by.into(),
+        };
+        // The file is removed when `file` drops, after the script has run.
+        let res = self.write(ws, op).await;
+        drop(file);
+        res
+    }
+
     /// Cancel is `exit`, never teardown: the worktree and its changes stay.
     async fn control(
         &self,
