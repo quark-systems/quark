@@ -481,10 +481,11 @@ impl EngineAdapter for FirstmateEngine {
     }
 }
 
-/// Account variables `fm-spawn.sh` carries onto an agent's launch. It
-/// forwards an ambient `CLAUDE_CONFIG_DIR` to Claude Code only; Codex's
-/// `CODEX_HOME` and the others do not reach the agent's pane yet.
-const FORWARDED_ACCOUNT_ENVS: &[&str] = &["CLAUDE_CONFIG_DIR"];
+/// Account variables `fm-spawn.sh` carries onto an agent's launch and onto
+/// `fm-control.sh <task> relaunch`: an ambient `CLAUDE_CONFIG_DIR` to Claude
+/// Code and `CODEX_HOME` to Codex. The other harnesses' variables do not
+/// reach the agent's pane yet.
+const FORWARDED_ACCOUNT_ENVS: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME"];
 
 /// Only a forwarded account variable, set to an absolute directory path,
 /// reaches an engine script.

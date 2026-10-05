@@ -38,6 +38,14 @@ export interface Task {
   pull_request_url?: string | null; created_at: string; updated_at: string;
   /** The account the worker was started under (an `Account.id`), when its harness has accounts. */
   account_id?: string | null;
+  /** Rate limits the worker hit, oldest first, and where it moved (quark#26). */
+  failovers?: AccountFailover[];
+}
+
+export type FailoverOutcome = "relaunched" | "no_healthy_account" | "relaunch_failed";
+export interface AccountFailover {
+  from_account_id: string; to_account_id?: string | null; pool?: string | null;
+  outcome: FailoverOutcome; signal: string; detail?: string | null; at: string;
 }
 
 export type DecisionState = "open" | "answered";
@@ -154,6 +162,8 @@ export interface DispatchRecord {
   chosen: { harness: string; model?: string | null; effort?: string | null; account?: string | null };
   /** `provider` is "none" when no classifier was consulted (the coordinator picked). */
   classifier: { provider: string; model?: string | null; confidence?: number | null };
+  /** The rate limit this relaunch answered, when the daemon moved the worker to another account (quark#26). */
+  failover?: AccountFailover | null;
   recorded_at: string;
 }
 

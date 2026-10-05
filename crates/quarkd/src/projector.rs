@@ -8,7 +8,8 @@
 //! repo's `project.yaml` declares and the dispatch profiles its
 //! `dispatch.yaml` declares, whenever either declaration changes, turns
 //! what finished tasks learned into memory proposals, and records why each
-//! newly spawned worker got its agent ([`crate::dispatch`]).
+//! newly spawned worker got its agent ([`crate::dispatch`]). A worker whose
+//! session log ends at a rate limit is handed to [`Failover`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -17,13 +18,14 @@ use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use quark_systems::{DispatchTrigger, MemoryEvidence};
-use quark_transcript::{SessionFormat, SessionRoots};
+use quark_transcript::{RateLimit, SessionFormat, SessionRoots};
 use tokio::sync::mpsc;
 
 use crate::sessions::{Sessions, TaskTarget};
 
 use crate::dispatch::{self, Resolved};
 use crate::engine::{EngineAdapter, EngineError, EngineTask, WorkspaceRef};
+use crate::failover::Failover;
 
 use crate::memory;
 use crate::store::{NewProposal, Store, TranscriptSource};
@@ -38,6 +40,8 @@ pub struct Projector {
     engine: Arc<dyn EngineAdapter>,
     transcripts: Arc<TranscriptTap>,
     sessions: Option<Sessions>,
+    /// Moves rate-limited workers to another account, when set.
+    failover: Option<Arc<Failover>>,
     /// Command-center workspace whose secondmates are the coordinators.
     command: Option<PathBuf>,
     /// Coordinator targets last handed to the session layer, by Project id.
@@ -56,6 +60,7 @@ impl Projector {
             engine,
             transcripts,
             sessions: None,
+            failover: None,
             command: None,
             coordinators: Mutex::default(),
             gates: Mutex::default(),
@@ -73,6 +78,12 @@ impl Projector {
     /// Also maps each refreshed workspace's tmux windows to its tasks.
     pub fn with_sessions(mut self, sessions: Sessions) -> Self {
         self.sessions = Some(sessions);
+        self
+    }
+
+    /// Also fails workers over to another pool account on rate limits.
+    pub fn with_failover(mut self, failover: Arc<Failover>) -> Self {
+        self.failover = Some(failover);
         self
     }
 
@@ -334,12 +345,15 @@ impl Projector {
     }
 
     /// Projects new coordinator and worker session-log entries. A log that
-    /// cannot be read is logged and retried next tick.
+    /// cannot be read is logged and retried next tick. A worker whose log
+    /// now ends at a rate limit is failed over.
     async fn tap_transcripts(&self, ws: &WorkspaceRef, tasks: Vec<EngineTask>) {
         let tap = self.transcripts.clone();
         let store = self.store.clone();
-        let ws = ws.clone();
+        let project = ws.clone();
         let res = tokio::task::spawn_blocking(move || {
+            let ws = project;
+            let mut limited: Vec<(String, RateLimit)> = Vec::new();
             let project_id = &ws.project_id;
             let coordinator = TranscriptSource::Coordinator {
                 project_id: project_id.clone(),
@@ -362,15 +376,40 @@ impl Projector {
                         continue;
                     }
                 };
-                let source = TranscriptSource::Task { task_id };
-                if let Err(e) = tap.poll(project_id, source, worktree, &[format]) {
-                    tracing::warn!(project = %project_id, task = %t.id, error = %e, "worker transcript");
+                let source = TranscriptSource::Task {
+                    task_id: task_id.clone(),
+                };
+                match tap.poll(project_id, source, worktree, &[format]) {
+                    Ok(Some(limit)) => limited.push((task_id, limit)),
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(project = %project_id, task = %t.id, error = %e, "worker transcript")
+                    }
                 }
             }
+            limited
         })
         .await;
-        if let Err(e) = res {
-            tracing::error!(error = %e, "transcript task panicked");
+        let limited = match res {
+            Ok(limited) => limited,
+            Err(e) => {
+                tracing::error!(error = %e, "transcript task panicked");
+                return;
+            }
+        };
+        let Some(failover) = &self.failover else {
+            return;
+        };
+        for (task_id, limit) in limited {
+            match failover.rate_limited(ws, &task_id, &limit).await {
+                Ok(Some(f)) => {
+                    tracing::info!(task = %task_id, from = %f.from_account_id, to = ?f.to_account_id, outcome = ?f.outcome, signal = %f.signal, "rate limit")
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(task = %task_id, error = %e, "rate-limit failover failed")
+                }
+            }
         }
     }
 

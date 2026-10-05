@@ -18,6 +18,7 @@ use utoipa::IntoParams;
 use super::{db, ApiError, AppState};
 use crate::accounts::Holder;
 use crate::engine::{TaskControl, WorkspaceRef};
+use crate::failover::Failover;
 use crate::provision;
 
 /// Note given to a relaunched worker when the client sends none.
@@ -658,7 +659,8 @@ pub(super) const MAX_ANSWERED_BY_BYTES: usize = 128;
 /// Answer an open decision.
 ///
 /// The engine records the answer with who gave it, which unblocks the task
-/// that asked. The answered decision is returned and also arrives as a
+/// that asked. A decision the daemon opened about a rate limit relaunches
+/// the task's worker instead, with the answer as its note. The answered decision is returned and also arrives as a
 /// `decision.answered` event.
 #[utoipa::path(
     post,
@@ -712,10 +714,27 @@ pub async fn answer_decision(
         project_id: target.project_id,
         root: root.into(),
     };
-    state
-        .engine
-        .answer(&ws, &target.engine_id, &input.answer, &answered_by)
+    if crate::store::is_daemon_decision(&target.engine_id) {
+        // The daemon's own question about a rate limit: the answer
+        // relaunches the worker instead of going to the engine.
+        let decision = {
+            let id = id.clone();
+            db(&state, move |s| s.get_decision(&id)).await?
+        };
+        Failover::new(
+            state.store.clone(),
+            state.engine.clone(),
+            state.accounts.clone(),
+            state.harnesses.clone(),
+        )
+        .resume(&ws, &decision, &input.answer)
         .await?;
+    } else {
+        state
+            .engine
+            .answer(&ws, &target.engine_id, &input.answer, &answered_by)
+            .await?;
+    }
     let decision = db(&state, move |s| {
         s.answer_decision(&id, &input.answer, &answered_by)
     })

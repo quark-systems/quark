@@ -20,6 +20,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Project memory | `GET /v1/projects/{id}/memory/proposals[?state=]`, `POST .../memory/proposals/{proposal_id}:accept` with optional `text` and `decided_by`, `:reject` with optional `decided_by`, `GET /v1/projects/{id}/memory`; `memory.proposed`, `memory.accepted`, `memory.rejected` events | quark#29 |
 | Accounts and pools | `GET/POST /v1/accounts`, `GET/PATCH/DELETE /v1/accounts/{id}`, `account.quota_changed` events; `AgentConfig.pool`, `Task.account_id`, `RelaunchTask.pool`, `HarnessInfo.account_env` | quark#23 |
 | Why this agent | `GET /v1/tasks/{id}/dispatch`, `dispatch.recorded` events | quark#27 |
+| Failover on rate limits | `DispatchRecord.failover`, `Task.failovers` (`AccountFailover`: `from_account_id`, `to_account_id`, `pool`, `outcome`, `signal`, `detail`, `at`), a `failover` entry in `GET /v1/tasks/{id}/events`; a decision the daemon opens itself, answered through `POST /v1/decisions/{id}:answer` | quark#26 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 
 ## How the app uses them
@@ -66,5 +67,10 @@ A `404` with an `ErrorBody` is a real "not found".
   The new account's quota is `pending` until its `account.quota_changed` arrives.
   `409 conflict` means the directory is already an account (or the harness's default); removing answers `409` for a default account or one a running task uses.
   Pools are replaced with `PATCH /v1/accounts/{id}` `{pools}`; a default account can join pools but keeps its label.
-  `launchable: false` marks an account the engine cannot start its harness under yet (today every non-default Codex, Pi and Grok account); its quota is still read.
+  `launchable: false` marks an account the engine cannot start its harness under yet (today every non-default Pi and Grok account); its quota is still read.
 - **Pools.** The New project form offers the pools of the chosen harness's accounts as `agent_config.pool`. The daemon starts the coordinator under the pool's least busy ready account, its workers inherit it, and each task records the account it started under in `Task.account_id`.
+- **Failover (ADR-11).** When a worker's session log ends at a rate limit, the daemon has the engine relaunch it from its branch, in the same worktree, under the next healthy account of its pool: the Project agent config's pool when the worker runs that harness, else any pool the worker's account is in.
+  `task.state_changed` then carries the new `account_id` and one more `failovers` entry (`outcome: relaunched`), and the task's activity log gains a `failover` entry; `signal` names the harness log line that reported the limit.
+  The relaunch's dispatch record (`GET /v1/tasks/{id}/dispatch`, `dispatch.recorded`) carries the same entry as `failover`, names the new account in `chosen.account`, and says so in its `summary`, so the "Why this agent" panel shows it.
+  A task never returns on its own to an account it left. With no healthy account left (`no_healthy_account`), or when the engine refuses the relaunch (`relaunch_failed`), the daemon opens a decision for the task (`decision.opened`) and does nothing more until it is answered.
+  Answering it relaunches the worker with the answer as its note, under another account if one is healthy by then and under its own otherwise; `502` means the engine refused and the decision stays open.

@@ -19,10 +19,12 @@ mod claude;
 mod codex;
 mod locate;
 mod pi;
+mod rate_limit;
 mod reader;
 
 pub use locate::{locate, SessionRoots};
 pub use quark_systems::{TranscriptEntry, TranscriptRole};
+pub use rate_limit::RateLimit;
 pub use reader::{read_from, ReadBatch, MAX_BATCH_BYTES};
 
 use serde_json::Value;
@@ -79,6 +81,17 @@ impl SessionFormat {
             SessionFormat::Claude => claude::parse(v),
             SessionFormat::Codex => codex::parse(v),
             SessionFormat::Pi => pi::parse(v),
+        }
+    }
+
+    /// The rate limit one already-parsed log line reports, if it reports
+    /// one. Claude Code and Codex only; see [`RateLimit`] for the lines
+    /// matched.
+    pub fn rate_limit(self, v: &Value) -> Option<RateLimit> {
+        match self {
+            SessionFormat::Claude => rate_limit::claude(v),
+            SessionFormat::Codex => rate_limit::codex(v),
+            SessionFormat::Pi => None,
         }
     }
 }

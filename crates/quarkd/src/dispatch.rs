@@ -82,6 +82,7 @@ pub fn build(
         candidates: Vec::new(),
         chosen: chosen.clone(),
         classifier: none,
+        failover: None,
         recorded_at: String::new(),
     };
 
