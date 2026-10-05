@@ -1,5 +1,6 @@
 //! The `/v1` HTTP API and event stream.
 
+mod accounts;
 mod error;
 mod events;
 mod harnesses;
@@ -31,6 +32,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub engine: Arc<dyn EngineAdapter>,
     pub harnesses: Arc<HarnessRegistry>,
+    /// Accounts, pools and quota per harness.
+    pub accounts: Arc<crate::accounts::Accounts>,
     pub sessions: Sessions,
     /// Where new Project workspaces and Project repos go.
     pub layout: crate::provision::Layout,
@@ -103,6 +106,13 @@ pub fn router(state: AppState) -> Router {
             "/v1/pull-requests/{id}/comments",
             post(pull_requests::comment),
         )
+        .route("/v1/accounts", get(accounts::list).post(accounts::create))
+        .route(
+            "/v1/accounts/{id}",
+            get(accounts::get)
+                .patch(accounts::update)
+                .delete(accounts::delete),
+        )
         .route("/v1/harnesses", get(harnesses::list))
         .route("/v1/harnesses:validate", post(harnesses::validate))
         .route(
@@ -133,7 +143,7 @@ fn cors() -> CorsLayer {
                 .map(|o| HeaderValue::from_static(o))
                 .collect::<Vec<_>>(),
         )
-        .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers([header::CONTENT_TYPE])
 }
 

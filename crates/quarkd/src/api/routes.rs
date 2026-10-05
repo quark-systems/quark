@@ -15,6 +15,7 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 
 use super::{db, ApiError, AppState};
+use crate::accounts::Holder;
 use crate::engine::{TaskControl, WorkspaceRef};
 use crate::provision;
 
@@ -81,6 +82,18 @@ pub async fn create_project(
                 msgs.join("; ")
             )));
         }
+        if let Some(pool) = &agent.pool {
+            let accounts = state.accounts.list().await?;
+            if !accounts
+                .iter()
+                .any(|a| a.harness == agent.harness && a.pools.contains(pool))
+            {
+                return Err(ApiError::invalid(format!(
+                    "agent_config: pool `{pool}` has no {} accounts",
+                    agent.harness
+                )));
+            }
+        }
     }
     let project = db(&state, move |s| s.create_project(input)).await?;
     if project.status == ProjectStatus::Provisioning {
@@ -93,6 +106,7 @@ fn start_provisioning(state: &AppState, project_id: &str) {
     tokio::spawn(provision::provision(
         state.store.clone(),
         state.engine.clone(),
+        state.accounts.clone(),
         state.layout.clone(),
         project_id.to_string(),
     ));
@@ -384,6 +398,8 @@ pub async fn relaunch_task(
     input: Option<Json<RelaunchTask>>,
 ) -> Result<StatusCode, ApiError> {
     let input = input.map(|Json(i)| i).unwrap_or_default();
+    let (ws, task) = engine_target(&state, id.clone()).await?;
+    let account_env = relaunch_account(&state, &id, &input).await?;
     let note = input
         .note
         .filter(|n| !n.trim().is_empty())
@@ -393,10 +409,49 @@ pub async fn relaunch_task(
         model: input.model,
         effort: input.effort,
         note,
+        account_env,
     };
-    let (ws, task) = engine_target(&state, id).await?;
     state.engine.control(&ws, &task, &action).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The account a relaunched worker runs under: the task's own while it is
+/// still usable (sticky), else one from `pool`, or from the Project's agent
+/// config's pool when the worker keeps that harness. Recorded on the task.
+async fn relaunch_account(
+    state: &AppState,
+    id: &str,
+    input: &RelaunchTask,
+) -> Result<Vec<(String, String)>, ApiError> {
+    let task_id = id.to_string();
+    let task = db(state, move |s| s.get_task(&task_id)).await?;
+    let Some(harness) = input.harness.clone().or(task.harness) else {
+        return Ok(Vec::new());
+    };
+    let pid = task.project_id.clone();
+    let project = db(state, move |s| s.get_project(&pid)).await?;
+    let same_harness = |a: &&quark_systems::AgentConfig| {
+        state.harnesses.resolve(&a.harness).map(|h| h.id())
+            == state.harnesses.resolve(&harness).map(|h| h.id())
+    };
+    let pool = input.pool.clone().or_else(|| {
+        project
+            .agent_config
+            .as_ref()
+            .filter(same_harness)
+            .and_then(|a| a.pool.clone())
+    });
+    let config = quark_systems::AgentConfig {
+        harness,
+        model: None,
+        effort: None,
+        pool,
+    };
+    let lease = state
+        .accounts
+        .lease(&Holder::Task(id.to_string()), &config)
+        .await?;
+    Ok(lease.map(|l| l.env).unwrap_or_default())
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

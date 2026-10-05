@@ -78,13 +78,20 @@ fn setup(workspace: &Path) -> Setup {
         .unwrap()
         .id;
     let home = tempfile::tempdir().unwrap();
+    let harnesses = Arc::new(HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        HostEnv::default(),
+    ));
     Setup {
         app: api::router(AppState {
             store: store.clone(),
             engine: engine.clone(),
-            harnesses: Arc::new(HarnessRegistry::new(
-                quarkd::harness::builtin(),
-                HostEnv::default(),
+            harnesses: harnesses.clone(),
+            accounts: Arc::new(quarkd::accounts::Accounts::new(
+                store.clone(),
+                harnesses,
+                Arc::new(quarkd::accounts::StubQuota::new()),
+                &["CLAUDE_CONFIG_DIR"],
             )),
             sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
             layout: Layout::new(home.path()),
@@ -244,8 +251,11 @@ impl EngineAdapter for Watched {
         command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
+        account_env: &[(String, String)],
     ) -> Result<(), EngineError> {
-        self.inner.start_coordinator(command, ws, agent).await
+        self.inner
+            .start_coordinator(command, ws, agent, account_env)
+            .await
     }
     fn watch_dirs(&self, _ws: &WorkspaceRef) -> Vec<PathBuf> {
         vec![self.dir.clone()]

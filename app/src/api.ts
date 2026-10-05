@@ -7,7 +7,11 @@ export type TaskState =
 export type TaskKind = "ship" | "scout";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
-export interface AgentConfig { harness: string; model?: string | null; effort?: string | null }
+export interface AgentConfig {
+  harness: string; model?: string | null; effort?: string | null;
+  /** Account pool to run under (quark#23); absent runs under the harness's default account. */
+  pool?: string | null;
+}
 export interface RepoSource { url: string; name?: string | null }
 export type DispatchPreset = "single" | "light_trivial";
 export type DeliveryPolicy = "gated" | "direct";
@@ -32,6 +36,8 @@ export interface Task {
   id: string; project_id: string; title: string; state: TaskState;
   kind?: TaskKind | null; state_note?: string | null; harness?: string | null;
   pull_request_url?: string | null; created_at: string; updated_at: string;
+  /** The account the worker was started under (an `Account.id`), when its harness has accounts. */
+  account_id?: string | null;
 }
 
 export type DecisionState = "open" | "answered";
@@ -72,9 +78,41 @@ export interface HarnessInfo {
   install: { installed: boolean; version?: string | null; path?: string | null; install_hint: string };
   models: { selection: "free_form" | "provider_qualified" | "automatic"; discovery?: string | null };
   efforts: Effort[];
-  auth: { state: "configured" | "not_configured" | "unknown"; detail?: string | null };
+  auth: HarnessAuth;
   transcript: boolean;
+  /** Variable that selects an account's config directory; null when the harness has only its default account. */
+  account_env?: string | null;
 }
+export type AuthState = "configured" | "not_configured" | "unknown";
+export interface HarnessAuth { state: AuthState; detail?: string | null }
+
+// Accounts and pools per harness, with per-account quota (quark#23, ADR-11).
+export type QuotaState = "pending" | "known" | "unavailable" | "error" | "unsupported";
+export interface QuotaWindow { id: string; label: string; percent_remaining?: number | null; resets_at?: string | null }
+export interface AccountQuota {
+  state: QuotaState;
+  /** What limits the account now, 0 to 100. */
+  remaining_percent?: number | null;
+  plan?: string | null; windows: QuotaWindow[]; detail?: string | null; checked_at?: string | null;
+}
+export interface Account {
+  /** `acc_...`, or `default-<harness>` for a harness's default account. */
+  id: string; harness: string; label: string; config_dir?: string | null;
+  /** The harness's usual config directory; listed but cannot be removed. */
+  default: boolean;
+  pools: string[];
+  /** Credential health from the harness adapter. */
+  health: HarnessAuth;
+  quota: AccountQuota;
+  active_tasks: number;
+  /** False when the engine cannot start this harness under another account yet. */
+  launchable: boolean;
+  created_at?: string | null;
+}
+export interface CreateAccount { harness: string; label?: string | null; config_dir: string; pools?: string[] }
+export interface UpdateAccount { label?: string | null; pools?: string[] | null }
+/** Payload of `account.quota_changed`. */
+export interface AccountQuotaChanged { account_id: string; harness: string; quota: AccountQuota }
 export interface ValidationIssue { field: string; code: string; message: string }
 export interface HarnessValidation { valid: boolean; errors: ValidationIssue[]; warnings: ValidationIssue[] }
 
@@ -243,6 +281,14 @@ export const api = {
   harnesses: () => req<HarnessInfo[]>("GET", "/v1/harnesses"),
   validateAgent: (config: AgentConfig, role: AgentRole) =>
     req<HarnessValidation>("POST", "/v1/harnesses:validate", { config, role }),
+
+  /** Every account per harness; `refresh` reads each account's quota now. */
+  accounts: (refresh = false) => req<Account[]>("GET", "/v1/accounts" + (refresh ? "?refresh=true" : "")),
+  /** Its quota arrives shortly after as `account.quota_changed`. */
+  addAccount: (a: CreateAccount) => req<Account>("POST", "/v1/accounts", a),
+  updateAccount: (id: string, u: UpdateAccount) => req<Account>("PATCH", `/v1/accounts/${enc(id)}`, u),
+  /** 409 for a default account or one a running task uses. */
+  removeAccount: (id: string) => req<void>("DELETE", `/v1/accounts/${enc(id)}`),
 
   chat: (cid: string) => req<TranscriptItem[]>("GET", `/v1/coordinators/${enc(cid)}/messages?limit=1000`),
   sendChat: (cid: string, text: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}/messages`, { text }),

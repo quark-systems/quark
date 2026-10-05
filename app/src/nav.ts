@@ -6,6 +6,7 @@
 //   #/inbox[/<id>]     decisions inbox, optionally with one decision selected
 //   #/prs              PR center
 //   #/pr/<pr id>       one pull request: checks, reviews, diff
+//   #/accounts         harness accounts, pools and quota
 import { useSyncExternalStore } from "react";
 
 export type Route =
@@ -15,7 +16,8 @@ export type Route =
   | { name: "task"; id: string }
   | { name: "inbox"; id?: string }
   | { name: "prs" }
-  | { name: "pr"; id: string };
+  | { name: "pr"; id: string }
+  | { name: "accounts" };
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
@@ -25,6 +27,7 @@ export function parseRoute(hash: string): Route {
   if (parts[0] === "inbox") return parts[1] ? { name: "inbox", id: parts[1] } : { name: "inbox" };
   if (parts[0] === "prs") return { name: "prs" };
   if (parts[0] === "pr" && parts[1]) return { name: "pr", id: parts[1] };
+  if (parts[0] === "accounts") return { name: "accounts" };
   return { name: "projects" };
 }
 
@@ -37,6 +40,7 @@ export function href(r: Route): string {
     case "inbox": return r.id ? `#/inbox/${encodeURIComponent(r.id)}` : "#/inbox";
     case "prs": return "#/prs";
     case "pr": return `#/pr/${encodeURIComponent(r.id)}`;
+    case "accounts": return "#/accounts";
   }
 }
 

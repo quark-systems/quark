@@ -32,12 +32,19 @@ async fn harness() -> Harness {
     let engine = Arc::new(StubEngine::new());
     let chat = Arc::new(RecordingInput::new());
     let home = tempfile::tempdir().unwrap();
+    let harnesses = Arc::new(HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        HostEnv::default(),
+    ));
     let app = api::router(AppState {
         store: store.clone(),
         engine: engine.clone(),
-        harnesses: Arc::new(HarnessRegistry::new(
-            quarkd::harness::builtin(),
-            HostEnv::default(),
+        harnesses: harnesses.clone(),
+        accounts: Arc::new(quarkd::accounts::Accounts::new(
+            store.clone(),
+            harnesses,
+            Arc::new(quarkd::accounts::StubQuota::new()),
+            &["CLAUDE_CONFIG_DIR"],
         )),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(home.path()),
@@ -587,7 +594,8 @@ async fn creating_a_project_provisions_workspace_repo_and_coordinator() {
             },
             StubWrite::StartCoordinator {
                 project_id: id.clone(),
-                harness: "claude-code".into()
+                harness: "claude-code".into(),
+                account_env: Vec::new(),
             },
         ]
     );

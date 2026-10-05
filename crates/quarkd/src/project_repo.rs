@@ -265,6 +265,9 @@ fn agent_yaml(a: Option<&AgentConfig>, indent: &str) -> String {
     if let Some(e) = &a.effort {
         y.push_str(&format!("{indent}effort: {}\n", q(e)));
     }
+    if let Some(p) = &a.pool {
+        y.push_str(&format!("{indent}pool: {}\n", q(p)));
+    }
     y
 }
 
@@ -279,6 +282,9 @@ fn profile(a: Option<&AgentConfig>, effort: Option<&str>) -> String {
     }
     if let Some(e) = effort.or(a.effort.as_deref()) {
         parts.push(format!("effort: {}", q(e)));
+    }
+    if let Some(p) = &a.pool {
+        parts.push(format!("pool: {}", q(p)));
     }
     format!("{{ {} }}", parts.join(", "))
 }
@@ -380,6 +386,7 @@ mod tests {
                 harness: "claude-code".into(),
                 model: Some("claude-sonnet-5".into()),
                 effort: Some("medium".into()),
+                pool: None,
             }),
             dispatch_preset: Some(DispatchPreset::LightTrivial),
             delivery: Some(DeliveryPolicy::Direct),
@@ -417,6 +424,15 @@ mod tests {
         assert!(y.ends_with("default:\n  - { harness: \"claude-code\", model: \"claude-sonnet-5\", effort: \"medium\" }\n"), "{y}");
         p.dispatch_preset = None;
         assert!(dispatch_yaml(&p).contains("rules: []\n"));
+    }
+
+    #[test]
+    fn profiles_name_their_account_pool() {
+        let mut p = project();
+        p.agent_config.as_mut().unwrap().pool = Some("max".into());
+        let y = dispatch_yaml(&p);
+        assert!(y.ends_with("effort: \"medium\", pool: \"max\" }\n"), "{y}");
+        assert!(project_yaml(&p).contains("  pool: \"max\"\n"));
     }
 
     #[test]

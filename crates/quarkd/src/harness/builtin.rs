@@ -544,6 +544,18 @@ impl Harness for CliHarness {
         self.0.account_env
     }
 
+    fn default_config_dir(&self, env: &HostEnv) -> Option<PathBuf> {
+        self.config_dir(env, &Account::default())
+    }
+
+    fn quota_provider(&self) -> Option<&'static str> {
+        match self.0.id {
+            "claude-code" => Some("claude"),
+            "codex" => Some("codex"),
+            _ => None,
+        }
+    }
+
     fn launch(
         &self,
         config: &AgentConfig,
