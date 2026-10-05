@@ -129,6 +129,8 @@ test("decisions inbox: answer from the keyboard, then see who answered", async (
   await expect(page).toHaveURL(/#\/inbox\/d-2$/);
   await page.keyboard.press("k");
   await expect(page).toHaveURL(/#\/inbox\/d-1$/);
+  // The URL changes before the route re-renders; wait for d-1's panel before typing into it.
+  await expect(detail).toContainText("Keep the full answer history per decision");
 
   // r focuses the answer box; Ctrl+Enter sends and moves on to the next open decision.
   await page.keyboard.press("r");
