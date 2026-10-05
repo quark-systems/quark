@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::{SessionFormat, TranscriptEntry};
+use crate::{RateLimit, SessionFormat, TranscriptEntry, TranscriptRole};
 
 /// Most bytes one [`read_from`] call consumes; the next call continues from
 /// `next_offset`, so a large backlog is projected over several ticks.
@@ -23,6 +23,11 @@ pub struct ReadBatch {
     pub restarted: bool,
     /// Complete lines that were not JSON.
     pub malformed: usize,
+    /// The rate limit the agent is stopped at: the last one the read found,
+    /// when the read reached the end of the log and the agent wrote nothing
+    /// of its own after it. A limit the agent already worked past is not
+    /// reported.
+    pub rate_limit: Option<RateLimit>,
 }
 
 /// Parses complete lines appended to `path` since byte `offset`.
@@ -39,23 +44,41 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
     let start = pos;
+    let mut at_end = false;
     while pos - start < MAX_BATCH_BYTES {
         line.clear();
         let n = reader.read_until(b'\n', &mut line)?;
         if n == 0 || line.last() != Some(&b'\n') {
+            at_end = true;
             break;
         }
         let text = String::from_utf8_lossy(&line);
         let text = text.trim();
         if !text.is_empty() {
             match serde_json::from_str::<serde_json::Value>(text) {
-                Ok(v) => batch
-                    .entries
-                    .extend(format.parse_value(&v).into_iter().map(|e| (pos, e))),
+                Ok(v) => {
+                    let entries = format.parse_value(&v);
+                    if let Some(limit) = format.rate_limit(&v) {
+                        batch.rate_limit = Some(limit);
+                    } else if entries.iter().any(|e| {
+                        matches!(
+                            e.role,
+                            TranscriptRole::Assistant
+                                | TranscriptRole::Thinking
+                                | TranscriptRole::ToolCall
+                        )
+                    }) {
+                        batch.rate_limit = None;
+                    }
+                    batch.entries.extend(entries.into_iter().map(|e| (pos, e)));
+                }
                 Err(_) => batch.malformed += 1,
             }
         }
         pos += n as u64;
+    }
+    if !at_end {
+        batch.rate_limit = None;
     }
     batch.next_offset = pos;
     Ok(batch)
@@ -66,7 +89,6 @@ mod tests {
     use std::io::Write;
 
     use super::*;
-    use crate::TranscriptRole;
 
     const USER: &str = r#"{"type":"user","message":{"role":"user","content":"hello"}}"#;
     const REPLY: &str = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#;
@@ -115,5 +137,34 @@ mod tests {
         let batch = read_from(&path, 0, SessionFormat::Claude).unwrap();
         assert_eq!(batch.malformed, 1);
         assert_eq!(batch.entries.len(), 1);
+    }
+
+    const LIMITED: &str = r#"{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"You've hit your session limit"}]}}"#;
+
+    #[test]
+    fn reports_a_rate_limit_the_agent_is_stopped_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, format!("{USER}\n{REPLY}\n{LIMITED}\n{USER}\n")).unwrap();
+        let batch = read_from(&path, 0, SessionFormat::Claude).unwrap();
+        let limit = batch.rate_limit.expect("a rate limit");
+        assert_eq!(
+            limit.message.as_deref(),
+            Some("You've hit your session limit")
+        );
+        // The harness's own message still reaches the transcript.
+        assert_eq!(batch.entries.len(), 4);
+
+        let none = read_from(&path, batch.next_offset, SessionFormat::Claude).unwrap();
+        assert_eq!(none.rate_limit, None);
+    }
+
+    #[test]
+    fn a_rate_limit_the_agent_worked_past_is_not_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, format!("{LIMITED}\n{USER}\n{REPLY}\n")).unwrap();
+        let batch = read_from(&path, 0, SessionFormat::Claude).unwrap();
+        assert_eq!(batch.rate_limit, None);
     }
 }

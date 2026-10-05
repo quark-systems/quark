@@ -92,6 +92,8 @@ use super::{accounts, events, harnesses, memory, pull_requests, routes, terminal
         quark_systems::MemoryProposalState,
         quark_systems::QuotaState,
         quark_systems::AccountQuotaChanged,
+        quark_systems::AccountFailover,
+        quark_systems::FailoverOutcome,
     )),
     tags(
         (name = "daemon"),

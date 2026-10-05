@@ -12,8 +12,8 @@ use std::sync::Mutex;
 use crate::engine::{FleetSnapshot, Hold, StatusEntry};
 use quark_systems::{
     AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset,
-    DispatchRecord, Event, EventType, Project, ProjectStatus, RepoSource, Task, TaskEvent,
-    TaskKind, TaskState, TranscriptEntry, TranscriptItem, UpdateProject,
+    DispatchRecord, DispatchTrigger, Event, EventType, Project, ProjectStatus, RepoSource, Task,
+    TaskEvent, TaskKind, TaskState, TranscriptEntry, TranscriptItem, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -21,10 +21,12 @@ use tokio::sync::broadcast;
 use crate::now_rfc3339;
 
 mod accounts;
+mod failover;
 mod memory;
 mod pull_requests;
 
 pub use accounts::{default_account_id, AccountRow};
+pub use failover::is_daemon_decision;
 pub use memory::{NewProposal, PendingLearning};
 pub use pull_requests::{artifact_id, artifact_path, PrOwner, PrSyncTarget};
 
@@ -35,7 +37,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -312,6 +314,11 @@ CREATE TABLE dispatch_records (
     record      TEXT NOT NULL,
     UNIQUE (task_id, generation)
 );
+"#;
+
+/// Rate-limit failovers (ADR-11) per task, as API JSON, oldest first.
+const SCHEMA_V13: &str = r#"
+ALTER TABLE tasks ADD COLUMN failovers TEXT NOT NULL DEFAULT '[]';
 "#;
 
 /// A task whose status log the projector tails.
@@ -769,6 +776,7 @@ impl Store {
                                 .harness
                                 .as_deref()
                                 .and_then(|h| accounts::inherited_account(tx, project_id, h)),
+                            failovers: Vec::new(),
                             created_at: now.clone(),
                             updated_at: now,
                         };
@@ -883,8 +891,10 @@ impl Store {
 
     /// Stores the record of one spawn, assigning its id and time, and emits
     /// `dispatch.recorded`. A record that names no account gets the account
-    /// the task runs under, if one is known. A generation already recorded
-    /// for the task is left as it was and returns `None`.
+    /// the task runs under, if one is known. A relaunch that moved the worker
+    /// to another account after a rate limit notes that failover. A
+    /// generation already recorded for the task is left as it was and
+    /// returns `None`.
     pub fn record_dispatch(
         &self,
         record: &DispatchRecord,
@@ -905,6 +915,17 @@ impl Store {
                     )
                     .optional()?
                     .flatten();
+            }
+            if record.trigger == DispatchTrigger::Relaunch && record.failover.is_none() {
+                if let Some(f) = failover::unrecorded(tx, &record.task_id)? {
+                    record.summary = format!(
+                        "{} Quark moved the worker from account {} to {} after a rate limit.",
+                        record.summary,
+                        f.from_account_id,
+                        f.to_account_id.as_deref().unwrap_or("another account")
+                    );
+                    record.failover = Some(f);
+                }
             }
             let inserted = tx.execute(
                 "INSERT OR IGNORE INTO dispatch_records
@@ -1228,7 +1249,9 @@ impl Store {
                 rows.collect::<std::result::Result<_, _>>()?
             };
             for (engine_id, old) in open {
-                if holds.iter().any(|h| h.id == engine_id)
+                // The daemon's own questions have no hold to go away.
+                if failover::is_daemon_decision(&engine_id)
+                    || holds.iter().any(|h| h.id == engine_id)
                     || !later(observed_at, Some(&old.opened_at))
                 {
                     continue;
@@ -1610,6 +1633,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.pragma_update(None, "user_version", 12)?;
         tx.commit()?;
     }
+    if version < 13 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V13)?;
+        tx.pragma_update(None, "user_version", 13)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1716,9 +1745,9 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
 }
 
 const TASK_COLUMNS: &str = "id, project_id, title, kind, state, state_note, harness, \
-                            pull_request_url, created_at, updated_at, account_id";
+                            pull_request_url, created_at, updated_at, account_id, failovers";
 const TASK_SELECT: &str = "SELECT id, project_id, title, kind, state, state_note, harness, \
-                           pull_request_url, created_at, updated_at, account_id FROM tasks";
+                           pull_request_url, created_at, updated_at, account_id, failovers FROM tasks";
 
 fn task_from_row(r: &Row) -> rusqlite::Result<Task> {
     task_from_row_at(r, 0)
@@ -1740,6 +1769,8 @@ fn task_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Task> {
         created_at: r.get(i + 8)?,
         updated_at: r.get(i + 9)?,
         account_id: r.get(i + 10)?,
+        // Written only by this daemon; an unreadable value reads as none.
+        failovers: serde_json::from_str(&r.get::<_, String>(i + 11)?).unwrap_or_default(),
     })
 }
 
@@ -1777,7 +1808,7 @@ fn decision_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Decision> {
 
 /// Whether RFC 3339 time `a` is strictly later than `b`. An absent `b` is
 /// the distant past; an unparsable time is never later, so nothing changes.
-fn later(a: &str, b: Option<&str>) -> bool {
+pub(crate) fn later(a: &str, b: Option<&str>) -> bool {
     use time::format_description::well_known::Rfc3339;
     let Ok(a) = time::OffsetDateTime::parse(a, &Rfc3339) else {
         return false;

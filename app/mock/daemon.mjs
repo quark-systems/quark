@@ -80,6 +80,7 @@ function addTask(projectId, t, { silent = false } = {}) {
     kind: t.kind ?? "ship", state_note: t.state_note ?? null, harness: t.harness ?? "claude-code",
     pull_request_url: t.pull_request_url ?? null, created_at: t.created_at ?? now(), updated_at: t.updated_at ?? now(),
     account_id: t.account_id ?? (ACCOUNT_ENV[t.harness ?? "claude-code"] ? `default-${t.harness ?? "claude-code"}` : null),
+    failovers: t.failovers ?? [],
   };
   tasks.set(task.id, task);
   transcripts.set(task.id, []);
@@ -106,7 +107,7 @@ function recordDispatch(task, how, { silent = false, ts = now(), model = null, e
   const base = {
     id: nextId("dsp"), task_id: task.id, project_id: task.project_id, chosen, recorded_at: ts,
     trigger: how === "relaunch" ? "relaunch" : "spawn", decided_by: how, rule: null, candidates: [],
-    classifier: { provider: "none", model: null, confidence: null },
+    classifier: { provider: "none", model: null, confidence: null }, failover: null,
   };
   const rec = how === "classifier" ? {
     ...base, rule: DEMO_RULE, candidates: DEMO_CANDIDATES,
@@ -438,7 +439,7 @@ function addAccount(a) {
     quota: a.quota ?? (QUOTA_PROVIDER[a.harness]
       ? { state: "pending", remaining_percent: null, plan: null, windows: [], detail: null, checked_at: null }
       : { state: "unsupported", remaining_percent: null, plan: null, windows: [], detail: "quota is read per account for Claude Code and Codex only", checked_at: null }),
-    active_tasks: 0, launchable: a.launchable ?? (a.default || a.harness === "claude-code"), created_at: a.default ? null : now(),
+    active_tasks: 0, launchable: a.launchable ?? (a.default || a.harness === "claude-code" || a.harness === "codex"), created_at: a.default ? null : now(),
   };
   accounts.set(account.id, account);
   return account;

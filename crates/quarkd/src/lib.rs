@@ -11,6 +11,7 @@ pub mod config;
 pub mod crew_dispatch;
 pub mod dispatch;
 pub mod engine;
+pub mod failover;
 pub mod forge;
 pub mod gates;
 pub mod harness;
@@ -69,10 +70,6 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let engine: Arc<dyn EngineAdapter> =
         config::build_engine(engine, &config, store.clone(), tmux)?;
     let layout = provision::Layout::new(&config.home);
-    let projector = Projector::new(store.clone(), engine.clone())
-        .with_sessions(sessions.clone())
-        .with_command(layout.command_workspace());
-    let projector_task = tokio::spawn(projector.run(config.refresh_interval));
     let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
     let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
     let pr_task = tokio::spawn(pr_center.run(config.pr_refresh_interval));
@@ -87,6 +84,17 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         engine.account_envs(),
     ));
     let quota_task = tokio::spawn(accounts.clone().run(config.quota_refresh_interval));
+    let failover = failover::Failover::new(
+        store.clone(),
+        engine.clone(),
+        accounts.clone(),
+        harnesses.clone(),
+    );
+    let projector = Projector::new(store.clone(), engine.clone())
+        .with_sessions(sessions.clone())
+        .with_command(layout.command_workspace())
+        .with_failover(Arc::new(failover));
+    let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 
     let app = api::router(AppState {
         store,

@@ -642,10 +642,41 @@ async fn engine_scripts_run_on_the_daemons_tmux_server() {
         )
     );
 
+    // A relaunch carries the account it moves the worker to: the engine's
+    // own `fm-control.sh <task> relaunch`, with the variable in its
+    // environment.
+    let control = fake.engine_root.join("bin/fm-control.sh");
+    fs::write(
+        &control,
+        "#!/bin/sh\necho \"$1 $2 CODEX_HOME=$CODEX_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR\" > \"$FM_HOME/env.log\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&control, fs::Permissions::from_mode(0o755)).unwrap();
+    e.control(
+        &WorkspaceRef {
+            project_id: "prj_1".into(),
+            root: fake.home.clone(),
+        },
+        "ship-task",
+        &TaskControl::Relaunch {
+            harness: None,
+            model: None,
+            effort: None,
+            note: "moved after a rate limit".into(),
+            account_env: vec![("CODEX_HOME".into(), "/accounts/codex-work".into())],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(fake.home.join("env.log")).unwrap(),
+        "ship-task relaunch CODEX_HOME=/accounts/codex-work CLAUDE_CONFIG_DIR=\n"
+    );
+
     // Only an account variable the engine forwards, set to an absolute
     // path, reaches a script.
     for env in [
-        ("CODEX_HOME", "/accounts/codex-work"),
+        ("PI_CODING_AGENT_DIR", "/accounts/pi-work"),
         ("CLAUDE_CONFIG_DIR", "relative/dir"),
         ("PATH", "/tmp"),
     ] {

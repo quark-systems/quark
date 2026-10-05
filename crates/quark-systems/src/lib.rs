@@ -246,8 +246,45 @@ pub struct Task {
     /// when the harness has accounts.
     #[serde(default)]
     pub account_id: Option<String>,
+    /// Each time the worker hit a rate limit, oldest first: the account it
+    /// moved to, or why it could not move.
+    #[serde(default)]
+    pub failovers: Vec<AccountFailover>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// How a rate limit on a task's account was handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FailoverOutcome {
+    /// The worker was relaunched from its branch, in the same worktree,
+    /// under `to_account_id`.
+    Relaunched,
+    /// No other account in the pool was healthy; a decision was opened.
+    NoHealthyAccount,
+    /// The engine could not relaunch the worker; a decision was opened.
+    RelaunchFailed,
+}
+
+/// One rate limit a task's worker hit, and where the worker went (ADR-11).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AccountFailover {
+    /// The account that reported the rate limit (an `Account.id`).
+    pub from_account_id: String,
+    /// The account the worker was relaunched under; absent unless `outcome`
+    /// is `relaunched`.
+    pub to_account_id: Option<String>,
+    /// The pool the next account was chosen from, when one was named.
+    pub pool: Option<String>,
+    pub outcome: FailoverOutcome,
+    /// The harness log line that reported the limit, e.g.
+    /// `claude: assistant isApiErrorMessage error=rate_limit`.
+    pub signal: String,
+    /// What the harness said about the limit, or why the relaunch failed.
+    pub detail: Option<String>,
+    /// When the daemon handled it (RFC 3339 UTC).
+    pub at: String,
 }
 
 /// A steering message for a task's worker.
@@ -329,6 +366,10 @@ pub struct DispatchRecord {
     /// The agent the worker was actually started with.
     pub chosen: DispatchChoice,
     pub classifier: DispatchClassifier,
+    /// The rate limit this relaunch answered, when the daemon relaunched the
+    /// worker to move it to another account; also in `Task.failovers`.
+    #[serde(default)]
+    pub failover: Option<AccountFailover>,
     /// When the daemon recorded the dispatch (RFC 3339 UTC).
     pub recorded_at: String,
 }

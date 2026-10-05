@@ -447,19 +447,8 @@ impl Accounts {
                         h.name()
                     )));
                 }
-                let ready = members
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, a)| {
-                        a.launchable
-                            && a.health.state != AuthState::NotConfigured
-                            && !a.quota.exhausted()
-                    })
-                    .min_by_key(|(i, a)| {
-                        let left = a.quota.remaining_percent.map_or(-1, |p| (p * 100.0) as i64);
-                        (a.active_tasks, Reverse(left), *i)
-                    });
-                let Some((_, a)) = ready else {
+                let ready = least_busy(members.iter().copied().filter(|a| ready(a)));
+                let Some(a) = ready else {
                     return Err(AccountError::Conflict(format!(
                         "no account in pool `{pool}` is ready: each is logged out, out of quota, or one the engine cannot launch {} under yet",
                         h.name()
@@ -484,6 +473,59 @@ impl Accounts {
         Ok(Some(Lease {
             account_id: chosen,
             env,
+        }))
+    }
+
+    /// The account a task's worker moves to after its own reported a rate
+    /// limit: the least busy ready account of `harness` in `pool`, or, with
+    /// no pool named, in any pool the task's account is in. The task's own
+    /// account and those in `exclude` are passed over. `None` when no such
+    /// account is left. Nothing is recorded; see
+    /// [`Store::record_failover`].
+    pub async fn next_account(
+        &self,
+        task_id: &str,
+        harness: &str,
+        pool: Option<&str>,
+        exclude: &[String],
+    ) -> Result<Option<Lease>> {
+        let _guard = self.lease_lock.lock().await;
+        let Some(h) = self.harnesses.resolve(harness).cloned() else {
+            return Ok(None);
+        };
+        let Some(var) = h.account_env() else {
+            return Ok(None);
+        };
+        let accounts: Vec<Account> = self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|a| a.harness == h.id())
+            .collect();
+        let (store, id) = (self.store.clone(), task_id.to_string());
+        let current = blocking(move || store.task_account(&id))
+            .await?
+            .unwrap_or_else(|| default_account_id(h.id()));
+        let pools: Vec<String> = match pool {
+            Some(p) => vec![p.to_string()],
+            None => accounts
+                .iter()
+                .find(|a| a.id == current)
+                .map(|a| a.pools.clone())
+                .unwrap_or_default(),
+        };
+        let next = least_busy(accounts.iter().filter(|a| {
+            a.id != current
+                && !exclude.contains(&a.id)
+                && a.pools.iter().any(|p| pools.contains(p))
+                && ready(a)
+        }));
+        Ok(next.map(|a| Lease {
+            account_id: a.id.clone(),
+            env: match (&a.config_dir, a.default) {
+                (Some(dir), false) => vec![(var.to_string(), dir.clone())],
+                _ => Vec::new(),
+            },
         }))
     }
 
@@ -532,6 +574,24 @@ impl Accounts {
             }
         }
     }
+}
+
+/// Whether an agent can start under the account now: the engine can launch
+/// it, it is logged in, and its last quota reading has quota left.
+fn ready(a: &Account) -> bool {
+    a.launchable && a.health.state != AuthState::NotConfigured && !a.quota.exhausted()
+}
+
+/// The account with the fewest running tasks, then the most quota left, then
+/// the first listed.
+fn least_busy<'a>(accounts: impl Iterator<Item = &'a Account>) -> Option<&'a Account> {
+    accounts
+        .enumerate()
+        .min_by_key(|(i, a)| {
+            let left = a.quota.remaining_percent.map_or(-1, |p| (p * 100.0) as i64);
+            (a.active_tasks, Reverse(left), *i)
+        })
+        .map(|(_, a)| a)
 }
 
 async fn blocking<T, F>(f: F) -> Result<T>

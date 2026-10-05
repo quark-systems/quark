@@ -69,6 +69,17 @@ impl From<AccountError> for ApiError {
     }
 }
 
+impl From<crate::failover::FailoverError> for ApiError {
+    fn from(e: crate::failover::FailoverError) -> Self {
+        use crate::failover::FailoverError;
+        match e {
+            FailoverError::Store(e) => e.into(),
+            FailoverError::Account(e) => e.into(),
+            FailoverError::Engine(e) => e.into(),
+        }
+    }
+}
+
 impl From<EngineError> for ApiError {
     fn from(e: EngineError) -> Self {
         match e {

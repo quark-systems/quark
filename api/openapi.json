@@ -430,7 +430,7 @@
           "decisions"
         ],
         "summary": "Answer an open decision.",
-        "description": "The engine records the answer with who gave it, which unblocks the task\nthat asked. The answered decision is returned and also arrives as a\n`decision.answered` event.",
+        "description": "The engine records the answer with who gave it, which unblocks the task\nthat asked. A decision the daemon opened about a rate limit relaunches\nthe task's worker instead, with the answer as its note. The answered decision is returned and also arrives as a\n`decision.answered` event.",
         "operationId": "answer_decision",
         "parameters": [
           {
@@ -2391,6 +2391,54 @@
           }
         }
       },
+      "AccountFailover": {
+        "type": "object",
+        "description": "One rate limit a task's worker hit, and where the worker went (ADR-11).",
+        "required": [
+          "from_account_id",
+          "outcome",
+          "signal",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When the daemon handled it (RFC 3339 UTC)."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the harness said about the limit, or why the relaunch failed."
+          },
+          "from_account_id": {
+            "type": "string",
+            "description": "The account that reported the rate limit (an `Account.id`)."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/FailoverOutcome"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool the next account was chosen from, when one was named."
+          },
+          "signal": {
+            "type": "string",
+            "description": "The harness log line that reported the limit, e.g.\n`claude: assistant isApiErrorMessage error=rate_limit`."
+          },
+          "to_account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account the worker was relaunched under; absent unless `outcome`\nis `relaunched`."
+          }
+        }
+      },
       "AccountQuota": {
         "type": "object",
         "description": "An account's latest quota reading.",
@@ -3069,6 +3117,17 @@
             "$ref": "#/components/schemas/DispatchDecider",
             "description": "Who chose the agent."
           },
+          "failover": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountFailover",
+                "description": "The rate limit this relaunch answered, when the daemon relaunched the\nworker to move it to another account; also in `Task.failovers`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -3353,6 +3412,15 @@
             "description": "`/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`."
           }
         }
+      },
+      "FailoverOutcome": {
+        "type": "string",
+        "description": "How a rate limit on a task's account was handled.",
+        "enum": [
+          "relaunched",
+          "no_healthy_account",
+          "relaunch_failed"
+        ]
       },
       "FileChangeStatus": {
         "type": "string",
@@ -4465,6 +4533,13 @@
           },
           "created_at": {
             "type": "string"
+          },
+          "failovers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountFailover"
+            },
+            "description": "Each time the worker hit a rate limit, oldest first: the account it\nmoved to, or why it could not move."
           },
           "harness": {
             "type": [
