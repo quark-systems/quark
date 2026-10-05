@@ -34,6 +34,11 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
     },
     fit() { try { fit.fit(); } catch { /* not laid out */ } },
     focus() { term.focus(); },
+    text() {
+      const b = term.buffer.active, lines: string[] = [];
+      for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? "");
+      return lines.join("\n");
+    },
     raw() { return term; },
   };
 }
