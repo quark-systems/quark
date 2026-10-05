@@ -59,6 +59,11 @@ impl Layout {
             .unwrap_or_else(|| self.home.join("memory"))
     }
 
+    /// User-level settings, `~/.quark/config.yaml`.
+    pub fn user_config(&self) -> PathBuf {
+        self.home.join(crate::classifier::USER_FILE)
+    }
+
     /// The command-center workspace (a firstmate primary).
     pub fn command_workspace(&self) -> PathBuf {
         self.home.join("workspaces/command")

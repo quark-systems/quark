@@ -25,6 +25,10 @@ pub struct Resolution {
     pub reason: Option<String>,
     pub notes: Vec<String>,
     pub candidates: Vec<Candidate>,
+    /// Why the classifier's answer was not used and the default profiles
+    /// were resolved instead (`on_failure: default`): a confidence below the
+    /// floor, a timeout or a failure.
+    pub fallback: Option<String>,
     /// The profile the resolution selected (`clear` only).
     pub profile: Option<Profile>,
     /// The block as printed, empty when off.
@@ -63,13 +67,15 @@ impl Resolution {
             reason: None,
             notes: Vec::new(),
             candidates: Vec::new(),
+            fallback: None,
             profile: None,
             raw: String::new(),
         }
     }
 
-    /// Whether the classifier was asked at all. An escalation for an empty
-    /// rule set and a failure before the request never reach it.
+    /// Whether the classifier answered. An escalation for an empty rule set,
+    /// a failure before the request and a fallback for a classifier that
+    /// never answered carry no answer.
     pub fn classifier_consulted(&self) -> bool {
         self.model.is_some() || self.confidence.is_some()
     }
@@ -96,6 +102,7 @@ pub fn parse(stdout: &str) -> Option<Resolution> {
                 r.model = known(m);
             }
             "rule" => parse_rule(value, &mut r),
+            "fallback" => r.fallback = parse_fallback(value),
             "reason" => r.reason = known(value),
             "note" => r.notes.extend(known(value)),
             "candidate" => r.candidates.extend(parse_candidate(value)),
@@ -105,6 +112,16 @@ pub fn parse(stdout: &str) -> Option<Resolution> {
     }
     r.status = status?;
     Some(r)
+}
+
+/// `default (confidence 0.4 below floor 0.6)`
+fn parse_fallback(value: &str) -> Option<String> {
+    let why = value.strip_prefix("default").unwrap_or(value).trim();
+    let why = why
+        .strip_prefix('(')
+        .and_then(|w| w.strip_suffix(')'))
+        .unwrap_or(why);
+    Some(why.to_string())
 }
 
 /// `rule_4 (A simple bug fix.)   confidence: 0.9`
@@ -317,5 +334,50 @@ mod tests {
     #[test]
     fn output_without_a_status_is_refused() {
         assert_eq!(parse("dispatch-resolve:\n  reason: x\n"), None);
+    }
+
+    #[test]
+    fn parses_a_fallback_to_the_default_profiles() {
+        // The classifier never answered: no model, rule or probabilities.
+        let failed = parse(
+            "dispatch-resolve:
+  status: clear
+  fallback: default (classifier request timed out after 2000ms)
+  note: classifier fell back to the default profiles (on_failure default): classifier request timed out after 2000ms
+  select: ordered
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=79%  spendPriority=1.2  runway=ok  -> eligible
+  selected: claude:sonnet (first eligible profile in listed order)
+  profile: --harness 'claude' --model 'sonnet'
+",
+        )
+        .unwrap();
+        assert_eq!(failed.status, "clear");
+        assert_eq!(
+            failed.fallback.as_deref(),
+            Some("classifier request timed out after 2000ms")
+        );
+        assert!(!failed.classifier_consulted());
+        assert_eq!(failed.rule, None);
+        assert_eq!(failed.profile.unwrap().harness, "claude");
+
+        // It answered below the floor: its answer is still reported.
+        let low = parse(
+            "dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 412   tokens: 310/12
+  rule: rule_1 (A simple bug fix.)   confidence: 0.4
+  probabilities: rule_1=0.4 default=0.6
+  fallback: default (confidence 0.4 below floor 0.6)
+  profile: --harness 'codex'
+",
+        )
+        .unwrap();
+        assert_eq!(
+            low.fallback.as_deref(),
+            Some("confidence 0.4 below floor 0.6")
+        );
+        assert!(low.classifier_consulted());
+        assert_eq!(low.confidence, Some(0.4));
+        assert_eq!(low.rule.as_deref(), Some("rule_1"));
     }
 }

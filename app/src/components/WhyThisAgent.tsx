@@ -8,9 +8,10 @@ import { Unavailable } from "./Unavailable";
 
 const NONE: DispatchRecord[] = [];
 
-const DECIDER: Record<DispatchRecord["decided_by"], string> = {
+export const DECIDER: Record<DispatchRecord["decided_by"], string> = {
   classifier: "classifier",
   coordinator: "coordinator",
+  default_rule: "default rule",
   relaunch: "relaunch",
 };
 

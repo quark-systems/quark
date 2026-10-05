@@ -355,8 +355,11 @@ fn dispatch_yaml(p: &Project) -> String {
         "# Dispatch rules for this Project, created from the {} preset.\n",
         q(preset.as_str())
     ));
-    y.push_str("# With provider none, the coordinator picks the rule for each task.\n");
-    y.push_str("classifier:\n  provider: \"none\"\n");
+    y.push_str(
+        "# No classifier block here: the default in ~/.quark/config.yaml applies, and with\n",
+    );
+    y.push_str("# none there (provider: none) the coordinator picks the rule for each task.\n");
+    y.push_str("# A classifier block in this file overrides that default field by field.\n");
     y.push_str("default_select: \"ordered\"\n");
     match preset {
         DispatchPreset::Single => y.push_str("rules: []\n"),

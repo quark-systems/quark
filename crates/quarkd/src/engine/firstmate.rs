@@ -571,6 +571,7 @@ pub fn neutral_resolution(r: Resolution) -> EngineResolution {
             effort: p.effort,
             account: None,
         }),
+        fallback: r.fallback,
         classifier_consulted,
         classifier_model: r.model,
         confidence: r.confidence,

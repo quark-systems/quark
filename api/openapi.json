@@ -840,7 +840,7 @@
           "projects"
         ],
         "summary": "The Project's dispatch rules.",
-        "description": "What `dispatch.yaml` on the Project repo's `main` declares: the rules in\norder, each with its name, condition and ordered candidates, the default\ncandidates and `default_select`. Harness ids are Quark's. A Project repo\nwithout the file answers no rules and no `revision`.",
+        "description": "What `dispatch.yaml` on the Project repo's `main` declares: the rules in\norder, each with its name, condition and ordered candidates, the default\ncandidates and `default_select`. Harness ids are Quark's. A Project repo\nwithout the file answers no rules and no `revision`. `classifier` is the\nclassifier in effect: the file's block over the user-level default in\n`~/.quark/config.yaml`, `provider: none` when neither names one.",
         "operationId": "get",
         "parameters": [
           {
@@ -3454,7 +3454,7 @@
           },
           "provider": {
             "type": "string",
-            "description": "`none` when no classifier was consulted and the coordinator picked."
+            "description": "`none` when no classifier is configured. A configured classifier that\ndid not answer has a provider and no model or confidence."
           }
         }
       },
@@ -3463,6 +3463,7 @@
         "enum": [
           "classifier",
           "coordinator",
+          "default_rule",
           "relaunch"
         ]
       },
@@ -3766,7 +3767,7 @@
               "object",
               "null"
             ],
-            "description": "The file's `classifier` block, as written. Saving keeps it."
+            "description": "The classifier in effect: the file's `classifier` block over the\nuser-level default, with `provider: none` when neither names one. Its\n`credential` is a keychain reference, never a key. Saving keeps the\nfile's own block."
           },
           "commit": {
             "type": [
@@ -3894,7 +3895,7 @@
           },
           "decided_by": {
             "$ref": "#/components/schemas/DispatchDecider",
-            "description": "Who would choose the agent: `classifier` when the resolution selects\na profile, else `coordinator`."
+            "description": "Who would choose the agent: `classifier` when the resolution selects\na matched rule's profile, `default_rule` when it falls back to the\ndefault rule (`on_failure: default`), else `coordinator`."
           },
           "project_id": {
             "type": "string"

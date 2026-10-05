@@ -16,6 +16,7 @@ import { href } from "../nav";
 import { useStore } from "../store";
 import { errText } from "../util";
 import { Unavailable } from "../components/Unavailable";
+import { DECIDER } from "../components/WhyThisAgent";
 
 type Tab = "rules" | "test";
 const VALID: HarnessValidation = { valid: true, errors: [], warnings: [] };
@@ -421,7 +422,7 @@ function TestResult({ t, draft, rules }: { t: DispatchTest; draft: boolean; rule
             : <span className="faint">none: the coordinator would pick</span>}
         </dd>
         <dt>Decided by</dt>
-        <dd><span className="pill accent">{t.decided_by}</span></dd>
+        <dd><span className="pill accent">{DECIDER[t.decided_by] ?? t.decided_by}</span></dd>
         {t.chosen && <><dt>Would select</dt><dd className="mono" data-testid="dispatch-test-chosen">{profileLabel(t.chosen)}</dd></>}
         <dt>Classifier</dt>
         <dd>

@@ -9,7 +9,7 @@
 
 use quark_systems::{
     DispatchChoice, DispatchClassifier, DispatchDecider, DispatchRecord, DispatchResolution,
-    DispatchStatus, DispatchTrigger,
+    DispatchRule, DispatchStatus, DispatchTrigger,
 };
 
 use crate::engine::{EngineResolution, EngineSpawn};
@@ -21,6 +21,9 @@ pub const FRESH_SPAWN_SECS: i64 = 10 * 60;
 
 /// The classifier provider recorded when none was consulted.
 pub const NO_CLASSIFIER: &str = "none";
+
+/// The id the engine's resolution gives the default rule.
+pub const DEFAULT_RULE: &str = "default";
 
 /// The provider name for a classifier behind the System-1 API, which is
 /// what the engine's resolution calls.
@@ -117,7 +120,7 @@ pub fn build(
                     "No classifier is configured (provider: none), so the coordinator picked {agent}."
                 ),
                 (DispatchStatus::Clear, Some(p)) if same_agent(p, &chosen) => {
-                    record.decided_by = DispatchDecider::Classifier;
+                    record.decided_by = decider(&r);
                     format!("{} The resolution selected {agent}.", matched(&r))
                 }
                 (DispatchStatus::Clear, Some(p)) => {
@@ -140,7 +143,7 @@ pub fn build(
                     )
                 }
             };
-            record.rule = r.rule;
+            record.rule = rule(&r);
             record.candidates = r.candidates;
             record.resolution = DispatchResolution {
                 status: r.status,
@@ -162,9 +165,31 @@ pub fn no_classifier() -> DispatchClassifier {
     }
 }
 
-/// The classifier a resolution consulted, if it consulted one.
+/// Who decides when the resolution's selected profile is used: the
+/// classifier, or the default rule its answer fell back to.
+pub fn decider(r: &EngineResolution) -> DispatchDecider {
+    match r.fallback {
+        Some(_) => DispatchDecider::DefaultRule,
+        None => DispatchDecider::Classifier,
+    }
+}
+
+/// The rule the resolution applied: the default rule after a fallback,
+/// whatever the classifier answered.
+pub fn rule(r: &EngineResolution) -> Option<DispatchRule> {
+    match r.fallback {
+        Some(_) => Some(DispatchRule {
+            id: DEFAULT_RULE.into(),
+            when: None,
+        }),
+        None => r.rule.clone(),
+    }
+}
+
+/// The classifier a resolution consulted, if it consulted one. A fallback
+/// means one is configured, even when it never answered.
 pub fn classifier(r: &EngineResolution) -> DispatchClassifier {
-    if !r.classifier_consulted {
+    if !r.classifier_consulted && r.fallback.is_none() {
         return no_classifier();
     }
     DispatchClassifier {
@@ -190,8 +215,15 @@ fn same_agent(a: &DispatchChoice, b: &DispatchChoice) -> bool {
     a.harness == b.harness && a.model == b.model && a.effort == b.effort
 }
 
-/// `The classifier matched rule <id> (<when>) at <c> confidence.`
+/// `The classifier matched rule <id> (<when>) at <c> confidence.`, or why
+/// its answer was not used and the default rule applied.
 pub fn matched(r: &EngineResolution) -> String {
+    if let Some(why) = &r.fallback {
+        return format!(
+            "The classifier's answer was not used ({why}), so the default rule applied \
+             (on_failure: default)."
+        );
+    }
     let rule = match &r.rule {
         Some(rule) => match &rule.when {
             Some(when) => format!("rule {} ({when})", rule.id),
@@ -220,7 +252,7 @@ pub fn status_word(s: DispatchStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quark_systems::{DispatchCandidate, DispatchRule};
+    use quark_systems::DispatchCandidate;
 
     fn spawn(harness: &str, model: Option<&str>) -> EngineSpawn {
         EngineSpawn {
@@ -264,6 +296,7 @@ mod tests {
                 effort: None,
                 account: None,
             }),
+            fallback: None,
             classifier_consulted: true,
             classifier_model: Some("jev-1.13.0".into()),
             confidence: Some(0.91),
@@ -320,6 +353,7 @@ mod tests {
             notes: vec![],
             candidates: vec![],
             profile: None,
+            fallback: None,
             classifier_consulted: false,
             classifier_model: None,
             confidence: None,
@@ -384,6 +418,64 @@ mod tests {
         assert!(r
             .summary
             .starts_with("Relaunched in the same worktree with codex:gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn a_fallback_to_the_default_rule_is_recorded_as_one() {
+        // The classifier never answered: on_failure default selected the
+        // default rule's profile, and the worker was started with it.
+        let mut failed = clear(("claude", Some("sonnet")));
+        failed.rule = None;
+        failed.classifier_consulted = false;
+        failed.classifier_model = None;
+        failed.confidence = None;
+        failed.fallback = Some("classifier request timed out after 2000ms".into());
+        let r = build(
+            "t",
+            "p",
+            &spawn("claude", Some("sonnet")),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(failed.clone())),
+        );
+        assert_eq!(r.decided_by, DispatchDecider::DefaultRule);
+        assert_eq!(r.rule.as_ref().unwrap().id, "default");
+        assert_eq!(r.classifier.provider, SYSTEM1, "one is configured");
+        assert_eq!(r.classifier.model, None);
+        assert_eq!(r.classifier.confidence, None);
+        assert_eq!(
+            r.summary,
+            "The classifier's answer was not used (classifier request timed out after 2000ms), \
+             so the default rule applied (on_failure: default). The resolution selected \
+             claude:sonnet."
+        );
+
+        // It answered below the floor: its model and confidence are kept.
+        let mut low = clear(("claude", Some("sonnet")));
+        low.confidence = Some(0.4);
+        low.fallback = Some("confidence 0.4 below floor 0.6".into());
+        let r = build(
+            "t",
+            "p",
+            &spawn("claude", Some("sonnet")),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(low)),
+        );
+        assert_eq!(r.decided_by, DispatchDecider::DefaultRule);
+        assert_eq!(r.rule.as_ref().unwrap().id, "default");
+        assert_eq!(r.classifier.model.as_deref(), Some("jev-1.13.0"));
+        assert_eq!(r.classifier.confidence, Some(0.4));
+        assert!(r.summary.contains("confidence 0.4 below floor 0.6"));
+
+        // The coordinator can still override the default rule's profile.
+        let r = build(
+            "t",
+            "p",
+            &spawn("codex", None),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(failed)),
+        );
+        assert_eq!(r.decided_by, DispatchDecider::Coordinator);
+        assert!(r.summary.contains("overrode the selected profile"));
     }
 
     #[test]

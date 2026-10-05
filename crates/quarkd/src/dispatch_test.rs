@@ -102,7 +102,7 @@ pub fn build(
                         dispatch::matched(&r),
                         dispatch::label(&chosen)
                     );
-                    test.decided_by = DispatchDecider::Classifier;
+                    test.decided_by = dispatch::decider(&r);
                     test.chosen = Some(chosen);
                     lead
                 }
@@ -118,14 +118,15 @@ pub fn build(
                     )
                 }
             };
+            let applied = dispatch::rule(&r);
             test.candidates = if r.candidates.is_empty() {
                 all()
             } else {
-                weighed(&r.candidates, r.rule.as_ref(), &listed, host)
+                weighed(&r.candidates, applied.as_ref(), &listed, host)
             };
             // The engine excerpts the rule's condition; the rules file has
             // all of it.
-            test.rule = r.rule.map(|rule| {
+            test.rule = applied.map(|rule| {
                 let when = listed
                     .iter()
                     .find(|l| l.rule.id == rule.id)
@@ -527,6 +528,7 @@ default:
             notes: vec![],
             candidates: vec![],
             profile: None,
+            fallback: None,
             classifier_consulted: false,
             classifier_model: None,
             confidence: None,
@@ -564,7 +566,7 @@ default:
             infos: &infos,
             accounts: &accounts,
         };
-        let config = crate::crew_dispatch::compile(YAML).unwrap();
+        let config = crate::crew_dispatch::compile(YAML, None).unwrap();
         let t = build("prj_1", &config, Resolved::Ran(Box::new(off())), &host);
 
         assert_eq!(t.decided_by, DispatchDecider::Coordinator);
@@ -648,7 +650,7 @@ default:
             infos: &infos,
             accounts: &accounts,
         };
-        let config = crate::crew_dispatch::compile(YAML).unwrap();
+        let config = crate::crew_dispatch::compile(YAML, None).unwrap();
         let clear = EngineResolution {
             status: DispatchStatus::Clear,
             rule: Some(DispatchRule {
@@ -678,6 +680,7 @@ default:
                 effort: Some("low".into()),
                 account: None,
             }),
+            fallback: None,
             classifier_consulted: true,
             classifier_model: Some("jev-1.13.0".into()),
             confidence: Some(0.91),
@@ -754,6 +757,7 @@ default:
         };
         let config = crate::crew_dispatch::compile(
             "rules: []\ndefault: { harness: \"nope\", pool: \"max\" }\n",
+            None,
         )
         .unwrap();
         let escalate = EngineResolution {

@@ -392,6 +392,10 @@ pub enum DispatchDecider {
     /// The coordinator picked: no classifier, a resolution that was not
     /// clear, or a selected profile the coordinator overrode.
     Coordinator,
+    /// The classifier's answer was not used (below its floor, a timeout or
+    /// a failure), `on_failure: default` resolved the default rule instead,
+    /// and the worker was started with the profile that selected.
+    DefaultRule,
     /// The worker was relaunched in its worktree; dispatch rules were not
     /// consulted again.
     Relaunch,
@@ -467,7 +471,8 @@ pub struct DispatchChoice {
 /// The classifier behind the System-1 API, as consulted for this dispatch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DispatchClassifier {
-    /// `none` when no classifier was consulted and the coordinator picked.
+    /// `none` when no classifier is configured. A configured classifier that
+    /// did not answer has a provider and no model or confidence.
     pub provider: String,
     /// The model that answered, e.g. `jev-1.13.0`.
     pub model: Option<String>,
@@ -564,7 +569,10 @@ pub struct DispatchRules {
     pub revision: Option<String>,
     /// The commit on `main` that last changed the file.
     pub commit: Option<String>,
-    /// The file's `classifier` block, as written. Saving keeps it.
+    /// The classifier in effect: the file's `classifier` block over the
+    /// user-level default, with `provider: none` when neither names one. Its
+    /// `credential` is a keychain reference, never a key. Saving keeps the
+    /// file's own block.
     #[schema(value_type = Option<Object>)]
     pub classifier: Option<serde_json::Value>,
     pub default_select: Option<DispatchSelect>,
@@ -601,7 +609,8 @@ pub struct TestDispatch {
 pub struct DispatchTest {
     pub project_id: String,
     /// Who would choose the agent: `classifier` when the resolution selects
-    /// a profile, else `coordinator`.
+    /// a matched rule's profile, `default_rule` when it falls back to the
+    /// default rule (`on_failure: default`), else `coordinator`.
     pub decided_by: DispatchDecider,
     /// One sentence on the outcome, for people.
     pub summary: String,

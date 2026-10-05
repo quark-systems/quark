@@ -3,7 +3,7 @@
 //!
 //! ```yaml
 //! classifier:
-//!   provider: "none"           # kept for the classifier; the engine ignores it
+//!   provider: "none"           # see crate::classifier
 //! default_select: "ordered"    # or "quota-balanced"
 //! rules:
 //!   - name: "trivial-edit"
@@ -19,7 +19,9 @@
 //! `use` and `default` take one profile or a list of them, and keep that shape.
 //! Harness ids are Quark's (`claude-code`) and compile to the engine's adapter
 //! names (`claude`). A profile's account `pool` is Quark's own and is left
-//! out. The engine's optional typed-resolution fields (rule `why`, `approval`
+//! out. The `classifier` block compiles to the classifier in effect: the
+//! Project's block over the user default (`crate::classifier`), `provider:
+//! none` when neither names one. The engine's optional typed-resolution fields (rule `why`, `approval`
 //! and `floor`, profile `provider`, `floor` and `pricing`) pass through.
 //!
 //! The engine validates the result again before writing it
@@ -34,6 +36,7 @@ use quark_systems::{DispatchProfile, DispatchRuleSpec, DispatchRulesDraft};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::classifier;
 use crate::harness::SPECS;
 
 /// The Project repo file this module compiles.
@@ -152,8 +155,8 @@ pub struct Rule {
 /// The engine's `crew-dispatch.json`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct CrewDispatchConfig {
-    /// The classifier block, kept verbatim for Quark's classifier. The engine
-    /// keeps unknown top-level keys and ignores them.
+    /// The classifier block: the one in effect when compiled, the file's own
+    /// when read as written.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub classifier: Option<serde_json::Value>,
     pub rules: Vec<Rule>,
@@ -163,9 +166,18 @@ pub struct CrewDispatchConfig {
     pub default_select: Option<Select>,
 }
 
-/// Compile `dispatch.yaml`.
-pub fn compile(dispatch_yaml: &str) -> Result<CrewDispatchConfig, String> {
-    read(dispatch_yaml, engine_harness)
+/// Compile `dispatch.yaml`. `user_classifier` is the user-level default
+/// classifier block, which the file's own block overrides field by field.
+pub fn compile(
+    dispatch_yaml: &str,
+    user_classifier: Option<&classifier::Block>,
+) -> Result<CrewDispatchConfig, String> {
+    let fail = |e: String| format!("{FILE}: {e}");
+    let mut config = read(dispatch_yaml, engine_harness)?;
+    let block = classifier::block(config.classifier.as_ref()).map_err(fail)?;
+    let effective = classifier::effective(block.as_ref(), user_classifier).map_err(fail)?;
+    config.classifier = Some(serde_json::to_value(effective).map_err(|e| fail(e.to_string()))?);
+    Ok(config)
 }
 
 /// `dispatch.yaml` as written: checked as [`compile`] checks it, with
@@ -181,9 +193,7 @@ fn read(dispatch_yaml: &str, harness: fn(&str) -> &str) -> Result<CrewDispatchCo
     let Some(doc) = doc else {
         return Ok(CrewDispatchConfig::default());
     };
-    if doc.classifier.as_ref().is_some_and(|c| !c.is_object()) {
-        return Err(fail("classifier must be a mapping".into()));
-    }
+    classifier::block(doc.classifier.as_ref()).map_err(fail)?;
     let mut names = HashSet::new();
     let mut rules = Vec::new();
     for (i, r) in doc.rules.unwrap_or_default().into_iter().enumerate() {
@@ -494,11 +504,11 @@ default:
 
     #[test]
     fn compiles_rules_default_and_candidate_lists() {
-        let c = compile(YAML).unwrap();
+        let c = compile(YAML, None).unwrap();
         assert_eq!(
             serde_json::to_value(&c).unwrap(),
             json!({
-                "classifier": {"provider": "none", "confidence_floor": 0.6},
+                "classifier": {"provider": "none"},
                 "rules": [
                     {
                         "name": "trivial-edit",
@@ -535,11 +545,53 @@ default:
     fn compiles_what_project_creation_writes() {
         let y = "classifier:\n  provider: \"none\"\ndefault_select: \"ordered\"\nrules: []\n\
                  default:\n  - { harness: \"cursor-agent\" }\n";
-        let c = serde_json::to_value(compile(y).unwrap()).unwrap();
+        let c = serde_json::to_value(compile(y, None).unwrap()).unwrap();
         assert_eq!(c["rules"], json!([]));
         assert_eq!(c["default"], json!([{"harness": "cursor"}]));
-        let empty = serde_json::to_value(compile("# nothing yet\n").unwrap()).unwrap();
-        assert_eq!(empty, json!({"rules": []}));
+        let empty = serde_json::to_value(compile("# nothing yet\n", None).unwrap()).unwrap();
+        assert_eq!(
+            empty,
+            json!({"classifier": {"provider": "none"}, "rules": []})
+        );
+    }
+
+    #[test]
+    fn compiles_the_classifier_in_effect() {
+        let user = classifier::user_default(
+            "classifier:\n  provider: system1\n  model: jev-1\n\
+             \x20 credential: keychain:quark/classifier\n  timeout_ms: 1500\n",
+        )
+        .unwrap();
+        let of = |y: &str| {
+            serde_json::to_value(compile(y, user.as_ref()).unwrap()).unwrap()["classifier"].clone()
+        };
+        // A Project that says nothing takes the user default.
+        let inherited = json!({
+            "provider": "system1",
+            "model": "jev-1",
+            "credential": "keychain:quark/classifier",
+            "confidence_floor": 0.6,
+            "timeout_ms": 1500,
+            "on_failure": "coordinator"
+        });
+        assert_eq!(of(""), inherited);
+        assert_eq!(of("rules: []\n"), inherited);
+        // What the Project sets wins; the rest still comes from the default.
+        let c = of("classifier:\n  confidence_floor: 0.8\n  on_failure: default\n");
+        assert_eq!(c["confidence_floor"], 0.8);
+        assert_eq!(c["on_failure"], "default");
+        assert_eq!(c["model"], "jev-1");
+        assert_eq!(
+            of("classifier:\n  provider: none\n"),
+            json!({"provider": "none"})
+        );
+        // Without a user default the provider is none.
+        let alone = serde_json::to_value(compile("rules: []\n", None).unwrap()).unwrap();
+        assert_eq!(alone["classifier"], json!({"provider": "none"}));
+        // Read as written, the file's own block is kept as it is.
+        let written = as_written("classifier:\n  confidence_floor: 0.8\n").unwrap();
+        assert_eq!(written.classifier, Some(json!({"confidence_floor": 0.8})));
+        assert_eq!(as_written("rules: []\n").unwrap().classifier, None);
     }
 
     #[test]
@@ -556,10 +608,14 @@ default:
             ("default_select: \"cheapest\"", "unknown variant"),
             ("default: []", "default: needs at least one profile"),
             ("classifier: \"none\"", "classifier must be a mapping"),
+            ("classifier: { credential: \"sk-live-abc\" }", "classifier: credential must be a keychain reference"),
+            ("classifier: { provider: system1 }", "classifier: provider system1 needs a model"),
+            ("classifier: { confidence_floor: 2 }", "classifier: confidence_floor must be between 0 and 1"),
+            ("classifier: { endpoint: \"https://x.test\" }", "classifier: unknown field `endpoint`"),
             ("defualt: []", "unknown field `defualt`"),
             ("rules: [", "dispatch.yaml"),
         ] {
-            let err = compile(bad).unwrap_err();
+            let err = compile(bad, None).unwrap_err();
             assert!(err.contains(why), "{bad}: {err}");
             assert!(err.starts_with("dispatch.yaml: "), "{err}");
         }
@@ -619,11 +675,11 @@ default:
             default: vec![],
         };
         // A classifier written in flow style, after the rules.
-        let prev = "rules: []\nclassifier: { provider: \"system1\", floor: 0.5 }\n";
+        let prev = "rules: []\nclassifier: { provider: \"system1\", confidence_floor: 0.5 }\n";
         let y = render(&d, Some(prev)).unwrap();
         assert_eq!(
             y,
-            "classifier: { provider: \"system1\", floor: 0.5 }\nrules:\n  \
+            "classifier: { provider: \"system1\", confidence_floor: 0.5 }\nrules:\n  \
              - when: \"Says \\\"quoted\\\": yes\"\n    use:\n      - { harness: \"codex\" }\n"
         );
         assert_eq!(
@@ -646,7 +702,7 @@ default:
         // An empty candidate list is written so that compiling refuses it.
         let mut empty = d.clone();
         empty.rules[0].candidates.clear();
-        let err = compile(&render(&empty, None).unwrap()).unwrap_err();
+        let err = compile(&render(&empty, None).unwrap(), None).unwrap_err();
         assert!(err.contains("needs at least one profile"), "{err}");
     }
 

@@ -7,6 +7,7 @@
 pub mod accounts;
 pub mod api;
 pub mod chat;
+pub mod classifier;
 pub mod config;
 pub mod crew_dispatch;
 pub mod dispatch;
@@ -94,6 +95,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let projector = Projector::new(store.clone(), engine.clone())
         .with_sessions(sessions.clone())
         .with_command(layout.command_workspace())
+        .with_user_config(layout.user_config())
         .with_failover(Arc::new(failover));
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
 

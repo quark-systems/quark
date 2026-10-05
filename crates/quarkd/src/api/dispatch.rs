@@ -5,6 +5,7 @@ use quark_systems::{DispatchRules, DispatchTest, ErrorBody, PutDispatchRules, Te
 use std::path::PathBuf;
 
 use super::{db, ApiError, AppState};
+use crate::classifier;
 use crate::crew_dispatch::{self, CrewDispatchConfig};
 use crate::dispatch::Resolved;
 use crate::dispatch_test::{self, Host};
@@ -27,7 +28,11 @@ fn no_project_repo() -> ApiError {
 }
 
 /// The rules `dispatch.yaml` on `main` of the bare repo declares.
-fn read_rules(project_id: &str, bare: &std::path::Path) -> Result<DispatchRules, ApiError> {
+fn read_rules(
+    project_id: &str,
+    bare: &std::path::Path,
+    user_config: &std::path::Path,
+) -> Result<DispatchRules, ApiError> {
     let failed =
         |e: String| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "project_repo_failed", e);
     let declared = crew_dispatch::read_declared(bare).map_err(failed)?;
@@ -50,11 +55,18 @@ fn read_rules(project_id: &str, bare: &std::path::Path) -> Result<DispatchRules,
     .ok()
     .filter(|c| !c.is_empty());
     let draft = crew_dispatch::draft(&written);
+    let effective = classifier::user_default_at(user_config)
+        .and_then(|user| {
+            let block = classifier::block(written.classifier.as_ref())?;
+            classifier::effective(block.as_ref(), user.as_ref())
+        })
+        .and_then(|c| serde_json::to_value(c).map_err(|e| e.to_string()))
+        .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e))?;
     Ok(DispatchRules {
         project_id: project_id.to_string(),
         revision: declared.map(|d| d.blob),
         commit,
-        classifier: written.classifier,
+        classifier: Some(effective),
         default_select: draft.default_select,
         rules: draft.rules,
         default: draft.default,
@@ -66,7 +78,9 @@ fn read_rules(project_id: &str, bare: &std::path::Path) -> Result<DispatchRules,
 /// What `dispatch.yaml` on the Project repo's `main` declares: the rules in
 /// order, each with its name, condition and ordered candidates, the default
 /// candidates and `default_select`. Harness ids are Quark's. A Project repo
-/// without the file answers no rules and no `revision`.
+/// without the file answers no rules and no `revision`. `classifier` is the
+/// classifier in effect: the file's block over the user-level default in
+/// `~/.quark/config.yaml`, `provider: none` when neither names one.
 #[utoipa::path(
     get,
     path = "/v1/projects/{id}/dispatch",
@@ -84,7 +98,8 @@ pub async fn get(
 ) -> Result<Json<DispatchRules>, ApiError> {
     let project = db(&state, move |s| s.get_project(&id)).await?;
     let bare = project.project_repo_path.ok_or_else(no_project_repo)?;
-    tokio::task::spawn_blocking(move || read_rules(&project.id, &PathBuf::from(bare)))
+    let user_config = state.layout.user_config();
+    tokio::task::spawn_blocking(move || read_rules(&project.id, &PathBuf::from(bare), &user_config))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map(Json)
@@ -124,6 +139,7 @@ pub async fn put(
         return Err(no_project_repo());
     };
     let (bare, checkout) = (PathBuf::from(bare), PathBuf::from(root).join("project"));
+    let user_config = state.layout.user_config();
     tokio::task::spawn_blocking(move || {
         project_repo::commit_file(
             &bare,
@@ -144,13 +160,15 @@ pub async fn put(
                 }
                 let body = crew_dispatch::render(&input.rules, current.map(|(_, text)| text))
                     .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e))?;
-                crew_dispatch::compile(&body)
+                let user = classifier::user_default_at(&user_config)
+                    .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e))?;
+                crew_dispatch::compile(&body, user.as_ref())
                     .map_err(|e| dispatch_invalid(StatusCode::BAD_REQUEST, e))?;
                 Ok(body)
             },
             "Update dispatch rules",
         )?;
-        read_rules(&project.id, &bare)
+        read_rules(&project.id, &bare, &user_config)
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -200,23 +218,27 @@ pub async fn test(
     let project = db(&state, move |s| s.get_project(&id)).await?;
 
     let (repo, draft) = (project.project_repo_path.clone(), input.draft);
+    let user_config = state.layout.user_config();
     let (config, unsaved) = tokio::task::spawn_blocking(move || {
+        let user = classifier::user_default_at(&user_config)
+            .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e))?;
         let declared = match repo {
             Some(repo) => crew_dispatch::read_declared(&PathBuf::from(repo))
                 .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e))?,
             None => None,
         };
         let saved = || match &declared {
-            Some(d) => crew_dispatch::compile(&d.dispatch_yaml)
+            Some(d) => crew_dispatch::compile(&d.dispatch_yaml, user.as_ref())
                 .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e)),
-            None => Ok(CrewDispatchConfig::default()),
+            None => crew_dispatch::compile("", user.as_ref())
+                .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e)),
         };
         let Some(draft) = draft else {
             return Ok((saved()?, false));
         };
         let body = crew_dispatch::render(&draft, declared.as_ref().map(|d| &*d.dispatch_yaml))
             .map_err(|e| dispatch_invalid(StatusCode::CONFLICT, e))?;
-        let config = crew_dispatch::compile(&body)
+        let config = crew_dispatch::compile(&body, user.as_ref())
             .map_err(|e| dispatch_invalid(StatusCode::BAD_REQUEST, e))?;
         let unsaved = config != saved()?;
         Ok::<_, ApiError>((config, unsaved))
