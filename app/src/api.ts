@@ -156,7 +156,7 @@ export interface ChangedFile {
 }
 // Why this agent (ADR-11, quark#27): one record per worker spawn, kept after the task ends.
 export type DispatchTrigger = "spawn" | "relaunch";
-export type DispatchDecider = "classifier" | "coordinator" | "relaunch";
+export type DispatchDecider = "classifier" | "coordinator" | "default_rule" | "relaunch";
 export type DispatchStatus = "clear" | "ambiguous" | "escalate" | "error" | "off" | "not_consulted";
 export interface DispatchCandidate {
   harness: string; model?: string | null; passed: boolean; reason: string; evidence?: string | null;
@@ -169,7 +169,7 @@ export interface DispatchRecord {
   candidates: DispatchCandidate[];
   /** `account` is an `Account.id` (quark#23), the task's account when the spawn was recorded; null when unknown. */
   chosen: { harness: string; model?: string | null; effort?: string | null; account?: string | null };
-  /** `provider` is "none" when no classifier was consulted (the coordinator picked). */
+  /** `provider` is "none" when no classifier is configured. One that did not answer has no model or confidence. */
   classifier: { provider: string; model?: string | null; confidence?: number | null };
   /** The rate limit this relaunch answered, when the daemon moved the worker to another account (quark#26). */
   failover?: AccountFailover | null;
@@ -223,7 +223,7 @@ export interface DispatchRules extends DispatchRulesDraft {
   revision?: string | null;
   /** The commit on `main` that last changed the file. */
   commit?: string | null;
-  /** The file's classifier block, which saving keeps. */
+  /** The classifier in effect: the file's block over the user-level default. Saving keeps the file's own block. */
   classifier?: Record<string, unknown> | null;
 }
 

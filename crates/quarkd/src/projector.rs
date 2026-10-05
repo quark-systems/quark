@@ -48,8 +48,12 @@ pub struct Projector {
     coordinators: Mutex<HashMap<String, Option<String>>>,
     /// The Project repo declaration last applied as gate config, by Project id.
     gates: Mutex<HashMap<String, String>>,
-    /// The `dispatch.yaml` blob last applied as dispatch profiles, by Project id.
-    dispatch: Mutex<HashMap<String, String>>,
+    /// The `dispatch.yaml` blob and user-level settings last applied as
+    /// dispatch profiles, by Project id.
+    dispatch: Mutex<HashMap<String, (String, String)>>,
+    /// The user-level settings file whose `classifier` block is the default
+    /// for every Project.
+    user_config: Option<PathBuf>,
 }
 
 impl Projector {
@@ -65,7 +69,15 @@ impl Projector {
             coordinators: Mutex::default(),
             gates: Mutex::default(),
             dispatch: Mutex::default(),
+            user_config: None,
         }
+    }
+
+    /// Takes each Project's default classifier from the settings file at
+    /// `path` (`~/.quark/config.yaml`).
+    pub fn with_user_config(mut self, path: PathBuf) -> Self {
+        self.user_config = Some(path);
+        self
     }
 
     /// Reads harness session logs from `roots` instead of the current user's
@@ -219,7 +231,8 @@ impl Projector {
     }
 
     /// Compile the Project repo's `dispatch.yaml` and hand it to the engine
-    /// when it changed since it was last applied. A file that does not compile,
+    /// when it, or the user-level default classifier, changed since it was
+    /// last applied. A file that does not compile,
     /// or that the engine refuses as invalid, is recorded once and waits for
     /// the next change, leaving the last good config in place; any other
     /// engine failure is recorded and retried next tick.
@@ -240,10 +253,21 @@ impl Projector {
                 return;
             }
         };
-        if self.dispatch.lock().unwrap().get(&ws.project_id) == Some(&declared.blob) {
+        let user = match &self.user_config {
+            Some(path) => crate::classifier::read_user_file(path),
+            None => Ok(String::new()),
+        };
+        // An unreadable settings file is applied as its error, once.
+        let applied = (
+            declared.blob,
+            user.clone().unwrap_or_else(|e| format!("\0{e}")),
+        );
+        if self.dispatch.lock().unwrap().get(&ws.project_id) == Some(&applied) {
             return;
         }
-        let res = match crate::crew_dispatch::compile(&declared.dispatch_yaml)
+        let res = match user
+            .and_then(|text| crate::classifier::user_default(&text))
+            .and_then(|user| crate::crew_dispatch::compile(&declared.dispatch_yaml, user.as_ref()))
             .and_then(|c| serde_json::to_string(&c).map_err(|e| e.to_string()))
         {
             Ok(json) => self.engine.set_crew_dispatch(ws, &json).await,
@@ -255,7 +279,7 @@ impl Projector {
             self.dispatch
                 .lock()
                 .unwrap()
-                .insert(ws.project_id.clone(), declared.blob);
+                .insert(ws.project_id.clone(), applied);
         }
     }
 

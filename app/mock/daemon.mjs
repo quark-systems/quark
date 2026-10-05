@@ -94,7 +94,9 @@ function addTask(projectId, t, { silent = false } = {}) {
 }
 
 // Why this agent (ADR-11): one record per worker spawn. `how` is "classifier" (a confident rule match
-// whose selected profile was used), "coordinator" (no classifier: provider none) or "relaunch".
+// whose selected profile was used), "coordinator" (no classifier: provider none) or "relaunch". The
+// daemon also records "default_rule" (the classifier's on_failure: default fallback); the mock has no
+// classifier failures, so it never produces one.
 const DEMO_RULE = { id: "rule_1", when: "A focused change inside one crate with tests." };
 const DEMO_CANDIDATES = [
   { harness: "claude-code", model: "claude-sonnet-5", passed: true, reason: "eligible",

@@ -149,7 +149,10 @@ async fn dispatch_yaml_on_main_reaches_the_engine_and_bad_files_keep_the_last_go
     projector.refresh_all().await.unwrap();
     let all = configs(&engine);
     assert_eq!(all.len(), 3);
-    assert_eq!(all[2], json!({"rules": [], "default": {"harness": "pi"}}));
+    assert_eq!(
+        all[2],
+        json!({"classifier": {"provider": "none"}, "rules": [], "default": {"harness": "pi"}})
+    );
     assert_eq!(calls()[0], (true, None));
 }
 
@@ -312,6 +315,7 @@ async fn a_description_is_tested_against_the_rules_on_main() {
         notes: vec![],
         candidates: vec![],
         profile: None,
+        fallback: None,
         classifier_consulted: false,
         classifier_model: None,
         confidence: None,
@@ -395,6 +399,7 @@ async fn a_description_is_tested_against_the_rules_on_main() {
             effort: Some("low".into()),
             account: None,
         }),
+        fallback: None,
         classifier_consulted: true,
         classifier_model: Some("jev-1.13.0".into()),
         confidence: Some(0.9),
@@ -588,8 +593,9 @@ async fn rules_are_read_saved_as_a_commit_and_tested_as_a_draft() {
     assert_eq!(
         file,
         "# Dispatch rules for this Project, created from the \"light_trivial\" preset.\n\
-         # With provider none, the coordinator picks the rule for each task.\n\
-         classifier:\n  provider: \"none\"\n\
+         # No classifier block here: the default in ~/.quark/config.yaml applies, and with\n\
+         # none there (provider: none) the coordinator picks the rule for each task.\n\
+         # A classifier block in this file overrides that default field by field.\n\
          default_select: \"quota-balanced\"\n\
          rules:\n\
          \x20 - name: \"big\"\n\
@@ -676,4 +682,224 @@ async fn rules_are_read_saved_as_a_commit_and_tested_as_a_draft() {
     }
     let (status, _) = call(&app, "GET", "/v1/projects/prj_nope/dispatch", None).await;
     assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn the_user_default_classifier_applies_until_the_project_overrides_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (bare, checkout) = (dir.path().join("p.git"), workspace.join("project"));
+    let user_config = dir.path().join("config.yaml");
+
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let project = store
+        .create_project(CreateProject {
+            name: "Quark".into(),
+            workspace_path: Some(workspace.to_string_lossy().into_owned()),
+            agent_config: Some(AgentConfig {
+                harness: "codex".into(),
+                model: None,
+                effort: None,
+                pool: None,
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    quarkd::project_repo::init(&bare, &checkout, &project).unwrap();
+    store
+        .set_project_status(
+            &project.id,
+            ProjectStatus::Ready,
+            None,
+            None,
+            Some(bare.to_str().unwrap()),
+        )
+        .unwrap();
+    let engine = Arc::new(StubEngine::new());
+    let projector = Projector::new(store.clone(), engine.clone())
+        .with_session_roots(Default::default())
+        .with_user_config(user_config.clone());
+    let classifiers = || -> Vec<Value> {
+        configs(&engine)
+            .into_iter()
+            .map(|c| c["classifier"].clone())
+            .collect()
+    };
+
+    // No settings file and no block in the Project: provider none.
+    projector.refresh_all().await.unwrap();
+    assert_eq!(classifiers(), [json!({"provider": "none"})]);
+
+    // A user-level default reaches a Project that names no classifier, without
+    // a change to the Project repo.
+    std::fs::write(
+        &user_config,
+        "classifier:\n  provider: system1\n  model: jev-1\n\
+         \x20 credential: keychain:quark/classifier\n",
+    )
+    .unwrap();
+    projector.refresh_all().await.unwrap();
+    projector.refresh_all().await.unwrap();
+    let all = classifiers();
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(
+        all[1],
+        json!({
+            "provider": "system1",
+            "model": "jev-1",
+            "credential": "keychain:quark/classifier",
+            "confidence_floor": 0.6,
+            "timeout_ms": 5000,
+            "on_failure": "coordinator"
+        })
+    );
+
+    // The Project's block overrides it field by field.
+    push_dispatch(
+        &checkout,
+        "classifier:\n  confidence_floor: 0.8\n  timeout_ms: 900\n  on_failure: default\n\
+         default: { harness: \"codex\" }\n",
+    );
+    projector.refresh_all().await.unwrap();
+    let c = classifiers().pop().unwrap();
+    assert_eq!(c["model"], "jev-1");
+    assert_eq!(c["confidence_floor"], 0.8);
+    assert_eq!(c["timeout_ms"], 900);
+    assert_eq!(c["on_failure"], "default");
+
+    // An inline key is refused wherever it is written, never echoed, and the
+    // last good config stays.
+    let applied = configs(&engine).len();
+    let failure = || {
+        let (ok, detail) = store
+            .recent_adapter_calls(&project.id, "dispatch", 10)
+            .unwrap()
+            .remove(0);
+        assert!(!ok);
+        detail.unwrap()
+    };
+    std::fs::write(&user_config, "classifier:\n  credential: sk-live-abc123\n").unwrap();
+    projector.refresh_all().await.unwrap();
+    let detail = failure();
+    assert!(
+        detail.contains("config.yaml: classifier: credential must be a keychain reference"),
+        "{detail}"
+    );
+    assert!(!detail.contains("sk-live"), "{detail}");
+    std::fs::remove_file(&user_config).unwrap();
+    push_dispatch(
+        &checkout,
+        "classifier:\n  provider: system1\n  model: open\n  credential: sk-live-abc123\n",
+    );
+    projector.refresh_all().await.unwrap();
+    let detail = failure();
+    assert!(
+        detail.contains("dispatch.yaml: classifier: credential must be a keychain reference"),
+        "{detail}"
+    );
+    assert!(!detail.contains("sk-live"), "{detail}");
+    assert_eq!(configs(&engine).len(), applied);
+
+    // A Project can turn the classifier off whatever the default says.
+    std::fs::write(
+        &user_config,
+        "classifier:\n  provider: system1\n  model: open\n",
+    )
+    .unwrap();
+    push_dispatch(&checkout, "classifier:\n  provider: none\n");
+    projector.refresh_all().await.unwrap();
+    assert_eq!(classifiers().pop().unwrap(), json!({"provider": "none"}));
+}
+
+#[tokio::test]
+async fn the_api_answers_the_classifier_in_effect_and_a_fallback_to_the_default_rule() {
+    use quark_systems::{DispatchChoice, DispatchStatus};
+    use quarkd::engine::EngineResolution;
+
+    let dir = tempfile::tempdir().unwrap();
+    let Served {
+        app,
+        engine,
+        project,
+        checkout,
+        ..
+    } = served(dir.path());
+    let rules = format!("/v1/projects/{}/dispatch", project.id);
+
+    // The user-level default shows on a Project that names no classifier,
+    // and the Project's block overrides it.
+    std::fs::write(
+        dir.path().join("config.yaml"),
+        "classifier:\n  provider: system1\n  model: jev-1\n  credential: keychain:quark/classifier\n",
+    )
+    .unwrap();
+    let (status, got) = call(&app, "GET", &rules, None).await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(got["classifier"]["provider"], "system1");
+    assert_eq!(got["classifier"]["credential"], "keychain:quark/classifier");
+    assert_eq!(got["classifier"]["on_failure"], "coordinator");
+    push_dispatch(
+        &checkout,
+        "classifier:\n  on_failure: default\n  timeout_ms: 800\n\
+         default:\n  - { harness: \"claude-code\", model: \"claude-sonnet-5\" }\n",
+    );
+    let (_, got) = call(&app, "GET", &rules, None).await;
+    assert_eq!(got["classifier"]["model"], "jev-1");
+    assert_eq!(got["classifier"]["on_failure"], "default");
+    assert_eq!(got["classifier"]["timeout_ms"], 800);
+
+    // The classifier timed out and on_failure default resolved the default
+    // rule: the default rule decides, and the outcome says why.
+    engine.set_description_resolution(Ok(EngineResolution {
+        status: DispatchStatus::Clear,
+        rule: None,
+        reason: None,
+        notes: vec![],
+        candidates: vec![],
+        profile: Some(DispatchChoice {
+            harness: "claude".into(),
+            model: Some("claude-sonnet-5".into()),
+            effort: None,
+            account: None,
+        }),
+        fallback: Some("classifier request timed out after 800ms".into()),
+        classifier_consulted: false,
+        classifier_model: None,
+        confidence: None,
+        output: None,
+    }));
+    let uri = format!("/v1/projects/{}/dispatch:test", project.id);
+    let (status, t) = call(
+        &app,
+        "POST",
+        &uri,
+        Some(json!({"description": "Fix a typo."})),
+    )
+    .await;
+    assert_eq!(status, 200, "{t}");
+    assert_eq!(t["decided_by"], "default_rule");
+    assert_eq!(t["rule"]["id"], "default");
+    assert_eq!(t["classifier"]["provider"], "system1");
+    assert_eq!(t["classifier"]["model"], Value::Null);
+    assert_eq!(t["chosen"]["harness"], "claude-code");
+    let summary = t["summary"].as_str().unwrap();
+    assert!(
+        summary.starts_with(
+            "The classifier's answer was not used (classifier request timed out after 800ms), \
+             so the default rule applied (on_failure: default)."
+        ),
+        "{summary}"
+    );
+
+    // An inline key in the user-level file is refused, not echoed.
+    std::fs::write(
+        dir.path().join("config.yaml"),
+        "classifier:\n  credential: sk-live-abc123\n",
+    )
+    .unwrap();
+    let (status, err) = call(&app, "GET", &rules, None).await;
+    assert_eq!(status, 409, "{err}");
+    assert_eq!(err["error"]["code"], "dispatch_invalid");
+    assert!(!err.to_string().contains("sk-live"), "{err}");
 }

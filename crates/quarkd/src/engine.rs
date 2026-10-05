@@ -94,7 +94,10 @@ pub struct EngineResolution {
     pub candidates: Vec<DispatchCandidate>,
     /// The profile the resolution selected, when `status` is clear.
     pub profile: Option<DispatchChoice>,
-    /// Whether the classifier was asked, and what it answered.
+    /// Why the classifier's answer was not used and the default rule was
+    /// resolved instead (`on_failure: default`), when that happened.
+    pub fallback: Option<String>,
+    /// Whether the classifier answered, and what it answered.
     pub classifier_consulted: bool,
     pub classifier_model: Option<String>,
     pub confidence: Option<f64>,
