@@ -17,6 +17,8 @@ use super::{accounts, dispatch, events, harnesses, memory, pull_requests, routes
         routes::get_project,
         routes::update_project,
         routes::provision_project,
+        dispatch::get,
+        dispatch::put,
         dispatch::test,
         routes::list_tasks,
         routes::get_task,

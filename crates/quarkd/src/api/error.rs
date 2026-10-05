@@ -58,6 +58,25 @@ impl From<StoreError> for ApiError {
     }
 }
 
+impl From<crate::project_repo::RepoError> for ApiError {
+    fn from(e: crate::project_repo::RepoError) -> Self {
+        use crate::project_repo::RepoError;
+        match e {
+            RepoError::Uncommitted(_) => {
+                ApiError::new(StatusCode::CONFLICT, "uncommitted_changes", e.to_string())
+            }
+            other => {
+                tracing::warn!(error = %other, "committing to a Project repo failed");
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "project_repo_failed",
+                    other.to_string(),
+                )
+            }
+        }
+    }
+}
+
 impl From<AccountError> for ApiError {
     fn from(e: AccountError) -> Self {
         match e {

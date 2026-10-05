@@ -8,6 +8,7 @@
 //   node mock/daemon.mjs [--port 7380] [--quiet]
 //
 // --quiet turns off background activity (state changes, output) so tests are deterministic.
+import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -129,18 +130,76 @@ function recordDispatch(task, how, { silent = false, ts = now(), model = null, e
   return rec;
 }
 
+// GET and PUT /v1/projects/{id}/dispatch: each Project's dispatch.yaml, as its preset wrote it until it is saved.
+const dispatchRules = new Map(); // project id -> DispatchRules
+const hex40 = () => crypto.randomBytes(20).toString("hex");
+const TRIVIAL_WHEN = "A trivial mechanical edit such as a rename, typo or one-line fix.";
+function rulesOf(proj) {
+  if (!dispatchRules.has(proj.id)) {
+    const agent = proj.agent_config ?? { harness: "claude-code", model: "claude-sonnet-5", effort: "medium" };
+    const profile = (effort) => ({ harness: agent.harness, model: agent.model ?? null, effort: effort ?? agent.effort ?? null, pool: agent.pool ?? null });
+    dispatchRules.set(proj.id, {
+      project_id: proj.id, revision: hex40(), commit: hex40(), classifier: { provider: "none" }, default_select: "ordered",
+      rules: proj.dispatch_preset === "light_trivial" ? [{ name: "trivial-edit", when: TRIVIAL_WHEN, select: null, candidates: [profile("low")] }] : [],
+      default: [profile()],
+    });
+  }
+  return dispatchRules.get(proj.id);
+}
+const blank = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+const cleanProfile = (c) => ({
+  harness: c?.harness, model: blank(c?.model), effort: blank(c?.effort), pool: blank(c?.pool),
+  ...(blank(c?.provider) ? { provider: blank(c.provider) } : {}), ...(c?.floor ? { floor: c.floor } : {}), ...(blank(c?.pricing) ? { pricing: blank(c.pricing) } : {}),
+});
+// The draft as quarkd would write and read it back, or the compile error as { error }.
+function compileDraft(b) {
+  const fail = (m) => ({ error: `dispatch.yaml: ${m}` });
+  if (!b || typeof b !== "object") return fail("expected a mapping");
+  if (b.default_select != null && !["ordered", "quota-balanced"].includes(b.default_select)) return fail(`unknown variant \`${b.default_select}\`, expected \`quota-balanced\` or \`ordered\``);
+  const profiles = (list, where) => {
+    if (!Array.isArray(list) || !list.length) return `${where}: needs at least one profile`;
+    for (const [i, c] of list.entries()) if (typeof c?.harness !== "string" || !c.harness.trim()) return `${where}: profile ${i + 1}: harness is empty`;
+    return null;
+  };
+  const names = new Set();
+  const rules = [];
+  for (const [i, r] of (b.rules ?? []).entries()) {
+    const name = blank(r?.name);
+    const label = name ? `rule ${i + 1} (${name})` : `rule ${i + 1}`;
+    if (name && names.has(name)) return fail(`${label}: another rule has this name`);
+    if (name) names.add(name);
+    if (typeof r?.when !== "string" || !r.when.trim()) return fail(`${label}: when is empty`);
+    const bad = profiles(r.candidates, `${label}: use`);
+    if (bad) return fail(bad);
+    rules.push({
+      name, when: r.when, candidates: r.candidates.map(cleanProfile), select: r.select ?? null,
+      ...(blank(r.why) ? { why: r.why } : {}), ...(blank(r.approval) ? { approval: r.approval } : {}), ...(r.floor ? { floor: r.floor } : {}),
+    });
+  }
+  const def = b.default ?? [];
+  if (def.length) { const bad = profiles(def, "default"); if (bad) return fail(bad); }
+  return { default_select: b.default_select ?? null, rules, default: def.map(cleanProfile) };
+}
+const sameRules = (a, b) => JSON.stringify([a.default_select, a.rules, a.default]) === JSON.stringify([b.default_select, b.rules, b.default]);
+
 // POST /v1/projects/{id}/dispatch:test. The mock has no classifier, except that a description
-// naming a rename or a typo matches the trivial-edit rule, so both outcomes can be seen.
-const TEST_RULE = { id: "rule_1", when: "A trivial mechanical edit such as a rename, typo or one-line fix." };
-function testDispatch(proj, description) {
-  const agent = proj.agent_config ?? { harness: "claude-code", model: "claude-sonnet-5", effort: "medium" };
+// sharing a word with a rule's condition (a rename or a typo, for the trivial-edit rule) matches
+// that rule, so both outcomes can be seen. Like quarkd, it does not resolve rules that are not saved.
+const COMMON = new Set(["such", "that", "this", "with", "from", "task", "tasks", "file", "files", "change", "changes", "line"]);
+const words = (s) => new Set((s.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !COMMON.has(w)));
+function testDispatch(proj, description, draft = null) {
+  const saved = rulesOf(proj);
+  const rules = draft ?? saved;
+  const unsaved = !!draft && !sameRules(draft, saved);
   const listed = [
-    { rule: TEST_RULE, rule_name: "trivial-edit", harness: agent.harness, model: agent.model ?? null, effort: "low", pool: agent.pool ?? null },
-    { rule: TEST_RULE, rule_name: "trivial-edit", harness: "pi", model: "openai/gpt-5.5", effort: null, pool: null },
-    { rule: { id: "default", when: null }, rule_name: null, harness: agent.harness, model: agent.model ?? null, effort: agent.effort ?? null, pool: agent.pool ?? null },
-  ];
-  const matched = /\b(rename|typo)\b/i.test(description);
-  const candidates = (matched ? listed.filter((l) => l.rule === TEST_RULE) : listed).map((l) => {
+    ...rules.rules.flatMap((r, i) => r.candidates.map((c) => ({ rule: { id: `rule_${i + 1}`, when: r.when }, rule_name: r.name ?? null, ...c }))),
+    ...rules.default.map((c) => ({ rule: { id: "default", when: null }, rule_name: null, ...c })),
+  ].map(({ rule, rule_name, harness, model, effort, pool }) => ({ rule, rule_name, harness, model: model ?? null, effort: effort ?? null, pool: pool ?? null }));
+  const said = words(description);
+  const hit = unsaved ? -1 : rules.rules.findIndex((r) => [...words(r.when)].some((w) => said.has(w)));
+  const matched = hit >= 0;
+  const rule = matched ? { id: `rule_${hit + 1}`, when: rules.rules[hit].when } : null;
+  const candidates = (matched ? listed.filter((l) => l.rule.id === rule.id) : listed).map((l) => {
     const h = HARNESSES.find((x) => x.id === l.harness);
     const mine = accountList().filter((a) => a.harness === l.harness && (l.pool ? a.pools.includes(l.pool) : a.default));
     const quota = mine.map((a) => `${a.label}: ${a.quota.remaining_percent == null ? "quota not read" : `${a.quota.remaining_percent}% remaining`}`).join("; ");
@@ -162,13 +221,22 @@ function testDispatch(proj, description) {
   const tail = `${passing} of ${candidates.length} candidate${candidates.length === 1 ? "" : "s"} could start a worker now.`;
   const first = candidates.find((c) => c.passed);
   if (matched && first) {
-    const label = first.harness + (first.model ? `:${first.model}` : "") + ` (${first.effort} effort)`;
+    const label = first.harness + (first.model ? `:${first.model}` : "") + (first.effort ? ` (${first.effort} effort)` : "");
     return {
-      project_id: proj.id, decided_by: "classifier", rule: TEST_RULE, candidates,
-      summary: `The classifier matched rule ${TEST_RULE.id} (${TEST_RULE.when}) at 0.91 confidence. The resolution would select ${label}. ${tail}`,
+      project_id: proj.id, decided_by: "classifier", rule, candidates,
+      summary: `The classifier matched rule ${rule.id} (${rule.when}) at 0.91 confidence. The resolution would select ${label}. ${tail}`,
       resolution: { status: "clear", reason: null, notes: ["rule matched"], output: "dispatch-resolve:\n  status: clear" },
       classifier: { provider: "system1", model: "jev-1.13.0", confidence: 0.91 },
       chosen: { harness: first.harness, model: first.model, effort: first.effort, account: null },
+    };
+  }
+  if (unsaved) {
+    const reason = "These rules are not saved, and the dispatch resolution reads the saved ones, so it was not run";
+    return {
+      project_id: proj.id, decided_by: "coordinator", rule: null, chosen: null, candidates,
+      summary: `${reason}; the coordinator would pick. ${tail}`,
+      resolution: { status: "not_consulted", reason, notes: [], output: null },
+      classifier: { provider: "none", model: null, confidence: null },
     };
   }
   return {
@@ -252,6 +320,11 @@ function seed() {
     repos: [{ url: "https://github.com/quark-systems/quark.git" }, { url: "https://github.com/quark-systems/firstmate.git" }],
     agent_config: { harness: "claude-code", model: null, effort: "high" },
     created_at: minutesAgo(600), updated_at: minutesAgo(3),
+  });
+  // One rule with a second candidate that cannot run here, so the editor and the test have something to show.
+  rulesOf(quark).rules.push({
+    name: "trivial-edit", when: TRIVIAL_WHEN, select: null,
+    candidates: [{ harness: "claude-code", model: "claude-sonnet-5", effort: "low", pool: null }, { harness: "pi", model: "openai/gpt-5.5", effort: null, pool: null }],
   });
   const site = addProject({
     id: "website", name: "Website refresh", goal: "Move the marketing site to the new design system.",
@@ -437,7 +510,7 @@ function send(res, status, body, type = "application/json") {
 }
 const cors = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "access-control-allow-headers": "content-type",
 };
 const notFound = (res) => send(res, 404, { error: { code: "not_found", message: "resource not found" } });
@@ -598,9 +671,27 @@ const server = http.createServer(async (req, res) => {
   if ((r = m(/^\/v1\/projects\/([^/]+)\/dispatch:test$/)) && req.method === "POST") {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);
-    const description = (await readJson(req))?.description;
+    const b = await readJson(req);
+    const description = b?.description;
     if (typeof description !== "string" || !description.trim()) return invalid(res, "description is empty");
-    return send(res, 200, testDispatch(proj, description.trim()));
+    const draft = b.draft == null ? null : compileDraft(b.draft);
+    if (draft?.error) return send(res, 400, { error: { code: "dispatch_invalid", message: draft.error } });
+    return send(res, 200, testDispatch(proj, description.trim(), draft));
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/dispatch$/)) && (req.method === "GET" || req.method === "PUT")) {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const current = rulesOf(proj);
+    if (req.method === "GET") return send(res, 200, current);
+    const b = await readJson(req);
+    if (b?.revision != null && b.revision !== current.revision) {
+      return send(res, 409, { error: { code: "dispatch_changed", message: "dispatch.yaml changed on main since these rules were loaded; load them again and repeat the edit" } });
+    }
+    const next = compileDraft(b);
+    if (next.error) return send(res, 400, { error: { code: "dispatch_invalid", message: next.error } });
+    // Like quarkd: rules that are what main has already make no commit.
+    if (!sameRules(next, current)) dispatchRules.set(proj.id, { ...current, ...next, revision: hex40(), commit: hex40() });
+    return send(res, 200, dispatchRules.get(proj.id));
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/tasks$/)) && req.method === "GET") {
     const id = decodeURIComponent(r[1]);

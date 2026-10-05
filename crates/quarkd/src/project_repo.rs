@@ -35,6 +35,8 @@ pub enum RepoError {
     },
     #[error("{0} exists but is not a Project repo checkout")]
     Unexpected(PathBuf),
+    #[error("{0} has uncommitted changes in the Project repo checkout")]
+    Uncommitted(String),
 }
 
 const HOLDOUT_README: &str = "# Holdout tests\n\n\
@@ -117,6 +119,57 @@ pub fn commit_new_file(
     body: &str,
     message: &str,
 ) -> Result<(String, String), RepoError> {
+    update_checkout(bare, checkout)?;
+    let rel = name(&|rel: &str| checkout.join(rel).exists());
+    let sha = commit_path(checkout, &rel, body, message)?;
+    Ok((rel, sha))
+}
+
+/// Replace the file at `rel` (or add it) in its own commit on `main`, through
+/// the checkout as [`commit_new_file`] does. `edit` is given the file as
+/// `main` has it once the checkout is up to date, its blob id and text, and
+/// returns the new text, or an error to change nothing. Returns the commit
+/// id, or `None` when the new text is what `main` already has. An edit of the
+/// file in the checkout that was never committed is refused, not overwritten.
+pub fn commit_file<E: From<RepoError>>(
+    bare: &Path,
+    checkout: &Path,
+    rel: &str,
+    edit: impl FnOnce(Option<(&str, &str)>) -> Result<String, E>,
+    message: &str,
+) -> Result<Option<String>, E> {
+    update_checkout(bare, checkout)?;
+    if !git(Some(checkout), &["status", "--porcelain", "--", rel])?.is_empty() {
+        return Err(RepoError::Uncommitted(rel.to_string()).into());
+    }
+    let path = checkout.join(rel);
+    let current = match git(
+        Some(checkout),
+        &["rev-parse", "--verify", "--quiet", &format!("HEAD:{rel}")],
+    ) {
+        Ok(blob) => {
+            let text = std::fs::read_to_string(&path).map_err(|source| RepoError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            Some((blob, text))
+        }
+        Err(_) => None,
+    };
+    let body = edit(
+        current
+            .as_ref()
+            .map(|(blob, text)| (blob.as_str(), text.as_str())),
+    )?;
+    if current.is_some_and(|(_, text)| text == body) {
+        return Ok(None);
+    }
+    Ok(Some(commit_path(checkout, rel, &body, message)?))
+}
+
+/// Clone the checkout when it is missing, and fast-forward it to the bare
+/// repo's `main`.
+fn update_checkout(bare: &Path, checkout: &Path) -> Result<(), RepoError> {
     if !checkout.join(".git").exists() {
         if checkout.exists() {
             return Err(RepoError::Unexpected(checkout.to_path_buf()));
@@ -140,8 +193,13 @@ pub fn commit_new_file(
         Some(checkout),
         &["merge", "--quiet", "--ff-only", "FETCH_HEAD"],
     )?;
-    let rel = name(&|rel: &str| checkout.join(rel).exists());
-    let path = checkout.join(&rel);
+    Ok(())
+}
+
+/// Write `body` to `rel` in the checkout, commit only that path and push.
+/// Returns the commit id.
+fn commit_path(checkout: &Path, rel: &str, body: &str, message: &str) -> Result<String, RepoError> {
+    let path = checkout.join(rel);
     if let Some(dir) = path.parent() {
         mkdir(dir)?;
     }
@@ -149,11 +207,11 @@ pub fn commit_new_file(
         path: path.clone(),
         source,
     })?;
-    git(Some(checkout), &["add", "--", &rel])?;
-    commit(checkout, message, &["--", &rel])?;
+    git(Some(checkout), &["add", "--", rel])?;
+    commit(checkout, message, &["--", rel])?;
     let sha = git(Some(checkout), &["rev-parse", "HEAD"])?;
     git(Some(checkout), &["push", "--quiet", "origin", "HEAD:main"])?;
-    Ok((rel, sha))
+    Ok(sha)
 }
 
 /// Commit in `dir`, unsigned and without hooks, as the person's git identity
@@ -518,6 +576,78 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(checkout.join("instructions.md")).unwrap(),
             "edited\n"
+        );
+    }
+
+    #[test]
+    fn commit_file_replaces_one_file_in_its_own_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("projects/prj_1.git");
+        let checkout = dir.path().join("ws/project");
+        std::fs::create_dir_all(dir.path().join("ws")).unwrap();
+        init(&bare, &checkout, &project()).unwrap();
+        std::fs::write(checkout.join("instructions.md"), "edited\n").unwrap();
+        let before = git(Some(&bare), &["rev-parse", "main:dispatch.yaml"]).unwrap();
+
+        let save = |body: &'static str| {
+            commit_file(
+                &bare,
+                &checkout,
+                "dispatch.yaml",
+                |current| {
+                    let (blob, text) = current.expect("the file is on main");
+                    assert_eq!(blob.len(), 40);
+                    assert!(text.contains("rules:"));
+                    Ok::<_, RepoError>(body.to_string())
+                },
+                "Update dispatch rules",
+            )
+        };
+        let sha = save("rules: []\n").unwrap().expect("a commit");
+        assert_eq!(git(Some(&bare), &["rev-parse", "main"]).unwrap(), sha);
+        let changed = git(Some(&bare), &["show", "--name-only", "--format=%s", "main"]).unwrap();
+        assert_eq!(changed, "Update dispatch rules\n\ndispatch.yaml");
+        assert_ne!(
+            git(Some(&bare), &["rev-parse", "main:dispatch.yaml"]).unwrap(),
+            before
+        );
+        // The same text again is no commit, and the other edit is untouched.
+        assert_eq!(save("rules: []\n").unwrap(), None);
+        assert_eq!(git(Some(&bare), &["rev-parse", "main"]).unwrap(), sha);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("instructions.md")).unwrap(),
+            "edited\n"
+        );
+
+        // An edit the closure refuses, and one the checkout has not committed.
+        let refused = commit_file(
+            &bare,
+            &checkout,
+            "dispatch.yaml",
+            |_| Err(RepoError::Uncommitted("nope".into())),
+            "m",
+        );
+        assert!(matches!(refused, Err(RepoError::Uncommitted(p)) if p == "nope"));
+        std::fs::write(checkout.join("dispatch.yaml"), "rules: [] # mine\n").unwrap();
+        let err = save("default: { harness: \"pi\" }\n").unwrap_err();
+        assert!(matches!(err, RepoError::Uncommitted(p) if p == "dispatch.yaml"));
+        assert_eq!(git(Some(&bare), &["rev-parse", "main"]).unwrap(), sha);
+
+        // A file main does not have yet is added.
+        let added = commit_file(
+            &bare,
+            &checkout,
+            "library/x.md",
+            |current| {
+                assert_eq!(current, None);
+                Ok::<_, RepoError>("x\n".to_string())
+            },
+            "Add x",
+        );
+        assert!(added.unwrap().is_some());
+        assert_eq!(
+            git(Some(&bare), &["show", "main:library/x.md"]).unwrap(),
+            "x"
         );
     }
 }

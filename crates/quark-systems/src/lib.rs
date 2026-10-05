@@ -475,11 +475,124 @@ pub struct DispatchClassifier {
     pub confidence: Option<f64>,
 }
 
+/// How a list of candidate profiles is resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum DispatchSelect {
+    /// The first candidate that can run.
+    Ordered,
+    /// The candidate with the most quota to spend.
+    QuotaBalanced,
+}
+
+/// A quota floor; the engine applies it only under typed resolution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchFloor {
+    pub scope: String,
+    #[schema(value_type = f64)]
+    pub min_percent: serde_json::Number,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+/// One candidate of a dispatch rule or of the default: a harness with its
+/// model, effort and account pool.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchProfile {
+    /// Harness id, e.g. `claude-code`.
+    pub harness: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Account pool to run under (see `Account.pools`); absent runs under
+    /// the harness's default account.
+    #[serde(default)]
+    pub pool: Option<String>,
+    /// The engine's typed-resolution fields, kept as `dispatch.yaml` has them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<DispatchFloor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<String>,
+}
+
+/// One rule of a Project's `dispatch.yaml`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchRuleSpec {
+    /// Quark's name for the rule, unique in the file.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The condition a task must meet, in plain words.
+    pub when: String,
+    /// The rule's `use` list, in order; at least one.
+    pub candidates: Vec<DispatchProfile>,
+    /// How `candidates` are resolved; absent uses `default_select`.
+    #[serde(default)]
+    pub select: Option<DispatchSelect>,
+    /// The engine's typed-resolution fields, kept as `dispatch.yaml` has them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<DispatchFloor>,
+}
+
+/// The editable part of a Project's `dispatch.yaml`: its rules, in order,
+/// and the default. The `classifier` block is not part of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchRulesDraft {
+    /// How candidate lists are resolved where a rule does not say.
+    #[serde(default)]
+    pub default_select: Option<DispatchSelect>,
+    #[serde(default)]
+    pub rules: Vec<DispatchRuleSpec>,
+    /// The candidates for a task no rule matches, in order.
+    #[serde(default)]
+    pub default: Vec<DispatchProfile>,
+}
+
+/// A Project's dispatch rules: `dispatch.yaml` on the Project repo's `main`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchRules {
+    pub project_id: String,
+    /// Names this version of the file (its git blob id); absent when `main`
+    /// has no `dispatch.yaml`. Send it back when saving.
+    pub revision: Option<String>,
+    /// The commit on `main` that last changed the file.
+    pub commit: Option<String>,
+    /// The file's `classifier` block, as written. Saving keeps it.
+    #[schema(value_type = Option<Object>)]
+    pub classifier: Option<serde_json::Value>,
+    pub default_select: Option<DispatchSelect>,
+    pub rules: Vec<DispatchRuleSpec>,
+    pub default: Vec<DispatchProfile>,
+}
+
+/// Request body for `PUT /v1/projects/{id}/dispatch`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PutDispatchRules {
+    /// The `revision` the edit started from. When `main` has another by
+    /// now, nothing is saved. Absent saves over whatever is there.
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(flatten)]
+    pub rules: DispatchRulesDraft,
+}
+
 /// A task description to test against a Project's dispatch rules.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct TestDispatch {
     /// The task as it would be briefed to a worker.
     pub description: String,
+    /// Rules to test instead of the saved ones. They are compiled and
+    /// never written. The engine's dispatch resolution reads the saved
+    /// rules, so it is not run for a draft that differs from them.
+    #[serde(default)]
+    pub draft: Option<DispatchRulesDraft>,
 }
 
 /// What a Project's dispatch rules would do with a task description

@@ -199,6 +199,34 @@ export interface DispatchTest {
   candidates: DispatchTestCandidate[];
 }
 
+// The rule editor (quark#25): `dispatch.yaml` on the Project repo's `main`, without its classifier block.
+export type DispatchSelect = "ordered" | "quota-balanced";
+export interface DispatchFloor { scope: string; min_percent: number; provider?: string | null }
+/** One candidate of a rule or of the default. `provider`, `floor` and `pricing` are the engine's, kept as written. */
+export interface DispatchProfile {
+  harness: string; model?: string | null; effort?: string | null; pool?: string | null;
+  provider?: string | null; floor?: DispatchFloor | null; pricing?: string | null;
+}
+/** `why`, `approval` and `floor` are the engine's, kept as written. */
+export interface DispatchRuleSpec {
+  name?: string | null; when: string;
+  /** The rule's `use` list, in order. */
+  candidates: DispatchProfile[];
+  /** Absent uses `default_select`. */
+  select?: DispatchSelect | null;
+  why?: string | null; approval?: string | null; floor?: DispatchFloor | null;
+}
+export interface DispatchRulesDraft { default_select?: DispatchSelect | null; rules: DispatchRuleSpec[]; default: DispatchProfile[] }
+export interface DispatchRules extends DispatchRulesDraft {
+  project_id: string;
+  /** Names this version of the file; sent back when saving. Null when `main` has no `dispatch.yaml`. */
+  revision?: string | null;
+  /** The commit on `main` that last changed the file. */
+  commit?: string | null;
+  /** The file's classifier block, which saving keeps. */
+  classifier?: Record<string, unknown> | null;
+}
+
 export interface TaskChanges { task_id: string; base_ref: string; base: string; head: string; files: ChangedFile[] }
 export interface TaskDiff { task_id: string; base: string; path?: string | null; patch: string; truncated: boolean }
 
@@ -346,9 +374,14 @@ export const api = {
   promoteMemoryEntry: (pid: string, entryId: string, promoted_by?: string | null) =>
     req<UserMemoryEntry>("POST", `/v1/projects/${enc(pid)}/memory/${enc(entryId)}:promote`, { promoted_by: promoted_by ?? null }),
   userMemory: () => req<UserMemoryEntry[]>("GET", "/v1/memory"),
-  /** What the Project's dispatch rules would do with a task description. 409 `dispatch_invalid` when `dispatch.yaml` does not compile. */
-  testDispatch: (pid: string, description: string) =>
-    req<DispatchTest>("POST", `/v1/projects/${enc(pid)}/dispatch:test`, { description }),
+  /** What the Project's dispatch rules would do with a task description; with a `draft`, what those unsaved rules would do. 409 `dispatch_invalid` when `dispatch.yaml` does not compile. */
+  testDispatch: (pid: string, description: string, draft?: DispatchRulesDraft) =>
+    req<DispatchTest>("POST", `/v1/projects/${enc(pid)}/dispatch:test`, { description, ...(draft ? { draft } : {}) }),
+  /** 409 `dispatch_invalid` when `dispatch.yaml` does not compile, `no_project_repo` when the Project has none. */
+  dispatchRules: (pid: string) => req<DispatchRules>("GET", `/v1/projects/${enc(pid)}/dispatch`),
+  /** Commits `dispatch.yaml` to the Project repo. 400 `dispatch_invalid` with the compile error; 409 `dispatch_changed` when `main` moved on from `revision`. */
+  saveDispatchRules: (pid: string, draft: DispatchRulesDraft, revision?: string | null) =>
+    req<DispatchRules>("PUT", `/v1/projects/${enc(pid)}/dispatch`, { revision: revision ?? null, ...draft }),
   harnesses: () => req<HarnessInfo[]>("GET", "/v1/harnesses"),
   validateAgent: (config: AgentConfig, role: AgentRole) =>
     req<HarnessValidation>("POST", "/v1/harnesses:validate", { config, role }),

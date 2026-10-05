@@ -21,9 +21,9 @@ use crate::engine::WorkspaceRef;
 use crate::memory;
 use crate::project_repo;
 
-/// One accept at a time, so two entries never race for a file name or for
-/// the Project repo's `main`.
-static ACCEPTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// One commit to a Project repo at a time, so two entries never race for a
+/// file name or for the Project repo's `main`.
+pub(super) static COMMITTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// One promotion at a time, so an entry is copied to user-level memory once.
 static PROMOTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -135,7 +135,7 @@ pub async fn accept(
     Json(input): Json<AcceptMemoryProposal>,
 ) -> Result<Json<MemoryProposal>, ApiError> {
     let who = decided_by(input.decided_by.as_deref())?;
-    let _one = ACCEPTING.lock().await;
+    let _one = COMMITTING.lock().await;
     let proposal = {
         let (p, i) = (project_id.clone(), id.clone());
         db(&state, move |s| s.get_memory_proposal(&p, &i)).await?
@@ -276,7 +276,7 @@ pub async fn reject(
     Json(input): Json<RejectMemoryProposal>,
 ) -> Result<Json<MemoryProposal>, ApiError> {
     let who = decided_by(input.decided_by.as_deref())?;
-    let _one = ACCEPTING.lock().await;
+    let _one = COMMITTING.lock().await;
     Ok(Json(
         db(&state, move |s| {
             s.reject_memory_proposal(&project_id, &id, &who)

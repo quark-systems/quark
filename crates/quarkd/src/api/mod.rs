@@ -60,6 +60,10 @@ pub fn router(state: AppState) -> Router {
                 .post(routes::project_action),
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
+        .route(
+            "/v1/projects/{id}/dispatch",
+            get(dispatch::get).put(dispatch::put),
+        )
         .route("/v1/projects/{id}/dispatch:test", post(dispatch::test))
         .route("/v1/projects/{id}/memory", get(memory::list_entries))
         // POST serves the custom method `.../memory/{entry_id}:promote`.
@@ -156,7 +160,13 @@ fn cors() -> CorsLayer {
                 .map(|o| HeaderValue::from_static(o))
                 .collect::<Vec<_>>(),
         )
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([header::CONTENT_TYPE])
 }
 

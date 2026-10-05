@@ -30,6 +30,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use quark_systems::{DispatchProfile, DispatchRuleSpec, DispatchRulesDraft};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -89,22 +90,10 @@ struct ProfileYaml {
 }
 
 /// How a profile list is resolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Select {
-    QuotaBalanced,
-    Ordered,
-}
+pub use quark_systems::DispatchSelect as Select;
 
 /// A quota floor; the engine applies it only under typed resolution.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Floor {
-    pub scope: String,
-    pub min_percent: serde_json::Number,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-}
+pub use quark_systems::DispatchFloor as Floor;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Profile {
@@ -176,6 +165,16 @@ pub struct CrewDispatchConfig {
 
 /// Compile `dispatch.yaml`.
 pub fn compile(dispatch_yaml: &str) -> Result<CrewDispatchConfig, String> {
+    read(dispatch_yaml, engine_harness)
+}
+
+/// `dispatch.yaml` as written: checked as [`compile`] checks it, with
+/// harness ids left Quark's.
+pub fn as_written(dispatch_yaml: &str) -> Result<CrewDispatchConfig, String> {
+    read(dispatch_yaml, |id| id)
+}
+
+fn read(dispatch_yaml: &str, harness: fn(&str) -> &str) -> Result<CrewDispatchConfig, String> {
     let fail = |e: String| format!("{FILE}: {e}");
     let doc: Option<DispatchYaml> =
         serde_yaml_ng::from_str(dispatch_yaml).map_err(|e| fail(e.to_string()))?;
@@ -207,7 +206,7 @@ pub fn compile(dispatch_yaml: &str) -> Result<CrewDispatchConfig, String> {
         rules.push(Rule {
             name: r.name,
             when: r.when,
-            profiles: profiles(r.profiles).map_err(|e| fail(format!("use: {e}")))?,
+            profiles: profiles(r.profiles, harness).map_err(|e| fail(format!("use: {e}")))?,
             select: r.select,
             why: r.why,
             approval: r.approval,
@@ -216,7 +215,7 @@ pub fn compile(dispatch_yaml: &str) -> Result<CrewDispatchConfig, String> {
     }
     let default = doc
         .default
-        .map(profiles)
+        .map(|d| profiles(d, harness))
         .transpose()
         .map_err(|e| fail(format!("default: {e}")))?;
     Ok(CrewDispatchConfig {
@@ -228,7 +227,7 @@ pub fn compile(dispatch_yaml: &str) -> Result<CrewDispatchConfig, String> {
 }
 
 /// One profile mapping or a non-empty list of them.
-fn profiles(v: serde_yaml_ng::Value) -> Result<Profiles, String> {
+fn profiles(v: serde_yaml_ng::Value, harness: fn(&str) -> &str) -> Result<Profiles, String> {
     match v {
         serde_yaml_ng::Value::Sequence(items) => {
             if items.is_empty() {
@@ -237,16 +236,16 @@ fn profiles(v: serde_yaml_ng::Value) -> Result<Profiles, String> {
             items
                 .into_iter()
                 .enumerate()
-                .map(|(i, p)| profile(p).map_err(|e| format!("profile {}: {e}", i + 1)))
+                .map(|(i, p)| profile(p, harness).map_err(|e| format!("profile {}: {e}", i + 1)))
                 .collect::<Result<_, _>>()
                 .map(Profiles::Many)
         }
-        serde_yaml_ng::Value::Mapping(_) => profile(v).map(Profiles::One),
+        serde_yaml_ng::Value::Mapping(_) => profile(v, harness).map(Profiles::One),
         _ => Err("must be a profile or a list of profiles".into()),
     }
 }
 
-fn profile(v: serde_yaml_ng::Value) -> Result<Profile, String> {
+fn profile(v: serde_yaml_ng::Value, harness: fn(&str) -> &str) -> Result<Profile, String> {
     let p: ProfileYaml = from_value(v)?;
     for (field, value) in [
         ("harness", Some(&p.harness)),
@@ -258,7 +257,7 @@ fn profile(v: serde_yaml_ng::Value) -> Result<Profile, String> {
         }
     }
     Ok(Profile {
-        harness: engine_harness(&p.harness).to_string(),
+        harness: harness(&p.harness).to_string(),
         model: p.model,
         effort: p.effort,
         provider: p.provider,
@@ -276,6 +275,167 @@ fn from_value<T: DeserializeOwned>(v: serde_yaml_ng::Value) -> Result<T, String>
 /// built-in harness for pass through, for the engine to accept or refuse.
 fn engine_harness(id: &str) -> &str {
     SPECS.iter().find(|s| s.id == id).map_or(id, |s| s.engine)
+}
+
+/// The editable part of a config [`as_written`] read.
+pub fn draft(written: &CrewDispatchConfig) -> DispatchRulesDraft {
+    let profile = |p: &Profile| DispatchProfile {
+        harness: p.harness.clone(),
+        model: p.model.clone(),
+        effort: p.effort.clone(),
+        pool: p.pool.clone(),
+        provider: p.provider.clone(),
+        floor: p.floor.clone(),
+        pricing: p.pricing.clone(),
+    };
+    let list = |ps: &Profiles| ps.as_slice().iter().map(profile).collect();
+    DispatchRulesDraft {
+        default_select: written.default_select,
+        rules: written
+            .rules
+            .iter()
+            .map(|r| DispatchRuleSpec {
+                name: r.name.clone(),
+                when: r.when.clone(),
+                candidates: list(&r.profiles),
+                select: r.select,
+                why: r.why.clone(),
+                approval: r.approval.clone(),
+                floor: r.floor.clone(),
+            })
+            .collect(),
+        default: written.default.as_ref().map(list).unwrap_or_default(),
+    }
+}
+
+/// Write `draft` as `dispatch.yaml`, in the layout project creation uses.
+/// The comment lines that open `previous`, the file being replaced, and its
+/// `classifier` block are kept; other comments are not. Blank optional
+/// values are left out. The result is not checked: [`compile`] it.
+pub fn render(draft: &DispatchRulesDraft, previous: Option<&str>) -> Result<String, String> {
+    let mut y = String::new();
+    match previous {
+        Some(prev) => {
+            for line in prev.lines().take_while(|l| l.starts_with('#')) {
+                y.push_str(line);
+                y.push('\n');
+            }
+            if let Some(classifier) = as_written(prev)?.classifier {
+                y.push_str(&classifier_block(prev, &classifier)?);
+            }
+        }
+        None => y.push_str("# Dispatch rules for this Project.\n"),
+    }
+    if let Some(select) = draft.default_select {
+        y.push_str(&format!("default_select: {}\n", select_yaml(select)));
+    }
+    if draft.rules.is_empty() {
+        y.push_str("rules: []\n");
+    } else {
+        y.push_str("rules:\n");
+    }
+    for r in &draft.rules {
+        let mut lines = Vec::new();
+        if let Some(name) = filled(&r.name) {
+            lines.push(format!("name: {}", q(name)));
+        }
+        lines.push(format!("when: {}", q(&r.when)));
+        if let Some(select) = r.select {
+            lines.push(format!("select: {}", select_yaml(select)));
+        }
+        if let Some(why) = filled(&r.why) {
+            lines.push(format!("why: {}", q(why)));
+        }
+        if let Some(approval) = filled(&r.approval) {
+            lines.push(format!("approval: {}", q(approval)));
+        }
+        if let Some(floor) = &r.floor {
+            lines.push(format!("floor: {}", floor_yaml(floor)));
+        }
+        if r.candidates.is_empty() {
+            lines.push("use: []".into());
+        } else {
+            lines.push("use:".into());
+        }
+        for (i, line) in lines.iter().enumerate() {
+            y.push_str(if i == 0 { "  - " } else { "    " });
+            y.push_str(line);
+            y.push('\n');
+        }
+        for p in &r.candidates {
+            y.push_str(&format!("      - {}\n", profile_yaml(p)));
+        }
+    }
+    if !draft.default.is_empty() {
+        y.push_str("default:\n");
+        for p in &draft.default {
+            y.push_str(&format!("  - {}\n", profile_yaml(p)));
+        }
+    }
+    Ok(y)
+}
+
+/// A YAML double-quoted scalar: a JSON string is one.
+fn q(s: &str) -> String {
+    serde_json::to_string(s).expect("strings serialize")
+}
+
+fn filled(s: &Option<String>) -> Option<&str> {
+    s.as_deref().filter(|v| !v.trim().is_empty())
+}
+
+fn select_yaml(select: Select) -> String {
+    serde_json::to_string(&select).expect("a select serializes")
+}
+
+fn floor_yaml(f: &Floor) -> String {
+    let mut parts = vec![
+        format!("scope: {}", q(&f.scope)),
+        format!("min_percent: {}", f.min_percent),
+    ];
+    if let Some(p) = filled(&f.provider) {
+        parts.push(format!("provider: {}", q(p)));
+    }
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// One flow-style profile.
+fn profile_yaml(p: &DispatchProfile) -> String {
+    let mut parts = vec![format!("harness: {}", q(&p.harness))];
+    for (key, value) in [
+        ("model", &p.model),
+        ("effort", &p.effort),
+        ("pool", &p.pool),
+        ("provider", &p.provider),
+        ("pricing", &p.pricing),
+    ] {
+        if let Some(v) = filled(value) {
+            parts.push(format!("{key}: {}", q(v)));
+        }
+    }
+    if let Some(f) = &p.floor {
+        parts.push(format!("floor: {}", floor_yaml(f)));
+    }
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// The `classifier` block of `file`, which reads as `classifier`: its own
+/// lines when they stand apart from the rest, else the value written anew.
+fn classifier_block(file: &str, classifier: &serde_json::Value) -> Result<String, String> {
+    let lines: Vec<&str> = file.lines().collect();
+    if let Some(start) = lines.iter().position(|l| l.starts_with("classifier:")) {
+        let inside = |l: &&&str| l.trim().is_empty() || l.starts_with([' ', '\t']);
+        let mut end = start + 1 + lines[start + 1..].iter().take_while(inside).count();
+        while lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        let block = format!("{}\n", lines[start..end].join("\n"));
+        if as_written(&block).is_ok_and(|c| c.classifier.as_ref() == Some(classifier)) {
+            return Ok(block);
+        }
+    }
+    serde_yaml_ng::to_string(&serde_json::json!({ "classifier": classifier }))
+        .map_err(|e| format!("{FILE}: classifier: {e}"))
 }
 
 /// What `main` of a bare Project repo declares: the `dispatch.yaml` blob id
@@ -403,6 +563,91 @@ default:
             assert!(err.contains(why), "{bad}: {err}");
             assert!(err.starts_with("dispatch.yaml: "), "{err}");
         }
+    }
+
+    #[test]
+    fn a_draft_renders_to_a_file_that_reads_back_as_the_draft() {
+        let written = as_written(YAML).unwrap();
+        let d = draft(&written);
+        assert_eq!(d.rules[0].candidates[0].harness, "claude-code");
+        assert_eq!(d.rules[0].candidates[0].pool.as_deref(), Some("max"));
+        assert_eq!(
+            d.rules[1].candidates.len(),
+            1,
+            "one profile is a list of one"
+        );
+        assert_eq!(d.default_select, Some(Select::Ordered));
+
+        let y = render(&d, Some(YAML.trim_start())).unwrap();
+        assert!(
+            y.starts_with(
+                "# Dispatch rules for this Project.\nclassifier:\n  provider: \"none\"\n  \
+                 confidence_floor: 0.6\ndefault_select: \"ordered\"\nrules:\n  \
+                 - name: \"trivial-edit\"\n    when: \"A trivial mechanical edit such as a rename, typo or one-line fix.\"\n    use:\n      \
+                 - { harness: \"claude-code\", model: \"claude-sonnet-5\", effort: \"low\", pool: \"max\" }\n"
+            ),
+            "{y}"
+        );
+        assert!(y.contains(
+            "  - when: \"A Bedrock-only task.\"\n    approval: \"captain\"\n    \
+             floor: { scope: \"all_models\", min_percent: 20, provider: \"claude\" }\n    use:\n"
+        ));
+        assert!(y.ends_with(
+            "default:\n  - { harness: \"claude-code\", model: \"claude-sonnet-5\", effort: \"medium\" }\n"
+        ));
+        let again = as_written(&y).unwrap();
+        assert_eq!(draft(&again), d);
+        assert_eq!(again.classifier, written.classifier);
+        // Rendering what was rendered changes nothing.
+        assert_eq!(render(&d, Some(&y)).unwrap(), y);
+    }
+
+    #[test]
+    fn rendering_keeps_any_classifier_and_drops_blank_values() {
+        let d = DispatchRulesDraft {
+            default_select: None,
+            rules: vec![DispatchRuleSpec {
+                name: Some(" ".into()),
+                when: "Says \"quoted\": yes".into(),
+                candidates: vec![DispatchProfile {
+                    harness: "codex".into(),
+                    model: Some(String::new()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            default: vec![],
+        };
+        // A classifier written in flow style, after the rules.
+        let prev = "rules: []\nclassifier: { provider: \"system1\", floor: 0.5 }\n";
+        let y = render(&d, Some(prev)).unwrap();
+        assert_eq!(
+            y,
+            "classifier: { provider: \"system1\", floor: 0.5 }\nrules:\n  \
+             - when: \"Says \\\"quoted\\\": yes\"\n    use:\n      - { harness: \"codex\" }\n"
+        );
+        assert_eq!(
+            as_written(&y).unwrap().rules[0].when,
+            "Says \"quoted\": yes"
+        );
+
+        // A block that cannot be lifted as lines is written anew.
+        let prev = "{ classifier: { provider: \"system1\" }, rules: [] }\n";
+        let y = render(&d, Some(prev)).unwrap();
+        assert!(
+            y.starts_with("classifier:\n  provider: system1\nrules:\n"),
+            "{y}"
+        );
+
+        // No file yet, and a file that does not compile.
+        let y = render(&DispatchRulesDraft::default(), None).unwrap();
+        assert_eq!(y, "# Dispatch rules for this Project.\nrules: []\n");
+        assert!(render(&d, Some("rules: [")).is_err());
+        // An empty candidate list is written so that compiling refuses it.
+        let mut empty = d.clone();
+        empty.rules[0].candidates.clear();
+        let err = compile(&render(&empty, None).unwrap()).unwrap_err();
+        assert!(err.contains("needs at least one profile"), "{err}");
     }
 
     #[test]
