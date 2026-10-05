@@ -171,6 +171,9 @@ pub struct WorkspacePlan {
     /// Where the workspace goes. It must not exist yet, or be the workspace
     /// an earlier attempt seeded for the same Project.
     pub root: PathBuf,
+    /// User-level memory, shared by every Project, for the coordinator to
+    /// read.
+    pub user_memory: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]

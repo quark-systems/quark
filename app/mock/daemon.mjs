@@ -47,6 +47,8 @@ const memoryProposals = new Map(); // proposal id -> MemoryProposal
 const memoryEntries = new Map(); // project id -> MemoryEntry[] (the Project repo's memory/)
 const accounts = new Map(); // account id -> Account, in the daemon's order (default first per harness)
 const dispatches = new Map(); // task id -> DispatchRecord[], oldest first; kept after the task ends
+const memoryCommits = new Map(); // commit id -> MemoryCommit
+const userMemory = []; // UserMemoryEntry[] (user-level memory, shared by every Project)
 
 const events = []; // { seq, ... } bounded
 let seq = 0;
@@ -165,6 +167,26 @@ function output(task, text) {
   const term = terms.get(task.id);
   term.screen = (term.screen + text).slice(-16000);
   outputEvent(task, "output", text);
+}
+
+/** Records a Project memory entry with the commit that adds its file, as quarkd does on accept. */
+function addMemoryEntry(e) {
+  const sha = Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  const entry = { accepted_at: null, accepted_by: null, proposal_id: null, source: null, date: null, ...e, path: `memory/${e.id}.md`, commit: sha };
+  const q = (v) => (v == null ? "null" : JSON.stringify(v));
+  const file = [
+    "---", `date: ${q(entry.date)}`, `source: ${q(entry.source)}`, `task: ${q(entry.evidence.task_id)}`, `task_title: ${q(entry.evidence.task_title)}`,
+    `pull_request: ${q(entry.evidence.pull_request_url)}`, `files: ${JSON.stringify(entry.evidence.files)}`, `proposal: ${q(entry.proposal_id)}`,
+    `accepted_at: ${q(entry.accepted_at)}`, `accepted_by: ${q(entry.accepted_by)}`, "---", "", ...entry.text.split("\n"),
+  ];
+  memoryCommits.set(sha, {
+    commit: sha, subject: `Remember: ${entry.text.split("\n")[0].slice(0, 60)}`, author: entry.accepted_by ?? "mock-user", date: entry.accepted_at ?? now(),
+    patch: `diff --git a/${entry.path} b/${entry.path}\nnew file mode 100644\n--- /dev/null\n+++ b/${entry.path}\n@@ -0,0 +1,${file.length} @@\n` +
+      file.map((l) => "+" + l).join("\n"),
+  });
+  if (!memoryEntries.has(entry.project_id)) memoryEntries.set(entry.project_id, []);
+  memoryEntries.get(entry.project_id).push(entry);
+  return entry;
 }
 
 // ---------------------------------------------------------------- seed
@@ -315,11 +337,11 @@ function seed() {
     evidence: { task_id: inReview.id, task_title: inReview.title, pull_request_url: inReview.pull_request_url, files: ["api/openapi.json", "crates/quarkd/tests/api.rs"] },
   });
   MP("mp-2", quark, done, "SQLite runs in WAL mode with a 5s busy timeout; keep long work outside store transactions.", { source: "coordinator", proposed_at: minutesAgo(25) });
-  memoryEntries.set(quark.id, [{
-    id: "2026-10-01-one-task-one-pr-against-main", project_id: quark.id, path: "memory/2026-10-01-one-task-one-pr-against-main.md",
+  addMemoryEntry({
+    id: "2026-10-01-one-task-one-pr-against-main", project_id: quark.id,
     text: "One task, one PR against main; never stack PRs.", source: "coordinator", date: minutesAgo(900), accepted_at: minutesAgo(880),
-    accepted_by: "matt", proposal_id: null, commit: null, evidence: { task_id: done.id, task_title: done.title, pull_request_url: null, files: [] },
-  }]);
+    accepted_by: "matt", evidence: { task_id: done.id, task_title: done.title, pull_request_url: null, files: [] },
+  });
 
   chat(quark.id, "user", "Split Phase 1 into tasks and start the event stream and terminal work.", { ts: minutesAgo(35) });
   chat(quark.id, "thinking", "Two independent workstreams; dispatch both.", { ts: minutesAgo(35) });
@@ -570,16 +592,40 @@ const server = http.createServer(async (req, res) => {
     const text = b.text?.trim() || mp.text;
     const slug = text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join("-").slice(0, 48) || "entry";
     const id = `${mp.proposed_at.slice(0, 10)}-${slug}`;
-    const entry = {
-      id, project_id: mp.project_id, path: `memory/${id}.md`, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
-      accepted_at: now(), accepted_by: by, proposal_id: mp.id, commit: Math.random().toString(16).slice(2, 12).padEnd(10, "0"),
-    };
+    const entry = addMemoryEntry({
+      id, project_id: mp.project_id, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
+      accepted_at: now(), accepted_by: by, proposal_id: mp.id,
+    });
     Object.assign(mp, { text, state: "accepted", decided_at: entry.accepted_at, decided_by: by, entry });
-    if (!memoryEntries.has(mp.project_id)) memoryEntries.set(mp.project_id, []);
-    memoryEntries.get(mp.project_id).push(entry);
     emit("memory.accepted", { ...mp }, mp.project_id);
     return send(res, 200, mp);
   }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/memory\/commits\/([^/]+)$/)) && req.method === "GET") {
+    const list = memoryEntries.get(decodeURIComponent(r[1])) ?? [];
+    const c = memoryCommits.get(decodeURIComponent(r[2]));
+    if (!c || !list.some((e) => e.commit === c.commit)) return notFound(res);
+    return send(res, 200, c);
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/memory\/([^/:]+):promote$/)) && req.method === "POST") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    const entry = proj && (memoryEntries.get(proj.id) ?? []).find((e) => e.id === decodeURIComponent(r[2]));
+    if (!entry) return notFound(res);
+    const b = (await readJson(req)) ?? {};
+    let promoted = userMemory.find((u) => u.project_id === proj.id && u.entry_id === entry.id);
+    if (!promoted) {
+      // Like quarkd: a name another Project's entry took gets a numeric suffix.
+      let id = entry.id;
+      for (let n = 2; userMemory.some((u) => u.id === id); n++) id = `${entry.id}-${n}`;
+      promoted = {
+        id, path: `/home/mock/.quark/memory/${id}.md`, text: entry.text, evidence: entry.evidence, source: entry.source, date: entry.date,
+        project_id: proj.id, project_name: proj.name, entry_id: entry.id, commit: entry.commit,
+        promoted_at: now(), promoted_by: b.promoted_by?.trim() || "mock-user",
+      };
+      userMemory.push(promoted);
+    }
+    return send(res, 200, promoted);
+  }
+  if (p === "/v1/memory" && req.method === "GET") return send(res, 200, userMemory);
   if (p === "/v1/harnesses" && req.method === "GET") return send(res, 200, HARNESSES);
   if (p === "/v1/harnesses:validate" && req.method === "POST") {
     const b = await readJson(req);

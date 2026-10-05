@@ -9,6 +9,8 @@ export function Palette({ onClose }: { onClose: () => void }) {
   const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
   const prs = useStore((s) => s.pullRequests);
+  const proposals = useStore((s) => s.memoryProposals);
+  const toReview = (pid: string) => Object.values(proposals).filter((m) => m.project_id === pid && m.state === "proposed").length;
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -52,6 +54,14 @@ export function Palette({ onClose }: { onClose: () => void }) {
               {Object.values(projects).map((p) => (
                 <Command.Item key={p.id} value={`project ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "project", id: p.id }))}>
                   <span className="mono faint">#</span>{p.name}<span className="sub">{p.goal ?? ""}</span>
+                </Command.Item>
+              ))}
+            </Command.Group>
+            <Command.Group heading="Memory">
+              {Object.values(projects).map((p) => (
+                <Command.Item key={p.id} value={`memory learnings review ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "memory", project: p.id }))}>
+                  <span className="ellipsis">Memory: {p.name}</span>
+                  <span className="sub">{toReview(p.id)} to review</span>
                 </Command.Item>
               ))}
             </Command.Group>

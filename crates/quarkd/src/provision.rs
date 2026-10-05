@@ -33,11 +33,30 @@ use crate::store::Store;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     pub home: PathBuf,
+    /// User-level memory, when it is not `<home>/memory`.
+    pub user_memory: Option<PathBuf>,
 }
 
 impl Layout {
     pub fn new(home: impl Into<PathBuf>) -> Self {
-        Self { home: home.into() }
+        Self {
+            home: home.into(),
+            user_memory: None,
+        }
+    }
+
+    /// Keeps user-level memory in `dir` instead of `<home>/memory`.
+    pub fn with_user_memory(mut self, dir: Option<PathBuf>) -> Self {
+        self.user_memory = dir;
+        self
+    }
+
+    /// User-level memory: entries every Project's coordinator reads,
+    /// `~/.quark/memory` by default.
+    pub fn user_memory(&self) -> PathBuf {
+        self.user_memory
+            .clone()
+            .unwrap_or_else(|| self.home.join("memory"))
     }
 
     /// The command-center workspace (a firstmate primary).
@@ -230,6 +249,7 @@ impl Provisioner {
             goal: project.goal.clone(),
             sources: sources.clone(),
             root: root.clone(),
+            user_memory: Some(self.layout.user_memory()),
         };
         let root = self
             .step(

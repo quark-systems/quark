@@ -16,11 +16,18 @@
 //! accepted one is committed to the Project repo as a Markdown file whose
 //! front matter carries its evidence and date, the same JSON-quoted YAML the
 //! rest of the Project repo uses.
+//!
+//! Any entry can be promoted to user-level memory: a copy under
+//! `~/.quark/memory/` (see [`crate::provision::Layout::user_memory`]) that
+//! every Project's coordinator reads, in the same file format plus where it
+//! came from.
 
+use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-use quark_systems::{MemoryEntry, MemoryEvidence, MemorySource};
+use quark_systems::{MemoryCommit, MemoryEntry, MemoryEvidence, MemorySource, UserMemoryEntry};
 
 /// The status verb that reports a learning.
 pub const LEARNED_VERB: &str = "learned";
@@ -134,14 +141,14 @@ fn q_opt(s: Option<&str>) -> String {
     s.map_or_else(|| "null".into(), q)
 }
 
-/// The entry file: front matter with evidence and dates, then the text.
-pub fn render(e: &MemoryEntry) -> String {
+/// The entry's front-matter lines: evidence and dates.
+fn front(e: &MemoryEntry) -> String {
     let source = e.source.map(|s| match s {
         MemorySource::Worker => "worker",
         MemorySource::Coordinator => "coordinator",
     });
     let files: Vec<String> = e.evidence.files.iter().map(|f| q(f)).collect();
-    let mut m = String::from("---\n");
+    let mut m = String::new();
     m.push_str(&format!("date: {}\n", q_opt(e.date.as_deref())));
     m.push_str(&format!("source: {}\n", q_opt(source)));
     m.push_str(&format!("task: {}\n", q_opt(e.evidence.task_id.as_deref())));
@@ -163,10 +170,25 @@ pub fn render(e: &MemoryEntry) -> String {
         "accepted_by: {}\n",
         q_opt(e.accepted_by.as_deref())
     ));
-    m.push_str("---\n\n");
-    m.push_str(e.text.trim());
-    m.push('\n');
     m
+}
+
+/// The entry file: front matter with evidence and dates, then the text.
+pub fn render(e: &MemoryEntry) -> String {
+    format!("---\n{}---\n\n{}\n", front(e), e.text.trim())
+}
+
+/// Front matter and text of an entry file; `None` for a file without front
+/// matter.
+fn split_front(body: &str) -> Option<(&str, &str)> {
+    body.strip_prefix("---\n")?.split_once("\n---\n")
+}
+
+/// A front-matter value: a JSON string, or `null`.
+fn scalar(value: &str) -> Option<String> {
+    serde_json::from_str::<Option<String>>(value.trim())
+        .ok()
+        .flatten()
 }
 
 /// Reads an entry file. A file without front matter (written by hand) is all
@@ -190,10 +212,7 @@ pub fn parse(project_id: &str, path: &str, body: &str) -> MemoryEntry {
         proposal_id: None,
         commit: None,
     };
-    let Some(rest) = body.strip_prefix("---\n") else {
-        return entry;
-    };
-    let Some((front, text)) = rest.split_once("\n---\n") else {
+    let Some((front, text)) = split_front(body) else {
         return entry;
     };
     entry.text = text.trim().to_string();
@@ -202,7 +221,7 @@ pub fn parse(project_id: &str, path: &str, body: &str) -> MemoryEntry {
             continue;
         };
         let value = value.trim();
-        let s = || serde_json::from_str::<Option<String>>(value).ok().flatten();
+        let s = || scalar(value);
         match key.trim() {
             "date" => entry.date = s(),
             "source" => {
@@ -235,6 +254,7 @@ pub fn list(bare: &Path, project_id: &str) -> Result<Vec<MemoryEntry>, String> {
         return Ok(Vec::new());
     }
     let names = git(bare, &["ls-tree", "--name-only", &tree])?;
+    let added = added_in(bare)?;
     let mut entries = Vec::new();
     for name in names.lines().filter(|n| !n.starts_with('.')) {
         let path = format!("{MEMORY_DIR}/{name}");
@@ -243,10 +263,231 @@ pub fn list(bare: &Path, project_id: &str) -> Result<Vec<MemoryEntry>, String> {
             continue;
         }
         let body = git(bare, &["show", &object])?;
-        entries.push(parse(project_id, &path, &body));
+        let mut entry = parse(project_id, &path, &body);
+        entry.commit = added.get(&path).cloned();
+        entries.push(entry);
     }
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(entries)
+}
+
+/// The commit on `main` that added each file under `memory/`: the latest
+/// one, for a file removed and added again.
+fn added_in(bare: &Path) -> Result<HashMap<String, String>, String> {
+    let log = git(
+        bare,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "log",
+            "--diff-filter=A",
+            "--name-only",
+            "--format=commit %H",
+            "main",
+            "--",
+            MEMORY_DIR,
+        ],
+    )?;
+    let mut added = HashMap::new();
+    let mut commit = "";
+    for line in log.lines() {
+        if let Some(sha) = line.strip_prefix("commit ") {
+            commit = sha;
+        } else if !line.is_empty() {
+            added
+                .entry(line.to_string())
+                .or_insert_with(|| commit.to_string());
+        }
+    }
+    Ok(added)
+}
+
+/// A commit on the Project repo's `main` with what it changed under
+/// `memory/`. `None` when `commit` is not a commit id on `main`.
+pub fn commit(bare: &Path, commit: &str) -> Result<Option<MemoryCommit>, String> {
+    let hex = (7..=64).contains(&commit.len()) && commit.chars().all(|c| c.is_ascii_hexdigit());
+    let object = format!("{commit}^{{commit}}");
+    if !hex
+        || git(bare, &["rev-parse", "--verify", "--quiet", &object]).is_err()
+        || git(bare, &["merge-base", "--is-ancestor", commit, "main"]).is_err()
+    {
+        return Ok(None);
+    }
+    let shown = git(
+        bare,
+        &[
+            "show",
+            "--no-color",
+            "--no-ext-diff",
+            "--format=%H%n%an%n%aI%n%s",
+            "--patch",
+            commit,
+            "--",
+            MEMORY_DIR,
+        ],
+    )?;
+    let mut head = shown.splitn(5, '\n');
+    let mut next = || head.next().unwrap_or("").to_string();
+    let (sha, author, date, subject) = (next(), next(), next(), next());
+    Ok(Some(MemoryCommit {
+        commit: sha,
+        subject,
+        author: Some(author).filter(|a| !a.is_empty()),
+        date: Some(date).filter(|d| !d.is_empty()),
+        patch: next().trim_start_matches('\n').to_string(),
+    }))
+}
+
+/// The user-level entry file: the Project entry's front matter, then where
+/// it was promoted from.
+pub fn render_user(e: &UserMemoryEntry) -> String {
+    let mut m = front(&MemoryEntry {
+        id: String::new(),
+        project_id: String::new(),
+        path: String::new(),
+        text: String::new(),
+        evidence: e.evidence.clone(),
+        source: e.source,
+        date: e.date.clone(),
+        accepted_at: None,
+        accepted_by: None,
+        proposal_id: None,
+        commit: None,
+    });
+    for (key, value) in [
+        ("project", &e.project_id),
+        ("project_name", &e.project_name),
+        ("entry", &e.entry_id),
+        ("commit", &e.commit),
+        ("promoted_at", &e.promoted_at),
+        ("promoted_by", &e.promoted_by),
+    ] {
+        m.push_str(&format!("{key}: {}\n", q_opt(value.as_deref())));
+    }
+    format!("---\n{m}---\n\n{}\n", e.text.trim())
+}
+
+/// Reads a user-level entry file; one written by hand is all text.
+pub fn parse_user(path: &Path, body: &str) -> UserMemoryEntry {
+    let shown = path.to_string_lossy();
+    let base = parse("", &shown, body);
+    let mut entry = UserMemoryEntry {
+        id: base.id,
+        path: base.path,
+        text: base.text,
+        evidence: base.evidence,
+        source: base.source,
+        date: base.date,
+        project_id: None,
+        project_name: None,
+        entry_id: None,
+        commit: None,
+        promoted_at: None,
+        promoted_by: None,
+    };
+    let Some((front, _)) = split_front(body) else {
+        return entry;
+    };
+    for line in front.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        match key.trim() {
+            "project" => entry.project_id = scalar(value),
+            "project_name" => entry.project_name = scalar(value),
+            "entry" => entry.entry_id = scalar(value),
+            "commit" => entry.commit = scalar(value),
+            "promoted_at" => entry.promoted_at = scalar(value),
+            "promoted_by" => entry.promoted_by = scalar(value),
+            _ => {}
+        }
+    }
+    entry
+}
+
+/// Every user-level entry in `dir`, by file name. A directory that does not
+/// exist yet has none.
+pub fn list_user(dir: &Path) -> Result<Vec<UserMemoryEntry>, String> {
+    let read = match std::fs::read_dir(dir) {
+        Ok(read) => read,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("reading {}: {e}", dir.display())),
+    };
+    let mut entries = Vec::new();
+    for file in read {
+        let path = file
+            .map_err(|e| format!("reading {}: {e}", dir.display()))?
+            .path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or(".");
+        if name.starts_with('.') || !name.ends_with(".md") || !path.is_file() {
+            continue;
+        }
+        // A file that is not UTF-8 is not an entry Quark can show.
+        if let Ok(body) = std::fs::read_to_string(&path) {
+            entries.push(parse_user(&path, &body));
+        }
+    }
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(entries)
+}
+
+/// Copies a Project entry into user-level memory at `dir`, as a new file
+/// named after the entry. Returns the user-level entry and whether it was
+/// written now: promoting an entry again returns the copy already there.
+pub fn promote(
+    dir: &Path,
+    entry: &MemoryEntry,
+    project_name: &str,
+    promoted_at: &str,
+    promoted_by: &str,
+) -> Result<(UserMemoryEntry, bool), String> {
+    if let Some(have) = list_user(dir)?.into_iter().find(|u| {
+        u.project_id.as_deref() == Some(&entry.project_id)
+            && u.entry_id.as_deref() == Some(&entry.id)
+    }) {
+        return Ok((have, false));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    let mut promoted = UserMemoryEntry {
+        id: String::new(),
+        path: String::new(),
+        text: entry.text.clone(),
+        evidence: entry.evidence.clone(),
+        source: entry.source,
+        date: entry.date.clone(),
+        project_id: Some(entry.project_id.clone()),
+        project_name: Some(project_name.to_string()),
+        entry_id: Some(entry.id.clone()),
+        commit: entry.commit.clone(),
+        promoted_at: Some(promoted_at.to_string()),
+        promoted_by: Some(promoted_by.to_string()),
+    };
+    let body = render_user(&promoted);
+    // Another Project may have an entry of the same name: never replace it.
+    for n in 1.. {
+        let id = if n == 1 {
+            entry.id.clone()
+        } else {
+            format!("{}-{n}", entry.id)
+        };
+        let path = dir.join(format!("{id}.md"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(body.as_bytes())
+                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
+                promoted.id = id;
+                promoted.path = path.to_string_lossy().into_owned();
+                return Ok((promoted, true));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("writing {}: {e}", path.display())),
+        }
+    }
+    unreachable!("the loop returns")
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -340,6 +581,42 @@ mod tests {
             "{body}"
         );
         assert_eq!(parse("prj_1", &e.path, &body), e);
+    }
+
+    #[test]
+    fn promotes_once_and_never_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("memory");
+        assert_eq!(list_user(&root).unwrap(), []);
+        let mut e = parse("prj_1", "memory/2026-10-02-x.md", "Keep it small.\n");
+        e.evidence.task_title = Some("Fix: login".into());
+        e.commit = Some("abc1234".into());
+
+        let (first, written) = promote(&root, &e, "Quark", "2026-10-03T00:00:00Z", "matt").unwrap();
+        assert!(written);
+        assert_eq!(first.id, "2026-10-02-x");
+        assert_eq!(first.project_name.as_deref(), Some("Quark"));
+        assert_eq!(first.commit.as_deref(), Some("abc1234"));
+        let file = std::fs::read_to_string(root.join("2026-10-02-x.md")).unwrap();
+        assert!(file.contains("project: \"prj_1\"\n"), "{file}");
+        assert!(file.ends_with("---\n\nKeep it small.\n"), "{file}");
+        let (again, written) = promote(&root, &e, "Quark", "later", "someone").unwrap();
+        assert!(!written);
+        assert_eq!(again, first);
+
+        // The same file name from another Project lands beside it.
+        e.project_id = "prj_2".into();
+        let (other, written) = promote(&root, &e, "Other", "2026-10-04T00:00:00Z", "matt").unwrap();
+        assert!(written);
+        assert_eq!(other.id, "2026-10-02-x-2");
+        std::fs::write(root.join("by-hand.md"), "# Note\n").unwrap();
+        std::fs::write(root.join(".hidden.md"), "no").unwrap();
+        let ids: Vec<_> = list_user(&root)
+            .unwrap()
+            .into_iter()
+            .map(|u| u.id)
+            .collect();
+        assert_eq!(ids, ["2026-10-02-x-2", "2026-10-02-x", "by-hand"]);
     }
 
     #[test]

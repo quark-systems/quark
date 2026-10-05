@@ -668,8 +668,18 @@ pub fn charter(plan: &WorkspacePlan) -> (String, String) {
         .filter(|g| !g.is_empty())
         .map(|g| format!(" Its goal: {g}"))
         .unwrap_or_default();
+    let shared = plan
+        .user_memory
+        .as_deref()
+        .map(|dir| {
+            format!(
+                " Memory shared by every Project is in {}; read every entry there too, and reread it when told a new one landed.",
+                dir.display()
+            )
+        })
+        .unwrap_or_default();
     let charter = format!(
-        "Coordinate the Quark Project \"{}\" across {}.{goal} The Project repo checked out at project/ holds its instructions.md and memory/; read instructions.md and every entry in memory/ before planning work, and reread memory/ when told a new entry landed. Have workers report what a task taught them that is worth keeping as `learned: <text>` status lines before done:, and add your own for a finished task as `learned [source=coordinator]: <text>` in its status log; each becomes a memory proposal for review.",
+        "Coordinate the Quark Project \"{}\" across {}.{goal} The Project repo checked out at project/ holds its instructions.md and memory/; read instructions.md and every entry in memory/ before planning work, and reread memory/ when told a new entry landed. Have workers report what a task taught them that is worth keeping as `learned: <text>` status lines before done:, and add your own for a finished task as `learned [source=coordinator]: <text>` in its status log; each becomes a memory proposal for review.{shared}",
         plan.name,
         repos.join(", "),
     );

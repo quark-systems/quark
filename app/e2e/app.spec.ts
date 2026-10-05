@@ -326,3 +326,88 @@ test("accounts: add a second Claude account and see both with health and quota",
   await work.getByRole("button", { name: "Remove Work" }).click();
   await expect(rows).toHaveCount(1);
 });
+
+test("memory: review proposals from the keyboard, browse entries with their commit, promote one", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await expect(page.getByTestId("memory-count")).toHaveText("2");
+  await page.getByTestId("nav-memory").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/memory$/);
+
+  // Pending proposals are listed oldest first, each with links to its evidence.
+  const rows = page.getByTestId("memory-row");
+  const detail = page.getByTestId("memory-detail");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await expect(rows.first()).toContainText("Regenerate api/openapi.json");
+  const evidence = detail.getByTestId("memory-evidence");
+  await expect(evidence.getByRole("link", { name: "OpenAPI check in CI" })).toHaveAttribute("href", /^#\/t\//);
+  await expect(evidence.getByRole("link", { name: "quark-systems/quark#2" })).toHaveAttribute("href", "#/pr/pr-1");
+  await expect(evidence).toContainText("crates/quarkd/tests/api.rs");
+
+  // j/k move the selection.
+  await page.keyboard.press("j");
+  await expect(page).toHaveURL(/#\/p\/quark\/memory\/mp-2$/);
+  await expect(detail).toContainText("coordinator");
+  await page.keyboard.press("k");
+  await expect(page).toHaveURL(/#\/p\/quark\/memory\/mp-1$/);
+
+  // e focuses the entry text; Ctrl+Enter accepts it as edited and moves on to the next proposal.
+  await page.keyboard.press("e");
+  const box = page.getByLabel("Memory entry");
+  await expect(box).toBeFocused();
+  await expect(box).toHaveValue(/^Regenerate api\/openapi\.json/);
+  await page.getByLabel("Reviewing as").fill("matt");
+  await box.fill("Regenerate api/openapi.json whenever a route or shape changes.");
+  await box.press("Control+Enter");
+  await expect(page).toHaveURL(/#\/p\/quark\/memory\/mp-2$/);
+  await expect(rows).toHaveCount(1);
+
+  // x asks once more, then rejects.
+  await page.keyboard.press("x");
+  await expect(page.getByTestId("memory-reject")).toHaveText("Reject? Press x again");
+  await page.keyboard.press("x");
+  await expect(rows).toHaveCount(0);
+  await expect(page.getByTestId("memory-list")).toContainText("Nothing to review");
+
+  // Accepted entries are browsable, newest first, each with the commit that added it.
+  await page.keyboard.press("a");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("Regenerate api/openapi.json whenever a route or shape changes.");
+  await expect(rows.first()).toContainText("accepted by matt");
+  await expect(rows.nth(1)).toContainText("One task, one PR against main");
+  await expect(detail).toContainText("memory/");
+  await expect(detail.getByRole("link", { name: "OpenAPI check in CI" })).toBeVisible();
+  const commit = detail.getByTestId("memory-commit");
+  await expect(commit).toHaveText(/^[0-9a-f]{10}$/);
+  await page.keyboard.press("c");
+  const view = page.getByTestId("memory-commit-view");
+  await expect(view).toContainText("Remember: Regenerate api/openapi.json");
+  await expect(view.getByTestId("diff-file")).toContainText("accepted_by: \"matt\"");
+  await expect(view.getByTestId("diff-file")).toContainText("Regenerate api/openapi.json whenever a route or shape changes.");
+
+  // u promotes the entry to user-level memory.
+  const shared = page.getByTestId("memory-shared");
+  await expect(shared).toContainText("Only this Project's coordinator reads this entry.");
+  await page.keyboard.press("u");
+  await expect(shared).toContainText("Every Project's coordinator reads this entry.");
+  await expect(shared).toContainText("promoted by matt");
+  await expect(rows.first()).toContainText("user-level");
+  await expect(rows.nth(1)).not.toContainText("user-level");
+
+  // The daemon holds what the screen shows.
+  const state = await page.evaluate(async () => {
+    const get = async (path: string) => (await fetch("http://127.0.0.1:7392" + path)).json();
+    return { shared: await get("/v1/memory"), proposals: await get("/v1/projects/quark/memory/proposals") };
+  });
+  expect(state.shared).toHaveLength(1);
+  expect(state.shared[0]).toMatchObject({
+    text: "Regenerate api/openapi.json whenever a route or shape changes.", project_id: "quark", project_name: "Quark MVP", promoted_by: "matt",
+  });
+  expect(state.proposals.map((m: any) => [m.id, m.state, m.decided_by])).toEqual([["mp-1", "accepted", "matt"], ["mp-2", "rejected", "matt"]]);
+
+  // Nothing is left to review on the board.
+  await page.locator(".header .crumb").click();
+  await expect(page).toHaveURL(/#\/p\/quark$/);
+  await expect(page.getByTestId("nav-memory")).toBeVisible();
+  await expect(page.getByTestId("memory-count")).toHaveCount(0);
+});

@@ -1,5 +1,6 @@
-//! Project memory (journey J8): review proposals from finished tasks, and
-//! read the entries accepted into the Project repo's `memory/`.
+//! Project memory (journey J8): review proposals from finished tasks, read
+//! the entries accepted into the Project repo's `memory/`, and promote one to
+//! the user-level memory every Project's coordinator reads.
 
 use std::path::PathBuf;
 
@@ -8,8 +9,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    AcceptMemoryProposal, ErrorBody, MemoryEntry, MemoryProposal, MemoryProposalState,
-    RejectMemoryProposal,
+    AcceptMemoryProposal, ErrorBody, MemoryCommit, MemoryEntry, MemoryProposal,
+    MemoryProposalState, PromoteMemoryEntry, RejectMemoryProposal, UserMemoryEntry,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -23,6 +24,9 @@ use crate::project_repo;
 /// One accept at a time, so two entries never race for a file name or for
 /// the Project repo's `main`.
 static ACCEPTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// One promotion at a time, so an entry is copied to user-level memory once.
+static PROMOTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -92,7 +96,7 @@ fn decided_by(given: Option<&str>) -> Result<String, ApiError> {
     };
     if who.is_empty() || who.len() > MAX_ANSWERED_BY_BYTES || who.chars().any(char::is_control) {
         return Err(ApiError::invalid(
-            "decided_by must be one line of at most 128 bytes",
+            "the name must be one line of at most 128 bytes",
         ));
     }
     Ok(who)
@@ -303,19 +307,185 @@ pub async fn list_entries(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<MemoryEntry>>, ApiError> {
+    Ok(Json(entries_of(&state, &id).await?))
+}
+
+fn repo_failed(e: String) -> ApiError {
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "project_repo_failed", e)
+}
+
+/// The Project's entries, read from its Project repo off the async runtime.
+async fn entries_of(state: &AppState, id: &str) -> Result<Vec<MemoryEntry>, ApiError> {
     let project = {
-        let id = id.clone();
-        db(&state, move |s| s.get_project(&id)).await?
+        let id = id.to_string();
+        db(state, move |s| s.get_project(&id)).await?
     };
     let Some(bare) = project.project_repo_path else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
-    let entries =
-        tokio::task::spawn_blocking(move || memory::list(std::path::Path::new(&bare), &id))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| {
-                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "project_repo_failed", e)
-            })?;
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || memory::list(std::path::Path::new(&bare), &id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(repo_failed)
+}
+
+/// A Project repo commit that touched `memory/`, with its diff there: what
+/// an entry's `commit` links to.
+#[utoipa::path(
+    get,
+    path = "/v1/projects/{id}/memory/commits/{commit}",
+    tag = "memory",
+    params(
+        ("id" = String, Path, description = "Project id"),
+        ("commit" = String, Path, description = "Commit id on the Project repo's `main`")
+    ),
+    responses(
+        (status = 200, body = MemoryCommit),
+        (status = 404, body = ErrorBody),
+        (status = 500, body = ErrorBody, description = "`project_repo_failed`: the repo could not be read")
+    )
+)]
+pub async fn get_commit(
+    State(state): State<AppState>,
+    Path((id, commit)): Path<(String, String)>,
+) -> Result<Json<MemoryCommit>, ApiError> {
+    let project = db(&state, move |s| s.get_project(&id)).await?;
+    let Some(bare) = project.project_repo_path else {
+        return Err(ApiError::not_found());
+    };
+    tokio::task::spawn_blocking(move || memory::commit(std::path::Path::new(&bare), &commit))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(repo_failed)?
+        .map(Json)
+        .ok_or_else(ApiError::not_found)
+}
+
+/// Dispatches `POST /v1/projects/{id}/memory/{entry_id}:promote`.
+pub async fn entry_action(
+    state: State<AppState>,
+    Path((project_id, target)): Path<(String, String)>,
+    body: Bytes,
+) -> Result<Json<UserMemoryEntry>, ApiError> {
+    let Some((id, action)) = target.rsplit_once(':') else {
+        return Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "use POST .../memory/{entry_id}:promote",
+        ));
+    };
+    match action {
+        "promote" => {
+            let path = Path((project_id, id.to_string()));
+            promote(state, path, Json(parse_body(&body)?)).await
+        }
+        _ => Err(ApiError::not_found()),
+    }
+}
+
+/// Promote a Project memory entry to user-level memory.
+///
+/// The entry is copied as one new file into the user-level memory directory
+/// (`~/.quark/memory/` unless the daemon was started with another), which
+/// every Project's coordinator reads, and each coordinator is told about it.
+/// The Project's own entry stays. Promoting an entry again returns the copy
+/// made the first time.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{id}/memory/{entry_id}:promote",
+    tag = "memory",
+    params(
+        ("id" = String, Path, description = "Project id"),
+        ("entry_id" = String, Path, description = "Memory entry id")
+    ),
+    request_body = PromoteMemoryEntry,
+    responses(
+        (status = 200, body = UserMemoryEntry),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 500, body = ErrorBody, description = "`project_repo_failed`, or `user_memory_failed`: the file could not be written")
+    )
+)]
+pub async fn promote(
+    State(state): State<AppState>,
+    Path((project_id, id)): Path<(String, String)>,
+    Json(input): Json<PromoteMemoryEntry>,
+) -> Result<Json<UserMemoryEntry>, ApiError> {
+    let who = decided_by(input.promoted_by.as_deref())?;
+    let project = {
+        let p = project_id.clone();
+        db(&state, move |s| s.get_project(&p)).await?
+    };
+    let entry = entries_of(&state, &project_id)
+        .await?
+        .into_iter()
+        .find(|e| e.id == id)
+        .ok_or_else(ApiError::not_found)?;
+    let dir = state.layout.user_memory();
+    let _one = PROMOTING.lock().await;
+    let (promoted, written) = tokio::task::spawn_blocking(move || {
+        memory::promote(&dir, &entry, &project.name, &crate::now_rfc3339(), &who)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| {
+        tracing::warn!(project = %project_id, error = %e, "promoting a memory entry failed");
+        ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "user_memory_failed", e)
+    })?;
+    if written {
+        tell_coordinators(&state, &promoted);
+    }
+    Ok(Json(promoted))
+}
+
+/// Tells every Project's coordinator about a new user-level entry, in the
+/// background: the file is what counts, and a coordinator without a live
+/// session is not told.
+fn tell_coordinators(state: &AppState, entry: &UserMemoryEntry) {
+    let text = format!(
+        "Memory shared by every Project: a new entry landed at {}. \
+         Read it and apply it from your next plan on:\n\n{}",
+        entry.path, entry.text
+    );
+    let state = state.clone();
+    tokio::spawn(async move {
+        let Ok(projects) = db(&state, |s| s.list_projects()).await else {
+            return;
+        };
+        for p in projects {
+            let Some(root) = p.workspace_path else {
+                continue;
+            };
+            let ws = WorkspaceRef {
+                project_id: p.id,
+                root: PathBuf::from(root),
+            };
+            if let Err(e) = state.chat.send(&ws, &text).await {
+                tracing::info!(project = %ws.project_id, error = %e, "coordinator not told about a user-level memory entry");
+            }
+        }
+    });
+}
+
+/// User-level memory: every entry in the user-level memory directory, by
+/// file name, including files people added by hand.
+#[utoipa::path(
+    get,
+    path = "/v1/memory",
+    tag = "memory",
+    responses(
+        (status = 200, body = Vec<UserMemoryEntry>),
+        (status = 500, body = ErrorBody, description = "`user_memory_failed`: the directory could not be read")
+    )
+)]
+pub async fn list_user_entries(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<UserMemoryEntry>>, ApiError> {
+    let dir = state.layout.user_memory();
+    let entries = tokio::task::spawn_blocking(move || memory::list_user(&dir))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "user_memory_failed", e))?;
     Ok(Json(entries))
 }

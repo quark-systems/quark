@@ -60,6 +60,16 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
         .route("/v1/projects/{id}/memory", get(memory::list_entries))
+        // POST serves the custom method `.../memory/{entry_id}:promote`.
+        .route(
+            "/v1/projects/{id}/memory/{entry_id}",
+            post(memory::entry_action),
+        )
+        .route(
+            "/v1/projects/{id}/memory/commits/{commit}",
+            get(memory::get_commit),
+        )
+        .route("/v1/memory", get(memory::list_user_entries))
         .route(
             "/v1/projects/{id}/memory/proposals",
             get(memory::list_proposals),

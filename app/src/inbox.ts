@@ -1,4 +1,5 @@
 // Ordering and selection for the decisions inbox, kept pure so it is easy to test.
+// The Memory screen moves through its lists with the same `step` and `nextAfterAnswer`.
 import type { Decision, DecisionState } from "./api";
 
 /** Open decisions oldest first, since they hold up work longest; answered ones newest first. */
@@ -10,7 +11,7 @@ export function inboxList(all: Decision[], filter: DecisionState): Decision[] {
 }
 
 /** The id `delta` rows from `id`, clamped to the list; the first row when `id` is not in it. */
-export function step(list: Decision[], id: string | undefined, delta: number): string | undefined {
+export function step(list: { id: string }[], id: string | undefined, delta: number): string | undefined {
   if (!list.length) return undefined;
   const i = list.findIndex((d) => d.id === id);
   if (i < 0) return list[0].id;
@@ -18,7 +19,7 @@ export function step(list: Decision[], id: string | undefined, delta: number): s
 }
 
 /** After answering `id`, the open decision to show next: the one after it, else the one before. */
-export function nextAfterAnswer(openBefore: Decision[], id: string): string | undefined {
+export function nextAfterAnswer(openBefore: { id: string }[], id: string): string | undefined {
   const i = openBefore.findIndex((d) => d.id === id);
   const rest = openBefore.filter((d) => d.id !== id);
   if (!rest.length) return undefined;

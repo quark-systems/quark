@@ -50,6 +50,9 @@ struct ServeArgs {
     /// quota-axi binary that reads account quota.
     #[arg(long, env = "QUARKD_QUOTA_AXI", default_value = "quota-axi")]
     quota_axi: PathBuf,
+    /// User-level memory directory, shared by every Project [default: <home>/memory]
+    #[arg(long, env = "QUARK_USER_MEMORY")]
+    user_memory: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -76,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
                 tmux: args.tmux,
                 quota_refresh_interval: Duration::from_secs(args.quota_refresh_secs.max(30)),
                 quota_axi: args.quota_axi,
+                user_memory: args.user_memory,
             };
             quarkd::serve(config, args.engine).await
         }

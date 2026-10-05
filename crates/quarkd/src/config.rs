@@ -28,6 +28,8 @@ pub struct Config {
     pub quota_refresh_interval: Duration,
     /// The `quota-axi` binary that reads account quota.
     pub quota_axi: PathBuf,
+    /// User-level memory directory; `<home>/memory` when unset.
+    pub user_memory: Option<PathBuf>,
 }
 
 impl Config {

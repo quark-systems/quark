@@ -7,13 +7,8 @@ import { api, Decision, DecisionState, NotAvailable } from "../api";
 import { go, href } from "../nav";
 import { upsertDecision, useStore } from "../store";
 import { inboxList, nextAfterAnswer, step } from "../inbox";
-import { ago, errText } from "../util";
+import { ago, errText, savedUser, saveUser } from "../util";
 import { Unavailable } from "../components/Unavailable";
-
-const USER_KEY = "quark.user";
-function savedUser(): string {
-  try { return localStorage.getItem(USER_KEY) ?? ""; } catch { return ""; }
-}
 
 export function Inbox({ id }: { id?: string }) {
   const decisions = useStore((s) => s.decisions);
@@ -134,7 +129,7 @@ function DecisionDetail({ d, answerBox, onAnswered }: {
     if (!answer || busy) return;
     setBusy(true); setErr(null);
     const by = user.trim();
-    try { localStorage.setItem(USER_KEY, by); } catch { /* storage unavailable */ }
+    saveUser(by);
     try {
       const r = await api.answerDecision(d.id, { answer, answered_by: by || null });
       setText("");
