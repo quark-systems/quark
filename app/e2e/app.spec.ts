@@ -415,3 +415,160 @@ test("memory: review proposals from the keyboard, browse entries with their comm
   await expect(page.getByTestId("nav-memory")).toBeVisible();
   await expect(page.getByTestId("memory-count")).toHaveCount(0);
 });
+
+test("dispatch: edit rules, test them, save them as a commit and test again", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await page.getByTestId("nav-dispatch").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
+
+  // The rules on the Project repo: one rule with two ordered candidates, then the default.
+  const rows = page.getByTestId("dispatch-row");
+  const detail = page.getByTestId("dispatch-detail");
+  const save = page.getByTestId("dispatch-save");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await expect(rows.first()).toContainText("trivial-edit");
+  await expect(rows.first()).toContainText("2 candidates");
+  await expect(rows.nth(1)).toContainText("Default");
+  await expect(page.getByTestId("dispatch-classifier")).toContainText("No classifier is configured");
+  await expect(detail.getByLabel("Rule name")).toHaveValue("trivial-edit");
+  await expect(detail.getByLabel("Candidate 1 model")).toHaveValue("claude-sonnet-5");
+  await expect(detail.getByLabel("Candidate 2 harness")).toHaveValue("pi");
+  await expect(save).toBeDisabled();
+
+  // t opens the test pane: a description, the rule it matches, and each candidate's pass or fail reason.
+  await page.keyboard.press("t");
+  const describe = page.getByLabel("Task description");
+  await expect(describe).toBeFocused();
+  await expect(page.getByTestId("dispatch-test-scope")).toHaveText("Tests the saved rules. Nothing is dispatched.");
+  await describe.fill("Rename a field in the settings struct.");
+  await describe.press("Control+Enter");
+  const result = page.getByTestId("dispatch-test-result");
+  const tested = result.getByTestId("dispatch-test-candidate");
+  await expect(result.getByTestId("dispatch-test-rule")).toContainText("trivial-edit");
+  await expect(result.getByTestId("dispatch-test-chosen")).toHaveText("claude-code:claude-sonnet-5 (low effort)");
+  await expect(tested).toHaveCount(2);
+  await expect(tested.first().getByTestId("dispatch-test-reason")).toHaveText("eligible");
+  await expect(tested.first()).toContainText("would be chosen");
+  await expect(tested.first().getByTestId("dispatch-test-check")).toHaveText(
+    [/Harness installed Claude Code 2\.1\.0/, /Model accepted model claude-sonnet-5, low effort/, /Account health Default: logged in/, /Quota headroom .*62% remaining/]);
+  await expect(tested.nth(1).getByTestId("dispatch-test-reason")).toHaveText(/^Pi is not installed/);
+  await expect(tested.nth(1).getByTestId("dispatch-test-check").first().getByLabel("failed")).toBeVisible();
+  await expect(tested.nth(1).getByTestId("dispatch-test-check").nth(1).getByLabel("passed")).toBeVisible();
+
+  // Back in the rules, each candidate is checked with its harness as it is edited.
+  await describe.press("Escape");
+  await page.keyboard.press("r");
+  await detail.getByLabel("Candidate 2 model").fill("gpt-5.5");
+  await expect(detail.getByTestId("dispatch-issue")).toHaveText("Pi needs a provider/model id.");
+  await expect(page.getByTestId("dispatch-dirty")).toBeVisible();
+  await expect(save).toBeDisabled();
+  await detail.getByLabel("Candidate 2 harness").selectOption("codex");
+  await detail.getByLabel("Candidate 2 model").fill("gpt-5.5");
+  await detail.getByLabel("Candidate 2 effort").selectOption("low");
+  await expect(detail.getByTestId("dispatch-issue")).toHaveCount(0);
+  await expect(save).toBeEnabled();
+
+  // n adds a rule, which cannot be saved until it says when it applies.
+  await detail.getByLabel("Candidate 2 effort").press("Escape");
+  await page.keyboard.press("n");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(1)).toHaveAttribute("aria-current", "true");
+  await expect(detail.getByLabel("Rule name")).toBeFocused();
+  await expect(rows.nth(1)).toContainText("fix");
+  await expect(detail).toContainText("Say when the rule applies.");
+  await expect(save).toBeDisabled();
+  await detail.getByLabel("Rule name").fill("big-feature");
+  await detail.getByLabel("When").fill("A feature that spans several crates.");
+  await expect(detail.getByLabel("Candidate 1 harness")).toHaveValue("claude-code");
+  await detail.getByLabel("Candidate 1 effort").selectOption("max");
+  await expect(rows.nth(1)).not.toContainText("fix");
+
+  // K moves the rule ahead of the other; j reaches the default, where default_select is.
+  await detail.getByLabel("Candidate 1 effort").press("Escape");
+  await page.keyboard.press("Shift+K");
+  await expect(rows.first()).toContainText("big-feature");
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await page.keyboard.press("j");
+  await page.keyboard.press("j");
+  await expect(rows.nth(2)).toHaveAttribute("aria-current", "true");
+  await expect(detail.getByLabel("Default select")).toHaveValue("ordered");
+  await detail.getByLabel("Default select").selectOption("quota-balanced");
+  await detail.getByTestId("dispatch-add-candidate").click();
+  await detail.getByLabel("Candidate 2 harness").selectOption("codex");
+  await detail.getByLabel("Move candidate 2 up").click();
+  await expect(detail.getByLabel("Candidate 1 harness")).toHaveValue("codex");
+
+  // The edited rules can be tested before they are saved; nothing reaches the Project repo.
+  await detail.getByLabel("Candidate 1 harness").press("Escape");
+  await page.keyboard.press("t");
+  await expect(page.getByTestId("dispatch-test-scope")).toContainText("Tests the rules as edited here.");
+  await describe.press("Control+Enter");
+  await expect(result.getByTestId("dispatch-test-summary")).toContainText("These rules are not saved");
+  await expect(result).toContainText("as edited, not saved");
+  await expect(tested).toHaveCount(5);
+  await expect(tested.first()).toContainText("claude-code (max effort)");
+  await expect(tested.first()).toContainText("big-feature");
+  await expect(tested.nth(2)).toContainText("codex:gpt-5.5 (low effort)");
+  const before = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/dispatch")).json());
+  expect(before.rules.map((r: any) => r.name)).toEqual(["trivial-edit"]);
+
+  // Ctrl+Enter in the rules saves: one commit of dispatch.yaml on the Project repo.
+  await describe.press("Escape");
+  await page.keyboard.press("r");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("dispatch-commit")).toHaveText(/^Saved as commit [0-9a-f]{10}$/);
+  await expect(page.getByTestId("dispatch-dirty")).toHaveCount(0);
+  await expect(save).toBeDisabled();
+  const after = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/dispatch")).json());
+  expect(after.revision).not.toBe(before.revision);
+  expect(after.commit).not.toBe(before.commit);
+  expect(after).toMatchObject({
+    default_select: "quota-balanced",
+    rules: [
+      { name: "big-feature", when: "A feature that spans several crates.", candidates: [{ harness: "claude-code", model: null, effort: "max", pool: null }] },
+      { name: "trivial-edit", candidates: [
+        { harness: "claude-code", model: "claude-sonnet-5", effort: "low" }, { harness: "codex", model: "gpt-5.5", effort: "low" }] },
+    ],
+    default: [{ harness: "codex" }, { harness: "claude-code", effort: "high" }],
+  });
+
+  // The saved rules are what a test now matches against.
+  await page.keyboard.press("t");
+  await expect(page.getByTestId("dispatch-test-scope")).toContainText("Tests the saved rules.");
+  await describe.fill("Build the feature flag service.");
+  await describe.press("Control+Enter");
+  await expect(result.getByTestId("dispatch-test-rule")).toContainText("big-feature");
+  await expect(result.getByTestId("dispatch-test-chosen")).toHaveText("claude-code (max effort)");
+  await expect(tested).toHaveCount(1);
+  await expect(result).not.toContainText("as edited, not saved");
+
+  // x asks once more, then deletes the rule; Revert brings back what is saved.
+  await describe.press("Escape");
+  await page.keyboard.press("r");
+  await page.keyboard.press("k");
+  await expect(rows.nth(1)).toHaveAttribute("aria-current", "true");
+  await page.keyboard.press("x");
+  await expect(page.getByTestId("dispatch-delete")).toHaveText("Delete? Press x again");
+  await page.keyboard.press("x");
+  await expect(rows).toHaveCount(2);
+  await expect(page.getByTestId("dispatch-dirty")).toBeVisible();
+  await page.getByRole("button", { name: "Revert" }).click();
+  await expect(rows).toHaveCount(3);
+  await expect(page.getByTestId("dispatch-dirty")).toHaveCount(0);
+
+  // A save that started from rules main no longer has is refused, and the screen offers the rules on main.
+  await page.evaluate(async (revision) => {
+    await fetch("http://127.0.0.1:7392/v1/projects/quark/dispatch", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision, default_select: "ordered", rules: [], default: [{ harness: "codex" }] }),
+    });
+  }, after.revision);
+  await page.keyboard.press("x");
+  await page.keyboard.press("x");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("dispatch-error")).toContainText("dispatch.yaml changed on main");
+  await page.getByRole("button", { name: "Load the rules on main" }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(page.getByTestId("dispatch-error")).toHaveCount(0);
+});

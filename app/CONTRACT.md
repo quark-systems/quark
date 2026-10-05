@@ -23,6 +23,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Failover on rate limits | `DispatchRecord.failover`, `Task.failovers` (`AccountFailover`: `from_account_id`, `to_account_id`, `pool`, `outcome`, `signal`, `detail`, `at`), a `failover` entry in `GET /v1/tasks/{id}/events`; a decision the daemon opens itself, answered through `POST /v1/decisions/{id}:answer` | quark#26 |
 | Memory review and promotion | `GET /v1/projects/{id}/memory/commits/{commit}`, `POST /v1/projects/{id}/memory/{entry_id}:promote` with optional `promoted_by`, `GET /v1/memory`; `MemoryEntry.commit` on listed entries | quark#30 |
 | Testing dispatch rules | `POST /v1/projects/{id}/dispatch:test` with `description` | quark#24 |
+| Dispatch rule editor | `GET/PUT /v1/projects/{id}/dispatch`; an optional `draft` on `dispatch:test` | quark#25 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 
 ## How the app uses them
@@ -48,7 +49,14 @@ A `404` with an `ErrorBody` is a real "not found".
 - **Testing dispatch rules (ADR-11).** `api.testDispatch` posts a task description to `POST /v1/projects/{id}/dispatch:test` and gets a `DispatchTest`, in the words of a dispatch record: the matched `rule` and the `chosen` profile when the classifier decides, or `decided_by: "coordinator"` with `classifier.provider: "none"` when there is none.
   `candidates` are the matched rule's profiles when the resolution weighed them, else every profile of every rule and the default; each carries `passed`, `reason`, `evidence` and four `checks` (`harness_installed`, `model_accepted`, `account_health`, `quota_headroom`) with a `detail` each.
   Nothing is dispatched or recorded. `409 dispatch_invalid` means `dispatch.yaml` does not compile.
-  No screen calls it yet; the rule editor (quark#25) will.
+  The Dispatch screen's test pane calls it.
+- **Dispatch rule editor (J9).** The Dispatch screen (`#/p/<project id>/dispatch`) loads `GET /v1/projects/{id}/dispatch`: a `DispatchRules` with the `rules` of `dispatch.yaml` on the Project repo's `main` in order (`name`, `when`, ordered `candidates`, `select`), the `default` candidates and `default_select`, plus the file's `revision`, the `commit` that last changed it and its `classifier` block.
+  A candidate is a harness (a Quark harness id) with optional `model`, `effort` and account `pool`; the picker lists harnesses whose `roles` include `worker`.
+  Each distinct candidate is checked with `POST /v1/harnesses:validate` (role `worker`) as it is edited and again on save; its errors show under it and block saving, its warnings do not.
+  `PUT` sends `revision`, `default_select`, `rules` and `default`, and answers the saved `DispatchRules` with its new `revision` and `commit`: one commit of `dispatch.yaml` on `main`, which the engine takes on the daemon's next refresh.
+  `400 dispatch_invalid` carries the compile error; `409 dispatch_changed` means `main` has another `revision` (the screen offers to load it), `409 uncommitted_changes` that the Project repo checkout has an edit of the file that was never committed, `409 dispatch_invalid` that the file on `main` does not compile, and `409 no_project_repo` that there is no Project repo.
+  Saving keeps the `classifier` block, which the screen shows and does not edit (quark#28), the comment lines that open the file, and the engine's own fields (`why`, `approval`, `floor`, `provider`, `pricing`), which the app sends back as it got them; other comments in the file are lost. Rules that are already what `main` has make no commit.
+  The test pane sends the task description alone when nothing is edited, and with `draft` (`default_select`, `rules`, `default`) when there are unsaved edits. A draft is compiled and never written; the engine resolves only saved rules, so a draft that differs from them answers `resolution.status: "not_consulted"` with every candidate of the draft and its checks.
 - **Decisions inbox.** The app loads every decision (`GET /v1/decisions`, no state filter) so the inbox can list answered ones with who answered, and keeps them current from `decision.opened` and `decision.answered`.
   An answer is sent with `answered_by` from the "Answering as" field (remembered per viewer), or `null` to let the daemon use its own user; the `200` body is the answered decision.
   `409 already_answered` is shown as an error on the decision.

@@ -15,6 +15,7 @@ The same frontend runs in a plain browser.
 - **Decisions** (J5): every open decision across Projects, oldest first, with an answer box; the answered list shows who answered and when.
   Keys: `j`/`k` move, `r` or `Enter` answers, `Ctrl/Cmd+Enter` sends, `o`/`a` switch between open and answered, `t` opens the task that asked.
 - **Memory** (J8): per Project, the learnings finished tasks proposed, with their evidence, accepted (edited or not) or rejected from the keyboard; accepted entries with the commit that added each, and promotion to the user-level memory every Project's coordinator reads.
+- **Dispatch** (J9): per Project, the dispatch rules in order (name, when, ordered candidates), the default and `default_select`, each candidate checked with its harness as it is edited; saving commits `dispatch.yaml` to the Project repo, and the test pane shows the rule a task description matches and each candidate's pass or fail reason, for the saved rules or for the edit in progress.
   Keys: `j`/`k` move, `p`/`a` switch between proposed and accepted, `e` or `Enter` edits, `Ctrl/Cmd+Enter` accepts, `x` twice rejects, `u` promotes, `c` shows the commit, `t` opens the task.
 
 `Ctrl/Cmd+K` opens a palette that jumps to any Project, task or open decision.

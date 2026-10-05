@@ -74,4 +74,24 @@ describe("dispatch test", () => {
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({ description: "Rename a field" });
   });
+  it("sends unsaved rules as the draft to test", async () => {
+    respond(200, {});
+    const draft = { default_select: null, rules: [], default: [{ harness: "codex" }] };
+    await api.testDispatch("p", "Rename a field", draft);
+    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual({ description: "Rename a field", draft });
+  });
+  it("loads the rules and saves them against the revision they were loaded at", async () => {
+    const rules = { project_id: "p 1", revision: "abc", commit: "def", classifier: { provider: "none" }, default_select: "ordered" as const,
+      rules: [{ name: "big", when: "A big feature.", candidates: [{ harness: "claude-code", effort: "high" }] }], default: [{ harness: "codex" }] };
+    respond(200, rules);
+    await expect(api.dispatchRules("p 1")).resolves.toEqual(rules);
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toMatch(/\/v1\/projects\/p%201\/dispatch$/);
+    respond(200, rules);
+    const { default_select, rules: list, default: fallback } = rules;
+    await api.saveDispatchRules("p 1", { default_select, rules: list, default: fallback }, "abc");
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/v1\/projects\/p%201\/dispatch$/);
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ revision: "abc", default_select, rules: list, default: fallback });
+  });
 });

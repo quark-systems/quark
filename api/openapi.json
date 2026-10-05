@@ -834,13 +834,134 @@
         }
       }
     },
+    "/v1/projects/{id}/dispatch": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "The Project's dispatch rules.",
+        "description": "What `dispatch.yaml` on the Project repo's `main` declares: the rules in\norder, each with its name, condition and ordered candidates, the default\ncandidates and `default_select`. Harness ids are Quark's. A Project repo\nwithout the file answers no rules and no `revision`.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchRules"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`dispatch.yaml` does not compile (`dispatch_invalid`), or the Project has no Project repo (`no_project_repo`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Save the Project's dispatch rules.",
+        "description": "Writes the rules as `dispatch.yaml` and commits it to the Project repo's\n`main` in a commit of its own, so the change can be reviewed. The file is\ncompiled first, as it is before it reaches the engine, and one that does\nnot compile is refused with the compile error. The file's `classifier`\nblock and the comment lines that open it are kept; other comments are\nnot. The engine takes the saved rules on the daemon's next refresh.\nRules that are already what `main` has make no commit.",
+        "operationId": "put",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutDispatchRules"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rules as saved, with their new `revision` and `commit`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchRules"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The rules do not compile (`dispatch_invalid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`main` has another `revision` (`dispatch_changed`), the file there does not compile (`dispatch_invalid`), the checkout has an uncommitted edit of it (`uncommitted_changes`), or the Project has no Project repo (`no_project_repo`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/dispatch:test": {
       "post": {
         "tags": [
           "projects"
         ],
         "summary": "Test a task description against the Project's dispatch rules.",
-        "description": "Runs the engine's dispatch resolution on the description, as the\ncoordinator does on a task's brief, against the rules `dispatch.yaml` on\nthe Project repo's `main` declares. Returns the rule the classifier\nmatched and the profile it would select, or, with no classifier\n(`classifier.provider` is `none`), that the coordinator would pick. Every\ncandidate says whether a worker could start with it now and why: harness\ninstalled, model accepted, account health and quota headroom. Nothing is\ndispatched or recorded.",
+        "description": "Runs the engine's dispatch resolution on the description, as the\ncoordinator does on a task's brief, against the rules `dispatch.yaml` on\nthe Project repo's `main` declares. With a `draft`, the candidates are\nthose of the draft, which is compiled and never written; the resolution\nreads the saved rules, so it is not run for a draft that differs from\nthem, and the outcome says so. Returns the rule the classifier\nmatched and the profile it would select, or, with no classifier\n(`classifier.provider` is `none`), that the coordinator would pick. Every\ncandidate says whether a worker could start with it now and why: harness\ninstalled, model accepted, account health and quota headroom. Nothing is\ndispatched or recorded.",
         "operationId": "test",
         "parameters": [
           {
@@ -874,6 +995,7 @@
             }
           },
           "400": {
+            "description": "No description, or the `draft` does not compile (`dispatch_invalid`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3344,6 +3466,30 @@
           "relaunch"
         ]
       },
+      "DispatchFloor": {
+        "type": "object",
+        "description": "A quota floor; the engine applies it only under typed resolution.",
+        "required": [
+          "scope",
+          "min_percent"
+        ],
+        "properties": {
+          "min_percent": {
+            "type": "number",
+            "format": "double"
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "DispatchPreset": {
         "type": "string",
         "description": "Starting dispatch rules for a new Project. Both route to the Project's\nagent config; rules can be edited afterwards.",
@@ -3351,6 +3497,61 @@
           "single",
           "light_trivial"
         ]
+      },
+      "DispatchProfile": {
+        "type": "object",
+        "description": "One candidate of a dispatch rule or of the default: a harness with its\nmodel, effort and account pool.",
+        "required": [
+          "harness"
+        ],
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchFloor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness": {
+            "type": "string",
+            "description": "Harness id, e.g. `claude-code`."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Account pool to run under (see `Account.pools`); absent runs under\nthe harness's default account."
+          },
+          "pricing": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's typed-resolution fields, kept as `dispatch.yaml` has them."
+          }
+        }
       },
       "DispatchRecord": {
         "type": "object",
@@ -3488,6 +3689,163 @@
             "description": "The rule's `when` condition."
           }
         }
+      },
+      "DispatchRuleSpec": {
+        "type": "object",
+        "description": "One rule of a Project's `dispatch.yaml`.",
+        "required": [
+          "when",
+          "candidates"
+        ],
+        "properties": {
+          "approval": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchProfile"
+            },
+            "description": "The rule's `use` list, in order; at least one."
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchFloor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Quark's name for the rule, unique in the file."
+          },
+          "select": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchSelect",
+                "description": "How `candidates` are resolved; absent uses `default_select`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "when": {
+            "type": "string",
+            "description": "The condition a task must meet, in plain words."
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's typed-resolution fields, kept as `dispatch.yaml` has them."
+          }
+        }
+      },
+      "DispatchRules": {
+        "type": "object",
+        "description": "A Project's dispatch rules: `dispatch.yaml` on the Project repo's `main`.",
+        "required": [
+          "project_id",
+          "rules",
+          "default"
+        ],
+        "properties": {
+          "classifier": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The file's `classifier` block, as written. Saving keeps it."
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit on `main` that last changed the file."
+          },
+          "default": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchProfile"
+            }
+          },
+          "default_select": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchSelect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Names this version of the file (its git blob id); absent when `main`\nhas no `dispatch.yaml`. Send it back when saving."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchRuleSpec"
+            }
+          }
+        }
+      },
+      "DispatchRulesDraft": {
+        "type": "object",
+        "description": "The editable part of a Project's `dispatch.yaml`: its rules, in order,\nand the default. The `classifier` block is not part of it.",
+        "properties": {
+          "default": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchProfile"
+            },
+            "description": "The candidates for a task no rule matches, in order."
+          },
+          "default_select": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchSelect",
+                "description": "How candidate lists are resolved where a rule does not say."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchRuleSpec"
+            }
+          }
+        }
+      },
+      "DispatchSelect": {
+        "type": "string",
+        "description": "How a list of candidate profiles is resolved.",
+        "enum": [
+          "ordered",
+          "quota-balanced"
+        ]
       },
       "DispatchStatus": {
         "type": "string",
@@ -4741,6 +5099,26 @@
           "closed"
         ]
       },
+      "PutDispatchRules": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DispatchRulesDraft"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The `revision` the edit started from. When `main` has another by\nnow, nothing is saved. Absent saves over whatever is there."
+              }
+            }
+          }
+        ],
+        "description": "Request body for `PUT /v1/projects/{id}/dispatch`."
+      },
       "QuotaState": {
         "type": "string",
         "description": "Whether an account's quota could be read.",
@@ -5325,6 +5703,17 @@
           "description": {
             "type": "string",
             "description": "The task as it would be briefed to a worker."
+          },
+          "draft": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchRulesDraft",
+                "description": "Rules to test instead of the saved ones. They are compiled and\nnever written. The engine's dispatch resolution reads the saved\nrules, so it is not run for a draft that differs from them."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
