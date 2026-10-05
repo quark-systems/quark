@@ -171,3 +171,50 @@ fn live_engine_snapshot() {
     assert_eq!(snap.schema, snapshot::SCHEMA);
     let _ = decisions(&snap);
 }
+
+#[test]
+fn dispatch_resolution_and_spawn_meta() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = fake_engine(dir.path());
+    // Echoes its arguments into the block, so the test sees exactly what ran.
+    let script = dir.path().join("engine/bin/fm-dispatch-resolve.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\n[ -r \"$1\" ] || exit 2\n\
+         printf 'dispatch-resolve:\\n  status: escalate\\n  reason: args %s %s %s\\n' \"$(basename \"$1\")\" \"$2\" \"$3\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        ws.state_dir().join("t1.meta"),
+        "harness=claude\nmodel=default\neffort=high\nspawn_gen=s1790000000.1.2\nproject=/h/projects/quark\n",
+    )
+    .unwrap();
+
+    let log = Arc::new(MemoryCallLog::default());
+    let reader = EngineReader::new(ws.clone(), log.clone());
+    let meta = reader.spawn_meta("t1").unwrap().unwrap();
+    assert_eq!(meta.harness, "claude");
+    assert_eq!(meta.effort.as_deref(), Some("high"));
+    assert!(reader.spawn_meta("t2").unwrap().is_none());
+
+    // No brief yet: nothing runs.
+    assert!(reader
+        .dispatch_resolve("t1", Some("quark"))
+        .unwrap()
+        .is_none());
+    assert!(log.calls().is_empty());
+
+    fs::create_dir_all(ws.data_dir().join("t1")).unwrap();
+    fs::write(ws.data_dir().join("t1/brief.md"), "fix the bug\n").unwrap();
+    let r = reader
+        .dispatch_resolve("t1", Some("quark"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.status, "escalate");
+    assert_eq!(r.reason.as_deref(), Some("args brief.md --project quark"));
+    assert_eq!(log.calls()[0].script, "fm-dispatch-resolve.sh");
+
+    assert!(reader.dispatch_resolve("t1", Some("--evil")).is_err());
+    assert!(reader.dispatch_resolve("../t1", None).is_err());
+}

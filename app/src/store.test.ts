@@ -70,8 +70,17 @@ describe("applyEvent", () => {
     expect(s.taskActivity.t1).toBe(2);
   });
 
+  it("appends dispatch records to a task's loaded records", () => {
+    const rec = { id: "dsp_1", task_id: "t1", decided_by: "coordinator", recorded_at: "2026-10-02T10:00:00Z" };
+    // Not loaded yet: the later fetch includes it.
+    expect(applyEvent(initialState, ev(1, "dispatch.recorded", rec))).toBe(initialState);
+    let s = applyEvent({ ...initialState, dispatch: { t1: [] } }, ev(1, "dispatch.recorded", rec));
+    s = applyEvent(s, ev(2, "dispatch.recorded", rec));
+    expect(s.dispatch.t1).toEqual([rec]);
+  });
+
   it("leaves state untouched for events it does not render", () => {
-    expect(applyEvent(initialState, ev(1, "dispatch.recorded", {}))).toBe(initialState);
+    expect(applyEvent(initialState, ev(1, "some.future_event", {}))).toBe(initialState);
   });
 });
 

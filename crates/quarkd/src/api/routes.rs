@@ -4,8 +4,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
     AgentRole, AnswerDecision, CoordinatorMessage, CoordinatorMessageAccepted, CreateProject,
-    Decision, DecisionState, ErrorBody, Health, Project, ProjectStatus, RelaunchTask,
-    SendTaskMessage, Task, TaskChanges, TaskDiff, TaskEvent, TranscriptItem, UpdateProject,
+    Decision, DecisionState, DispatchRecord, ErrorBody, Health, Project, ProjectStatus,
+    RelaunchTask, SendTaskMessage, Task, TaskChanges, TaskDiff, TaskEvent, TranscriptItem,
+    UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -485,6 +486,27 @@ pub async fn list_task_events(
     Ok(Json(
         db(&state, move |s| s.list_task_events(&id, after, limit)).await?,
     ))
+}
+
+/// Why the task got its agent: one dispatch record per worker spawn, oldest
+/// first (the first spawn, then each relaunch). Empty until the task's worker
+/// has been spawned. Records outlive the task. New records arrive on the
+/// event stream as `dispatch.recorded`.
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/dispatch",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 200, body = Vec<DispatchRecord>),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn list_task_dispatch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<DispatchRecord>>, ApiError> {
+    Ok(Json(db(&state, move |s| s.list_dispatch(&id)).await?))
 }
 
 /// Files the task changed: its working tree, including uncommitted and
