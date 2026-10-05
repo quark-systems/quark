@@ -1,7 +1,7 @@
 use axum::Json;
 use utoipa::OpenApi;
 
-use super::{accounts, events, harnesses, memory, pull_requests, routes, terminals};
+use super::{accounts, dispatch, events, harnesses, memory, pull_requests, routes, terminals};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -17,6 +17,7 @@ use super::{accounts, events, harnesses, memory, pull_requests, routes, terminal
         routes::get_project,
         routes::update_project,
         routes::provision_project,
+        dispatch::test,
         routes::list_tasks,
         routes::get_task,
         routes::send_task_message,

@@ -8,7 +8,7 @@
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -124,6 +124,23 @@ impl ScriptRunner {
     /// and project name; no caller string becomes an option.
     pub fn run_dispatch_resolve(&self, task_id: &str, project: Option<&str>) -> Result<Vec<u8>> {
         let brief = self.workspace.brief_path(task_id)?;
+        self.run_dispatch_resolve_file(&brief, project)
+    }
+
+    /// Run the engine's dispatch resolution on the brief at `brief`, which
+    /// need not belong to a task, and return its stdout. The path must be
+    /// absolute so it can never read as an option.
+    pub fn run_dispatch_resolve_file(
+        &self,
+        brief: &Path,
+        project: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        if !brief.is_absolute() {
+            return Err(Error::InvalidArgument {
+                script: DISPATCH_RESOLVE,
+                reason: format!("brief path {} is not absolute", brief.display()),
+            });
+        }
         let mut args = vec![brief.to_string_lossy().into_owned()];
         if let Some(p) = project {
             if !safe_name(p) {

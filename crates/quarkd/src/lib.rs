@@ -10,6 +10,7 @@ pub mod chat;
 pub mod config;
 pub mod crew_dispatch;
 pub mod dispatch;
+pub mod dispatch_test;
 pub mod engine;
 pub mod failover;
 pub mod forge;

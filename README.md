@@ -61,6 +61,7 @@ Project memory (J8, `crates/quarkd/src/memory.rs`): a worker reports what a task
 
 Dispatch rules (ADR-11, `crates/quarkd/src/crew_dispatch.rs`) live in the Project repo's `dispatch.yaml`: `rules` (each a `when` with one profile or a list of candidates in `use`), `default`, `default_select` and the `classifier` block.
 Each refresh compiles a changed `dispatch.yaml` on `main` into the workspace's `config/crew-dispatch.json` through `fm-crew-dispatch.sh config-set`, mapping Quark harness ids (`claude-code`) to the engine's (`claude`); a file that does not compile or that the engine refuses is recorded as a failed `dispatch` adapter call and the last good config stays.
+`POST /v1/projects/{id}/dispatch:test` (`crates/quarkd/src/dispatch_test.rs`) runs the engine's `fm-dispatch-resolve.sh` on a task description and returns the matched rule or that the coordinator would pick, and every candidate with its pass or fail reason; it dispatches nothing.
 
 Terminal sessions need tmux 3.2 or newer (`--tmux` or `QUARKD_TMUX` picks the binary; without tmux the terminal routes answer 503).
 quarkd runs one private tmux server on `~/.quark/run/tmux/quark` and attaches to it in control mode; engine calls point `TMUX` at it, so the command center, every coordinator and every worker run there (firstmate records no tmux socket per task, so the server is shared rather than one per Project).

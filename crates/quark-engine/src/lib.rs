@@ -36,6 +36,7 @@ pub mod write;
 pub use error::{Error, Result};
 pub use workspace::{validate_task_id, Workspace};
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,12 +88,17 @@ impl EngineReader {
             return Ok(None);
         }
         let out = self.runner.run_dispatch_resolve(task_id, project)?;
-        dispatch::parse(&String::from_utf8_lossy(&out))
-            .map(Some)
-            .ok_or_else(|| Error::Malformed {
-                what: "dispatch resolution",
-                detail: "no status line".into(),
-            })
+        parse_resolution(&out).map(Some)
+    }
+
+    /// Run the engine's dispatch resolution on the brief at `brief`, a file
+    /// that need not belong to a task.
+    pub fn dispatch_resolve_file(
+        &self,
+        brief: &Path,
+        project: Option<&str>,
+    ) -> Result<dispatch::Resolution> {
+        parse_resolution(&self.runner.run_dispatch_resolve_file(brief, project)?)
     }
 
     /// Read the published `state/home-summary.json`, if this home has one.
@@ -147,4 +153,11 @@ impl EngineWriter {
         let out = self.runner.run_write(op)?;
         Ok(String::from_utf8_lossy(&out).into_owned())
     }
+}
+
+fn parse_resolution(stdout: &[u8]) -> Result<dispatch::Resolution> {
+    dispatch::parse(&String::from_utf8_lossy(stdout)).ok_or_else(|| Error::Malformed {
+        what: "dispatch resolution",
+        detail: "no status line".into(),
+    })
 }

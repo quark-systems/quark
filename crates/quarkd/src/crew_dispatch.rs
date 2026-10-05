@@ -84,8 +84,8 @@ struct ProfileYaml {
     #[serde(default)]
     pricing: Option<String>,
     /// The Quark account pool the profile runs on; not the engine's concern.
-    #[serde(default, rename = "pool")]
-    _pool: Option<String>,
+    #[serde(default)]
+    pool: Option<String>,
 }
 
 /// How a profile list is resolved.
@@ -119,6 +119,10 @@ pub struct Profile {
     pub floor: Option<Floor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing: Option<String>,
+    /// The Quark account pool the profile runs on, which the engine is not
+    /// told.
+    #[serde(skip)]
+    pub pool: Option<String>,
 }
 
 /// One profile, or candidates to choose among.
@@ -127,6 +131,15 @@ pub struct Profile {
 pub enum Profiles {
     One(Profile),
     Many(Vec<Profile>),
+}
+
+impl Profiles {
+    pub fn as_slice(&self) -> &[Profile] {
+        match self {
+            Profiles::One(p) => std::slice::from_ref(p),
+            Profiles::Many(ps) => ps,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -148,7 +161,7 @@ pub struct Rule {
 }
 
 /// The engine's `crew-dispatch.json`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct CrewDispatchConfig {
     /// The classifier block, kept verbatim for Quark's classifier. The engine
     /// keeps unknown top-level keys and ignores them.
@@ -167,12 +180,7 @@ pub fn compile(dispatch_yaml: &str) -> Result<CrewDispatchConfig, String> {
     let doc: Option<DispatchYaml> =
         serde_yaml_ng::from_str(dispatch_yaml).map_err(|e| fail(e.to_string()))?;
     let Some(doc) = doc else {
-        return Ok(CrewDispatchConfig {
-            classifier: None,
-            rules: Vec::new(),
-            default: None,
-            default_select: None,
-        });
+        return Ok(CrewDispatchConfig::default());
     };
     if doc.classifier.as_ref().is_some_and(|c| !c.is_object()) {
         return Err(fail("classifier must be a mapping".into()));
@@ -256,6 +264,7 @@ fn profile(v: serde_yaml_ng::Value) -> Result<Profile, String> {
         provider: p.provider,
         floor: p.floor,
         pricing: p.pricing,
+        pool: p.pool,
     })
 }
 

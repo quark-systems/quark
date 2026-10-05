@@ -175,6 +175,29 @@ export interface DispatchRecord {
   failover?: AccountFailover | null;
   recorded_at: string;
 }
+// Testing a description against the dispatch rules (ADR-11, quark#24). Nothing is dispatched or recorded.
+export type DispatchCheckKind = "harness_installed" | "model_accepted" | "account_health" | "quota_headroom";
+export interface DispatchCheck { check: DispatchCheckKind; passed: boolean; detail: string }
+/** One profile of the rules; `passed` is true when every check passed. `harness` is a Quark harness id. */
+export interface DispatchTestCandidate extends DispatchCandidate {
+  /** The rule listing the profile; its id is "default" for a default profile. */
+  rule: { id: string; when?: string | null };
+  rule_name?: string | null; effort?: string | null; pool?: string | null;
+  /** One per `DispatchCheckKind`, in that order. */
+  checks: DispatchCheck[];
+}
+export interface DispatchTest {
+  project_id: string;
+  /** "classifier" when the resolution selects a profile, else "coordinator". */
+  decided_by: DispatchDecider; summary: string;
+  rule?: DispatchRecord["rule"]; resolution: DispatchRecord["resolution"];
+  /** `provider` is "none" when no classifier is configured (the coordinator would pick). */
+  classifier: DispatchRecord["classifier"];
+  /** The profile the resolution selected; null when the coordinator would pick. */
+  chosen?: DispatchRecord["chosen"] | null;
+  /** The matched rule's profiles when the resolution weighed them, else every profile of every rule and the default. */
+  candidates: DispatchTestCandidate[];
+}
 
 export interface TaskChanges { task_id: string; base_ref: string; base: string; head: string; files: ChangedFile[] }
 export interface TaskDiff { task_id: string; base: string; path?: string | null; patch: string; truncated: boolean }
@@ -323,6 +346,9 @@ export const api = {
   promoteMemoryEntry: (pid: string, entryId: string, promoted_by?: string | null) =>
     req<UserMemoryEntry>("POST", `/v1/projects/${enc(pid)}/memory/${enc(entryId)}:promote`, { promoted_by: promoted_by ?? null }),
   userMemory: () => req<UserMemoryEntry[]>("GET", "/v1/memory"),
+  /** What the Project's dispatch rules would do with a task description. 409 `dispatch_invalid` when `dispatch.yaml` does not compile. */
+  testDispatch: (pid: string, description: string) =>
+    req<DispatchTest>("POST", `/v1/projects/${enc(pid)}/dispatch:test`, { description }),
   harnesses: () => req<HarnessInfo[]>("GET", "/v1/harnesses"),
   validateAgent: (config: AgentConfig, role: AgentRole) =>
     req<HarnessValidation>("POST", "/v1/harnesses:validate", { config, role }),

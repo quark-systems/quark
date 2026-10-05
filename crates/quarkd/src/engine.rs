@@ -376,6 +376,17 @@ pub trait EngineAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// Run the engine's dispatch resolution on `description` as if it were a
+    /// task's brief, without creating a task. `None` when the engine has no
+    /// resolution.
+    async fn resolve_description(
+        &self,
+        _ws: &WorkspaceRef,
+        _description: &str,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        Ok(None)
+    }
+
     /// Each running Project coordinator's tmux window target in the
     /// command-center workspace, keyed by Project id. Engines without
     /// coordinator windows have none.
@@ -477,6 +488,11 @@ pub struct StubEngine {
     resolutions: Mutex<HashMap<String, Result<EngineResolution, String>>>,
     /// Engine task ids the dispatch resolution ran for, in order.
     resolved: Mutex<Vec<String>>,
+    /// What the dispatch resolution reports for a description, or the error
+    /// to fail with.
+    description_resolution: Mutex<Option<Result<EngineResolution, String>>>,
+    /// Descriptions the dispatch resolution ran for, in order.
+    described: Mutex<Vec<String>>,
 }
 
 impl StubEngine {
@@ -534,6 +550,16 @@ impl StubEngine {
     /// Engine task ids the dispatch resolution ran for, oldest first.
     pub fn resolved(&self) -> Vec<String> {
         self.resolved.lock().unwrap().clone()
+    }
+
+    /// What the dispatch resolution reports for any description.
+    pub fn set_description_resolution(&self, resolution: Result<EngineResolution, String>) {
+        *self.description_resolution.lock().unwrap() = Some(resolution);
+    }
+
+    /// Descriptions the dispatch resolution ran for, oldest first.
+    pub fn described(&self) -> Vec<String> {
+        self.described.lock().unwrap().clone()
     }
 
     /// Writes received so far, oldest first.
@@ -752,6 +778,19 @@ impl EngineAdapter for StubEngine {
             None => Ok(None),
             Some(Ok(r)) => Ok(Some(r.clone())),
             Some(Err(e)) => Err(EngineError::Command(e.clone())),
+        }
+    }
+
+    async fn resolve_description(
+        &self,
+        _ws: &WorkspaceRef,
+        description: &str,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        self.described.lock().unwrap().push(description.to_string());
+        match self.description_resolution.lock().unwrap().clone() {
+            None => Ok(None),
+            Some(Ok(r)) => Ok(Some(r)),
+            Some(Err(e)) => Err(EngineError::Command(e)),
         }
     }
 

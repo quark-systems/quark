@@ -475,6 +475,88 @@ pub struct DispatchClassifier {
     pub confidence: Option<f64>,
 }
 
+/// A task description to test against a Project's dispatch rules.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TestDispatch {
+    /// The task as it would be briefed to a worker.
+    pub description: String,
+}
+
+/// What a Project's dispatch rules would do with a task description
+/// (ADR-11). Nothing is dispatched or recorded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchTest {
+    pub project_id: String,
+    /// Who would choose the agent: `classifier` when the resolution selects
+    /// a profile, else `coordinator`.
+    pub decided_by: DispatchDecider,
+    /// One sentence on the outcome, for people.
+    pub summary: String,
+    /// The dispatch rule the classifier matched; absent when none matched or
+    /// no classifier is configured.
+    pub rule: Option<DispatchRule>,
+    /// What the engine's dispatch resolution reported for the description.
+    pub resolution: DispatchResolution,
+    /// `provider` is `none` when no classifier is configured and the
+    /// coordinator would pick.
+    pub classifier: DispatchClassifier,
+    /// The profile the resolution selected; absent when the coordinator
+    /// would pick.
+    pub chosen: Option<DispatchChoice>,
+    /// The matched rule's profiles when the resolution weighed them, else
+    /// every profile of every rule and the default, in the order the rules
+    /// list them.
+    pub candidates: Vec<DispatchTestCandidate>,
+}
+
+/// One profile of the Project's dispatch rules, with whether a worker could
+/// be started with it now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchTestCandidate {
+    /// The rule that lists the profile; its id is `default` for a default
+    /// profile.
+    pub rule: DispatchRule,
+    /// The rule's `name` in `dispatch.yaml`, when it has one.
+    pub rule_name: Option<String>,
+    /// Harness id, e.g. `claude-code`.
+    pub harness: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// The account pool the profile runs under, when it names one.
+    pub pool: Option<String>,
+    /// True when every check passed.
+    pub passed: bool,
+    /// Why it passed or failed: the first failed check, else the
+    /// resolution's verdict or `eligible`.
+    pub reason: String,
+    /// The quota evidence it was judged on.
+    pub evidence: Option<String>,
+    /// One entry per [`DispatchCheckKind`], in that order.
+    pub checks: Vec<DispatchCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchCheck {
+    pub check: DispatchCheckKind,
+    pub passed: bool,
+    /// What was found, e.g. `Claude Code 2.1.0 at /usr/local/bin/claude`.
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchCheckKind {
+    /// The harness's executable is on this machine.
+    HarnessInstalled,
+    /// The harness accepts the profile's model and effort for a worker.
+    ModelAccepted,
+    /// An account the profile can run under has a credential.
+    AccountHealth,
+    /// Such an account has quota left, by the resolution's quota evidence
+    /// and each account's own reading.
+    QuotaHeadroom,
+}
+
 /// How a file differs between a task's base and its working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

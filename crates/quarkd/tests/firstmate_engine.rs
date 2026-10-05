@@ -238,6 +238,60 @@ async fn spawns_and_dispatch_resolution_come_from_the_engine() {
         .is_err());
 }
 
+#[tokio::test]
+async fn a_description_is_resolved_as_a_brief_without_a_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let (e, ws) = engine(dir.path());
+    let script = ws_engine_bin(dir.path()).join("fm-dispatch-resolve.sh");
+    // Resolves only a readable brief holding the description, passed alone.
+    fs::write(
+        &script,
+        "#!/bin/sh\n[ $# -eq 1 ] || exit 2\necho \"$1\" > \"$FM_HOME/brief.path\"\n\
+         grep -q 'no rule for this' \"$1\" && exit 0\n\
+         grep -q 'rename a field' \"$1\" || exit 2\ncat <<'OUT'\ndispatch-resolve:\n  status: ambiguous\n\
+         model: jev-1.13.0   latency_ms: 200   tokens: 1/1\n\
+         rule: rule_1 (A trivial edit.)   confidence: 0.4\n\
+         reason: confidence 0.4 below floor 0.6\n\
+         candidate: claude:sonnet  provider=claude  scope=all_models  remaining=79%  -> eligible\nOUT\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let r = e
+        .resolve_description(&ws, "rename a field")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.status, DispatchStatus::Ambiguous);
+    assert_eq!(r.rule.as_ref().unwrap().id, "rule_1");
+    assert_eq!(r.confidence, Some(0.4));
+    assert_eq!(r.candidates.len(), 1);
+    assert!(r.profile.is_none());
+    let brief = PathBuf::from(
+        fs::read_to_string(ws.root.join("brief.path"))
+            .unwrap()
+            .trim(),
+    );
+    assert!(brief.is_absolute());
+    assert!(!brief.exists(), "the temporary brief is removed");
+    assert!(
+        !brief.starts_with(&ws.root),
+        "nothing is written in the workspace"
+    );
+
+    // No classifier key: the script prints nothing, which reads as off.
+    let off = e
+        .resolve_description(&ws, "no rule for this")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(off.status, DispatchStatus::Off);
+    assert!(!off.classifier_consulted);
+
+    // A configuration error (exit 2) is an engine failure, not a result.
+    assert!(e.resolve_description(&ws, "something else").await.is_err());
+}
+
 fn ws_engine_bin(dir: &Path) -> PathBuf {
     dir.join("engine/bin")
 }
