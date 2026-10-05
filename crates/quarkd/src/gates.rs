@@ -221,7 +221,8 @@ pub fn read_declared(bare: &Path) -> Result<Option<Declared>, String> {
     }))
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+/// Run git in `dir` and return its trimmed stdout.
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
