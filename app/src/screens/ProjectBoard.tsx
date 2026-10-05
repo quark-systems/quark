@@ -14,6 +14,8 @@ export function ProjectBoard({ id }: { id: string }) {
   const connected = useStore((s) => s.connected);
   const tasks = useStore((s) => s.tasks);
   const [chatOpen, setChatOpen] = useState(true);
+  const proposals = useStore((s) => s.memoryProposals);
+  const toReview = useMemo(() => Object.values(proposals).filter((m) => m.project_id === id && m.state === "proposed").length, [proposals, id]);
 
   const mine = useMemo(() => Object.values(tasks).filter((t) => t.project_id === id), [tasks, id]);
   const columns = useMemo(() => {
@@ -42,6 +44,9 @@ export function ProjectBoard({ id }: { id: string }) {
         )}
         {project.goal && <span className="crumb ellipsis" title={project.goal}>{project.goal}</span>}
         <span className="spacer" />
+        <a className="btn" href={href({ name: "memory", project: id })} data-testid="nav-memory" title="Review what finished tasks learned">
+          Memory{toReview > 0 && <span className="pill accent" data-testid="memory-count">{toReview}</span>}
+        </a>
         <button className={"btn" + (chatOpen ? " on" : "")} onClick={() => setChatOpen(!chatOpen)}>Coordinator</button>
       </div>
       {project.status && project.status !== "ready" && <ProvisionBar project={project} />}

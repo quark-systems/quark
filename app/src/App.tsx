@@ -7,6 +7,7 @@ import { Palette } from "./Palette";
 import { Projects } from "./screens/Projects";
 import { NewProject } from "./screens/NewProject";
 import { ProjectBoard } from "./screens/ProjectBoard";
+import { Memory } from "./screens/Memory";
 import { WorkerView } from "./screens/WorkerView";
 import { Inbox } from "./screens/Inbox";
 import { PullRequests } from "./screens/PullRequests";
@@ -51,7 +52,7 @@ export function App() {
   const openDecisions = useMemo(() => Object.values(decisions).filter((d) => d.state === "open").length, [decisions]);
 
   const currentProject =
-    route.name === "project" ? route.id : route.name === "task" ? tasks[route.id]?.project_id ?? null
+    route.name === "project" ? route.id : route.name === "memory" ? route.project : route.name === "task" ? tasks[route.id]?.project_id ?? null
       : route.name === "pr" ? prs[route.id]?.project_id ?? null : null;
   const sorted = Object.values(projects).sort((a, b) => a.name.localeCompare(b.name));
 
@@ -108,6 +109,7 @@ function RouteView() {
     case "projects": return <Projects />;
     case "new": return <NewProject onCreated={(id) => go({ name: "project", id })} />;
     case "project": return <ProjectBoard key={route.id} id={route.id} />;
+    case "memory": return <Memory key={route.project} project={route.project} id={route.id} />;
     case "task": return <WorkerView key={route.id} id={route.id} />;
     case "inbox": return <Inbox id={route.id} />;
     case "prs": return <PullRequests />;

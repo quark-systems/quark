@@ -14,6 +14,8 @@ The same frontend runs in a plain browser.
 - **Worker view** (J4): live terminal with input, a box to message the worker, cancel and relaunch, and tabs for the transcript and the changed files with their diff.
 - **Decisions** (J5): every open decision across Projects, oldest first, with an answer box; the answered list shows who answered and when.
   Keys: `j`/`k` move, `r` or `Enter` answers, `Ctrl/Cmd+Enter` sends, `o`/`a` switch between open and answered, `t` opens the task that asked.
+- **Memory** (J8): per Project, the learnings finished tasks proposed, with their evidence, accepted (edited or not) or rejected from the keyboard; accepted entries with the commit that added each, and promotion to the user-level memory every Project's coordinator reads.
+  Keys: `j`/`k` move, `p`/`a` switch between proposed and accepted, `e` or `Enter` edits, `Ctrl/Cmd+Enter` accepts, `x` twice rejects, `u` promotes, `c` shows the commit, `t` opens the task.
 
 `Ctrl/Cmd+K` opens a palette that jumps to any Project, task or open decision.
 

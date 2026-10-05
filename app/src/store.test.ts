@@ -92,3 +92,15 @@ describe("decisions", () => {
     expect(s.decisions.d1).toMatchObject({ state: "answered", answer: "Latest only", answered_by: "matt" });
   });
 });
+
+describe("memory proposals", () => {
+  const proposed = { id: "m1", project_id: "p1", text: "Keep it small.", evidence: { files: [] }, source: "worker", state: "proposed", proposed_at: "2026-10-02T10:00:00Z" };
+  it("replaces a proposal when it is decided", () => {
+    let s = applyEvent(initialState, ev(1, "memory.proposed", proposed));
+    expect(s.memoryProposals.m1.state).toBe("proposed");
+    s = applyEvent(s, ev(2, "memory.accepted", { ...proposed, state: "accepted", text: "Keep it small, always.", decided_by: "matt" }));
+    expect(s.memoryProposals.m1).toMatchObject({ state: "accepted", text: "Keep it small, always.", decided_by: "matt" });
+    s = applyEvent(s, ev(3, "memory.rejected", { ...proposed, id: "m2", state: "rejected" }));
+    expect(Object.keys(s.memoryProposals)).toEqual(["m1", "m2"]);
+  });
+});

@@ -2,7 +2,7 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  Account, AccountQuotaChanged, api, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
+  Account, AccountQuotaChanged, api, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, MemoryProposal, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
   TranscriptItem, wsUrl,
 } from "./api";
 
@@ -14,6 +14,8 @@ export interface AppState {
   projects: Record<string, Project>;
   tasks: Record<string, Task>;
   decisions: Record<string, Decision>;
+  /** Memory proposals across Projects by id, in every state. */
+  memoryProposals: Record<string, MemoryProposal>;
   /** Coordinator transcripts by coordinator id (= Project id). Absent until loaded. */
   chat: Record<string, TranscriptItem[]>;
   /** Worker transcripts by task id. Absent until loaded. */
@@ -37,7 +39,7 @@ export interface AppState {
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
-  projects: {}, tasks: {}, decisions: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
+  projects: {}, tasks: {}, decisions: {}, memoryProposals: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
   pullRequests: {}, prsAvailable: null, prActivity: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
 };
@@ -70,6 +72,11 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
     case "decision.opened":
     case "decision.answered":
       return { ...s, decisions: { ...s.decisions, [p.id]: p as Decision } };
+    case "memory.proposed":
+    case "memory.accepted":
+    case "memory.rejected":
+      if (typeof p?.id !== "string") return s;
+      return { ...s, memoryProposals: { ...s.memoryProposals, [p.id]: p as MemoryProposal } };
     case "coordinator.message": {
       // Transcript entries are identified by the seq of the event that carried them.
       const cid = p.coordinator_id ?? e.project_id;
@@ -196,13 +203,19 @@ export async function refreshSnapshots() {
     api.projects(),
     api.decisions().catch(() => [] as Decision[]),
   ]);
-  const lists = await Promise.all(projects.map((p) => api.tasks(p.id).catch(() => [] as Task[])));
+  const [lists, proposed] = await Promise.all([
+    Promise.all(projects.map((p) => api.tasks(p.id).catch(() => [] as Task[]))),
+    Promise.all(projects.map((p) => api.memoryProposals(p.id).catch(() => [] as MemoryProposal[]))),
+  ]);
   const tasks: Record<string, Task> = {};
   for (const l of lists) for (const t of l) tasks[t.id] = t;
+  const memoryProposals: Record<string, MemoryProposal> = {};
+  for (const l of proposed) for (const m of l) memoryProposals[m.id] = m;
   set({
     projects: Object.fromEntries(projects.map((p) => [p.id, p])),
     tasks,
     decisions: Object.fromEntries(decisions.map((d) => [d.id, d])),
+    memoryProposals,
     error: null,
   });
   await loadPullRequests().catch(() => undefined);
@@ -259,6 +272,11 @@ export async function loadDispatch(taskId: string): Promise<"ok" | "unavailable"
 /** Records a decision the daemon returned, e.g. from answering it; the event may arrive before or after. */
 export function upsertDecision(d: Decision) {
   set({ decisions: { ...state.decisions, [d.id]: d } });
+}
+
+/** Records a memory proposal the daemon returned from accepting or rejecting it. */
+export function upsertMemoryProposal(m: MemoryProposal) {
+  set({ memoryProposals: { ...state.memoryProposals, [m.id]: m } });
 }
 
 /** Loads every PR across Projects. Answers "unavailable" while the daemon has no PR center. */

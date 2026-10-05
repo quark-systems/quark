@@ -24,6 +24,15 @@ export function ago(ts: string | undefined | null): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+// The name a person answers decisions and reviews memory as, remembered per viewer.
+const USER_KEY = "quark.user";
+export function savedUser(): string {
+  try { return localStorage.getItem(USER_KEY) ?? ""; } catch { return ""; }
+}
+export function saveUser(name: string) {
+  try { localStorage.setItem(USER_KEY, name); } catch { /* storage unavailable */ }
+}
+
 export function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

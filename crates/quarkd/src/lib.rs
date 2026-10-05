@@ -69,7 +69,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let tmux = sessions.tmux_env().ok();
     let engine: Arc<dyn EngineAdapter> =
         config::build_engine(engine, &config, store.clone(), tmux)?;
-    let layout = provision::Layout::new(&config.home);
+    let layout = provision::Layout::new(&config.home).with_user_memory(config.user_memory.clone());
     let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
     let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
     let pr_task = tokio::spawn(pr_center.run(config.pr_refresh_interval));

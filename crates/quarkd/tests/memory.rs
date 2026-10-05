@@ -1,6 +1,6 @@
 //! Journey J8: a finished task's learnings arrive as memory proposals; an
 //! accepted one lands in the Project repo's `memory/` in its own commit and
-//! reaches the coordinator.
+//! reaches the coordinator. Any entry can be promoted to user-level memory.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,7 +49,8 @@ fn harness() -> Harness {
             &["CLAUDE_CONFIG_DIR"],
         )),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
-        layout: Layout::new(home.path()),
+        // User-level memory goes where the daemon is told, never `~/.quark`.
+        layout: Layout::new(home.path()).with_user_memory(Some(home.path().join("shared"))),
         chat: chat.clone(),
         forge: Arc::new(quarkd::forge::StubForge::new()),
     });
@@ -380,4 +381,146 @@ async fn refuses_what_it_cannot_do() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(h.chat.sent().is_empty());
+}
+
+/// Finishes a task that learned `text` and accepts the proposal.
+async fn accepted(h: &Harness, pid: &str, text: &str) -> Value {
+    h.engine.set_snapshot(task(TaskState::Done));
+    h.engine
+        .push_status("fix-42", line(&format!("learned: {text}")));
+    h.projector.refresh_all().await.unwrap();
+    let uri = format!("/v1/projects/{pid}/memory/proposals");
+    let (_, list) = call(&h.app, "GET", &format!("{uri}?state=proposed"), None).await;
+    let id = list[0]["id"].as_str().unwrap().to_string();
+    let (status, accepted) = call(&h.app, "POST", &format!("{uri}/{id}:accept"), None).await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    accepted
+}
+
+#[tokio::test]
+async fn entries_link_their_commit_and_promote_to_user_memory() {
+    let h = harness();
+    let pid = ready_project(&h).await;
+    let bare = h.home.path().join("projects").join(format!("{pid}.git"));
+    let shared = h.home.path().join("shared");
+    let entry = accepted(&h, &pid, "Rebase onto main before pushing.").await["entry"].clone();
+    let (id, commit) = (
+        entry["id"].as_str().unwrap(),
+        entry["commit"].as_str().unwrap(),
+    );
+    let memory = format!("/v1/projects/{pid}/memory");
+
+    // A listed entry names the commit that added it, and the commit is served.
+    let (_, entries) = call(&h.app, "GET", &memory, None).await;
+    assert_eq!(entries[0]["commit"], commit, "{entries}");
+    let (status, shown) = call(&h.app, "GET", &format!("{memory}/commits/{commit}"), None).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["commit"], commit);
+    assert_eq!(
+        shown["subject"],
+        "Remember: Rebase onto main before pushing."
+    );
+    assert!(shown["date"].as_str().is_some());
+    let patch = shown["patch"].as_str().unwrap();
+    assert!(
+        patch.starts_with(&format!("diff --git a/memory/{id}.md b/memory/{id}.md")),
+        "{patch}"
+    );
+    assert!(
+        patch.ends_with("+Rebase onto main before pushing."),
+        "{patch}"
+    );
+    // The commit that created the repo is on main too, without the entry.
+    let root = git(&bare, &["rev-list", "--max-parents=0", "main"]);
+    let (status, first) = call(&h.app, "GET", &format!("{memory}/commits/{root}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!first["patch"].as_str().unwrap().contains("Rebase"));
+    for bad in ["0000000000000000000000000000000000000000", "main", "abc"] {
+        let (status, _) = call(&h.app, "GET", &format!("{memory}/commits/{bad}"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+    }
+
+    // Nothing is shared until an entry is promoted.
+    let (status, none) = call(&h.app, "GET", "/v1/memory", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(none, json!([]));
+    assert!(!shared.exists());
+    for _ in 0..100 {
+        if !h.chat.sent().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let (status, promoted) = call(
+        &h.app,
+        "POST",
+        &format!("{memory}/{id}:promote"),
+        Some(json!({"promoted_by": "matt"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{promoted}");
+    let file = shared.join(format!("{id}.md"));
+    assert_eq!(promoted["id"], id);
+    assert_eq!(promoted["path"], file.to_str().unwrap());
+    assert_eq!(promoted["text"], "Rebase onto main before pushing.");
+    assert_eq!(promoted["project_id"], pid.as_str());
+    assert_eq!(promoted["project_name"], "Quark");
+    assert_eq!(promoted["entry_id"], id);
+    assert_eq!(promoted["commit"], commit);
+    assert_eq!(promoted["promoted_by"], "matt");
+    assert_eq!(promoted["evidence"], entry["evidence"]);
+    let body = std::fs::read_to_string(&file).unwrap();
+    assert!(body.contains("task_title: \"Fix #42\""), "{body}");
+    assert!(body.contains(&format!("project: \"{pid}\"")), "{body}");
+    assert!(body.ends_with("---\n\nRebase onto main before pushing.\n"));
+    assert!(
+        !h.home.path().join("memory").exists(),
+        "only the configured directory is written"
+    );
+    // The Project keeps its entry, and its repo is untouched.
+    assert_eq!(git(&bare, &["rev-parse", "main"]), commit);
+
+    // Every coordinator is told once; promoting again changes nothing.
+    let mut told = Vec::new();
+    for _ in 0..100 {
+        told = h.chat.sent();
+        if told.len() > 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(told.len(), 2, "{told:?}");
+    assert!(told[1].1.contains(file.to_str().unwrap()), "{}", told[1].1);
+    let (status, again) = call(&h.app, "POST", &format!("{memory}/{id}:promote"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again, promoted);
+    let (_, listed) = call(&h.app, "GET", "/v1/memory", None).await;
+    assert_eq!(listed, json!([promoted]));
+    assert_eq!(std::fs::read_dir(&shared).unwrap().count(), 1);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.chat.sent().len(), 2);
+
+    let (status, _) = call(&h.app, "POST", &format!("{memory}/nope:promote"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&h.app, "POST", &format!("{memory}/{id}:demote"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&h.app, "POST", &format!("{memory}/{id}"), None).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/projects/nope/memory/{id}:promote"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("{memory}/{id}:promote"),
+        Some(json!({"promoted_by": "a\nb"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

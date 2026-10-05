@@ -257,6 +257,14 @@ a.side-item { text-decoration: none; }
 .d-form textarea:focus { border-color: var(--accent); }
 .d-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .d-actions input { width: 120px; background: var(--bg-2); color: var(--fg); border: 1px solid var(--line-2); border-radius: 4px; padding: 2px 6px; font: 12px var(--sans); }
+.m-evidence { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; border-left: 2px solid var(--line-2); padding-left: 10px; }
+.m-label { font: 10.5px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-faint); }
+.m-files { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.m-commit { display: flex; flex-direction: column; gap: 8px; }
+.m-commit .file { margin-bottom: 0; }
+.m-commit .file-head { position: static; }
+.m-shared { display: flex; flex-direction: column; gap: 5px; border-top: 1px solid var(--line); padding-top: 12px; }
+.m-shared .d-actions { margin-top: 0; }
 .inbox-keys { margin-top: auto; padding: 8px 22px; font-size: 11px; border-top: 1px solid var(--line); display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 /* ---------- PR center ---------- */
 .select { background: var(--bg-2); color: var(--fg); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 6px; font: 12px var(--sans); }

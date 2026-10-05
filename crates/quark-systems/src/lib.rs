@@ -1041,6 +1041,52 @@ pub struct RejectMemoryProposal {
     pub decided_by: Option<String>,
 }
 
+/// One entry of user-level memory: a file under `~/.quark/memory/`, which
+/// every Project's coordinator reads. A file written by hand carries only
+/// `id`, `path` and `text`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct UserMemoryEntry {
+    /// The file name without its extension.
+    pub id: String,
+    /// Absolute path of the file on this machine.
+    pub path: String,
+    pub text: String,
+    #[serde(default)]
+    pub evidence: MemoryEvidence,
+    pub source: Option<MemorySource>,
+    /// When it was learned (RFC 3339 UTC).
+    pub date: Option<String>,
+    /// The Project it was promoted from.
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    /// The Project memory entry it was promoted from.
+    pub entry_id: Option<String>,
+    /// The Project repo commit that added that entry, when known.
+    pub commit: Option<String>,
+    pub promoted_at: Option<String>,
+    pub promoted_by: Option<String>,
+}
+
+/// Promote a Project memory entry to user-level memory.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct PromoteMemoryEntry {
+    /// Who is promoting, as for [`AcceptMemoryProposal::decided_by`].
+    #[serde(default)]
+    pub promoted_by: Option<String>,
+}
+
+/// A Project repo commit that touched `memory/`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MemoryCommit {
+    pub commit: String,
+    pub subject: String,
+    pub author: Option<String>,
+    /// When it was committed (RFC 3339).
+    pub date: Option<String>,
+    /// Unified diff of what it changed under `memory/`.
+    pub patch: String,
+}
+
 /// Who a terminal belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

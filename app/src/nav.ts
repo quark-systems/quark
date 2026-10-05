@@ -2,6 +2,7 @@
 //   #/                 Projects
 //   #/new              create a Project
 //   #/p/<project id>   board and coordinator chat
+//   #/p/<project id>/memory[/<id>]  the Project's memory, optionally with one proposal or entry selected
 //   #/t/<task id>      worker view
 //   #/inbox[/<id>]     decisions inbox, optionally with one decision selected
 //   #/prs              PR center
@@ -13,6 +14,7 @@ export type Route =
   | { name: "projects" }
   | { name: "new" }
   | { name: "project"; id: string }
+  | { name: "memory"; project: string; id?: string }
   | { name: "task"; id: string }
   | { name: "inbox"; id?: string }
   | { name: "prs" }
@@ -22,6 +24,9 @@ export type Route =
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "new") return { name: "new" };
+  if (parts[0] === "p" && parts[1] && parts[2] === "memory") {
+    return parts[3] ? { name: "memory", project: parts[1], id: parts[3] } : { name: "memory", project: parts[1] };
+  }
   if (parts[0] === "p" && parts[1]) return { name: "project", id: parts[1] };
   if (parts[0] === "t" && parts[1]) return { name: "task", id: parts[1] };
   if (parts[0] === "inbox") return parts[1] ? { name: "inbox", id: parts[1] } : { name: "inbox" };
@@ -36,6 +41,7 @@ export function href(r: Route): string {
     case "projects": return "#/";
     case "new": return "#/new";
     case "project": return `#/p/${encodeURIComponent(r.id)}`;
+    case "memory": return `#/p/${encodeURIComponent(r.project)}/memory` + (r.id ? `/${encodeURIComponent(r.id)}` : "");
     case "task": return `#/t/${encodeURIComponent(r.id)}`;
     case "inbox": return r.id ? `#/inbox/${encodeURIComponent(r.id)}` : "#/inbox";
     case "prs": return "#/prs";

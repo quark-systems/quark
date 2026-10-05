@@ -623,6 +623,39 @@
         }
       }
     },
+    "/v1/memory": {
+      "get": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "User-level memory: every entry in the user-level memory directory, by\nfile name, including files people added by hand.",
+        "operationId": "list_user_entries",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserMemoryEntry"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`user_memory_failed`: the directory could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects": {
       "get": {
         "tags": [
@@ -828,6 +861,65 @@
                   "items": {
                     "$ref": "#/components/schemas/MemoryEntry"
                   }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`project_repo_failed`: the repo could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/memory/commits/{commit}": {
+      "get": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "A Project repo commit that touched `memory/`, with its diff there: what\nan entry's `commit` links to.",
+        "operationId": "get_commit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commit",
+            "in": "path",
+            "description": "Commit id on the Project repo's `main`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryCommit"
                 }
               }
             }
@@ -1064,6 +1156,85 @@
           },
           "409": {
             "description": "`already_decided`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/memory/{entry_id}:promote": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Promote a Project memory entry to user-level memory.",
+        "description": "The entry is copied as one new file into the user-level memory directory\n(`~/.quark/memory/` unless the daemon was started with another), which\nevery Project's coordinator reads, and each coordinator is told about it.\nThe Project's own entry stays. Promoting an entry again returns the copy\nmade the first time.",
+        "operationId": "promote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entry_id",
+            "in": "path",
+            "description": "Memory entry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteMemoryEntry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserMemoryEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`project_repo_failed`, or `user_memory_failed`: the file could not be written",
             "content": {
               "application/json": {
                 "schema": {
@@ -3702,6 +3873,40 @@
           }
         }
       },
+      "MemoryCommit": {
+        "type": "object",
+        "description": "A Project repo commit that touched `memory/`.",
+        "required": [
+          "commit",
+          "subject",
+          "patch"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": "string"
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was committed (RFC 3339)."
+          },
+          "patch": {
+            "type": "string",
+            "description": "Unified diff of what it changed under `memory/`."
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
       "MemoryEntry": {
         "type": "object",
         "description": "One accepted memory entry: a file under the Project repo's `memory/`.",
@@ -4035,6 +4240,19 @@
           "ready",
           "failed"
         ]
+      },
+      "PromoteMemoryEntry": {
+        "type": "object",
+        "description": "Promote a Project memory entry to user-level memory.",
+        "properties": {
+          "promoted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is promoting, as for [`AcceptMemoryProposal::decided_by`]."
+          }
+        }
       },
       "PullRequest": {
         "type": "object",
@@ -4998,6 +5216,87 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "UserMemoryEntry": {
+        "type": "object",
+        "description": "One entry of user-level memory: a file under `~/.quark/memory/`, which\nevery Project's coordinator reads. A file written by hand carries only\n`id`, `path` and `text`.",
+        "required": [
+          "id",
+          "path",
+          "text"
+        ],
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project repo commit that added that entry, when known."
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was learned (RFC 3339 UTC)."
+          },
+          "entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project memory entry it was promoted from."
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/MemoryEvidence"
+          },
+          "id": {
+            "type": "string",
+            "description": "The file name without its extension."
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file on this machine."
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project it was promoted from."
+          },
+          "project_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "promoted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "promoted_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemorySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": "string"
           }
         }
       },

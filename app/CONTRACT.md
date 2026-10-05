@@ -21,6 +21,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Accounts and pools | `GET/POST /v1/accounts`, `GET/PATCH/DELETE /v1/accounts/{id}`, `account.quota_changed` events; `AgentConfig.pool`, `Task.account_id`, `RelaunchTask.pool`, `HarnessInfo.account_env` | quark#23 |
 | Why this agent | `GET /v1/tasks/{id}/dispatch`, `dispatch.recorded` events | quark#27 |
 | Failover on rate limits | `DispatchRecord.failover`, `Task.failovers` (`AccountFailover`: `from_account_id`, `to_account_id`, `pool`, `outcome`, `signal`, `detail`, `at`), a `failover` entry in `GET /v1/tasks/{id}/events`; a decision the daemon opens itself, answered through `POST /v1/decisions/{id}:answer` | quark#26 |
+| Memory review and promotion | `GET /v1/projects/{id}/memory/commits/{commit}`, `POST /v1/projects/{id}/memory/{entry_id}:promote` with optional `promoted_by`, `GET /v1/memory`; `MemoryEntry.commit` on listed entries | quark#30 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 
 ## How the app uses them
@@ -56,11 +57,16 @@ A `404` with an `ErrorBody` is a real "not found".
   The side panel shows one line per gate; the Evidence tab shows every case, failures first and expanded, with screenshots inline (click to enlarge), videos playable, and traces opened in trace.playwright.dev or downloaded.
   Artifact bytes come from `GET /v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`; an artifact `url` is relative to the daemon.
   `stale` evidence (for another `head_sha`) is flagged; `pending` and `running` gates show as in progress.
-- **Project memory (J8).** The daemon serves it now; the Memory screen lands with quark#30.
+- **Project memory (J8).** The Memory screen (`#/p/<project id>/memory`) reviews a Project's proposals and browses its entries.
   A finished task's learnings arrive as `memory.proposed` events, each a `MemoryProposal` with `text`, `evidence` (task, PR, files), `source` (`worker` or `coordinator`) and `proposed_at`.
-  Accepting, optionally with edited `text`, commits one file under the Project repo's `memory/` and returns the proposal `accepted` with its `entry` (path and commit); `memory.accepted` carries the same.
+  The app loads every Project's proposals with its snapshots and keeps them current from `memory.proposed`, `memory.accepted` and `memory.rejected`; the board shows how many await review.
+  Accepting, with `text` only when it was edited, commits one file under the Project repo's `memory/` and returns the proposal `accepted` with its `entry` (path and commit); `memory.accepted` carries the same.
   `:reject` returns it `rejected` and emits `memory.rejected`. A second decision is `409 already_decided`; accepting in a Project without a Project repo is `409 no_project_repo`.
-  `GET /v1/projects/{id}/memory` lists every entry on the Project repo's `main`, including hand-written files, which carry only `id`, `path` and `text`.
+  `decided_by` and `promoted_by` come from the "Reviewing as" field, the same remembered name decisions are answered as, or `null` for the daemon's own user.
+  `GET /v1/projects/{id}/memory` lists every entry on the Project repo's `main`, including hand-written files, which carry only `id`, `path`, `text` and `commit`; the app reads it again whenever a proposal is accepted.
+  An entry's `commit` is the commit that added its file. The screen opens it in place from `GET .../memory/commits/{commit}`, which answers its subject, author, date and a unified diff limited to `memory/`, and `404` for anything that is not a commit on `main`.
+  `:promote` copies an entry into user-level memory (`~/.quark/memory/`, or the directory quarkd was started with: `--user-memory`, `QUARK_USER_MEMORY`) and returns the `UserMemoryEntry`, whose `project_id` and `entry_id` say where it came from; the Project keeps its entry.
+  Promoting an entry again returns the same copy. `GET /v1/memory` lists user-level memory, which is how the screen knows which entries are already promoted; there is no event for a promotion.
 - **Accounts (ADR-11).** The Accounts screen lists `GET /v1/accounts` grouped by harness, the harness's default account first, each with its credential health (`health`, from the harness adapter) and latest quota (`quota`); `account.quota_changed` replaces one account's `quota` live.
   "Refresh quota" calls `GET /v1/accounts?refresh=true`, which reads every account's quota (one `quota-axi --provider claude|codex --profile-only` call each) before answering.
   Adding an account sends `harness`, an absolute `config_dir`, an optional `label` and `pools`; only harnesses with an `account_env` take one, and the form shows the login line (`CLAUDE_CONFIG_DIR=<dir> claude`).

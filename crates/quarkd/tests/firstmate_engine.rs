@@ -449,6 +449,7 @@ fn add_provision_scripts(engine_root: &Path) {
 
 fn plan(root: PathBuf) -> WorkspacePlan {
     WorkspacePlan {
+        user_memory: None,
         project_id: "prj_1".into(),
         name: "Quark".into(),
         goal: Some("Ship J2".into()),
@@ -761,4 +762,20 @@ async fn crew_dispatch_config_goes_through_config_set() {
     assert!(calls
         .iter()
         .all(|c| c.script == "fm-crew-dispatch.sh" && c.args == ["config-set"]));
+}
+
+#[test]
+fn charter_points_at_user_level_memory() {
+    let mut plan = plan(PathBuf::from("/w"));
+    let (without, _) = quarkd::engine::firstmate::charter(&plan);
+    assert!(!without.contains("shared by every Project"), "{without}");
+    plan.user_memory = Some(PathBuf::from("/home/me/.quark/memory"));
+    let (with, _) = quarkd::engine::firstmate::charter(&plan);
+    assert!(
+        with.ends_with(
+            " Memory shared by every Project is in /home/me/.quark/memory; read every entry \
+             there too, and reread it when told a new one landed."
+        ),
+        "{with}"
+    );
 }
