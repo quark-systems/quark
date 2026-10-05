@@ -129,6 +129,56 @@ function recordDispatch(task, how, { silent = false, ts = now(), model = null, e
   return rec;
 }
 
+// POST /v1/projects/{id}/dispatch:test. The mock has no classifier, except that a description
+// naming a rename or a typo matches the trivial-edit rule, so both outcomes can be seen.
+const TEST_RULE = { id: "rule_1", when: "A trivial mechanical edit such as a rename, typo or one-line fix." };
+function testDispatch(proj, description) {
+  const agent = proj.agent_config ?? { harness: "claude-code", model: "claude-sonnet-5", effort: "medium" };
+  const listed = [
+    { rule: TEST_RULE, rule_name: "trivial-edit", harness: agent.harness, model: agent.model ?? null, effort: "low", pool: agent.pool ?? null },
+    { rule: TEST_RULE, rule_name: "trivial-edit", harness: "pi", model: "openai/gpt-5.5", effort: null, pool: null },
+    { rule: { id: "default", when: null }, rule_name: null, harness: agent.harness, model: agent.model ?? null, effort: agent.effort ?? null, pool: agent.pool ?? null },
+  ];
+  const matched = /\b(rename|typo)\b/i.test(description);
+  const candidates = (matched ? listed.filter((l) => l.rule === TEST_RULE) : listed).map((l) => {
+    const h = HARNESSES.find((x) => x.id === l.harness);
+    const mine = accountList().filter((a) => a.harness === l.harness && (l.pool ? a.pools.includes(l.pool) : a.default));
+    const quota = mine.map((a) => `${a.label}: ${a.quota.remaining_percent == null ? "quota not read" : `${a.quota.remaining_percent}% remaining`}`).join("; ");
+    const evidence = matched && h?.install.installed ? `provider=${l.harness} scope=all_models remaining=79% spendPriority=0.42 runway=through_reset` : null;
+    const checks = [
+      { check: "harness_installed", passed: !!h?.install.installed,
+        detail: !h ? `unknown harness \`${l.harness}\`` : h.install.installed ? `${h.name} ${h.install.version}` : `${h.name} is not installed: ${h.install.install_hint}` },
+      { check: "model_accepted", passed: !!h, detail: !h ? `unknown harness \`${l.harness}\`` : `${l.model ? `model ${l.model}` : "the harness's default model"}${l.effort ? `, ${l.effort} effort` : ""}` },
+      { check: "account_health", passed: mine.length ? mine.some((a) => a.health.state !== "not_configured") : !l.pool,
+        detail: mine.length ? mine.map((a) => `${a.label}: ${a.health.state === "configured" ? "logged in" : a.health.state === "unknown" ? "login unknown" : "not logged in"}`).join("; ")
+          : l.pool ? `pool \`${l.pool}\` has no ${h?.name ?? l.harness} accounts` : `${h?.name ?? l.harness}: logged in` },
+      { check: "quota_headroom", passed: !mine.length || mine.some((a) => a.quota.remaining_percent == null || a.quota.remaining_percent > 0),
+        detail: (evidence ? `resolution: eligible (${evidence}); ` : "") + (quota || `quota is not read per account for ${h?.name ?? l.harness}`) },
+    ];
+    const failed = checks.find((c) => !c.passed);
+    return { ...l, passed: !failed, reason: failed ? failed.detail : "eligible", evidence: evidence ?? (quota || null), checks };
+  });
+  const passing = candidates.filter((c) => c.passed).length;
+  const tail = `${passing} of ${candidates.length} candidate${candidates.length === 1 ? "" : "s"} could start a worker now.`;
+  const first = candidates.find((c) => c.passed);
+  if (matched && first) {
+    const label = first.harness + (first.model ? `:${first.model}` : "") + ` (${first.effort} effort)`;
+    return {
+      project_id: proj.id, decided_by: "classifier", rule: TEST_RULE, candidates,
+      summary: `The classifier matched rule ${TEST_RULE.id} (${TEST_RULE.when}) at 0.91 confidence. The resolution would select ${label}. ${tail}`,
+      resolution: { status: "clear", reason: null, notes: ["rule matched"], output: "dispatch-resolve:\n  status: clear" },
+      classifier: { provider: "system1", model: "jev-1.13.0", confidence: 0.91 },
+      chosen: { harness: first.harness, model: first.model, effort: first.effort, account: null },
+    };
+  }
+  return {
+    project_id: proj.id, decided_by: "coordinator", rule: null, chosen: null, candidates,
+    summary: `No classifier is configured (provider: none), so the coordinator would pick. ${tail}`,
+    resolution: { status: "off", reason: null, notes: [], output: null },
+    classifier: { provider: "none", model: null, confidence: null },
+  };
+}
+
 let taskEventId = 0;
 function setState(task, state, note = null) {
   const previous = task.state;
@@ -544,6 +594,13 @@ const server = http.createServer(async (req, res) => {
       provision(proj);
       return send(res, 202);
     }
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/dispatch:test$/)) && req.method === "POST") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const description = (await readJson(req))?.description;
+    if (typeof description !== "string" || !description.trim()) return invalid(res, "description is empty");
+    return send(res, 200, testDispatch(proj, description.trim()));
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/tasks$/)) && req.method === "GET") {
     const id = decodeURIComponent(r[1]);

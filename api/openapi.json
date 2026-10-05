@@ -834,6 +834,76 @@
         }
       }
     },
+    "/v1/projects/{id}/dispatch:test": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Test a task description against the Project's dispatch rules.",
+        "description": "Runs the engine's dispatch resolution on the description, as the\ncoordinator does on a task's brief, against the rules `dispatch.yaml` on\nthe Project repo's `main` declares. Returns the rule the classifier\nmatched and the profile it would select, or, with no classifier\n(`classifier.provider` is `none`), that the coordinator would pick. Every\ncandidate says whether a worker could start with it now and why: harness\ninstalled, model accepted, account health and quota headroom. Nothing is\ndispatched or recorded.",
+        "operationId": "test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestDispatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchTest"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`dispatch.yaml` does not compile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/memory": {
       "get": {
         "tags": [
@@ -3176,6 +3246,35 @@
           }
         }
       },
+      "DispatchCheck": {
+        "type": "object",
+        "required": [
+          "check",
+          "passed",
+          "detail"
+        ],
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/DispatchCheckKind"
+          },
+          "detail": {
+            "type": "string",
+            "description": "What was found, e.g. `Claude Code 2.1.0 at /usr/local/bin/claude`."
+          },
+          "passed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DispatchCheckKind": {
+        "type": "string",
+        "enum": [
+          "harness_installed",
+          "model_accepted",
+          "account_health",
+          "quota_headroom"
+        ]
+      },
       "DispatchChoice": {
         "type": "object",
         "description": "The agent a worker was started with.",
@@ -3400,6 +3499,137 @@
           "off",
           "not_consulted"
         ]
+      },
+      "DispatchTest": {
+        "type": "object",
+        "description": "What a Project's dispatch rules would do with a task description\n(ADR-11). Nothing is dispatched or recorded.",
+        "required": [
+          "project_id",
+          "decided_by",
+          "summary",
+          "resolution",
+          "classifier",
+          "candidates"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchTestCandidate"
+            },
+            "description": "The matched rule's profiles when the resolution weighed them, else\nevery profile of every rule and the default, in the order the rules\nlist them."
+          },
+          "chosen": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchChoice",
+                "description": "The profile the resolution selected; absent when the coordinator\nwould pick."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "classifier": {
+            "$ref": "#/components/schemas/DispatchClassifier",
+            "description": "`provider` is `none` when no classifier is configured and the\ncoordinator would pick."
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/DispatchDecider",
+            "description": "Who would choose the agent: `classifier` when the resolution selects\na profile, else `coordinator`."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/DispatchResolution",
+            "description": "What the engine's dispatch resolution reported for the description."
+          },
+          "rule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchRule",
+                "description": "The dispatch rule the classifier matched; absent when none matched or\nno classifier is configured."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "description": "One sentence on the outcome, for people."
+          }
+        }
+      },
+      "DispatchTestCandidate": {
+        "type": "object",
+        "description": "One profile of the Project's dispatch rules, with whether a worker could\nbe started with it now.",
+        "required": [
+          "rule",
+          "harness",
+          "passed",
+          "reason",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchCheck"
+            },
+            "description": "One entry per [`DispatchCheckKind`], in that order."
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The quota evidence it was judged on."
+          },
+          "harness": {
+            "type": "string",
+            "description": "Harness id, e.g. `claude-code`."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "True when every check passed."
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account pool the profile runs under, when it names one."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it passed or failed: the first failed check, else the\nresolution's verdict or `eligible`."
+          },
+          "rule": {
+            "$ref": "#/components/schemas/DispatchRule",
+            "description": "The rule that lists the profile; its id is `default` for a default\nprofile."
+          },
+          "rule_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rule's `name` in `dispatch.yaml`, when it has one."
+          }
+        }
       },
       "DispatchTrigger": {
         "type": "string",
@@ -5084,6 +5314,19 @@
           "coordinator",
           "worker"
         ]
+      },
+      "TestDispatch": {
+        "type": "object",
+        "description": "A task description to test against a Project's dispatch rules.",
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "The task as it would be briefed to a worker."
+          }
+        }
       },
       "TranscriptEntry": {
         "type": "object",

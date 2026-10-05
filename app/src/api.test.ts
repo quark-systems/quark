@@ -62,3 +62,16 @@ describe("memory", () => {
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toMatch(/\/v1\/projects\/p\/memory\/proposals\?state=proposed$/);
   });
 });
+
+describe("dispatch test", () => {
+  it("posts the description to the Project's dispatch:test", async () => {
+    const result = { project_id: "p 1", decided_by: "coordinator", summary: "s", rule: null, chosen: null, candidates: [],
+      resolution: { status: "off", notes: [] }, classifier: { provider: "none" } };
+    respond(200, result);
+    await expect(api.testDispatch("p 1", "Rename a field")).resolves.toEqual(result);
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/v1\/projects\/p%201\/dispatch:test$/);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ description: "Rename a field" });
+  });
+});

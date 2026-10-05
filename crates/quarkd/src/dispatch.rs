@@ -59,11 +59,6 @@ pub fn build(
         account: None,
     };
     let agent = label(&chosen);
-    let none = DispatchClassifier {
-        provider: NO_CLASSIFIER.into(),
-        model: None,
-        confidence: None,
-    };
     let not_consulted = |reason: String| DispatchResolution {
         status: DispatchStatus::NotConsulted,
         reason: Some(reason),
@@ -81,7 +76,7 @@ pub fn build(
         resolution: not_consulted(String::new()),
         candidates: Vec::new(),
         chosen: chosen.clone(),
-        classifier: none,
+        classifier: no_classifier(),
         failover: None,
         recorded_at: String::new(),
     };
@@ -111,13 +106,7 @@ pub fn build(
         }
         Resolved::Ran(r) => {
             let r = *r;
-            if r.classifier_consulted {
-                record.classifier = DispatchClassifier {
-                    provider: SYSTEM1.into(),
-                    model: r.classifier_model.clone(),
-                    confidence: r.confidence,
-                };
-            }
+            record.classifier = classifier(&r);
             let mut notes = r.notes.clone();
             let selected = r
                 .profile
@@ -164,6 +153,27 @@ pub fn build(
     record
 }
 
+/// The classifier entry when none was consulted.
+pub fn no_classifier() -> DispatchClassifier {
+    DispatchClassifier {
+        provider: NO_CLASSIFIER.into(),
+        model: None,
+        confidence: None,
+    }
+}
+
+/// The classifier a resolution consulted, if it consulted one.
+pub fn classifier(r: &EngineResolution) -> DispatchClassifier {
+    if !r.classifier_consulted {
+        return no_classifier();
+    }
+    DispatchClassifier {
+        provider: SYSTEM1.into(),
+        model: r.classifier_model.clone(),
+        confidence: r.confidence,
+    }
+}
+
 /// `harness`, `harness:model` or `harness:model (effort)`.
 pub fn label(c: &DispatchChoice) -> String {
     let mut s = c.harness.clone();
@@ -180,7 +190,8 @@ fn same_agent(a: &DispatchChoice, b: &DispatchChoice) -> bool {
     a.harness == b.harness && a.model == b.model && a.effort == b.effort
 }
 
-fn matched(r: &EngineResolution) -> String {
+/// `The classifier matched rule <id> (<when>) at <c> confidence.`
+pub fn matched(r: &EngineResolution) -> String {
     let rule = match &r.rule {
         Some(rule) => match &rule.when {
             Some(when) => format!("rule {} ({when})", rule.id),
@@ -194,7 +205,8 @@ fn matched(r: &EngineResolution) -> String {
     }
 }
 
-fn status_word(s: DispatchStatus) -> &'static str {
+/// The status as it reads after "the dispatch resolution was".
+pub fn status_word(s: DispatchStatus) -> &'static str {
     match s {
         DispatchStatus::Clear => "clear",
         DispatchStatus::Ambiguous => "ambiguous",

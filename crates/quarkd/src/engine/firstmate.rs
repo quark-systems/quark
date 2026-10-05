@@ -2,6 +2,7 @@
 //! readers and its allowlisted writer.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -244,6 +245,33 @@ impl EngineAdapter for FirstmateEngine {
         let project = project.map(str::to_string);
         let r = blocking(move || reader.dispatch_resolve(&task, project.as_deref())).await?;
         Ok(r.map(neutral_resolution))
+    }
+
+    /// `fm-dispatch-resolve.sh` on `description` written to a temporary
+    /// brief, which is removed when the script returns.
+    async fn resolve_description(
+        &self,
+        ws: &WorkspaceRef,
+        description: &str,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        let reader = self.reader(ws)?.with_timeout(RESOLVE_TIMEOUT);
+        let description = description.to_string();
+        let r = blocking(move || {
+            let io = |source| Error::Io {
+                path: std::env::temp_dir(),
+                source,
+            };
+            let mut brief = tempfile::Builder::new()
+                .prefix("quark-dispatch-test-")
+                .suffix(".md")
+                .tempfile()
+                .map_err(io)?;
+            brief.write_all(description.as_bytes()).map_err(io)?;
+            brief.flush().map_err(io)?;
+            reader.dispatch_resolve_file(brief.path(), None)
+        })
+        .await?;
+        Ok(Some(neutral_resolution(r)))
     }
 
     async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {

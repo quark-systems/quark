@@ -1,6 +1,7 @@
 //! The `/v1` HTTP API and event stream.
 
 mod accounts;
+mod dispatch;
 mod error;
 mod events;
 mod harnesses;
@@ -59,6 +60,7 @@ pub fn router(state: AppState) -> Router {
                 .post(routes::project_action),
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
+        .route("/v1/projects/{id}/dispatch:test", post(dispatch::test))
         .route("/v1/projects/{id}/memory", get(memory::list_entries))
         // POST serves the custom method `.../memory/{entry_id}:promote`.
         .route(

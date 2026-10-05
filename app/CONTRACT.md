@@ -22,6 +22,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Why this agent | `GET /v1/tasks/{id}/dispatch`, `dispatch.recorded` events | quark#27 |
 | Failover on rate limits | `DispatchRecord.failover`, `Task.failovers` (`AccountFailover`: `from_account_id`, `to_account_id`, `pool`, `outcome`, `signal`, `detail`, `at`), a `failover` entry in `GET /v1/tasks/{id}/events`; a decision the daemon opens itself, answered through `POST /v1/decisions/{id}:answer` | quark#26 |
 | Memory review and promotion | `GET /v1/projects/{id}/memory/commits/{commit}`, `POST /v1/projects/{id}/memory/{entry_id}:promote` with optional `promoted_by`, `GET /v1/memory`; `MemoryEntry.commit` on listed entries | quark#30 |
+| Testing dispatch rules | `POST /v1/projects/{id}/dispatch:test` with `description` | quark#24 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 
 ## How the app uses them
@@ -44,6 +45,10 @@ A `404` with an `ErrorBody` is a real "not found".
 - **Why this agent (ADR-11).** The worker view's "Why this agent" tab loads `GET /v1/tasks/{id}/dispatch` (one record per spawn, oldest first) and appends `dispatch.recorded` events for that task.
   The newest record is shown in full: its summary, the chosen harness, model, effort and account (an `Account.id`, shown by its label when the accounts list is loaded; `null` when unknown), who decided (`classifier`, `coordinator` or `relaunch`), the matched rule, the classifier's provider, model and confidence (`provider: "none"` when the coordinator picked), the resolution's status and reason, and every candidate with its pass or fail reason and quota evidence; earlier records (the first spawn before a relaunch) are collapsed below it.
   An empty list means the worker has not started. Records outlive the task, so a finished task still shows its own.
+- **Testing dispatch rules (ADR-11).** `api.testDispatch` posts a task description to `POST /v1/projects/{id}/dispatch:test` and gets a `DispatchTest`, in the words of a dispatch record: the matched `rule` and the `chosen` profile when the classifier decides, or `decided_by: "coordinator"` with `classifier.provider: "none"` when there is none.
+  `candidates` are the matched rule's profiles when the resolution weighed them, else every profile of every rule and the default; each carries `passed`, `reason`, `evidence` and four `checks` (`harness_installed`, `model_accepted`, `account_health`, `quota_headroom`) with a `detail` each.
+  Nothing is dispatched or recorded. `409 dispatch_invalid` means `dispatch.yaml` does not compile.
+  No screen calls it yet; the rule editor (quark#25) will.
 - **Decisions inbox.** The app loads every decision (`GET /v1/decisions`, no state filter) so the inbox can list answered ones with who answered, and keeps them current from `decision.opened` and `decision.answered`.
   An answer is sent with `answered_by` from the "Answering as" field (remembered per viewer), or `null` to let the daemon use its own user; the `200` body is the answered decision.
   `409 already_answered` is shown as an error on the decision.
