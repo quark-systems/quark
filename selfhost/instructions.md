@@ -28,3 +28,4 @@ Link each task to its issue and say `Closes #<n>` in the PR body.
 - quarkd runs one shared tmux server for every Project (`~/.quark/run/tmux/quark`); engine calls run with `TMUX` pointing at it.
 
 Learnings accepted from finished tasks land in `memory/`, one file per entry.
+A worker reports one by appending `learned: <what to keep>` to its status log before `done:` (`learned [files=a,b]: ...` names the files it is about); the coordinator adds `learned [source=coordinator]: ...` to a finished task's log. Each becomes a memory proposal for review.

@@ -11,6 +11,7 @@ pub mod engine;
 pub mod forge;
 pub mod gates;
 pub mod harness;
+pub mod memory;
 pub mod pr_center;
 pub mod project_repo;
 pub mod projector;

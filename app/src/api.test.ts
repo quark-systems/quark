@@ -45,3 +45,20 @@ describe("decisions", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ answer: "yes", answered_by: "matt" });
   });
 });
+
+describe("memory", () => {
+  it("accepts a proposal with edited text under its Project", async () => {
+    const accepted = { id: "mpr 1", project_id: "p", text: "edited", evidence: { files: [] }, source: "worker", state: "accepted", proposed_at: "t" };
+    respond(200, accepted);
+    await expect(api.acceptMemoryProposal("p", "mpr 1", { text: "edited" })).resolves.toEqual(accepted);
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/v1\/projects\/p\/memory\/proposals\/mpr%201:accept$/);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ text: "edited" });
+  });
+  it("filters proposals by state", async () => {
+    respond(200, []);
+    await api.memoryProposals("p", "proposed");
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toMatch(/\/v1\/projects\/p\/memory\/proposals\?state=proposed$/);
+  });
+});

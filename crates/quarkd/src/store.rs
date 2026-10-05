@@ -20,8 +20,10 @@ use tokio::sync::broadcast;
 
 use crate::now_rfc3339;
 
+mod memory;
 mod pull_requests;
 
+pub use memory::{NewProposal, PendingLearning};
 pub use pull_requests::{artifact_id, artifact_path, PrOwner, PrSyncTarget};
 
 /// One `worker.output` event to append.
@@ -31,7 +33,7 @@ pub struct TerminalOutput {
     pub output: quark_systems::TerminalOutput,
 }
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE projects (
@@ -242,6 +244,28 @@ INSERT INTO decisions_v9 (id, project_id, engine_id, task_id, question, state, a
 DROP TABLE decisions;
 ALTER TABLE decisions_v9 RENAME TO decisions;
 CREATE INDEX decisions_by_engine_id ON decisions (project_id, engine_id);
+"#;
+
+/// Memory proposals (journey J8): learnings from finished tasks awaiting
+/// review. Accepted entries live in the Project repo; `entry` keeps what was
+/// committed. A proposal from a status line names it, so a line is proposed
+/// once.
+const SCHEMA_V10: &str = r#"
+CREATE TABLE memory_proposals (
+    id            TEXT PRIMARY KEY,
+    project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task_id       TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    task_event_id INTEGER UNIQUE REFERENCES task_events(id) ON DELETE SET NULL,
+    text          TEXT NOT NULL,
+    evidence      TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    state         TEXT NOT NULL,
+    proposed_at   TEXT NOT NULL,
+    decided_at    TEXT,
+    decided_by    TEXT,
+    entry         TEXT
+);
+CREATE INDEX memory_proposals_by_project ON memory_proposals (project_id, proposed_at);
 "#;
 
 /// A task whose status log the projector tails.
@@ -1396,6 +1420,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(SCHEMA_V9)?;
         tx.pragma_update(None, "user_version", 9)?;
+        tx.commit()?;
+    }
+    if version < 10 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA_V10)?;
+        tx.pragma_update(None, "user_version", 10)?;
         tx.commit()?;
     }
     Ok(())

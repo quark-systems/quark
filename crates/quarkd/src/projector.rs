@@ -5,7 +5,8 @@
 //! run on a timer and, when the adapter names directories to watch, as soon as
 //! a task file changes there, so the board moves while a worker reports.
 //! Each refresh also hands the engine the verification gates the Project
-//! repo's `project.yaml` declares, whenever that declaration changes.
+//! repo's `project.yaml` declares, whenever that declaration changes, and
+//! turns what finished tasks learned into memory proposals.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use quark_systems::MemoryEvidence;
 use quark_transcript::{SessionFormat, SessionRoots};
 use tokio::sync::mpsc;
 
@@ -20,7 +22,8 @@ use crate::sessions::{Sessions, TaskTarget};
 
 use crate::engine::{EngineAdapter, EngineError, EngineTask, WorkspaceRef};
 
-use crate::store::{Store, TranscriptSource};
+use crate::memory;
+use crate::store::{NewProposal, Store, TranscriptSource};
 use crate::transcripts::TranscriptTap;
 
 /// How long to wait after a file change for the rest of a burst (an atomic
@@ -129,6 +132,7 @@ impl Projector {
         self.tap_transcripts(ws, tasks).await;
 
         self.tail_statuses(ws).await;
+        self.propose_learnings(ws).await;
 
         let started = Instant::now();
         // Taken before the read, so the store can tell this read from one
@@ -350,6 +354,60 @@ impl Projector {
             }
         }
         self.record(ws, "status", started, first_err.as_ref()).await;
+    }
+
+    /// Turns `learned` lines of finished tasks into memory proposals. Files
+    /// the line does not name are read from the task's working tree, when it
+    /// has one.
+    async fn propose_learnings(&self, ws: &WorkspaceRef) {
+        let store = self.store.clone();
+        let project_id = ws.project_id.clone();
+        let pending =
+            match tokio::task::spawn_blocking(move || store.pending_learnings(&project_id)).await {
+                Ok(Ok(p)) => p,
+                res => {
+                    log_apply(ws, "memory", res.map(|r| r.map(|_| ())));
+                    return;
+                }
+            };
+        for l in pending {
+            let learning = memory::parse_learning(&l.note, &l.raw);
+            let mut files = learning.files;
+            if files.is_empty() {
+                if let Some(tree) = &l.worktree {
+                    match crate::worktree::changes(std::path::Path::new(tree)).await {
+                        Ok(c) => files.extend(
+                            c.files
+                                .into_iter()
+                                .take(memory::MAX_EVIDENCE_FILES)
+                                .map(|f| f.path),
+                        ),
+                        Err(e) => {
+                            tracing::debug!(task = %l.task_id, error = %e, "no changed files for a learning")
+                        }
+                    }
+                }
+            }
+            let proposal = NewProposal {
+                task_event_id: Some(l.task_event_id),
+                task_id: Some(l.task_id.clone()),
+                text: learning.text,
+                evidence: MemoryEvidence {
+                    task_id: Some(l.task_id),
+                    task_title: Some(l.task_title),
+                    pull_request_url: l.pull_request_url,
+                    files,
+                },
+                source: learning.source,
+            };
+            let store = self.store.clone();
+            let project_id = ws.project_id.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                store.propose_memory(&project_id, proposal).map(drop)
+            })
+            .await;
+            log_apply(ws, "memory", res);
+        }
     }
 
     async fn record(

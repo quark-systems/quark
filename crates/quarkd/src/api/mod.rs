@@ -3,6 +3,7 @@
 mod error;
 mod events;
 mod harnesses;
+mod memory;
 mod openapi;
 mod pull_requests;
 mod routes;
@@ -55,6 +56,16 @@ pub fn router(state: AppState) -> Router {
                 .post(routes::project_action),
         )
         .route("/v1/projects/{id}/tasks", get(routes::list_tasks))
+        .route("/v1/projects/{id}/memory", get(memory::list_entries))
+        .route(
+            "/v1/projects/{id}/memory/proposals",
+            get(memory::list_proposals),
+        )
+        // POST serves the custom methods `.../{proposal_id}:accept` and `:reject`.
+        .route(
+            "/v1/projects/{id}/memory/proposals/{proposal_id}",
+            post(memory::proposal_action),
+        )
         // POST serves the custom methods `/v1/tasks/{id}:cancel` and
         // `:relaunch`; the router allows one parameter per segment.
         .route(

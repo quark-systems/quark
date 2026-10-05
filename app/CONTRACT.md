@@ -17,6 +17,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Terminals | `GET /v1/terminals/{id}`, `POST /v1/terminals/{id}/snapshot`, `/input`, `/resize` | quark#9 |
 | Answering decisions | `POST /v1/decisions/{id}:answer` with `answer` and optional `answered_by`; `Decision.answered_by`, `answered_at` | Phase 2 workstream 1 (decisions answer path) |
 | Project creation | `POST /v1/projects` with `repos`, `agent_config`, `dispatch_preset`, `delivery`; `Project.status`; `POST /v1/projects/{id}:provision` | quark#10 |
+| Project memory | `GET /v1/projects/{id}/memory/proposals[?state=]`, `POST .../memory/proposals/{proposal_id}:accept` with optional `text` and `decided_by`, `:reject` with optional `decided_by`, `GET /v1/projects/{id}/memory`; `memory.proposed`, `memory.accepted`, `memory.rejected` events | quark#29 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 
 ## How the app uses them
@@ -49,3 +50,8 @@ A `404` with an `ErrorBody` is a real "not found".
   The side panel shows one line per gate; the Evidence tab shows every case, failures first and expanded, with screenshots inline (click to enlarge), videos playable, and traces opened in trace.playwright.dev or downloaded.
   Artifact bytes come from `GET /v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`; an artifact `url` is relative to the daemon.
   `stale` evidence (for another `head_sha`) is flagged; `pending` and `running` gates show as in progress.
+- **Project memory (J8).** The daemon serves it now; the Memory screen lands with quark#30.
+  A finished task's learnings arrive as `memory.proposed` events, each a `MemoryProposal` with `text`, `evidence` (task, PR, files), `source` (`worker` or `coordinator`) and `proposed_at`.
+  Accepting, optionally with edited `text`, commits one file under the Project repo's `memory/` and returns the proposal `accepted` with its `entry` (path and commit); `memory.accepted` carries the same.
+  `:reject` returns it `rejected` and emits `memory.rejected`. A second decision is `409 already_decided`; accepting in a Project without a Project repo is `409 no_project_repo`.
+  `GET /v1/projects/{id}/memory` lists every entry on the Project repo's `main`, including hand-written files, which carry only `id`, `path` and `text`.

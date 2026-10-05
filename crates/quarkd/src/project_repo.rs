@@ -99,16 +99,74 @@ pub fn init(bare: &Path, checkout: &Path, p: &Project) -> Result<(), RepoError> 
         })?;
     }
     git(Some(checkout), &["add", "--all"])?;
-    let message = format!("Create Project {}", p.name);
-    let mut args = vec!["-c", "commit.gpgsign=false"];
-    // Use the person's git identity when they have one; otherwise commit as Quark.
-    if git(Some(checkout), &["config", "user.email"]).is_err() {
-        args.extend(["-c", "user.name=Quark", "-c", "user.email=quark@localhost"]);
-    }
-    args.extend(["commit", "--quiet", "-m", &message]);
-    git(Some(checkout), &args)?;
+    commit(checkout, &format!("Create Project {}", p.name), &[])?;
     git(Some(checkout), &["push", "--quiet", "origin", "HEAD:main"])?;
     Ok(())
+}
+
+/// Add one new file to the Project repo in its own commit on `main`, through
+/// the checkout: bring the checkout up to date with the bare repo, write the
+/// file, commit only that path and push. `name` picks the file's path
+/// (relative to the repo) given a test for paths already taken, so the file
+/// never replaces another. Other changes in the checkout are left alone.
+/// Returns the path and the commit id.
+pub fn commit_new_file(
+    bare: &Path,
+    checkout: &Path,
+    name: impl Fn(&dyn Fn(&str) -> bool) -> String,
+    body: &str,
+    message: &str,
+) -> Result<(String, String), RepoError> {
+    if !checkout.join(".git").exists() {
+        if checkout.exists() {
+            return Err(RepoError::Unexpected(checkout.to_path_buf()));
+        }
+        git(
+            None,
+            &["clone", "--quiet", path_str(bare)?, path_str(checkout)?],
+        )?;
+    }
+    let branch = git(Some(checkout), &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if branch != "main" {
+        return Err(RepoError::Git {
+            args: "rev-parse --abbrev-ref HEAD".into(),
+            stderr: format!("the Project repo checkout is on {branch:?}, not main"),
+        });
+    }
+    // Fetch and fast-forward rather than pull, so the person's pull config
+    // (rebase, autostash) never applies here.
+    git(Some(checkout), &["fetch", "--quiet", "origin", "main"])?;
+    git(
+        Some(checkout),
+        &["merge", "--quiet", "--ff-only", "FETCH_HEAD"],
+    )?;
+    let rel = name(&|rel: &str| checkout.join(rel).exists());
+    let path = checkout.join(&rel);
+    if let Some(dir) = path.parent() {
+        mkdir(dir)?;
+    }
+    std::fs::write(&path, body).map_err(|source| RepoError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    git(Some(checkout), &["add", "--", &rel])?;
+    commit(checkout, message, &["--", &rel])?;
+    let sha = git(Some(checkout), &["rev-parse", "HEAD"])?;
+    git(Some(checkout), &["push", "--quiet", "origin", "HEAD:main"])?;
+    Ok((rel, sha))
+}
+
+/// Commit in `dir`, unsigned and without hooks, as the person's git identity
+/// when they have one, otherwise as Quark. `rest` is appended, e.g. `--` and
+/// the paths to commit.
+fn commit(dir: &Path, message: &str, rest: &[&str]) -> Result<(), RepoError> {
+    let mut args = vec!["-c", "commit.gpgsign=false"];
+    if git(Some(dir), &["config", "user.email"]).is_err() {
+        args.extend(["-c", "user.name=Quark", "-c", "user.email=quark@localhost"]);
+    }
+    args.extend(["commit", "--quiet", "--no-verify", "-m", message]);
+    args.extend(rest);
+    git(Some(dir), &args).map(drop)
 }
 
 fn git(dir: Option<&Path>, args: &[&str]) -> Result<String, RepoError> {
@@ -272,7 +330,11 @@ fn instructions_md(p: &Project) -> String {
         "\n## Guidance\n\n\
          Project-level guidance for the coordinator and every worker goes here: \
          conventions, constraints, and what done means for this Project.\n\n\
-         Learnings accepted from finished tasks land in `memory/`, one file per entry.\n",
+         Learnings accepted from finished tasks land in `memory/`, one file per entry. \
+         A worker reports one by appending `learned: <what to keep>` to its status log \
+         before `done:` (`learned [files=a,b]: ...` names the files it is about); \
+         the coordinator adds `learned [source=coordinator]: ...` to a finished task's log. \
+         Each becomes a memory proposal for review.\n",
     );
     m
 }
@@ -394,5 +456,52 @@ mod tests {
         assert!(checkout.join("project.yaml").is_file());
         let count = git(Some(&bare), &["rev-list", "--count", "main"]).unwrap();
         assert_eq!(count, "1");
+    }
+
+    #[test]
+    fn commit_new_file_adds_one_file_in_its_own_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("projects/prj_1.git");
+        let checkout = dir.path().join("ws/project");
+        std::fs::create_dir_all(dir.path().join("ws")).unwrap();
+        init(&bare, &checkout, &project()).unwrap();
+
+        // Someone else moved main, and the checkout has unrelated edits.
+        let other = dir.path().join("other");
+        git(
+            None,
+            &[
+                "clone",
+                "--quiet",
+                bare.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        std::fs::write(other.join("library/notes.md"), "notes\n").unwrap();
+        git(Some(&other), &["add", "--all"]).unwrap();
+        commit(&other, "Add notes", &[]).unwrap();
+        git(Some(&other), &["push", "--quiet", "origin", "HEAD:main"]).unwrap();
+        std::fs::write(checkout.join("instructions.md"), "edited\n").unwrap();
+
+        let name = |taken: &dyn Fn(&str) -> bool| {
+            assert!(taken("memory/.gitkeep"));
+            "memory/2026-10-02-x.md".to_string()
+        };
+        let (rel, sha) = commit_new_file(&bare, &checkout, name, "entry\n", "Remember x").unwrap();
+        assert_eq!(rel, "memory/2026-10-02-x.md");
+        assert_eq!(git(Some(&bare), &["rev-parse", "main"]).unwrap(), sha);
+        assert_eq!(
+            git(Some(&bare), &["show", "main:memory/2026-10-02-x.md"]).unwrap(),
+            "entry"
+        );
+        let changed = git(Some(&bare), &["show", "--name-only", "--format=%s", "main"]).unwrap();
+        assert_eq!(changed, "Remember x\n\nmemory/2026-10-02-x.md");
+        // The checkout has the entry and keeps its own edit uncommitted.
+        assert!(checkout.join("library/notes.md").is_file());
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("instructions.md")).unwrap(),
+            "edited\n"
+        );
     }
 }

@@ -762,6 +762,100 @@ pub struct CoordinatorMessageAccepted {
     pub accepted_at: String,
 }
 
+/// Where a memory proposal came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySource {
+    /// The task's worker reported it.
+    Worker,
+    /// The Project coordinator added it for a finished task.
+    Coordinator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryProposalState {
+    Proposed,
+    Accepted,
+    Rejected,
+}
+
+/// What a learning rests on.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MemoryEvidence {
+    /// The task it was learned in.
+    pub task_id: Option<String>,
+    pub task_title: Option<String>,
+    /// The task's pull request when the learning was proposed.
+    pub pull_request_url: Option<String>,
+    /// Files the learning is about: the ones the report names, else the
+    /// files the task changed.
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+/// One accepted memory entry: a file under the Project repo's `memory/`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MemoryEntry {
+    /// The file name without its extension.
+    pub id: String,
+    pub project_id: String,
+    /// Path in the Project repo, e.g. `memory/2026-10-02-run-the-gates.md`.
+    pub path: String,
+    pub text: String,
+    #[serde(default)]
+    pub evidence: MemoryEvidence,
+    pub source: Option<MemorySource>,
+    /// When it was learned (RFC 3339 UTC); absent for a file written by hand
+    /// without one.
+    pub date: Option<String>,
+    pub accepted_at: Option<String>,
+    pub accepted_by: Option<String>,
+    /// The proposal it was accepted from.
+    pub proposal_id: Option<String>,
+    /// The Project repo commit that added it, when known.
+    pub commit: Option<String>,
+}
+
+/// A learning from a finished task, waiting for review before it becomes
+/// Project memory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MemoryProposal {
+    pub id: String,
+    pub project_id: String,
+    /// The text as proposed, or as accepted when it was edited.
+    pub text: String,
+    pub evidence: MemoryEvidence,
+    pub source: MemorySource,
+    pub state: MemoryProposalState,
+    /// When it was proposed (RFC 3339 UTC).
+    pub proposed_at: String,
+    pub decided_at: Option<String>,
+    pub decided_by: Option<String>,
+    /// The entry it became, once accepted.
+    pub entry: Option<MemoryEntry>,
+}
+
+/// Accept a memory proposal, optionally edited.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AcceptMemoryProposal {
+    /// The text to keep instead of the proposed one.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Who is accepting: one line of at most 128 bytes. Absent or null means
+    /// the daemon's own user (`$USER`).
+    #[serde(default)]
+    pub decided_by: Option<String>,
+}
+
+/// Reject a memory proposal.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct RejectMemoryProposal {
+    /// Who is rejecting, as for [`AcceptMemoryProposal::decided_by`].
+    #[serde(default)]
+    pub decided_by: Option<String>,
+}
+
 /// Who a terminal belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1048,10 +1142,20 @@ pub enum EventType {
     DispatchRecorded,
     #[serde(rename = "account.quota_changed")]
     AccountQuotaChanged,
+    /// A finished task's learning awaits review; payload is a [`MemoryProposal`].
+    #[serde(rename = "memory.proposed")]
+    MemoryProposed,
+    /// A proposal was accepted and committed to the Project repo; payload is
+    /// the accepted [`MemoryProposal`] with its `entry`.
+    #[serde(rename = "memory.accepted")]
+    MemoryAccepted,
+    /// A proposal was rejected; payload is the [`MemoryProposal`].
+    #[serde(rename = "memory.rejected")]
+    MemoryRejected,
 }
 
 impl EventType {
-    pub const ALL: [EventType; 14] = [
+    pub const ALL: [EventType; 17] = [
         EventType::ProjectUpdated,
         EventType::TaskCreated,
         EventType::TaskStateChanged,
@@ -1066,6 +1170,9 @@ impl EventType {
         EventType::ReviewUpdated,
         EventType::DispatchRecorded,
         EventType::AccountQuotaChanged,
+        EventType::MemoryProposed,
+        EventType::MemoryAccepted,
+        EventType::MemoryRejected,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -1084,6 +1191,9 @@ impl EventType {
             EventType::ReviewUpdated => "review.updated",
             EventType::DispatchRecorded => "dispatch.recorded",
             EventType::AccountQuotaChanged => "account.quota_changed",
+            EventType::MemoryProposed => "memory.proposed",
+            EventType::MemoryAccepted => "memory.accepted",
+            EventType::MemoryRejected => "memory.rejected",
         }
     }
 
