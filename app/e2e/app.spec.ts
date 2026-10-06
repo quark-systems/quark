@@ -354,6 +354,8 @@ test("memory: review proposals from the keyboard, browse entries with their comm
   await expect(detail).toContainText("coordinator");
   await page.keyboard.press("k");
   await expect(page).toHaveURL(/#\/p\/quark\/memory\/mp-1$/);
+  // The URL changes before the route re-renders; wait for mp-1's panel before pressing e.
+  await expect(detail).toContainText("Regenerate api/openapi.json");
 
   // e focuses the entry text; Ctrl+Enter accepts it as edited and moves on to the next proposal.
   await page.keyboard.press("e");
