@@ -54,8 +54,13 @@ pub const MAX_CREW_DISPATCH_CONFIG_BYTES: usize = 256 * 1024;
 /// The target name [`WriteOp::CrewDispatchConfig`] reports.
 pub const CREW_DISPATCH_TARGET: &str = "crew-dispatch";
 
-/// Longest charter, scope or project description accepted, in characters.
+/// Longest scope or project description accepted, in characters.
 pub const MAX_LINE_CHARS: usize = 600;
+
+/// Longest secondmate charter accepted, in characters. The charter is the
+/// coordinator's standing job description, so it is longer than a one-line
+/// summary; `fm-home-seed.sh` itself sets no limit.
+pub const MAX_CHARTER_CHARS: usize = 8192;
 
 /// Largest steering message accepted, in bytes.
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -371,7 +376,8 @@ impl WriteOp {
                         return Err(Error::InvalidTaskId(p.clone()));
                     }
                 }
-                let charter = check_line("charter", charter).map_err(invalid)?;
+                let charter =
+                    check_line_max("charter", charter, MAX_CHARTER_CHARS).map_err(invalid)?;
                 check_line("scope", scope).map_err(invalid)?;
                 // fm-home-seed.sh refuses a charter still carrying the brief
                 // placeholder; refuse it here so nothing runs.
@@ -501,12 +507,16 @@ fn one_line(s: &str) -> String {
 
 /// Collapse whitespace to one line: nonempty, bounded, no control characters.
 fn check_line(what: &str, s: &str) -> std::result::Result<String, String> {
+    check_line_max(what, s, MAX_LINE_CHARS)
+}
+
+fn check_line_max(what: &str, s: &str, max: usize) -> std::result::Result<String, String> {
     let line = one_line(s);
     if line.is_empty() {
         return Err(format!("{what} is empty"));
     }
-    if line.chars().count() > MAX_LINE_CHARS {
-        return Err(format!("{what} is longer than {MAX_LINE_CHARS} characters"));
+    if line.chars().count() > max {
+        return Err(format!("{what} is longer than {max} characters"));
     }
     if line.chars().any(char::is_control) {
         return Err(format!("{what} contains a control character"));
@@ -997,6 +1007,7 @@ mod tests {
             seed("/q/p", &["-a"], "c"),
             seed("/q/p", &["a"], " "),
             seed("/q/p", &["a"], "{TASK}"),
+            seed("/q/p", &["a"], &"c".repeat(MAX_CHARTER_CHARS + 1)),
         ] {
             assert!(bad.argv().is_err(), "{bad:?}");
         }

@@ -833,3 +833,22 @@ fn charter_points_at_user_level_memory() {
         "{with}"
     );
 }
+
+/// Regression: the charter quarkd builds (goal plus shared memory) outgrew
+/// the 600-character line bound and the engine refused every new Project.
+#[test]
+fn full_charter_passes_engine_validation() {
+    let mut plan = plan(PathBuf::from("/w"));
+    plan.goal = Some("Build the Quark MVP according to the spec. ".repeat(10));
+    plan.user_memory = Some(PathBuf::from("/home/me/.quark/memory"));
+    let (charter, scope) = quarkd::engine::firstmate::charter(&plan);
+    assert!(charter.chars().count() > quark_engine::write::MAX_LINE_CHARS);
+    let op = quark_engine::write::WriteOp::HomeSeed {
+        id: "prj_1".into(),
+        home: "/w/prj_1".into(),
+        projects: vec!["quark".into(), "engine".into()],
+        charter,
+        scope,
+    };
+    op.argv().expect("charter accepted");
+}
