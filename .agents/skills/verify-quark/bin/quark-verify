@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# quark-verify: launch, doctor, drive and clean up an isolated Quark instance
+# for verification. See ../SKILL.md for the full recipe.
+#
+#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate] [--engine-dir DIR] [--run ID]
+#   quark-verify doctor
+#   quark-verify env                         print the run's variables (eval-able)
+#   quark-verify browser <command> ...       drive the app (bin/browser.mjs)
+#   quark-verify api <METHOD> <path> [json]  call the daemon's /v1 API; prints the body, fails on HTTP >= 400
+#   quark-verify events [--since SEQ] [--for SECS]   print event-stream frames as JSON lines
+#   quark-verify tmux <args...>              tmux against the run's private server (real daemon only)
+#   quark-verify capture <name> -- <cmd...>  run a command, saving cmd, stdout, stderr and exit code as evidence
+#   quark-verify cleanup                     stop everything the run started; evidence stays
+#
+# A run lives in $QUARK_VERIFY_HOME/<run-id> (default ~/.cache/quark-verify):
+# instance/ holds the daemon home, logs and pids and is removed by cleanup;
+# evidence/ holds proof artifacts and is never removed by this script.
+# Commands act on $QUARK_VERIFY_RUN, else the run named in $QUARK_VERIFY_HOME/current.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/../../../.." && pwd)
+base=${QUARK_VERIFY_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/quark-verify}
+
+die() { echo "quark-verify: $*" >&2; exit 1; }
+
+free_port() {
+  local p
+  for _ in $(seq 1 50); do
+    p=$((20000 + RANDOM % 30000))
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then echo "$p"; return; fi
+  done
+  die "no free port found"
+}
+
+wait_http() { # url secs what
+  local i
+  for i in $(seq 1 $(($2 * 5))); do
+    curl -sf -o /dev/null "$1" && return 0
+    sleep 0.2
+  done
+  die "$3 did not answer on $1 within $2s"
+}
+
+load() {
+  local id=${QUARK_VERIFY_RUN:-}
+  [ -n "$id" ] || id=$(cat "$base/current" 2>/dev/null) || die "no run; start one with: quark-verify launch"
+  run_dir=$base/$id
+  [ -f "$run_dir/instance/run.env" ] || die "run $id has no instance (cleaned up?); evidence is in $run_dir/evidence"
+  # shellcheck disable=SC1091
+  . "$run_dir/instance/run.env"
+}
+
+chromium_bin() {
+  if [ -n "${PW_CHROMIUM:-}" ]; then echo "$PW_CHROMIUM"; return; fi
+  if [ -x /opt/pw-browsers/chromium ]; then echo /opt/pw-browsers/chromium; return; fi
+  (cd "$repo/app" && node -e 'console.log(require("@playwright/test").chromium.executablePath())')
+}
+
+start_bg() { # name cmd... ; records instance/<name>.pid, logs to instance/<name>.log
+  local name=$1; shift
+  setsid "$@" >"$inst/$name.log" 2>&1 < /dev/null &
+  echo $! >"$inst/$name.pid"
+}
+
+cmd_launch() {
+  local daemon=real engine=stub engine_dir="" id=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --daemon) daemon=$2; shift 2 ;;
+      --engine) engine=$2; shift 2 ;;
+      --engine-dir) engine_dir=$2; shift 2 ;;
+      --run) id=$2; shift 2 ;;
+      *) die "launch: unknown argument $1" ;;
+    esac
+  done
+  case $daemon in real|mock) ;; *) die "--daemon must be real or mock" ;; esac
+  case $engine in stub|firstmate) ;; *) die "--engine must be stub or firstmate" ;; esac
+  [ "$engine" = firstmate ] && [ -z "$engine_dir" ] && die "--engine firstmate needs --engine-dir <quark-systems/firstmate checkout>"
+  id=${id:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+  run_dir=$base/$id
+  inst=$run_dir/instance
+  [ -e "$inst" ] && die "run $id already has an instance; clean it up or pick another --run"
+  mkdir -p "$inst" "$run_dir/evidence"
+
+  echo "building the app (app/dist)..." >&2
+  [ -d "$repo/app/node_modules" ] || (cd "$repo/app" && npm ci --no-audit --no-fund >&2)
+  (cd "$repo/app" && npm run --silent build >"$inst/app-build.log" 2>&1) || die "app build failed; see $inst/app-build.log"
+
+  local dport aport cport home="" daemon_url sock=""
+  dport=$(free_port); aport=$(free_port); cport=$(free_port)
+  daemon_url=http://127.0.0.1:$dport
+  if [ "$daemon" = real ]; then
+    echo "building quarkd..." >&2
+    (cd "$repo" && cargo build --quiet -p quarkd 2>"$inst/cargo.log") || die "quarkd build failed; see $inst/cargo.log"
+    local target=${CARGO_TARGET_DIR:-$repo/target}
+    home=$inst/home
+    # quarkd's tmux server listens on <home>/run/tmux/quark; a unix socket path
+    # over ~104 bytes cannot be bound, and terminals would silently be off.
+    [ ${#home} -le 80 ] || die "daemon home $home is too long for a tmux socket; set QUARK_VERIFY_HOME to a shorter directory"
+    mkdir -p "$home"
+    if [ "$engine" = firstmate ]; then
+      git clone --quiet "$engine_dir" "$home/engine" || die "cloning the engine from $engine_dir failed"
+    fi
+    start_bg quarkd "$target/debug/quarkd" --home "$home" --listen "127.0.0.1:$dport" --engine "$engine"
+    sock=$home/run/tmux/quark
+  else
+    engine=mock
+    start_bg quarkd node "$repo/app/mock/daemon.mjs" --port "$dport" --quiet
+  fi
+  start_bg serve node "$here/serve.mjs" --port "$aport" --daemon "$daemon_url" --dist "$repo/app/dist"
+  start_bg chromium "$(chromium_bin)" --headless=new --no-sandbox --disable-gpu --no-first-run \
+    --remote-debugging-address=127.0.0.1 --remote-debugging-port="$cport" \
+    --user-data-dir="$inst/chromium-profile" --window-size=1400,900 about:blank
+
+  cat >"$inst/run.env" <<EOF
+QV_RUN=$id
+QV_MODE=$daemon
+QV_ENGINE=$engine
+QV_DAEMON=$daemon_url
+QV_APP=http://127.0.0.1:$aport/
+QV_DAEMON_FOR_APP=http://127.0.0.1:$aport
+QV_CDP=http://127.0.0.1:$cport
+QV_HOME=$home
+QV_TMUX_SOCKET=$sock
+QV_EVIDENCE=$run_dir/evidence
+QV_COMMIT=$(git -C "$repo" rev-parse --short HEAD)
+EOF
+  echo "$id" >"$base/current"
+  wait_http "$daemon_url/v1/health" 60 "the daemon"
+  wait_http "http://127.0.0.1:$aport/" 20 "the app server"
+  wait_http "http://127.0.0.1:$cport/json/version" 20 "chromium"
+  echo "launched run $id" >&2
+  cat "$inst/run.env"
+}
+
+alive() { [ -f "$inst/$1.pid" ] && kill -0 "$(cat "$inst/$1.pid")" 2>/dev/null; }
+
+cmd_doctor() {
+  load
+  inst=$run_dir/instance
+  local ok=1 n h
+  for n in quarkd serve chromium; do
+    if alive "$n"; then echo "ok   $n pid $(cat "$inst/$n.pid")"; else echo "FAIL $n is not running (log: $inst/$n.log)"; ok=0; fi
+  done
+  if h=$(curl -sf "$QV_DAEMON/v1/health"); then
+    echo "ok   daemon $QV_DAEMON: $h"
+    if [ "$QV_MODE" = real ]; then
+      echo "$h" | grep -q "\"engine\":\"$QV_ENGINE\"" || { echo "FAIL daemon reports a different engine than $QV_ENGINE"; ok=0; }
+    fi
+  else echo "FAIL daemon does not answer on $QV_DAEMON"; ok=0; fi
+  if curl -sf "${QV_APP}v1/health" >/dev/null; then echo "ok   app $QV_APP proxies /v1 to the daemon"; else echo "FAIL app server $QV_APP does not proxy /v1"; ok=0; fi
+  if curl -sf "$QV_CDP/json/version" >/dev/null; then echo "ok   chromium CDP $QV_CDP"; else echo "FAIL chromium CDP does not answer"; ok=0; fi
+  if [ "$QV_MODE" = real ]; then
+    if tmux -S "$QV_TMUX_SOCKET" list-sessions >/dev/null 2>&1; then echo "ok   private tmux server $QV_TMUX_SOCKET"
+    else echo "note private tmux server not started yet (quarkd starts it on the first terminal or engine call)"; fi
+  fi
+  echo "build $QV_COMMIT, mode $QV_MODE, engine $QV_ENGINE, evidence $QV_EVIDENCE"
+  [ "$ok" = 1 ] || exit 1
+}
+
+cmd_api() {
+  load
+  [ $# -ge 2 ] || die "api: usage: api <METHOD> <path> [json]"
+  local method=$1 p=$2 body=${3:-} out code
+  out=$(mktemp)
+  if [ -n "$body" ]; then
+    code=$(curl -s -o "$out" -w '%{http_code}' -X "$method" -H 'content-type: application/json' -d "$body" "$QV_DAEMON$p")
+  else
+    code=$(curl -s -o "$out" -w '%{http_code}' -X "$method" "$QV_DAEMON$p")
+  fi
+  cat "$out"; echo; rm -f "$out"
+  [ "$code" -lt 400 ] || die "api: $method $p answered HTTP $code"
+}
+
+cmd_events() {
+  load
+  local since=0 secs=2
+  while [ $# -gt 0 ]; do
+    case $1 in --since) since=$2; shift 2 ;; --for) secs=$2; shift 2 ;; *) die "events: unknown argument $1" ;; esac
+  done
+  (cd "$repo/app" && node -e '
+    const WebSocket = require("ws");
+    const ws = new WebSocket(process.argv[1]);
+    ws.on("message", (m) => console.log(m.toString()));
+    ws.on("error", (e) => { console.error(e.message); process.exit(1); });
+    setTimeout(() => { ws.close(); process.exit(0); }, Number(process.argv[2]) * 1000);
+  ' "${QV_DAEMON/http/ws}/v1/events?cursor=$since" "$secs")
+}
+
+cmd_tmux() {
+  load
+  [ -n "$QV_TMUX_SOCKET" ] || die "tmux: the mock daemon has no tmux server"
+  tmux -S "$QV_TMUX_SOCKET" "$@"
+}
+
+cmd_capture() {
+  load
+  local name=${1:-}; shift || true
+  [ -n "$name" ] && [ "${1:-}" = "--" ] || die "capture: usage: capture <name> -- <cmd...>"
+  shift
+  local dir=$QV_EVIDENCE/$name code=0
+  mkdir -p "$dir"
+  printf '%q ' "$@" >"$dir/cmd.txt"; echo >>"$dir/cmd.txt"
+  "$@" >"$dir/stdout.txt" 2>"$dir/stderr.txt" || code=$?
+  echo "$code" >"$dir/exit-code.txt"
+  cat "$dir/stdout.txt"
+  [ -s "$dir/stderr.txt" ] && cat "$dir/stderr.txt" >&2
+  echo "captured $name (exit $code) in $dir" >&2
+  return "$code"
+}
+
+stop_pid() { # name
+  local f=$inst/$1.pid pid
+  [ -f "$f" ] || return 0
+  pid=$(cat "$f")
+  # Each process was started with setsid, so its pid is its process group.
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  for _ in $(seq 1 25); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  rm -f "$f"
+}
+
+cmd_cleanup() {
+  load
+  inst=$run_dir/instance
+  stop_pid chromium
+  stop_pid serve
+  stop_pid quarkd
+  if [ -n "$QV_TMUX_SOCKET" ] && [ -S "$QV_TMUX_SOCKET" ]; then
+    tmux -S "$QV_TMUX_SOCKET" kill-server 2>/dev/null || true
+  fi
+  # Keep the daemon log with the evidence; drop the rest of the instance.
+  [ -f "$inst/quarkd.log" ] && cp "$inst/quarkd.log" "$QV_EVIDENCE/daemon.log"
+  rm -rf "$inst"
+  [ "$(cat "$base/current" 2>/dev/null)" = "$QV_RUN" ] && rm -f "$base/current"
+  echo "cleaned up run $QV_RUN; evidence kept in $QV_EVIDENCE"
+  ls -1 "$QV_EVIDENCE"
+}
+
+sub=${1:-}; shift || true
+case $sub in
+  launch) cmd_launch "$@" ;;
+  doctor) cmd_doctor ;;
+  env) load; cat "$run_dir/instance/run.env" ;;
+  browser) load; (export QV_CDP QV_APP QV_DAEMON_FOR_APP QV_EVIDENCE; node "$here/browser.mjs" "$@") ;;
+  api) cmd_api "$@" ;;
+  events) cmd_events "$@" ;;
+  tmux) cmd_tmux "$@" ;;
+  capture) cmd_capture "$@" ;;
+  cleanup) cmd_cleanup ;;
+  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$sub" ] || exit 2 ;;
+esac
