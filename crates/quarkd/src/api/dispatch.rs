@@ -282,3 +282,26 @@ pub async fn test(
         &host,
     )))
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(get, put, test),
+    components(schemas(
+        quark_systems::DispatchRecord,
+        quark_systems::DispatchTrigger,
+        quark_systems::DispatchDecider,
+        quark_systems::DispatchStatus,
+    ))
+)]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/v1/projects/{id}/dispatch", get(self::get).put(put))
+        .route("/v1/projects/{id}/dispatch:test", post(test))
+}

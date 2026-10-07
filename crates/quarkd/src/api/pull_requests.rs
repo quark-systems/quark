@@ -355,3 +355,42 @@ pub async fn artifact(
     )
         .into_response())
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(list, get, diff, comment, merge, artifact),
+    components(schemas(
+        quark_systems::PullRequestState,
+        quark_systems::Mergeability,
+        quark_systems::ChecksState,
+        quark_systems::ReviewDecision,
+        quark_systems::CheckStatus,
+        quark_systems::ReviewState,
+        quark_systems::CheckUpdated,
+        quark_systems::ReviewUpdated,
+        quark_systems::DiffSide,
+        quark_systems::MergeMethod,
+        quark_systems::GateState,
+        quark_systems::GateKind,
+        quark_systems::ArtifactKind,
+    ))
+)]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/v1/pull-requests", get(list))
+        // POST serves the custom method `/v1/pull-requests/{id}:merge`.
+        .route("/v1/pull-requests/{id}", get(self::get).post(action))
+        .route("/v1/pull-requests/{id}/diff", get(diff))
+        .route(
+            "/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}",
+            get(artifact),
+        )
+        .route("/v1/pull-requests/{id}/comments", post(comment))
+}

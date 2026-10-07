@@ -46,3 +46,18 @@ pub async fn validate(
     let role = input.role.unwrap_or(AgentRole::Worker);
     Json(state.harnesses.validate(&input.config, role))
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(list, validate))]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/v1/harnesses", get(list))
+        .route("/v1/harnesses:validate", post(validate))
+}

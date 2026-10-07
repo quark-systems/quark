@@ -2,7 +2,7 @@
 
 This is the slice of the daemon API v1 the desktop app calls, and where each part is defined.
 `api/openapi.json` is the authority for every shape; when a PR below lands, its endpoints join it.
-`src/api.ts` holds the matching TypeScript types, and `mock/daemon.mjs` serves all of it for development and tests.
+`src/api/` holds the matching TypeScript types, one module per domain, and `mock/daemon.mjs` serves all of it for development and tests.
 
 The app reads `404` with no error body (an unknown route), `405` and `501` as "not available yet" and shows that in the panel, so each screen lights up as its endpoint lands.
 A `404` with an `ErrorBody` is a real "not found".

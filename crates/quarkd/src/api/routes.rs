@@ -903,3 +903,79 @@ pub async fn send_coordinator_message(
         }),
     ))
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(
+        health,
+        list_projects,
+        create_project,
+        get_project,
+        update_project,
+        provision_project,
+        list_tasks,
+        get_task,
+        send_task_message,
+        cancel_task,
+        relaunch_task,
+        list_task_events,
+        list_task_dispatch,
+        get_task_changes,
+        get_task_diff,
+        list_decisions,
+        answer_decision,
+        task_transcript,
+        coordinator_messages,
+        send_coordinator_message
+    ),
+    components(schemas(
+        quark_systems::TaskState,
+        quark_systems::TaskKind,
+        quark_systems::TaskEvent,
+        quark_systems::FileChangeStatus,
+        quark_systems::DecisionState,
+        quark_systems::ProjectStatus,
+        quark_systems::DeliveryPolicy,
+        quark_systems::DispatchPreset,
+        quark_systems::TranscriptEntry,
+        quark_systems::TranscriptRole,
+        quark_systems::ToolInfo,
+        quark_systems::ToolKind,
+        quark_systems::ToolDiffLine,
+        quark_systems::ToolDiffLineKind,
+    ))
+)]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/v1/health", get(health))
+        .route("/v1/projects", get(list_projects).post(create_project))
+        // POST serves the custom method `/v1/projects/{id}:provision`.
+        .route(
+            "/v1/projects/{id}",
+            get(get_project).patch(update_project).post(project_action),
+        )
+        .route("/v1/projects/{id}/tasks", get(list_tasks))
+        // POST serves the custom methods `/v1/tasks/{id}:cancel` and
+        // `:relaunch`; the router allows one parameter per segment.
+        .route("/v1/tasks/{id}", get(get_task).post(task_action))
+        .route("/v1/tasks/{id}/messages", post(send_task_message))
+        .route("/v1/tasks/{id}/transcript", get(task_transcript))
+        .route("/v1/tasks/{id}/events", get(list_task_events))
+        .route("/v1/tasks/{id}/dispatch", get(list_task_dispatch))
+        .route("/v1/tasks/{id}/changes", get(get_task_changes))
+        .route("/v1/tasks/{id}/diff", get(get_task_diff))
+        .route("/v1/decisions", get(list_decisions))
+        // POST serves the custom method `/v1/decisions/{id}:answer`.
+        .route("/v1/decisions/{id}", post(decision_action))
+        .route(
+            "/v1/coordinators/{id}/messages",
+            get(coordinator_messages).post(send_coordinator_message),
+        )
+}
