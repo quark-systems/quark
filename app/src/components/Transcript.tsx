@@ -93,7 +93,7 @@ function TurnFooter({ turn, agent }: { turn: Turn; agent: string }) {
   const elapsed = useElapsed(turn.live ? turn.startedAt : undefined);
   if (turn.live) {
     return (
-      <div className="tx-footer live" role="status">
+      <div className="tx-footer live">
         <span className="shimmer">{agent[0].toUpperCase() + agent.slice(1)} is working</span>
         {elapsed !== undefined && <span className="faint"> · {duration(elapsed)}</span>}
       </div>
