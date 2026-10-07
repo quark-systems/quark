@@ -6,11 +6,12 @@ import { href } from "../nav";
 import { loadTranscript, refreshTask, useStore } from "../store";
 import { attach, getTerm, resetTerm, TermHandle } from "../terminal";
 import { ago, errText, isActive, stateMeta } from "../util";
-import { DiffFile, parseUnifiedDiff } from "../diff";
-import { FileDiff } from "../components/FileDiff";
+import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
+import { FileDiff } from "../components/diff/DiffView";
 import { Unavailable } from "../components/Unavailable";
 import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
+import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
@@ -36,7 +37,7 @@ export function WorkerView({ id }: { id: string }) {
         <span className="faint">/</span>
         <h1 className="ellipsis" title={task.title}>{task.title}</h1>
         <span className="pill" style={{ color: st.color }} data-testid="task-state">{st.label}</span>
-        {task.harness && <span className="pill accent">{task.harness}</span>}
+        {task.harness && <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}</span>}
         {task.pull_request_url && <a className="pill green" href={task.pull_request_url} target="_blank" rel="noreferrer">pull request</a>}
         <span className="spacer" />
         <Controls taskId={id} active={isActive(task.state)} />

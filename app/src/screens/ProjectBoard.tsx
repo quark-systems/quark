@@ -3,9 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Project, Task, TranscriptItem } from "../api";
 import { href } from "../nav";
 import { loadChat, useStore } from "../store";
-import { ago, errText, STATES } from "../util";
+import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
+import { WorkerCard } from "../components/WorkerCard";
 import { Transcript, UserMessage } from "../components/transcript";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
@@ -60,18 +61,7 @@ export function ProjectBoard({ id }: { id: string }) {
               <div className="col-head"><span className="swatch" style={{ background: c.color }} />{c.label}<span className="n">{c.tasks.length}</span></div>
               <div className="col-body">
                 {c.tasks.map((t) => (
-                  <a className={"card" + (changed.has(t.id) ? " flash" : "")} key={t.id + (changed.has(t.id) ? ":" + t.state : "")}
-                    href={href({ name: "task", id: t.id })} data-testid="task-card">
-                    <div className="title">{t.title}</div>
-                    {t.state_note && <div className="note">{t.state_note}</div>}
-                    <div className="meta">
-                      {t.harness && <span className="pill accent">{t.harness}</span>}
-                      {t.kind && <span className="pill">{t.kind}</span>}
-                      {t.pull_request_url && <span className="pill green">PR</span>}
-                      <span className="spacer" />
-                      <span>{ago(t.updated_at)}</span>
-                    </div>
-                  </a>
+                  <WorkerCard key={t.id + (changed.has(t.id) ? ":" + t.state : "")} task={t} flash={changed.has(t.id)} />
                 ))}
                 {c.tasks.length === 0 && <div className="faint col-empty">—</div>}
               </div>

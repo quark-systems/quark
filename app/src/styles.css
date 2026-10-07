@@ -245,17 +245,6 @@ button { font: inherit; color: inherit; }
 
 /* ---------- diff ---------- */
 .diff-body { overflow: auto; padding: 10px 14px 40px; }
-.file { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 14px; overflow: hidden; }
-.file-head { position: sticky; top: -10px; z-index: 1; padding: 6px 10px; background: var(--bg-2); border-bottom: 1px solid var(--line); font: 12px var(--mono); display: flex; gap: 10px; }
-table.diff { border-collapse: collapse; width: 100%; font: 12px/1.5 var(--mono); }
-table.diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
-table.diff td.ln { width: 1%; color: var(--fg-faint); text-align: right; user-select: none; }
-table.diff td.sign { width: 1%; user-select: none; padding: 0 4px; color: var(--fg-faint); }
-tr.add td { background: var(--diff-add-bg); }
-tr.add td.sign { color: var(--diff-add-fg); background: var(--diff-add-gutter); }
-tr.del td { background: var(--diff-del-bg); }
-tr.del td.sign { color: var(--diff-del-fg); background: var(--diff-del-gutter); }
-tr.hunk td { background: color-mix(in srgb, var(--blue) 7%, transparent); color: var(--blue); padding: 2px 8px; }
 /* ---------- palette ---------- */
 .palette-overlay { position: fixed; inset: 0; background: var(--scrim); animation: backdrop-in 160ms ease-out both; display: flex; justify-content: center; padding-top: 12vh; z-index: 50; }
 [cmdk-root] { width: 620px; max-width: 92vw; background: var(--surface-popover); border: 0; border-radius: 12px; box-shadow: var(--shadow-popover); animation: popover-open 170ms var(--motion-pop-ease) backwards; overflow: hidden; height: fit-content; }
@@ -358,7 +347,6 @@ a.side-item { text-decoration: none; }
 .st { font: 600 10px var(--mono); width: 14px; text-align: center; border-radius: 3px; }
 .st-added { color: var(--green); } .st-deleted { color: var(--red); } .st-modified { color: var(--yellow); } .st-renamed { color: var(--blue); }
 .adds { color: var(--green); font: 11px var(--mono); } .dels { color: var(--red); font: 11px var(--mono); }
-.file-head .adds, .file-head .dels { font-size: 12px; }
 .state-note.bad { color: var(--red); }
 
 /* ---------- decisions inbox ---------- */
@@ -388,7 +376,7 @@ a.side-item { text-decoration: none; }
 .m-label { font: 10.5px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-faint); }
 .m-files { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .m-commit { display: flex; flex-direction: column; gap: 8px; }
-.m-commit .file { margin-bottom: 0; }
+.m-commit .dv-file { margin-bottom: 0; }
 .m-commit .file-head { position: static; }
 .m-shared { display: flex; flex-direction: column; gap: 5px; border-top: 1px solid var(--line); padding-top: 12px; }
 .m-shared .d-actions { margin-top: 0; }
@@ -434,13 +422,6 @@ a.side-item { text-decoration: none; }
 .review:last-child { border-bottom: 0; }
 .review .green { color: var(--green); } .review .red { color: var(--red); }
 .review-body { color: var(--fg-dim); margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
-tr.commentable td.ln { cursor: pointer; }
-tr.commentable td.ln:hover { color: var(--accent); }
-tr.comment-row td { white-space: normal; padding: 6px 10px; background: var(--bg-1); font-family: var(--sans); }
-.line-comment { border-left: 2px solid var(--accent); padding: 4px 8px; margin-bottom: 6px; background: var(--bg-2); border-radius: 0 4px 4px 0; white-space: pre-wrap; }
-.comment-box textarea { width: 100%; resize: vertical; background: var(--bg-2); color: var(--fg); border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 8px; font: 12.5px var(--sans); outline: none; }
-.comment-box textarea:focus { border-color: var(--accent); }
-.comment-actions { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
 /* ---------- evidence (ADR-15) ---------- */
 .gate-row { width: 100%; border: 0; background: none; cursor: pointer; text-align: left; color: var(--fg); }
 .gate-row:hover { background: var(--bg-2); }

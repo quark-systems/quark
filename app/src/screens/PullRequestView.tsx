@@ -6,8 +6,8 @@ import { api, ApiError, Evidence, NotAvailable, PullRequest } from "../api";
 import { href } from "../nav";
 import { refreshPullRequest, setPullRequest, useStore } from "../store";
 import { ago, errText } from "../util";
-import { DiffFile, parseUnifiedDiff } from "../diff";
-import { FileDiff, LineComment, OnComment } from "../components/FileDiff";
+import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
+import { DiffView, LineComment, OnComment } from "../components/diff/DiffView";
 import { StandingApproval } from "../components/StandingApproval";
 import { EvidencePanel, EvidenceSummary } from "../components/Evidence";
 import { Unavailable } from "../components/Unavailable";
@@ -182,7 +182,7 @@ function DiffPanel({ pr, comments, onComment }: { pr: PullRequest; comments: Lin
       {status === "loading" && <div className="empty">Loading the diff…</div>}
       {truncated && <div className="state-note">This diff was cut at the daemon's size limit.</div>}
       {onComment && files && files.length > 0 && <div className="faint small-text diff-hint">Click a line number to comment for the worker.</div>}
-      {files?.map((f, i) => <FileDiff key={f.path + i} f={f} comments={comments} onComment={onComment} />)}
+      {files && files.length > 0 && <DiffView files={files} comments={comments} onComment={onComment} />}
       {files && !files.length && <div className="empty">No textual changes.</div>}
     </div>
   );

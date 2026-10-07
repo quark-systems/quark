@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PullRequest } from "./api";
 import { applyEvent, initialState } from "./store";
 import { caseCounts, countByState, evidenceOutcome, filterPrs, formatBytes, formatMs, mergeBlocker, sortCases, sortChecks, traceViewerUrl } from "./prs";
-import { anchorOf } from "./components/FileDiff";
+import { anchorOf } from "./components/diff/model";
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   id: "pr-1", project_id: "p1", provider: "github", repo: "o/r", number: 1, url: "https://github.com/o/r/pull/1", title: "T",
