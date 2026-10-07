@@ -1,0 +1,16 @@
+/* Worker cards and harness marks. Builds on the base .card rules in styles.css and the theme tokens. */
+
+.wcard { padding: 9px 10px; border-radius: 8px; }
+.wcard-top { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.wcard-top .harness-logo { margin-top: 1px; }
+.wcard .title { margin-bottom: 0; min-width: 0; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wcard .note { margin: 0 0 7px 24px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wcard .meta { padding-left: 24px; font-family: var(--sans); }
+.wcard-harness { color: var(--fg-dim); white-space: nowrap; }
+.wcard-diff { display: inline-flex; gap: 4px; font: 600 11px var(--sans); font-variant-numeric: tabular-nums; }
+.wcard-diff .adds { color: var(--diff-add-fg); font: inherit; }
+.wcard-diff .dels { color: var(--diff-del-fg); font: inherit; }
+.wcard-live { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 0 color-mix(in srgb, var(--blue) 60%, transparent); animation: wcard-pulse 1.8s var(--motion-ease-out) infinite; }
+@keyframes wcard-pulse { 70% { box-shadow: 0 0 0 5px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .wcard-live { animation: none; } }
+

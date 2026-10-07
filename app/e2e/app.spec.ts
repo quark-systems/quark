@@ -69,6 +69,18 @@ test("coordinator chat: workers started and questions asked show as cards", asyn
   await expect(page).toHaveURL(/#\/inbox/);
 });
 
+test("worker cards show the harness, its mark and how much the worker changed", async ({ page }) => {
+  await open(page, "#/p/quark");
+  const card = page.getByTestId("task-card").filter({ hasText: "Event stream" });
+  await expect(card.getByRole("img", { name: "Claude Code" })).toBeVisible();
+  await expect(card.getByTestId("card-diff")).toHaveText(/^\+\d+−\d+$/);
+  // An alias resolves to the harness's mark; a harness without a published mark gets a monogram.
+  await expect(page.getByTestId("task-card").filter({ hasText: "Decision records" }).getByRole("img", { name: "Cursor Agent" })).toBeVisible();
+  await expect(page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).getByRole("img", { name: "Codex" })).toHaveText("Cx");
+  // Queued work has no working copy, so no counts.
+  await expect(page.getByTestId("task-card").filter({ hasText: "Harness registry trait" }).getByTestId("card-diff")).toHaveCount(0);
+});
+
 test("worker view: terminal, steering, transcript, changes, cancel and relaunch", async ({ page }) => {
   await open(page, "#/p/quark");
   await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
@@ -238,6 +250,14 @@ test("PR center: list by state, checks, line comment, merge, standing approval",
   expect(sent).toEqual([expect.objectContaining({ pull_request_id: "pr-1", text: "Name this constant", side: "new" })]);
   expect(typeof sent[0].line).toBe("number");
   expect(sent[0].path).toBeTruthy();
+
+  // Files collapse and expand together; a collapsed file keeps its header and counts.
+  const prDiff = page.getByTestId("pr-diff");
+  await prDiff.getByRole("button", { name: "Collapse all files" }).click();
+  await expect(prDiff.locator("table.diff")).toHaveCount(0);
+  await expect(prDiff.getByTestId("diff-file").first().locator(".dv-counts")).toBeVisible();
+  await prDiff.getByRole("button", { name: "Expand all files" }).click();
+  await expect(prDiff.locator("table.diff").first()).toBeVisible();
 
   await page.getByTestId("merge").click();
   await expect(page.getByTestId("pr-state")).toHaveText("Merged");

@@ -12,7 +12,9 @@ Adapted in Quark:
 - the transparent, CSS-driven terminal theme, ANSI palettes and Nerd Font stack: `app/src/term/types.ts`, `app/src/term/xterm.ts`;
 - the translucent macOS window with a native blur and overlay title bar: `app/src-tauri/src/lib.rs`;
 - tool-call classification and readable titles: `crates/quark-transcript/src/tool.rs`;
-- transcript turn structure, work fold, turn footer and scroll anchoring: `app/src/components/transcript/`.
+- transcript turn structure, work fold, turn footer and scroll anchoring: `app/src/components/transcript/`;
+- the unified diff view (file header, counts, folded gaps, word-level marks): `app/src/components/diff/`;
+- the session card layout for worker cards: `app/src/components/WorkerCard/WorkerCard.tsx`.
 
 MonoCode's NOTICE disclaims harness and provider trademarks; Quark copies none of MonoCode's logos.
 
@@ -39,3 +41,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Simple Icons
+
+https://simpleicons.org, CC0 1.0 Universal (public domain dedication).
+
+Harness logos in `app/src/components/WorkerCard/harnessMarks.ts` are the SVG paths Simple Icons publishes for Claude, Cursor, Google Gemini, Kimi, OpenCode and Pi.
+These marks are trademarks of their owners, used only to name which harness a worker runs; Quark is not affiliated with or endorsed by them.

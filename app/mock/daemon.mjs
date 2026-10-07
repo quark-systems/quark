@@ -366,9 +366,9 @@ function seed() {
   const T = (p, title, state, extra = {}) => addTask(p.id, { title, state, ...extra }, { silent: true });
   const a = T(quark, "Event stream: resync slow clients from the store", "running", { diff: DIFFS[0], harness: "claude-code", updated_at: minutesAgo(1) });
   const b = T(quark, "Terminal sessions over tmux control mode", "running", { diff: DIFFS[1], harness: "codex", updated_at: minutesAgo(4) });
-  T(quark, "Decision records carry who answered", "needs_decision", { diff: DIFFS[2], state_note: "Asked: keep answer history per decision?", updated_at: minutesAgo(12) });
+  T(quark, "Decision records carry who answered", "needs_decision", { diff: DIFFS[2], harness: "cursor", state_note: "Asked: keep answer history per decision?", updated_at: minutesAgo(12) });
   T(quark, "Harness registry trait", "queued", { updated_at: minutesAgo(20) });
-  T(quark, "OpenAPI check in CI", "in_review", { pull_request_url: "https://github.com/quark-systems/quark/pull/2", updated_at: minutesAgo(40) });
+  T(quark, "OpenAPI check in CI", "in_review", { harness: "gemini", pull_request_url: "https://github.com/quark-systems/quark/pull/2", updated_at: minutesAgo(40) });
   T(quark, "Daemon skeleton", "done", { updated_at: minutesAgo(300) });
   T(site, "Pricing page on the new grid", "running", { diff: DIFFS[3], harness: "codex", updated_at: minutesAgo(8) });
   T(site, "Changelog feed", "failed", { state_note: "Build failed: missing RSS dependency", updated_at: minutesAgo(70) });

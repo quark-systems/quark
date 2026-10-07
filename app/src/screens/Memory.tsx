@@ -11,9 +11,9 @@ import { go, href } from "../nav";
 import { upsertMemoryProposal, useStore } from "../store";
 import { nextAfterAnswer, step } from "../inbox";
 import { pendingProposals, prLabel, promotedCopy, sortEntries } from "../memory";
-import { parseUnifiedDiff } from "../diff";
+import { parseUnifiedDiff } from "../components/diff/model";
 import { ago, errText, savedUser, saveUser } from "../util";
-import { FileDiff } from "../components/FileDiff";
+import { DiffView } from "../components/diff/DiffView";
 import { Unavailable } from "../components/Unavailable";
 
 type Tab = "proposed" | "accepted";
@@ -322,7 +322,7 @@ function EntryDetail({ e, promoted, actions, onPromoted }: {
       {open && commit && (
         <div className="m-commit" data-testid="memory-commit-view">
           <div className="small-text"><b>{commit.subject}</b> <span className="faint">{commit.author ?? ""}{commit.date ? ` · ${ago(commit.date)}` : ""}</span></div>
-          {files.map((f) => <FileDiff key={f.path} f={f} />)}
+          {files.length > 0 && <DiffView files={files} />}
           {!files.length && <div className="faint small-text">This commit changed nothing under memory/.</div>}
         </div>
       )}

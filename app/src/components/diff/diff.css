@@ -1,0 +1,56 @@
+/* Diff view. Uses the theme tokens from styles.css; colors only for meaning (diff +/-, status). */
+.dv-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 12px; color: var(--fg-dim); }
+.dv-bar .spacer { flex: 1; }
+.dv-icon { display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 6px; background: none; color: var(--fg-faint); cursor: pointer; }
+.dv-icon:hover { background: var(--selection); color: var(--fg); }
+
+.dv-file { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; overflow: hidden; background: var(--bg); }
+.file-head { position: sticky; top: -10px; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 4px; min-height: 34px; background: var(--bg-2); font-size: 12px; }
+.dv-file.open .file-head { border-bottom: 1px solid var(--line); }
+.dv-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; border: 0; background: none; padding: 7px 4px; color: var(--fg); cursor: pointer; text-align: left; font: inherit; }
+.dv-chevron { flex: none; color: var(--fg-faint); transition: transform var(--motion-feedback-duration) var(--motion-ease-out); }
+.dv-chevron.open { transform: rotate(90deg); }
+.dv-status { flex: none; font: 600 10px var(--mono); width: 16px; height: 16px; display: grid; place-items: center; border-radius: 4px; background: var(--selection-subtle); }
+.dv-status.st-added { color: var(--green); } .dv-status.st-deleted { color: var(--red); }
+.dv-status.st-modified { color: var(--yellow); } .dv-status.st-renamed { color: var(--blue); }
+.dv-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); direction: ltr; }
+.dv-dir { color: var(--fg-faint); }
+.dv-base { color: var(--fg); font-weight: 600; }
+.dv-from { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-faint); font: 11px var(--mono); }
+.dv-counts { flex: none; display: inline-flex; gap: 6px; font: 600 11px var(--sans); font-variant-numeric: tabular-nums; }
+.dv-counts .adds { color: var(--diff-add-fg); font: inherit; }
+.dv-counts .dels { color: var(--diff-del-fg); font: inherit; }
+.dv-bar-blocks { flex: none; display: inline-flex; gap: 1px; }
+.dv-bar-blocks i { width: 7px; height: 7px; border-radius: 1.5px; background: var(--selection-strong); }
+.dv-bar-blocks i.a { background: var(--diff-add); }
+.dv-bar-blocks i.d { background: var(--diff-del); }
+.dv-note { display: block; width: 100%; padding: 10px 12px; color: var(--fg-faint); font: 12px var(--sans); border: 0; background: none; text-align: left; }
+.dv-load { cursor: pointer; border-top: 1px solid var(--line); }
+.dv-load:hover { color: var(--fg); background: var(--selection-subtle); }
+
+.dv-scroll { overflow-x: auto; }
+table.diff { border-collapse: collapse; width: 100%; font: 12px/1.6 var(--mono); }
+table.diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
+table.diff td.ln { width: 1%; min-width: 34px; color: var(--fg-faint); text-align: right; user-select: none; font-size: 11px; }
+table.diff td.sign { width: 1%; user-select: none; padding: 0 4px; color: var(--fg-faint); text-align: center; }
+table.diff td.code { width: 100%; }
+tr.add td { background: var(--diff-add-bg); }
+tr.add td.ln, tr.add td.sign { color: var(--diff-add-fg); background: var(--diff-add-gutter); }
+tr.del td { background: var(--diff-del-bg); }
+tr.del td.ln, tr.del td.sign { color: var(--diff-del-fg); background: var(--diff-del-gutter); }
+.dv-word { border-radius: 2px; }
+tr.add .dv-word { background: color-mix(in srgb, var(--diff-add) 32%, transparent); }
+tr.del .dv-word { background: color-mix(in srgb, var(--diff-del) 32%, transparent); }
+tr.hunk td { background: var(--selection-subtle); color: var(--fg-faint); padding: 3px 8px; font: 11px var(--sans); white-space: nowrap; }
+tr.hunk td.hunk-gap { text-align: center; }
+.hunk-hidden { margin-right: 12px; }
+.hunk-section { font-family: var(--mono); color: var(--fg-dim); }
+
+tr.commentable td.ln { cursor: pointer; }
+tr.commentable td.ln:hover { color: var(--accent); }
+tr.comment-row td { white-space: normal; padding: 6px 10px; background: var(--bg-1); font-family: var(--sans); }
+.line-comment { border-left: 2px solid var(--accent); padding: 4px 8px; margin-bottom: 6px; background: var(--bg-2); border-radius: 0 4px 4px 0; white-space: pre-wrap; }
+.comment-box textarea { width: 100%; resize: vertical; background: var(--bg-2); color: var(--fg); border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 8px; font: 12.5px var(--sans); outline: none; }
+.comment-box textarea:focus { border-color: var(--accent); }
+.comment-actions { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

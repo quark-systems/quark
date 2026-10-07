@@ -1,0 +1,5 @@
+/* Harness marks: vendor logos and monogram tiles, plus the name chip in headers. */
+.harness-logo { flex: none; display: inline-block; vertical-align: middle; color: var(--fg); }
+.harness-mono { display: inline-grid; place-items: center; border-radius: 4px; background: var(--selection-strong); color: var(--fg-dim); font-family: var(--sans); font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+.harness-none { width: 16px; height: 16px; border-radius: 4px; border: 1px dashed var(--line-2); }
+.header .harness-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-dim); white-space: nowrap; }
