@@ -36,6 +36,9 @@ use snapshot::{parse_cursor, render_snapshot, send_keys, Cursor, CURSOR_FORMAT};
 const PAUSE_AFTER_SECS: u32 = 5;
 /// Bytes typed per `send-keys` command.
 const INPUT_CHUNK: usize = 512;
+/// Attempts at listing panes after a window or the server went away.
+const REAP_TRIES: u32 = 20;
+const REAP_RETRY: std::time::Duration = std::time::Duration::from_millis(25);
 /// Window option holding the session's task id.
 const TASK_OPTION: &str = "@quark_task";
 
@@ -356,6 +359,26 @@ fn not_found_or(e: ServerError, id: &SessionId) -> CoreError {
     }
 }
 
+/// Pane ids on the server; empty once the server is gone. A server that is
+/// shutting down answers with errors such as "server exited unexpectedly",
+/// so a failed listing is retried until it either succeeds or the server
+/// has stopped. `None` only when a running server keeps failing.
+async fn live_panes(server: &Server) -> Option<Vec<String>> {
+    for attempt in 1..=REAP_TRIES {
+        match server.run(&["list-panes", "-a", "-F", "#{pane_id}"]).await {
+            Ok(out) => return Some(out.lines().map(str::to_string).collect()),
+            Err(e) => {
+                if !server.is_running().await {
+                    return Some(Vec::new());
+                }
+                tracing::debug!(error = %e, attempt, "listing tmux panes failed");
+                tokio::time::sleep(REAP_RETRY).await;
+            }
+        }
+    }
+    None
+}
+
 /// Context for replies the control reader handles in stream order.
 enum Tag {
     Cursor(String),
@@ -386,20 +409,8 @@ impl Reader {
         };
         let backend = TmuxBackend { inner };
         tokio::spawn(async move {
-            let live: Vec<String> = match backend
-                .inner
-                .server
-                .run(&["list-panes", "-a", "-F", "#{pane_id}"])
-                .await
-            {
-                Ok(out) => out.lines().map(str::to_string).collect(),
-                Err(ServerError::Failed { stderr, .. })
-                    if stderr.contains("no server running")
-                        || stderr.contains("error connecting") =>
-                {
-                    Vec::new()
-                }
-                Err(_) => return,
+            let Some(live) = live_panes(&backend.inner.server).await else {
+                return;
             };
             backend.inner.feeds.lock().unwrap().retain(|pane, tx| {
                 let alive = live.contains(pane);
