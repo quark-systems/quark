@@ -3,8 +3,8 @@
 //! login shell. That exercises everything Quark controls: the argv, the
 //! quoting, stdin, exit codes and transport failures.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use quark_core::host::Health;
@@ -18,17 +18,25 @@ while [ $# -gt 2 ]; do shift; done
 exec sh -c "$2"
 "#;
 
-fn fake_ssh(dir: &Path) -> PathBuf {
-    let p = dir.join("ssh");
-    std::fs::write(&p, FAKE_SSH).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    p
+/// The stand-in, written once for the whole test binary. Writing it again
+/// while another test forks would leave the write handle open in that child
+/// until it execs, and starting the script then fails with "Text file busy".
+fn fake_ssh() -> PathBuf {
+    static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ssh");
+        std::fs::write(&p, FAKE_SSH).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    });
+    dir.path().join("ssh")
 }
 
-fn ssh(dir: &Path, destination: &str) -> Arc<dyn Exec> {
+fn ssh(destination: &str) -> Arc<dyn Exec> {
     let options = Options {
-        ssh_program: fake_ssh(dir),
+        ssh_program: fake_ssh(),
         connect_timeout: Duration::from_secs(2),
     };
     connect(
@@ -44,7 +52,7 @@ fn ssh(dir: &Path, destination: &str) -> Arc<dyn Exec> {
 #[tokio::test]
 async fn commands_files_and_health_over_ssh() {
     let dir = tempfile::tempdir().unwrap();
-    let rt = ssh(dir.path(), "box");
+    let rt = ssh("box");
     let out = rt
         .run(
             &Cmd::new(["printf", "%s|%s|%s", "a b", "$HOME", "it's"])
@@ -81,8 +89,7 @@ async fn commands_files_and_health_over_ssh() {
 
 #[tokio::test]
 async fn a_failed_connection_is_unknown_not_a_failure() {
-    let dir = tempfile::tempdir().unwrap();
-    let rt = ssh(dir.path(), "unreachable");
+    let rt = ssh("unreachable");
     let err = rt.run(&Cmd::new(["true"])).await.unwrap_err();
     assert!(err.to_string().contains("outcome is unknown"), "{err}");
     assert!(matches!(
@@ -117,7 +124,7 @@ async fn tmux_sessions_over_ssh_survive_the_connection() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let rt = ssh(dir.path(), "box");
+    let rt = ssh("box");
     let socket = format!("quark-test-{}", std::process::id());
     let tmux = TmuxSessions::with_socket(rt.clone(), &socket);
     let spec = SessionSpec {
@@ -134,7 +141,7 @@ async fn tmux_sessions_over_ssh_survive_the_connection() {
     };
     let s = tmux.create(&spec).await.unwrap();
     // A second backend over a new "connection" sees the same session.
-    let again = TmuxSessions::with_socket(ssh(dir.path(), "box"), &socket);
+    let again = TmuxSessions::with_socket(ssh("box"), &socket);
     wait_for(&again, &s.id, "ready hi there").await;
     again.input(&s.id, b"hello 'q'\r").await.unwrap();
     wait_for(&tmux, &s.id, "got:hello 'q'").await;
@@ -153,7 +160,12 @@ async fn tmux_sessions_over_ssh_survive_the_connection() {
     let mut exited = None;
     for _ in 0..50 {
         let l = tmux.list().await.unwrap();
-        if let Some(i) = l.iter().find(|i| i.name == "sub-web" && !i.alive) {
+        // tmux marks the pane dead when its output closes and fills in the
+        // exit status once it reaps the child, so wait for both.
+        if let Some(i) = l
+            .iter()
+            .find(|i| i.name == "sub-web" && !i.alive && i.exit_code.is_some())
+        {
             exited = Some(i.exit_code);
             break;
         }
