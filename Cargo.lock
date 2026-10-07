@@ -1013,6 +1013,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-supervisor"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "quark-eventlog",
+ "quark-harness",
+ "quark-sessions",
+ "quark-systems",
+ "quark-worker",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "quark-systems"
 version = "0.0.1"
 dependencies = [
@@ -1074,9 +1093,13 @@ dependencies = [
  "quark-engine",
  "quark-eventlog",
  "quark-harness",
+ "quark-isolation",
  "quark-sessions",
+ "quark-supervisor",
  "quark-systems",
  "quark-transcript",
+ "quark-worker",
+ "quark-worktree",
  "rusqlite",
  "serde",
  "serde_json",

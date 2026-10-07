@@ -20,6 +20,7 @@ pub mod gates;
 pub mod harness;
 pub mod memory;
 pub mod metrics;
+pub mod native;
 pub mod pr_center;
 pub mod project_repo;
 pub mod projector;
@@ -106,13 +107,24 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let events_path = config.events_path();
     let events = quark_eventlog::SqliteEventLog::open(&events_path)
         .with_context(|| format!("opening {}", events_path.display()))?;
+    let native = if native::enabled() {
+        match native::NativeSupervision::start(&config, Arc::new(events.clone())).await {
+            Ok(n) => Some(n),
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "native supervisor not started");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let ingest = event_ingest::EventIngest::new(
         store.clone(),
         quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host()),
     );
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
 
-    let app = api::router(AppState {
+    let mut app = api::router(AppState {
         store,
         engine,
         harnesses,
@@ -126,6 +138,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         forge,
         events,
     });
+    if let Some(n) = &native {
+        app = app.nest(native::WORKER_PREFIX, n.worker_router());
+    }
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("binding {}", config.listen))?;
@@ -137,6 +152,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     ingest_task.abort();
     pr_task.abort();
     quota_task.abort();
+    if let Some(n) = native {
+        n.stop();
+    }
     // The tmux server keeps running; the next start reattaches.
     sessions.detach_all();
     Ok(())
