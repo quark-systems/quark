@@ -23,6 +23,7 @@ pub mod project_repo;
 pub mod projector;
 pub mod provision;
 pub mod sessions;
+pub mod settings;
 pub mod store;
 pub mod transcripts;
 pub mod worktree;

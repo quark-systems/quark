@@ -28,7 +28,7 @@ fn no_project_repo() -> ApiError {
 }
 
 /// The rules `dispatch.yaml` on `main` of the bare repo declares.
-fn read_rules(
+pub(super) fn read_rules(
     project_id: &str,
     bare: &std::path::Path,
     user_config: &std::path::Path,

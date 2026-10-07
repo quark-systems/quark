@@ -184,6 +184,36 @@ function compileDraft(b) {
 }
 const sameRules = (a, b) => JSON.stringify([a.default_select, a.rules, a.default]) === JSON.stringify([b.default_select, b.rules, b.default]);
 
+// GET and PATCH /v1/projects/{id}/settings: the dashboard's Settings tab. Gates per source, as
+// project.yaml declares them; the mock's quark source has a check and one holdout category.
+const verification = new Map(); // project id -> VerificationSettings
+function verificationOf(proj) {
+  if (!verification.has(proj.id)) {
+    verification.set(proj.id, {
+      revision: hex40(), error: null,
+      sources: proj.repos.map((r) => ({
+        source: r.name,
+        checks: r.name === "quark" ? [{ name: "test", run: "cargo test --workspace", timeout_s: 1800 }] : [],
+        journeys: null,
+        holdout: { enabled: true, categories: r.name === "quark" ? ["daemon-api"] : [], timeout_s: null },
+      })),
+    });
+  }
+  return verification.get(proj.id);
+}
+function settingsOf(proj) {
+  const rules = rulesOf(proj);
+  return {
+    project_id: proj.id, standing_approval: proj.standing_approval, delivery: proj.delivery ?? "gated",
+    agent_config: proj.agent_config, verification: verificationOf(proj),
+    dispatch: { rules: rules.rules.length, default_candidates: rules.default.length, classifier: "none", error: null },
+    memory: {
+      entries: (memoryEntries.get(proj.id) ?? []).length,
+      proposals_to_review: [...memoryProposals.values()].filter((m) => m.project_id === proj.id && m.state === "proposed").length,
+    },
+  };
+}
+
 // POST /v1/projects/{id}/dispatch:test. The mock has no classifier, except that a description
 // sharing a word with a rule's condition (a rename or a typo, for the trivial-edit rule) matches
 // that rule, so both outcomes can be seen. Like quarkd, it does not resolve rules that are not saved.
@@ -688,6 +718,34 @@ const server = http.createServer(async (req, res) => {
       provision(proj);
       return send(res, 202);
     }
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/settings$/)) && (req.method === "GET" || req.method === "PATCH")) {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    if (req.method === "GET") return send(res, 200, settingsOf(proj));
+    const b = await readJson(req);
+    if (!b || (b.standing_approval !== undefined && typeof b.standing_approval !== "boolean")) return invalid(res, "standing_approval must be a boolean");
+    const v = verificationOf(proj);
+    const holdout = b.holdout ?? [];
+    if (holdout.length) {
+      if (b.revision != null && b.revision !== v.revision) {
+        return send(res, 409, { error: { code: "settings_changed", message: "project.yaml changed on main since these settings were loaded; load them again and repeat the change" } });
+      }
+      const unknown = holdout.find((c) => !v.sources.some((s) => s.source === c.source));
+      if (unknown) return send(res, 400, { error: { code: "settings_invalid", message: `project.yaml has no source named "${unknown.source}"` } });
+      let changed = false;
+      for (const c of holdout) {
+        const s = v.sources.find((x) => x.source === c.source);
+        if (s.holdout.enabled !== c.enabled) { s.holdout.enabled = c.enabled; changed = true; }
+      }
+      if (changed) v.revision = hex40();
+    }
+    if (b.standing_approval !== undefined && b.standing_approval !== proj.standing_approval) {
+      proj.standing_approval = b.standing_approval;
+      proj.updated_at = now();
+      emit("project.updated", { ...proj }, proj.id);
+    }
+    return send(res, 200, settingsOf(proj));
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/dispatch:test$/)) && req.method === "POST") {
     const proj = projects.get(decodeURIComponent(r[1]));

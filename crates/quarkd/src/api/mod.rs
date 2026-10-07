@@ -1,6 +1,7 @@
 //! The `/v1` HTTP API and event stream.
 
 mod accounts;
+mod dashboard;
 mod dispatch;
 mod error;
 mod events;
@@ -81,6 +82,10 @@ const MODULES: &[Module] = &[
     Module {
         router: terminals::router,
         openapi: <terminals::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: dashboard::router,
+        openapi: <dashboard::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,

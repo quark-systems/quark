@@ -39,6 +39,11 @@ impl ApiError {
         self.code
     }
 
+    /// The human-readable message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
     }
