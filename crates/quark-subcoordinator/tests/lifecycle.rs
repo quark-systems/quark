@@ -198,7 +198,12 @@ async fn ended_sessions_are_recovered_then_left_to_a_person() {
     })
     .await;
     let brief = std::fs::read_to_string(env.home("api").join("BRIEF.md")).unwrap();
-    assert!(brief.starts_with("Your previous session ended unexpectedly (exit code 3)."));
+    // The exit code is in the note when tmux recorded one.
+    assert!(
+        brief.starts_with("Your previous session ended unexpectedly (exit code 3).")
+            || brief.starts_with("Your previous session ended unexpectedly."),
+        "{brief}"
+    );
 
     // Past the limit the agent stays stopped until a person relaunches it.
     subs.send(&id, "crash again").await.unwrap();

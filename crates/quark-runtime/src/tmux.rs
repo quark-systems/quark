@@ -256,30 +256,42 @@ impl SessionBackend for TmuxSessions {
             return Ok(Vec::new());
         }
         let out = out.check("listing sessions")?;
-        Ok(out
-            .stdout_str()
-            .lines()
-            .filter_map(|line| {
-                let mut f = line.rsplitn(3, '|');
-                let status = f.next()?;
-                let dead = f.next()?;
-                let name = f.next()?;
-                let alive = dead != "1";
-                Some(SessionInfo {
-                    id: SessionId(name.to_string()),
-                    name: name.to_string(),
-                    task: None,
-                    alive,
-                    exit_code: if alive { None } else { status.parse().ok() },
-                })
-            })
-            .collect())
+        Ok(out.stdout_str().lines().filter_map(parse_session).collect())
     }
+}
+
+/// One `list-sessions` line. A dead pane's exit status is best effort:
+/// tmux sometimes marks a pane dead without ever recording its status or
+/// signal, so an exited session can report no code.
+fn parse_session(line: &str) -> Option<SessionInfo> {
+    let mut f = line.rsplitn(3, '|');
+    let status = f.next()?;
+    let dead = f.next()? == "1";
+    let name = f.next()?;
+    Some(SessionInfo {
+        id: SessionId(name.to_string()),
+        name: name.to_string(),
+        task: None,
+        alive: !dead,
+        exit_code: if dead { status.parse().ok() } else { None },
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dead_panes_are_exited_with_any_known_code() {
+        let s = parse_session("sub-a|0|").unwrap();
+        assert!(s.alive);
+        let s = parse_session("sub-a|1|").unwrap();
+        assert_eq!((s.alive, s.exit_code), (false, None));
+        let s = parse_session("sub-a|1|5").unwrap();
+        assert_eq!((s.alive, s.exit_code), (false, Some(5)));
+        let s = parse_session("a|b|1|0").unwrap();
+        assert_eq!((s.name.as_str(), s.exit_code), ("a|b", Some(0)));
+    }
 
     #[test]
     fn names_must_be_plain() {

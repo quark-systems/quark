@@ -55,6 +55,9 @@ impl Exec for LocalRuntime {
     }
 }
 
+/// `ETXTBSY` on Linux and macOS.
+const TEXT_FILE_BUSY: i32 = 26;
+
 /// Run a local process to completion, killing it at `timeout`.
 pub(crate) async fn process(
     program: &str,
@@ -78,9 +81,24 @@ pub(crate) async fn process(
     if let Some(cwd) = cwd {
         c.current_dir(cwd);
     }
-    let mut child = c
-        .spawn()
-        .map_err(|e| CoreError::Backend(format!("could not start {program}: {e}")))?;
+    // A program written just before it runs can fail with ETXTBSY while
+    // another thread's freshly forked child still holds the write handle;
+    // that clears within moments, so try again briefly.
+    let mut tries = 0;
+    let mut child = loop {
+        match c.spawn() {
+            Ok(child) => break child,
+            Err(e) if e.raw_os_error() == Some(TEXT_FILE_BUSY) && tries < 20 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(10 * tries)).await;
+            }
+            Err(e) => {
+                return Err(CoreError::Backend(format!(
+                    "could not start {program}: {e}"
+                )))
+            }
+        }
+    };
     let writer = match (stdin, child.stdin.take()) {
         (Some(bytes), Some(mut pipe)) => {
             let bytes = bytes.to_vec();
