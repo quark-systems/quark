@@ -645,3 +645,19 @@ test("settings: every Project switch in one place, holdout and standing approval
   await page.getByTestId("settings-open-dispatch").click();
   await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
 });
+
+test("metrics: the dashboard's Metrics tab shows how the work went and changes its window", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await page.getByTestId("nav-metrics").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/metrics$/);
+
+  await expect(page.getByTestId("metrics-coverage")).toContainText("Last 7 days");
+  await expect(page.getByTestId("metrics-finished")).toContainText(/done, \d+ failed/);
+  await expect(page.getByTestId("metrics-lead")).toBeVisible();
+  await expect(page.getByTestId("metrics-day")).toHaveCount(7);
+  await expect(page.getByTestId("metrics-unavailable")).toContainText("Coordinator token efficiency");
+
+  await page.getByTestId("metrics-days-30").click();
+  await expect(page.getByTestId("metrics-coverage")).toContainText("Last 30 days");
+  await expect(page.getByTestId("metrics-day")).toHaveCount(30);
+});

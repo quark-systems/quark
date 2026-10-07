@@ -37,6 +37,7 @@ utoipa.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+time = { workspace = true, features = ["macros"] }
 http-body-util = "0.1.5"
 tokio-tungstenite.workspace = true
 tower = { version = "0.5.3", features = ["util"] }

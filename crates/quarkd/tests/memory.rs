@@ -53,6 +53,7 @@ fn harness() -> Harness {
         layout: Layout::new(home.path()).with_user_memory(Some(home.path().join("shared"))),
         chat: chat.clone(),
         forge: Arc::new(quarkd::forge::StubForge::new()),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
     });
     Harness {
         home,

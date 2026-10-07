@@ -26,6 +26,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Dispatch rule editor | `GET/PUT /v1/projects/{id}/dispatch`; an optional `draft` on `dispatch:test` | quark#25 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 | Project settings | `GET/PATCH /v1/projects/{id}/settings` (`ProjectSettings`, `UpdateProjectSettings`) | D1 Dashboard: Settings |
+| Project metrics | `GET /v1/projects/{id}/metrics?days=` (`ProjectMetrics`) | D3 Dashboard: Metrics |
 
 ## How the app uses them
 
@@ -62,6 +63,7 @@ A `404` with an `ErrorBody` is a real "not found".
 - **Project settings (dashboard).** The Settings screen (`#/p/<project id>/settings`) loads `GET /v1/projects/{id}/settings`: `standing_approval`, `delivery` (read-only: chosen at creation), `agent_config`, the gates `project.yaml` on the Project repo's `main` declares per source (`checks`, `journeys`, and `holdout` with `enabled` and the `categories` under `holdout/<source>/`) with the file's `revision`, and summaries of the dispatch rules and memory, which link to their own screens.
   Standing approval toggles through `PATCH /v1/projects/{id}` as in the PR center. A holdout switch sends `PATCH /v1/projects/{id}/settings` with `revision` and `holdout: [{source, enabled}]`, answered with the settings as they are now: one commit of `project.yaml` on `main` (comments in the file are not kept), which the engine takes on the daemon's next refresh.
   `409 settings_changed` means `main` has another `revision` (the screen offers to load again); `400 settings_invalid` names a source the file does not have or a result that does not compile; `409 no_project_repo` that there is no Project repo or `project.yaml`.
+- **Project metrics (dashboard).** The Metrics screen (`#/p/<project id>/metrics`) loads `GET /v1/projects/{id}/metrics?days=7|30|90`, computed from the event log: `throughput` (done, failed, `per_day`), `lead_time` (first spawn to done; median and p90 in seconds), `gates` (`pass_rate`, `first_time_green` and its rate), `interventions` (decisions, blockers, per finished task, relaunches), `failovers` by outcome, `accounts` the Project's tasks ran under with their quota, and `unavailable` metrics with a reason. `log_started_at` is how far back the log reaches; rates are absent when there is nothing to divide by.
 - **Decisions inbox.** The app loads every decision (`GET /v1/decisions`, no state filter) so the inbox can list answered ones with who answered, and keeps them current from `decision.opened` and `decision.answered`.
   An answer is sent with `answered_by` from the "Answering as" field (remembered per viewer), or `null` to let the daemon use its own user; the `200` body is the answered decision.
   `409 already_answered` is shown as an error on the decision.

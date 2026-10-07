@@ -50,6 +50,7 @@ export function ProjectBoard({ id }: { id: string }) {
           Memory{toReview > 0 && <span className="pill accent" data-testid="memory-count">{toReview}</span>}
         </a>
         <a className="btn" href={href({ name: "dispatch", project: id })} data-testid="nav-dispatch" title="Which agent each kind of task gets">Dispatch</a>
+        <a className="btn" href={href({ name: "metrics", project: id })} data-testid="nav-metrics" title="How this Project's work has gone">Metrics</a>
         <a className="btn" href={href({ name: "settings", project: id })} data-testid="nav-settings" title="Every switch for this Project">Settings</a>
         <button className={"btn" + (chatOpen ? " on" : "")} onClick={() => setChatOpen(!chatOpen)}>Coordinator</button>
       </div>

@@ -16,6 +16,7 @@ export * from "./terminals";
 export * from "./dispatch";
 export * from "./pullRequests";
 export * from "./settings";
+export * from "./metrics";
 
 import { projectsApi } from "./projects";
 import { tasksApi } from "./tasks";
@@ -28,6 +29,7 @@ import { terminalsApi } from "./terminals";
 import { dispatchApi } from "./dispatch";
 import { pullRequestsApi } from "./pullRequests";
 import { settingsApi } from "./settings";
+import { metricsApi } from "./metrics";
 
 export const api = {
   ...projectsApi,
@@ -41,4 +43,5 @@ export const api = {
   ...dispatchApi,
   ...pullRequestsApi,
   ...settingsApi,
+  ...metricsApi,
 };

@@ -84,6 +84,7 @@ fn setup_with(forwarded: &'static [&'static str]) -> Setup {
         layout: Layout::new(dir.path().join("quark-home")),
         chat: Arc::new(quarkd::chat::RecordingInput::new()),
         forge: Arc::new(quarkd::forge::StubForge::new()),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
     });
     Setup {
         projector: Projector::new(store.clone(), engine.clone())
