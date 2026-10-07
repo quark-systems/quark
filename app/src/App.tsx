@@ -1,19 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { daemonUrl, setDaemonUrl } from "./api";
-import { go, href, useRoute } from "./nav";
+import { href, useRoute } from "./nav";
+import { RouteView } from "./routes";
 import { start, useStore } from "./store";
 import { isActive } from "./util";
 import { Palette } from "./Palette";
-import { Projects } from "./screens/Projects";
-import { NewProject } from "./screens/NewProject";
-import { ProjectBoard } from "./screens/ProjectBoard";
-import { Memory } from "./screens/Memory";
-import { Dispatch } from "./screens/Dispatch";
-import { WorkerView } from "./screens/WorkerView";
-import { Inbox } from "./screens/Inbox";
-import { PullRequests } from "./screens/PullRequests";
-import { PullRequestView } from "./screens/PullRequestView";
-import { Accounts } from "./screens/Accounts";
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 export const MOD = isMac ? "⌘" : "Ctrl+";
@@ -102,22 +93,6 @@ export function App() {
       {palette && <Palette onClose={() => setPalette(false)} />}
     </div>
   );
-}
-
-function RouteView() {
-  const route = useRoute();
-  switch (route.name) {
-    case "projects": return <Projects />;
-    case "new": return <NewProject onCreated={(id) => go({ name: "project", id })} />;
-    case "project": return <ProjectBoard key={route.id} id={route.id} />;
-    case "memory": return <Memory key={route.project} project={route.project} id={route.id} />;
-    case "dispatch": return <Dispatch key={route.project} project={route.project} />;
-    case "task": return <WorkerView key={route.id} id={route.id} />;
-    case "inbox": return <Inbox id={route.id} />;
-    case "prs": return <PullRequests />;
-    case "pr": return <PullRequestView key={route.id} id={route.id} />;
-    case "accounts": return <Accounts />;
-  }
 }
 
 function StatusBar() {

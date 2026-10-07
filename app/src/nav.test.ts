@@ -11,6 +11,11 @@ describe("routes", () => {
   it("falls back to the Projects list", () => {
     expect(parseRoute("")).toEqual({ name: "projects" });
     expect(parseRoute("#/nope")).toEqual({ name: "projects" });
+    expect(parseRoute("#/p/")).toEqual({ name: "projects" });
+  });
+  it("ignores extra trailing segments", () => {
+    expect(parseRoute("#/p/x/nope")).toEqual({ name: "project", id: "x" });
+    expect(parseRoute("#/t/t-1/more")).toEqual({ name: "task", id: "t-1" });
   });
 });
 
