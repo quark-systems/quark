@@ -148,6 +148,7 @@ async fn session_logs_become_coordinator_and_worker_events() {
             kind: Some(TaskKind::Ship),
             state: TaskState::Running,
             state_note: None,
+            state_source: None,
             harness: Some("claude".into()),
             pull_request_url: None,
             worktree: Some(worktree.clone()),

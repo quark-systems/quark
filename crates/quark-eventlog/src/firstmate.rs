@@ -6,7 +6,10 @@
 //! - each new line of `state/<task>.status` as a `firstmate.status` event
 //!   ([`StatusPayload`]);
 //! - each new worker generation in `state/<task>.meta` as a
-//!   `firstmate.spawn` event ([`quark_engine::meta::SpawnMeta`]).
+//!   `firstmate.spawn` event ([`quark_engine::meta::SpawnMeta`]);
+//! - the set of tasks that have a `state/<task>.meta`, whenever it changes,
+//!   as a `firstmate.tasks` event ([`TasksPayload`]). Firstmate removes a
+//!   task's record at cleanup, so this is how the log learns a task left.
 //!
 //! Status lines are wake-event history, not current task state, so the
 //! bridge records them as they are and leaves turning them into
@@ -33,6 +36,15 @@ pub mod kinds {
     /// A worker was spawned or relaunched. Payload:
     /// [`quark_engine::meta::SpawnMeta`].
     pub const SPAWN: &str = "firstmate.spawn";
+    /// The tasks with a metadata record changed. Payload:
+    /// [`super::TasksPayload`].
+    pub const TASKS: &str = "firstmate.tasks";
+}
+
+/// Every task id with a `state/<task>.meta`, sorted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TasksPayload {
+    pub live: Vec<String>,
 }
 
 /// One `state/<task>.status` line as the engine wrote it.
@@ -57,6 +69,8 @@ pub struct StatusPayload {
 pub struct IngestReport {
     pub status_lines: usize,
     pub spawns: usize,
+    /// Whether the set of tasks changed.
+    pub tasks_changed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,10 +81,14 @@ struct StatusCursor {
 }
 
 /// Mirrors firstmate homes into an event log.
+///
+/// Clones share one lock, so passes never interleave: each reads a
+/// checkpoint and then writes it, and two at once would append twice.
 #[derive(Clone)]
 pub struct FirstmateBridge {
     log: SqliteEventLog,
     host: HostId,
+    pass: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 
 fn io(path: &Path, e: impl std::fmt::Display) -> CoreError {
@@ -79,23 +97,57 @@ fn io(path: &Path, e: impl std::fmt::Display) -> CoreError {
 
 impl FirstmateBridge {
     pub fn new(log: SqliteEventLog, host: HostId) -> Self {
-        Self { log, host }
+        Self {
+            log,
+            host,
+            pass: Default::default(),
+        }
     }
 
     /// Append everything new in the firstmate home `home`, which belongs to
     /// `project`. Safe to run again at any time; nothing lands twice.
     pub async fn ingest(&self, project: &ProjectId, home: &Path) -> Result<IngestReport> {
+        let _pass = self.pass.lock().await;
         let state = home.join("state");
         let mut report = IngestReport::default();
+        let mut live = Vec::new();
         for (task, kind, path) in task_files(&state)? {
             match kind {
                 FileKind::Status => {
                     report.status_lines += self.ingest_status(project, &task, &path).await?
                 }
-                FileKind::Meta => report.spawns += self.ingest_meta(project, &task, &path).await?,
+                FileKind::Meta => {
+                    report.spawns += self.ingest_meta(project, &task, &path).await?;
+                    live.push(task.to_string());
+                }
             }
         }
+        report.tasks_changed = self.ingest_tasks(project, live).await?;
         Ok(report)
+    }
+
+    async fn ingest_tasks(&self, project: &ProjectId, live: Vec<String>) -> Result<bool> {
+        let name = format!("firstmate/{project}/tasks");
+        let payload = TasksPayload { live };
+        let value =
+            serde_json::to_string(&payload).map_err(|e| CoreError::Backend(e.to_string()))?;
+        let saved = self.log.checkpoint(&name).await?;
+        // A home that never had a task needs no event.
+        if saved.as_deref() == Some(value.as_str()) || (saved.is_none() && payload.live.is_empty())
+        {
+            return Ok(false);
+        }
+        let event = NewEvent::typed(
+            self.host.clone(),
+            project.clone(),
+            None,
+            kinds::TASKS,
+            &payload,
+        )?;
+        self.log
+            .append_batch(vec![event], Some((name, value)))
+            .await?;
+        Ok(true)
     }
 
     async fn ingest_status(
@@ -282,7 +334,8 @@ mod tests {
             r,
             IngestReport {
                 status_lines: 1,
-                spawns: 1
+                spawns: 1,
+                tasks_changed: true,
             }
         );
         let all = log.read(Seq::ZERO, 100).await.unwrap();
@@ -342,6 +395,37 @@ mod tests {
         );
         let lines = statuses(&log.read(Seq::ZERO, 100).await.unwrap());
         assert_eq!(lines.last().unwrap().raw, "done: c");
+    }
+
+    #[tokio::test]
+    async fn records_when_a_task_leaves() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(db.path().join("events.db")).unwrap();
+        let bridge = FirstmateBridge::new(log.clone(), HostId::from("h"));
+        let p = ProjectId::from("p");
+        // No tasks yet: nothing to say.
+        assert!(!bridge.ingest(&p, home.path()).await.unwrap().tasks_changed);
+
+        std::fs::write(state.join("a.meta"), "kind=ship\n").unwrap();
+        std::fs::write(state.join("b.meta"), "spawn_gen=s1.1.1\nharness=x\n").unwrap();
+        assert!(bridge.ingest(&p, home.path()).await.unwrap().tasks_changed);
+        assert!(!bridge.ingest(&p, home.path()).await.unwrap().tasks_changed);
+        std::fs::remove_file(state.join("a.meta")).unwrap();
+        assert!(bridge.ingest(&p, home.path()).await.unwrap().tasks_changed);
+
+        let sets: Vec<TasksPayload> = log
+            .read(Seq::ZERO, 100)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind.as_str() == kinds::TASKS)
+            .map(|e| e.decode().unwrap())
+            .collect();
+        assert_eq!(sets[0].live, ["a", "b"]);
+        assert_eq!(sets[1].live, ["b"]);
     }
 
     #[tokio::test]

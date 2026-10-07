@@ -1559,6 +1559,7 @@ mod tests {
             kind: Some(TaskKind::Ship),
             state,
             state_note: None,
+            state_source: None,
             harness: Some("claude".into()),
             pull_request_url: None,
             worktree: None,

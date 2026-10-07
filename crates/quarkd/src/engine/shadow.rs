@@ -21,22 +21,33 @@
 //! | 5 dispatch | `resolve_dispatch`, `resolve_description`, `set_crew_dispatch` |
 //! | 7 sub-coordinators | `add_source`, `seed_workspace`, `start_coordinator`, `inbox_note` |
 //!
+//! A read that disagrees is asked again of both engines before it is
+//! recorded, so a file that changed between the two reads is not counted.
+//! Slice 1's reads compare only what the event log can know (see
+//! [`super::eventlog`]): which tasks exist, the state of those whose state
+//! firstmate read from the status log, their open decisions, and the status
+//! lines themselves.
+//!
+//! [`ShadowEngine::comparing`] limits which slices' reads go to the native
+//! engine; a shadow slice outside it is served by firstmate alone, because
+//! its comparison lives elsewhere (slice 2's in `verify_shadow`).
+//!
 //! Modes change at runtime with [`ShadowEngine::set_mode`] and
 //! [`ShadowEngine::rollback`]; each change is logged as a `slice.mode`
 //! event. Startup modes come from `QUARK_ENGINE_SLICES`
 //! (see [`slices_from_env`]).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use quark_core::event::kinds;
 use quark_core::slice::{Divergence, SliceChange};
 use quark_core::{CoreError, EventLog, HostId, NewEvent, ProjectId, Slice, SliceMode, SliceSwitch};
-use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod};
+use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskState};
 use serde::Serialize;
 
 use super::{
@@ -60,6 +71,14 @@ pub fn slices_from_env() -> Result<SliceSwitch, CoreError> {
 
 type Call<'a, T> = Pin<Box<dyn Future<Output = Result<T, EngineError>> + Send + 'a>>;
 
+/// Compares a bash and a native answer: `None` when they agree, else what
+/// to record for each side.
+type Compare<'a, T> = &'a (dyn Fn(&T, &T) -> Option<(serde_json::Value, serde_json::Value)> + Sync);
+
+/// What firstmate's last snapshot said about one task: where it read the
+/// state, and the state.
+type Seen = (Option<String>, TaskState);
+
 /// Runs firstmate and the native engine side by side, per slice.
 pub struct ShadowEngine {
     bash: Arc<dyn EngineAdapter>,
@@ -67,6 +86,10 @@ pub struct ShadowEngine {
     switch: RwLock<SliceSwitch>,
     log: Arc<dyn EventLog>,
     host: HostId,
+    /// Slices whose reads go to the native engine too; `None` for all.
+    compared: Option<BTreeSet<Slice>>,
+    /// Per project, per task: firstmate's last snapshot.
+    seen: Mutex<HashMap<String, HashMap<String, Seen>>>,
 }
 
 impl ShadowEngine {
@@ -83,7 +106,19 @@ impl ShadowEngine {
             switch: RwLock::new(switch),
             log,
             host,
+            compared: None,
+            seen: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Send only `slices`' reads to the native engine.
+    pub fn comparing(mut self, slices: &[Slice]) -> Self {
+        self.compared = Some(slices.iter().copied().collect());
+        self
+    }
+
+    fn compares(&self, slice: Slice) -> bool {
+        self.compared.as_ref().is_none_or(|c| c.contains(&slice))
     }
 
     pub fn mode(&self, slice: Slice) -> SliceMode {
@@ -145,14 +180,40 @@ impl ShadowEngine {
         T: Serialize,
         F: Fn(&'a dyn EngineAdapter) -> Call<'a, T>,
     {
+        self.read_compared(slice, operation, project, call, None)
+            .await
+    }
+
+    /// [`Self::read`], comparing two successful answers with `compare`
+    /// instead of as whole values. A failure on either side still compares
+    /// by [`outcome`].
+    async fn read_compared<'a, T, F>(
+        &'a self,
+        slice: Slice,
+        operation: &str,
+        project: &str,
+        call: F,
+        compare: Option<Compare<'_, T>>,
+    ) -> Result<T, EngineError>
+    where
+        T: Serialize,
+        F: Fn(&'a dyn EngineAdapter) -> Call<'a, T>,
+    {
         match self.mode(slice) {
             SliceMode::Bash => call(self.bash.as_ref()).await,
             SliceMode::Native => call(self.native.as_ref()).await,
+            SliceMode::Shadow if !self.compares(slice) => call(self.bash.as_ref()).await,
             SliceMode::Shadow => {
-                let bash = call(self.bash.as_ref()).await;
+                let mut bash = call(self.bash.as_ref()).await;
                 let native = call(self.native.as_ref()).await;
-                let (b, n) = (outcome(&bash), outcome(&native));
-                if b != n {
+                if differ(&bash, &native, compare).is_none() {
+                    return bash;
+                }
+                // Ask both again: a file that changed between the two reads
+                // is not a divergence.
+                bash = call(self.bash.as_ref()).await;
+                let native = call(self.native.as_ref()).await;
+                if let Some((b, n)) = differ(&bash, &native, compare) {
                     let d = Divergence {
                         slice,
                         operation: operation.to_string(),
@@ -166,6 +227,160 @@ impl ShadowEngine {
             }
         }
     }
+
+    /// Slice 1's snapshot comparison; remembers firstmate's answer for
+    /// [`Self::compare_holds`].
+    fn compare_snapshot(
+        &self,
+        project: &str,
+        bash: &FleetSnapshot,
+        native: &FleetSnapshot,
+    ) -> Option<(serde_json::Value, serde_json::Value)> {
+        let seen: HashMap<String, Seen> = bash
+            .tasks
+            .iter()
+            .map(|t| (t.id.clone(), (t.state_source.clone(), t.state)))
+            .collect();
+        self.seen.lock().unwrap().insert(project.to_string(), seen);
+        fleet_view(bash, native)
+    }
+
+    /// Slice 1's holds comparison: the keyed decisions of tasks whose open
+    /// decisions firstmate's last snapshot kept from the status log.
+    fn compare_holds(
+        &self,
+        project: &str,
+        bash: &[Hold],
+        native: &[Hold],
+    ) -> Option<(serde_json::Value, serde_json::Value)> {
+        let seen = self.seen.lock().unwrap();
+        let tasks = seen.get(project)?;
+        holds_view(tasks, bash, native)
+    }
+}
+
+/// Whether two answers differ, and if so what to record for each.
+fn differ<T: Serialize>(
+    bash: &Result<T, EngineError>,
+    native: &Result<T, EngineError>,
+    compare: Option<Compare<'_, T>>,
+) -> Option<(serde_json::Value, serde_json::Value)> {
+    if let (Ok(b), Ok(n), Some(compare)) = (bash, native, compare) {
+        return compare(b, n);
+    }
+    let (b, n) = (outcome(bash), outcome(native));
+    (b != n).then_some((b, n))
+}
+
+/// Firstmate's status-log word for a state: done covers in review.
+fn state_word(s: TaskState) -> &'static str {
+    match s {
+        TaskState::Running => "working",
+        TaskState::NeedsDecision => "parked",
+        TaskState::Blocked => "blocked",
+        TaskState::Paused => "paused",
+        TaskState::InReview | TaskState::Done => "done",
+        TaskState::Failed => "failed",
+        TaskState::Queued | TaskState::Unknown => "unknown",
+    }
+}
+
+/// Where firstmate read a task's state when that is the status log, the
+/// only source the event log carries.
+const STATUS_LOG: &str = "status-log";
+
+/// Slice 1's fleet comparison: the same tasks, and the same state for each
+/// task whose state firstmate read from the status log. Queued work with no
+/// worker comes from firstmate's backlog, which the log does not carry.
+fn fleet_view(
+    bash: &FleetSnapshot,
+    native: &FleetSnapshot,
+) -> Option<(serde_json::Value, serde_json::Value)> {
+    let ours: BTreeMap<&str, TaskState> = native
+        .tasks
+        .iter()
+        .map(|t| (t.id.as_str(), t.state))
+        .collect();
+    let mut b = BTreeMap::new();
+    let mut n = BTreeMap::new();
+    for t in bash.tasks.iter().filter(|t| t.state != TaskState::Queued) {
+        let judged = t.state_source.as_deref() == Some(STATUS_LOG);
+        let word = |s: TaskState| judged.then(|| state_word(s));
+        b.insert(t.id.as_str(), Some(word(t.state)));
+        n.insert(t.id.as_str(), ours.get(t.id.as_str()).map(|s| word(*s)));
+    }
+    let extra: Vec<&str> = ours
+        .keys()
+        .filter(|id| !b.contains_key(*id))
+        .copied()
+        .collect();
+    for id in extra {
+        b.insert(id, None);
+        n.insert(id, Some(None));
+    }
+    // `null`: no such task; `{"id": null}` style entries carry no state.
+    let view = |m: BTreeMap<&str, Option<Option<&str>>>| {
+        serde_json::Value::Object(
+            m.into_iter()
+                .map(|(id, v)| {
+                    let v = match v {
+                        None => serde_json::Value::Null,
+                        Some(None) => serde_json::json!({}),
+                        Some(Some(w)) => serde_json::json!({ "state": w }),
+                    };
+                    (id.to_string(), v)
+                })
+                .collect(),
+        )
+    };
+    (b != n).then(|| (view(b), view(n)))
+}
+
+/// Slice 1's holds comparison, for the tasks in `seen` whose open decisions
+/// firstmate keeps from the status log. Firstmate drops a task's decisions
+/// when its pane or validation run says it moved on, which the log can't
+/// see, and once the task is done or failed. Captain holds come from the
+/// backlog, which the log does not carry.
+fn holds_view(
+    seen: &HashMap<String, Seen>,
+    bash: &[Hold],
+    native: &[Hold],
+) -> Option<(serde_json::Value, serde_json::Value)> {
+    let kept = |task: &Option<String>| {
+        let Some((source, state)) = task.as_ref().and_then(|t| seen.get(t)) else {
+            return false;
+        };
+        let moved_on = matches!(source.as_deref(), Some("run-step" | "pane"))
+            && !matches!(state, TaskState::NeedsDecision | TaskState::Blocked);
+        let finished = matches!(
+            state,
+            TaskState::InReview | TaskState::Done | TaskState::Failed
+        );
+        !moved_on && !finished
+    };
+    let view = |holds: &[Hold]| {
+        holds
+            .iter()
+            .filter(|h| h.id.contains(':') && kept(&h.task_id))
+            .map(|h| (h.id.clone(), h.question.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let (b, n) = (view(bash), view(native));
+    (b != n).then(|| (serde_json::json!(b), serde_json::json!(n)))
+}
+
+/// Slice 1's status tail comparison. The native read runs second, so a
+/// line appended in between may be in its answer only; that is not a
+/// divergence.
+fn tail_view(
+    bash: &StatusTail,
+    native: &StatusTail,
+) -> Option<(serde_json::Value, serde_json::Value)> {
+    let later = native.entries.len() >= bash.entries.len()
+        && native.entries[..bash.entries.len()] == bash.entries[..]
+        && native.next_offset >= bash.next_offset;
+    let same = native.entries == bash.entries && native.next_offset == bash.next_offset;
+    (!same && !later).then(|| (outcome::<_>(&Ok(bash)), outcome::<_>(&Ok(native))))
 }
 
 /// A call's result as JSON, for comparison. Errors compare by kind only,
@@ -199,9 +414,14 @@ impl EngineAdapter for ShadowEngine {
     }
 
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
-        self.read(Slice::EventLog, "snapshot", &ws.project_id, |e| {
-            e.snapshot(ws)
-        })
+        let project = ws.project_id.as_str();
+        self.read_compared(
+            Slice::EventLog,
+            "snapshot",
+            project,
+            |e| e.snapshot(ws),
+            Some(&|b: &FleetSnapshot, n: &FleetSnapshot| self.compare_snapshot(project, b, n)),
+        )
         .await
     }
 
@@ -211,15 +431,26 @@ impl EngineAdapter for ShadowEngine {
         task_id: &str,
         offset: u64,
     ) -> Result<StatusTail, EngineError> {
-        self.read(Slice::EventLog, "status_tail", &ws.project_id, |e| {
-            e.status_tail(ws, task_id, offset)
-        })
+        self.read_compared(
+            Slice::EventLog,
+            "status_tail",
+            &ws.project_id,
+            |e| e.status_tail(ws, task_id, offset),
+            Some(&tail_view),
+        )
         .await
     }
 
     async fn holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
-        self.read(Slice::EventLog, "holds", &ws.project_id, |e| e.holds(ws))
-            .await
+        let project = ws.project_id.as_str();
+        self.read_compared(
+            Slice::EventLog,
+            "holds",
+            project,
+            |e| e.holds(ws),
+            Some(&|b: &Vec<Hold>, n: &Vec<Hold>| self.compare_holds(project, b, n)),
+        )
+        .await
     }
 
     fn watch_dirs(&self, ws: &WorkspaceRef) -> Vec<PathBuf> {
@@ -415,7 +646,7 @@ impl EngineAdapter for ShadowEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EngineTask, StubEngine, StubWrite};
+    use crate::engine::{EngineTask, StatusEntry, StubEngine, StubWrite};
     use quark_core::fake::MemoryEventLog;
     use quark_systems::TaskState;
 
@@ -433,10 +664,21 @@ mod tests {
             kind: None,
             state,
             state_note: None,
+            state_source: Some(STATUS_LOG.into()),
             harness: None,
             pull_request_url: None,
             terminal: None,
             worktree: None,
+        }
+    }
+
+    fn hold(id: &str, question: &str) -> Hold {
+        Hold {
+            id: id.into(),
+            task_id: Some(id.split(':').next().unwrap().into()),
+            question: question.into(),
+            answer: None,
+            answered_by: None,
         }
     }
 
@@ -495,7 +737,8 @@ mod tests {
         let d: Divergence = events[0].decode().unwrap();
         assert_eq!(d.slice, Slice::EventLog);
         assert_eq!(d.operation, "snapshot");
-        assert_eq!(d.native["tasks"][0]["state"], "blocked");
+        assert_eq!(d.bash["t1"]["state"], "working");
+        assert_eq!(d.native["t1"]["state"], "blocked");
 
         // Agreement records nothing.
         r.engine.holds(&ws()).await.unwrap();
@@ -561,5 +804,247 @@ mod tests {
         let back: SliceChange = r.log.events()[2].decode().unwrap();
         assert_eq!((back.from, back.to), (SliceMode::Shadow, SliceMode::Bash));
         assert_eq!(back.by, "rollback");
+    }
+
+    #[test]
+    fn the_fleet_compares_what_the_log_can_know() {
+        let mut queued = task("q", TaskState::Queued);
+        queued.state_source = None;
+        let mut by_pane = task("p", TaskState::Running);
+        by_pane.state_source = Some("pane".into());
+        let bash = FleetSnapshot {
+            tasks: vec![task("a", TaskState::InReview), by_pane, queued],
+        };
+        let native = FleetSnapshot {
+            tasks: vec![
+                task("a", TaskState::InReview),
+                task("p", TaskState::Blocked),
+            ],
+        };
+        assert_eq!(
+            fleet_view(&bash, &native),
+            None,
+            "pane state and backlog skipped"
+        );
+
+        // A done ship task reads in review or done; both are done.
+        let native_done = FleetSnapshot {
+            tasks: vec![task("a", TaskState::Done), task("p", TaskState::Running)],
+        };
+        assert_eq!(fleet_view(&bash, &native_done), None);
+
+        // A task only one side has.
+        let extra = FleetSnapshot {
+            tasks: vec![
+                task("a", TaskState::InReview),
+                task("p", TaskState::Running),
+                task("x", TaskState::Running),
+            ],
+        };
+        let (b, n) = fleet_view(&bash, &extra).unwrap();
+        assert_eq!(b["x"], serde_json::Value::Null);
+        assert_eq!(n["x"], serde_json::json!({}));
+        let missing = FleetSnapshot {
+            tasks: vec![task("p", TaskState::Running)],
+        };
+        let (b, n) = fleet_view(&bash, &missing).unwrap();
+        assert_eq!(b["a"]["state"], "done");
+        assert_eq!(n["a"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn holds_compare_only_where_firstmate_keeps_the_log_s_decisions() {
+        let mut seen = HashMap::new();
+        seen.insert(
+            "a".to_string(),
+            (Some(STATUS_LOG.into()), TaskState::NeedsDecision),
+        );
+        seen.insert("b".to_string(), (Some("pane".into()), TaskState::Running));
+        seen.insert(
+            "c".to_string(),
+            (Some("run-step".into()), TaskState::NeedsDecision),
+        );
+        let bash = [
+            hold("a:k", "q"),
+            hold("c:k", "gate"),
+            hold("held-1", "captain"),
+        ];
+        let native = [hold("a:k", "q"), hold("b:k", "stale"), hold("c:k", "gate")];
+        assert_eq!(holds_view(&seen, &bash, &native), None);
+        let (b, n) = holds_view(&seen, &bash, &[hold("a:k", "other")]).unwrap();
+        assert_eq!(b["c:k"], "gate");
+        assert_eq!(n["a:k"], "other");
+    }
+
+    #[test]
+    fn a_later_native_tail_is_not_a_divergence() {
+        let entry = |raw: &str| StatusEntry {
+            kind: "working".into(),
+            decision_key: Some("default".into()),
+            note: raw.into(),
+            raw: raw.into(),
+        };
+        let bash = StatusTail {
+            entries: vec![entry("a")],
+            next_offset: 10,
+        };
+        let later = StatusTail {
+            entries: vec![entry("a"), entry("b")],
+            next_offset: 20,
+        };
+        assert_eq!(tail_view(&bash, &later), None);
+        assert!(tail_view(&later, &bash).is_some());
+        let other = StatusTail {
+            entries: vec![entry("z")],
+            next_offset: 10,
+        };
+        assert!(tail_view(&bash, &other).is_some());
+    }
+
+    #[tokio::test]
+    async fn holds_wait_for_a_snapshot_and_slices_outside_comparing_stay_bash() {
+        let r = rig("1=shadow,2=shadow");
+        r.bash.set_holds(vec![hold("t1:k", "q")]);
+        // No snapshot yet: nothing to judge holds by.
+        r.engine.holds(&ws()).await.unwrap();
+        assert!(r.log.events().is_empty());
+
+        let engine = ShadowEngine::new(
+            r.bash.clone(),
+            r.native.clone(),
+            SliceSwitch::parse("1=shadow,2=shadow").unwrap(),
+            Arc::new(r.log.clone()),
+            HostId::from("local"),
+        )
+        .comparing(&[]);
+        engine.snapshot(&ws()).await.unwrap();
+        assert!(r.log.events().is_empty());
+    }
+
+    /// Answers `first` once, then `rest`.
+    struct Flaky {
+        calls: Mutex<u32>,
+        first: TaskState,
+        rest: TaskState,
+    }
+
+    #[async_trait]
+    impl EngineAdapter for Flaky {
+        fn name(&self) -> &'static str {
+            "flaky"
+        }
+        async fn snapshot(&self, _: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            let state = if *calls == 1 { self.first } else { self.rest };
+            Ok(FleetSnapshot {
+                tasks: vec![task("t1", state)],
+            })
+        }
+        async fn status_tail(
+            &self,
+            _: &WorkspaceRef,
+            _: &str,
+            _: u64,
+        ) -> Result<StatusTail, EngineError> {
+            unimplemented!()
+        }
+        async fn holds(&self, _: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
+            unimplemented!()
+        }
+        async fn send_message(
+            &self,
+            _: &WorkspaceRef,
+            _: &str,
+            _: &str,
+        ) -> Result<(), EngineError> {
+            unimplemented!()
+        }
+        async fn answer(
+            &self,
+            _: &WorkspaceRef,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), EngineError> {
+            unimplemented!()
+        }
+        async fn control(
+            &self,
+            _: &WorkspaceRef,
+            _: &str,
+            _: &TaskControl,
+        ) -> Result<(), EngineError> {
+            unimplemented!()
+        }
+        async fn merge_pull_request(
+            &self,
+            _: &WorkspaceRef,
+            _: &str,
+            _: &str,
+            _: Option<MergeMethod>,
+        ) -> Result<(), EngineError> {
+            unimplemented!()
+        }
+        async fn set_standing_approval(
+            &self,
+            _: &WorkspaceRef,
+            _: &[String],
+            _: bool,
+        ) -> Result<(), EngineError> {
+            unimplemented!()
+        }
+        async fn add_source(
+            &self,
+            _: &Path,
+            _: &SourceRepo,
+            _: DeliveryPolicy,
+        ) -> Result<(), EngineError> {
+            unimplemented!()
+        }
+        async fn seed_workspace(
+            &self,
+            _: &Path,
+            _: &WorkspacePlan,
+        ) -> Result<PathBuf, EngineError> {
+            unimplemented!()
+        }
+        async fn start_coordinator(
+            &self,
+            _: &Path,
+            _: &WorkspaceRef,
+            _: &AgentConfig,
+            _: &[(String, String)],
+        ) -> Result<(), EngineError> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_disagreement_that_clears_on_a_second_read_is_not_recorded() {
+        let bash = Arc::new(Flaky {
+            calls: Mutex::new(0),
+            first: TaskState::Running,
+            rest: TaskState::Blocked,
+        });
+        let native = Arc::new(StubEngine::new());
+        native.set_snapshot(FleetSnapshot {
+            tasks: vec![task("t1", TaskState::Blocked)],
+        });
+        let log = MemoryEventLog::new();
+        let engine = ShadowEngine::new(
+            bash,
+            native,
+            SliceSwitch::parse("1=shadow").unwrap(),
+            Arc::new(log.clone()),
+            HostId::from("local"),
+        );
+        let snap = engine.snapshot(&ws()).await.unwrap();
+        assert_eq!(
+            snap.tasks[0].state,
+            TaskState::Blocked,
+            "the second answer is served"
+        );
+        assert!(log.events().is_empty());
     }
 }

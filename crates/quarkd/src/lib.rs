@@ -82,8 +82,23 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         }
     }
     let tmux = sessions.tmux_env().ok();
-    let engine: Arc<dyn EngineAdapter> =
+    let events_path = config.events_path();
+    let events = quark_eventlog::SqliteEventLog::open(&events_path)
+        .with_context(|| format!("opening {}", events_path.display()))?;
+    let bridge = quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host());
+    let firstmate = engine == EngineKind::Firstmate;
+    let mut engine: Arc<dyn EngineAdapter> =
         config::build_engine(engine, &config, store.clone(), tmux)?;
+    if firstmate {
+        // Slice 1 in shadow: the fleet is read back from the event log too.
+        engine = engine::eventlog::shadowed(
+            engine,
+            engine::shadow::slices_from_env()?,
+            events.clone(),
+            bridge.clone(),
+            event_ingest::host(),
+        );
+    }
     let layout = provision::Layout::new(&config.home).with_user_memory(config.user_memory.clone());
     let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
     let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
@@ -107,9 +122,6 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         accounts.clone(),
         harnesses.clone(),
     );
-    let events_path = config.events_path();
-    let events = quark_eventlog::SqliteEventLog::open(&events_path)
-        .with_context(|| format!("opening {}", events_path.display()))?;
     let mut projector = Projector::new(store.clone(), engine.clone())
         .with_sessions(sessions.clone())
         .with_command(layout.command_workspace())
@@ -161,10 +173,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     } else {
         None
     };
-    let ingest = event_ingest::EventIngest::new(
-        store.clone(),
-        quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host()),
-    );
+    let ingest = event_ingest::EventIngest::new(store.clone(), bridge);
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
     let (triggers, triggers_task) = if native_triggers::enabled() {
         match native_triggers::ShadowTriggers::open(store.clone(), Arc::new(events.clone())).await {

@@ -366,6 +366,7 @@ fn engine_task(id: &str, harness: &str, state: TaskState) -> EngineTask {
         kind: Some(TaskKind::Ship),
         state,
         state_note: None,
+        state_source: None,
         harness: Some(harness.into()),
         pull_request_url: None,
         terminal: None,

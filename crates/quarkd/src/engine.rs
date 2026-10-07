@@ -18,6 +18,7 @@
 //! Adapters also name the directories worth watching, so the projector can
 //! refresh a workspace as soon as a worker reports, not only on its timer.
 
+pub mod eventlog;
 pub mod firstmate;
 pub mod shadow;
 
@@ -57,6 +58,10 @@ pub struct EngineTask {
     pub kind: Option<TaskKind>,
     pub state: TaskState,
     pub state_note: Option<String>,
+    /// Where the engine read the state, e.g. firstmate's `status-log`,
+    /// `pane` or `run-step`. `None` when the engine does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_source: Option<String>,
     pub harness: Option<String>,
     pub pull_request_url: Option<String>,
     /// The tmux `session:window` target the task runs in, when it runs in

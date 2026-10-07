@@ -92,6 +92,7 @@ async fn harness() -> Harness {
                     kind: Some(TaskKind::Ship),
                     state: TaskState::InReview,
                     state_note: None,
+                    state_source: None,
                     harness: Some("claude".into()),
                     pull_request_url: Some(URL.into()),
                     terminal: None,

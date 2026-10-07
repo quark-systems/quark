@@ -37,6 +37,7 @@ fn task(id: &str, terminal: Option<&str>, worktree: Option<PathBuf>) -> EngineTa
         kind: Some(TaskKind::Ship),
         state: TaskState::Running,
         state_note: None,
+        state_source: None,
         harness: Some("claude".into()),
         pull_request_url: None,
         terminal: terminal.map(Into::into),
