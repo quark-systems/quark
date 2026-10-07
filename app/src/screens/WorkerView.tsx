@@ -9,7 +9,7 @@ import { ago, errText, isActive, stateMeta } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../diff";
 import { FileDiff } from "../components/FileDiff";
 import { Unavailable } from "../components/Unavailable";
-import { Transcript } from "../components/Transcript";
+import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
 
 export function WorkerView({ id }: { id: string }) {
@@ -211,7 +211,7 @@ function TranscriptPanel({ taskId }: { taskId: string }) {
 
   if (status === "unavailable") return <Unavailable what="The transcript" endpoint={`GET /v1/tasks/${taskId}/transcript`} />;
   return (
-    <Transcript items={entries} agent="worker" testId="transcript" className="transcript"
+    <Transcript key={taskId} items={entries} agent="worker" testId="transcript" className="transcript"
       empty={status === "ok" ? <div className="empty">No transcript yet.</div> : status === "loading" ? <div className="empty">Loading…</div> : null}>
       {status === "error" && <div className="form-error">{err}</div>}
     </Transcript>

@@ -513,12 +513,20 @@ function seed() {
     accepted_by: "matt", evidence: { task_id: done.id, task_title: done.title, pull_request_url: null, files: [] },
   });
 
+  chat(quark.id, "user", "What's left before Phase 1 can start?", { ts: minutesAgo(200) });
+  chat(quark.id, "assistant", "The spec is settled. Once you say go I'll split it into tasks and start the first workers.", { ts: minutesAgo(199) });
   chat(quark.id, "user", "Split Phase 1 into tasks and start the event stream and terminal work.", { ts: minutesAgo(35) });
-  chat(quark.id, "thinking", "Two independent workstreams; dispatch both.", { ts: minutesAgo(35) });
-  chat(quark.id, "tool_call", '{"command":"bin/fm-spawn.sh event-stream"}', { ts: minutesAgo(35), tool_name: "Bash", tool_call_id: "k1", tool: { kind: "shell", title: "Run bin/fm-spawn.sh event-stream", command: "bin/fm-spawn.sh event-stream" } });
-  chat(quark.id, "tool_result", "spawned", { ts: minutesAgo(34), tool_call_id: "k1" });
-  chat(quark.id, "tool_call", '{"command":"bin/fm-spawn.sh terminals"}', { ts: minutesAgo(34), tool_name: "Bash", tool_call_id: "k2", tool: { kind: "shell", title: "Run bin/fm-spawn.sh terminals", command: "bin/fm-spawn.sh terminals" } });
-  chat(quark.id, "tool_result", "spawned", { ts: minutesAgo(34), tool_call_id: "k2" });
+  chat(quark.id, "thinking", "Two independent workstreams; dispatch both. Decision records need Matt's call first.", { ts: minutesAgo(35) });
+  const spawnCall = (id, task, at) => {
+    const command = `bin/fm-spawn.sh ${task} projects/quark --mode no-mistakes --yolo off`;
+    chat(quark.id, "tool_call", JSON.stringify({ command }), { ts: minutesAgo(at), tool_name: "Bash", tool_call_id: id, tool: { kind: "shell", title: `Run ${command}`, command } });
+    chat(quark.id, "tool_result", `spawned ${task}`, { ts: minutesAgo(at), tool_call_id: id });
+  };
+  spawnCall("k1", "event-stream", 35);
+  spawnCall("k2", "terminals", 34);
+  const hold = 'bin/fm-captain-hold.sh hold decision-records --reason "Keep decision records in docs/adr or in the wiki?"';
+  chat(quark.id, "tool_call", JSON.stringify({ command: hold }), { ts: minutesAgo(34), tool_name: "Bash", tool_call_id: "k3", tool: { kind: "shell", title: `Run ${hold}`, command: hold } });
+  chat(quark.id, "tool_result", "held", { ts: minutesAgo(34), tool_call_id: "k3" });
   chat(quark.id, "assistant", "Dispatched two workers:\n\n- **Event stream**: resync slow clients from the store (Claude Code)\n- **Terminal sessions** over tmux control mode (Codex)\n\nThe decision-records task is waiting on a question for you.", { ts: minutesAgo(34) });
 }
 
@@ -932,9 +940,10 @@ const server = http.createServer(async (req, res) => {
       // Like quarkd: not echoed; the session records it shortly after.
       setTimeout(() => {
         chat(cid, "user", text);
-        chat(cid, "tool_call", "fm-spawn.sh", { tool_name: "bash", tool_call_id: "spawn", tool: { kind: "shell", title: "Run bin/fm-spawn.sh", command: "bin/fm-spawn.sh" } });
-        chat(cid, "tool_result", "spawned", { tool_name: "bash", tool_call_id: "spawn" });
         const t = addTask(cid, { title: text.slice(0, 70), state: "queued", harness: projects.get(cid).agent_config?.harness ?? "claude-code" });
+        const command = `bin/fm-spawn.sh ${t.id} projects/${cid} --mode no-mistakes --yolo off`;
+        chat(cid, "tool_call", JSON.stringify({ command }), { tool_name: "bash", tool_call_id: `spawn-${t.id}`, tool: { kind: "shell", title: `Run ${command}`, command } });
+        chat(cid, "tool_result", "spawned", { tool_name: "bash", tool_call_id: `spawn-${t.id}` });
         chat(cid, "assistant", `On it. I wrote a task contract and queued **${t.title}**.`);
       }, QUIET ? 50 : 700);
       return send(res, 202, { coordinator_id: cid, confirmed: true, accepted_at: now() });

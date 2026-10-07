@@ -53,6 +53,22 @@ test("the board updates live when the coordinator queues a task", async ({ page 
   await expect(page.getByTestId("col-queued")).toContainText("Add tests for the parser");
 });
 
+test("coordinator chat: workers started and questions asked show as cards", async ({ page }) => {
+  await open(page, "#/p/quark");
+  const chat = page.getByTestId("coordinator-chat");
+  const cards = chat.getByTestId("coordinator-action");
+  // Earlier tests share the demo daemon and may have queued more tasks.
+  await expect(cards.filter({ hasText: "event-stream" })).toContainText("Started worker");
+  await expect(cards.filter({ hasText: "terminals" })).toContainText("Started worker");
+  const question = cards.filter({ hasText: "Asked you to decide" });
+  await expect(question).toContainText("decision-records");
+  await expect(question).toContainText("Keep decision records in docs/adr or in the wiki?");
+  // An hour or more between turns opens a new stretch, marked with its time.
+  await expect(chat.getByRole("separator")).toHaveCount(1);
+  await question.getByRole("link", { name: "Open inbox" }).click();
+  await expect(page).toHaveURL(/#\/inbox/);
+});
+
 test("worker view: terminal, steering, transcript, changes, cancel and relaunch", async ({ page }) => {
   await open(page, "#/p/quark");
   await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();

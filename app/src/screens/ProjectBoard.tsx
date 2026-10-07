@@ -6,7 +6,7 @@ import { loadChat, useStore } from "../store";
 import { ago, errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
-import { Transcript, UserMessage } from "../components/Transcript";
+import { Transcript, UserMessage } from "../components/transcript";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
 
@@ -144,7 +144,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
-          <Transcript items={items} agent="coordinator" className="chat-log"
+          <Transcript key={cid} items={items} agent="coordinator" actions className="chat-log"
             empty={status === "ok" ? <div className="empty">Ask the coordinator to plan or delegate work.</div>
               : status === "loading" ? <div className="empty">Loading…</div> : null}>
             {pending.length > 0 && pending.map((p) => (
