@@ -18,6 +18,9 @@ quark-worker = { path = "crates/quark-worker" }
 quark-harness = { path = "crates/quark-harness" }
 quark-sessions = { path = "crates/quark-sessions" }
 quark-eventlog = { path = "crates/quark-eventlog" }
+quark-isolation = { path = "crates/quark-isolation" }
+quark-supervisor = { path = "crates/quark-supervisor" }
+quark-worktree = { path = "crates/quark-worktree" }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"
