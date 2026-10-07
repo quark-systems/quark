@@ -1,6 +1,7 @@
 //! The `/v1` HTTP API and event stream.
 
 mod accounts;
+mod automation;
 mod dashboard;
 mod dispatch;
 mod error;
@@ -47,6 +48,9 @@ pub struct AppState {
     pub forge: Arc<dyn crate::forge::Forge>,
     /// The native event log (`events.db`) the dashboard reads.
     pub events: quark_eventlog::SqliteEventLog,
+    /// Inbox, trigger rules and away policy (slice 7); `None` when that
+    /// engine is off.
+    pub triggers: Option<Arc<quark_triggers::Engine>>,
 }
 
 /// One API module: its routes and its part of the OpenAPI document.
@@ -93,6 +97,10 @@ const MODULES: &[Module] = &[
     Module {
         router: metrics::router,
         openapi: <metrics::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: automation::router,
+        openapi: <automation::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,

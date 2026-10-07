@@ -317,6 +317,11 @@ impl Engine {
             .collect()
     }
 
+    /// How many times rule `id` has fired, or would have in shadow mode.
+    pub async fn fires(&self, project: &ProjectId, id: &RuleId) -> usize {
+        self.state.lock().await.rules.fire_count(project, id)
+    }
+
     pub async fn posture(&self, project: &ProjectId) -> Posture {
         self.state.lock().await.away.posture(project)
     }

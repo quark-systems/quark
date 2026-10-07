@@ -246,6 +246,13 @@ pub trait EngineAdapter: Send + Sync {
         text: &str,
     ) -> Result<(), EngineError>;
 
+    /// Leave the user's note in the workspace inbox, where the coordinator
+    /// picks it up at its next check. `Ok` means it is durably queued.
+    async fn inbox_note(&self, ws: &WorkspaceRef, text: &str) -> Result<(), EngineError> {
+        let _ = (ws, text);
+        Err(EngineError::Invalid("this engine has no inbox".into()))
+    }
+
     /// Answer the open hold `hold_id` with `answer`, recording `answered_by`
     /// as the person who answered. `Ok` means the engine durably recorded the
     /// answer and the question is no longer waiting; the hold leaves later
@@ -436,6 +443,9 @@ const STUB_ACCOUNT_ENVS: &[&str] = &[
 pub enum StubWrite {
     Message {
         task_id: String,
+        text: String,
+    },
+    InboxNote {
         text: String,
     },
     Control {
@@ -637,6 +647,10 @@ impl EngineAdapter for StubEngine {
             task_id: task_id.into(),
             text: text.into(),
         })
+    }
+
+    async fn inbox_note(&self, _ws: &WorkspaceRef, text: &str) -> Result<(), EngineError> {
+        self.accept(StubWrite::InboxNote { text: text.into() })
     }
 
     /// Records the answer and drops the hold, as an engine would.
