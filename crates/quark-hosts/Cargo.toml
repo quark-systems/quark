@@ -1,0 +1,23 @@
+[package]
+name = "quark-hosts"
+description = "Host resource telemetry for the native Quark engine: sampled CPU, memory, pressure and disk, attributed per Project and task."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo = { version = "0.36", default-features = false, features = ["system", "disk"] }
+time.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio.workspace = true
