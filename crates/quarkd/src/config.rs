@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use std::time::UNIX_EPOCH;
 
-use quark_core::SliceMode;
+use quark_core::{Slice, SliceMode, SliceSwitch};
 use quark_engine::runner::{AdapterCall, CallKind, CallLog};
 
 use crate::engine::firstmate::FirstmateEngine;
@@ -82,19 +82,7 @@ pub fn build_engine(
     store: Arc<Store>,
     tmux: Option<String>,
 ) -> anyhow::Result<Arc<dyn EngineAdapter>> {
-    // No native slice exists yet, so any non-bash mode is refused rather
-    // than silently ignored.
-    let slices = crate::engine::shadow::slices_from_env()?;
-    if let Some((slice, mode)) = slices
-        .modes()
-        .into_iter()
-        .find(|(_, m)| *m != SliceMode::Bash)
-    {
-        anyhow::bail!(
-            "slice {slice} can't be {}: no native engine for it yet",
-            mode.as_str()
-        );
-    }
+    check_slices(&crate::engine::shadow::slices_from_env()?)?;
     match kind {
         EngineKind::Stub => Ok(Arc::new(StubEngine::new())),
         EngineKind::Firstmate => Ok(Arc::new(
@@ -102,6 +90,28 @@ pub fn build_engine(
                 .with_tmux(tmux),
         )),
     }
+}
+
+/// The slices with a native side that can run in shadow: slice 1's ingest
+/// bridge (`event_ingest`) and slice 2's decision shadow (`verify_shadow`).
+/// Neither acts, so firstmate keeps serving every call. Any other non-bash
+/// mode is refused rather than silently ignored.
+pub fn check_slices(slices: &SliceSwitch) -> anyhow::Result<()> {
+    for (slice, mode) in slices.modes() {
+        let shadowable = matches!(slice, Slice::EventLog | Slice::Verification);
+        let ok = match mode {
+            SliceMode::Bash => true,
+            SliceMode::Shadow => shadowable,
+            SliceMode::Native => false,
+        };
+        if !ok {
+            anyhow::bail!(
+                "slice {slice} can't be {}: no native engine for it yet",
+                mode.as_str()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Logs every engine script call and keeps an `adapter_calls` record of each
@@ -159,4 +169,26 @@ fn rfc3339(t: std::time::SystemTime) -> String {
                 .ok()
         })
         .unwrap_or_else(crate::now_rfc3339)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_slices_one_and_two_may_shadow() {
+        for ok in ["", "1=shadow", "1=shadow,2=shadow"] {
+            assert!(
+                check_slices(&SliceSwitch::parse(ok).unwrap()).is_ok(),
+                "{ok}"
+            );
+        }
+        for bad in ["1=native", "1=shadow,2=shadow,3=shadow"] {
+            let err = check_slices(&SliceSwitch::parse(bad).unwrap()).unwrap_err();
+            assert!(
+                err.to_string().contains("no native engine for it yet"),
+                "{bad}"
+            );
+        }
+    }
 }

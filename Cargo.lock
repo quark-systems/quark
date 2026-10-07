@@ -1098,6 +1098,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-verify"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "libc",
+ "quark-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "quark-worker"
 version = "0.0.1"
 dependencies = [
@@ -1147,6 +1163,7 @@ dependencies = [
  "quark-systems",
  "quark-transcript",
  "quark-triggers",
+ "quark-verify",
  "quark-worker",
  "quark-worktree",
  "rusqlite",
@@ -1445,6 +1462,12 @@ dependencies = [
  "cpufeatures 0.3.1",
  "digest 0.11.3",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sharded-slab"
@@ -1919,6 +1942,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
