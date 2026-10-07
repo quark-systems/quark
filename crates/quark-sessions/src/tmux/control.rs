@@ -24,6 +24,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
 
+/// How often an idle control client pokes the server; see [`keepalive`].
+const KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// One parsed control-mode line outside a reply block.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Notification {
@@ -251,6 +254,7 @@ impl<T: Send + 'static> ControlClient<T> {
             }),
         };
         tokio::spawn(read_loop(stdout, client.clone(), handler));
+        tokio::spawn(keepalive(Arc::downgrade(&client.inner)));
         Ok(client)
     }
 
@@ -303,6 +307,32 @@ impl<T: Send + 'static> ControlClient<T> {
     pub fn detach(&self) {
         if let Some(mut child) = self.inner.child.lock().unwrap().take() {
             let _ = child.start_kill();
+        }
+    }
+}
+
+/// Sends a no-op command every [`KEEPALIVE`] while the client lives.
+///
+/// tmux 3.4 checks how far behind a control client is only when it has
+/// something else to write to it. A pane that falls behind at the end of a
+/// burst of output is then paused without a `%pause` notification until the
+/// client's next command, and its last output never arrives. Regular
+/// commands make tmux report the pause, so the handler can resync.
+async fn keepalive<T: Send + 'static>(inner: std::sync::Weak<Inner<T>>) {
+    let mut tick = tokio::time::interval(KEEPALIVE);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        let Some(inner) = inner.upgrade() else { return };
+        let client = ControlClient { inner };
+        if client.is_closed()
+            || client
+                .send("display-message -p ''", Waiter::Discard)
+                .await
+                .is_err()
+        {
+            return;
         }
     }
 }

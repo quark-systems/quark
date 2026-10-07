@@ -662,7 +662,10 @@ impl Handler for PaneHandler {
 
     fn pause(&mut self, client: &ControlClient<Tag>, pane: &str) {
         // The client fell behind and tmux dropped this pane's queued output.
-        // Resync from a snapshot, then let the pane continue.
+        // Let the pane continue, then resync from a snapshot. In this order
+        // nothing is lost: output before the capture is in it, and output
+        // after it follows in stream order. Continuing after the capture
+        // would let tmux drop whatever the pane wrote in between.
         if let Some(route) = self.panes.lock().unwrap().get_mut(pane) {
             route.live = false;
         }
@@ -670,13 +673,14 @@ impl Handler for PaneHandler {
         let client = client.clone();
         let pane = pane.to_string();
         tokio::spawn(async move {
-            if request_snapshot(&client, &pane, None).await.is_ok() {
-                let _ = client
-                    .send(
-                        &format!("refresh-client -A '{pane}:continue'"),
-                        Waiter::Discard,
-                    )
-                    .await;
+            let resumed = client
+                .send(
+                    &format!("refresh-client -A '{pane}:continue'"),
+                    Waiter::Discard,
+                )
+                .await;
+            if resumed.is_ok() {
+                let _ = request_snapshot(&client, &pane, None).await;
             }
         });
     }
