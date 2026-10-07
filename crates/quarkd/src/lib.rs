@@ -21,6 +21,7 @@ pub mod harness;
 pub mod memory;
 pub mod metrics;
 pub mod native;
+pub mod native_dispatch;
 pub mod native_triggers;
 pub mod pr_center;
 pub mod project_repo;
@@ -100,15 +101,31 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         accounts.clone(),
         harnesses.clone(),
     );
-    let projector = Projector::new(store.clone(), engine.clone())
+    let events_path = config.events_path();
+    let events = quark_eventlog::SqliteEventLog::open(&events_path)
+        .with_context(|| format!("opening {}", events_path.display()))?;
+    let mut projector = Projector::new(store.clone(), engine.clone())
         .with_sessions(sessions.clone())
         .with_command(layout.command_workspace())
         .with_user_config(layout.user_config())
         .with_failover(Arc::new(failover));
+    let telemetry = if native_dispatch::enabled() {
+        let log: Arc<dyn quark_core::EventLog> = Arc::new(events.clone());
+        projector = projector.with_dispatch_shadow(Arc::new(native_dispatch::DispatchShadow::new(
+            &config,
+            log.clone(),
+        )));
+        match native_dispatch::HostTelemetry::start(&config, log).await {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "host telemetry not started");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
-    let events_path = config.events_path();
-    let events = quark_eventlog::SqliteEventLog::open(&events_path)
-        .with_context(|| format!("opening {}", events_path.display()))?;
     let native = if native::enabled() {
         match native::NativeSupervision::start(&config, Arc::new(events.clone())).await {
             Ok(n) => Some(n),
@@ -190,6 +207,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     quota_task.abort();
     if let Some(n) = native {
         n.stop();
+    }
+    if let Some(t) = telemetry {
+        t.stop();
     }
     // The tmux server keeps running; the next start reattaches.
     sessions.detach_all();

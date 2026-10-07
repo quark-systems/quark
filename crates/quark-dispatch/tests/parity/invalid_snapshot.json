@@ -1,0 +1,74 @@
+{
+ "rules": {
+  "classifier": {
+   "provider": "system1"
+  },
+  "rules": [
+   {
+    "when": "trivial",
+    "use": [
+     {
+      "harness": "claude",
+      "model": "claude-sonnet-5"
+     },
+     {
+      "harness": "codex",
+      "model": "gpt-5.5"
+     }
+    ]
+   },
+   {
+    "when": "risky",
+    "approval": "captain",
+    "use": {
+     "harness": "claude"
+    }
+   },
+   {
+    "when": "ordered",
+    "select": "ordered",
+    "use": [
+     {
+      "harness": "codex"
+     },
+     {
+      "harness": "claude",
+      "effort": "high"
+     }
+    ]
+   }
+  ],
+  "default": [
+   {
+    "harness": "claude",
+    "effort": "medium"
+   }
+  ]
+ },
+ "classifier_response": {
+  "model": "jev-1",
+  "answers": {
+   "rule": {
+    "choice": "rule_1",
+    "confidence": 0.9,
+    "probabilities": {
+     "rule_1": 0.9,
+     "rule_2": 0.033333333333333326,
+     "rule_3": 0.033333333333333326,
+     "default": 0.033333333333333326
+    }
+   }
+  }
+ },
+ "http_code": 200,
+ "quota": {
+  "schemaVersion": 4,
+  "providers": []
+ },
+ "firstmate": {
+  "status": "error",
+  "profile": null,
+  "candidates": []
+ },
+ "firstmate_output": "dispatch-resolve:\n  status: error\n  reason: quota-axi --json returned an invalid snapshot\n"
+}

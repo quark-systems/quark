@@ -12,16 +12,22 @@
 //!
 //! What runs where comes from a [`Workloads`] source. The supervisor will
 //! provide the real one; until then [`StaticWorkloads`] holds a list set by
-//! the caller. Admission control (holding or placing workers by capacity)
-//! is not in this crate yet; it reads `sample` when it lands.
+//! the caller.
+//!
+//! [`EventHosts`] is the [`quark_core::HostRegistry`]: every registration
+//! and health change is a [`registry::HOST`] event. Admission control,
+//! which places workers by these hosts and their samples, lives in
+//! `quark-dispatch`.
 
 pub mod attribution;
 pub mod disk;
 pub mod pressure;
 pub mod probe;
 pub mod recorder;
+pub mod registry;
 pub mod sampler;
 
 pub use attribution::{StaticWorkloads, Workload, Workloads};
 pub use probe::{Probe, ProcessInfo, Reading, SystemProbe};
+pub use registry::{EventHosts, HostChange};
 pub use sampler::{HostSampler, QuarkPaths, SamplerConfig};

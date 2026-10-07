@@ -20,6 +20,8 @@ quark-sessions = { path = "crates/quark-sessions" }
 quark-eventlog = { path = "crates/quark-eventlog" }
 quark-isolation = { path = "crates/quark-isolation" }
 quark-supervisor = { path = "crates/quark-supervisor" }
+quark-hosts = { path = "crates/quark-hosts" }
+quark-dispatch = { path = "crates/quark-dispatch" }
 quark-worktree = { path = "crates/quark-worktree" }
 quark-triggers = { path = "crates/quark-triggers" }
 quark-runtime = { path = "crates/quark-runtime" }

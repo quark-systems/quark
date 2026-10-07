@@ -1,0 +1,128 @@
+{
+ "rules": {
+  "classifier": {
+   "provider": "system1"
+  },
+  "rules": [
+   {
+    "when": "trivial",
+    "use": [
+     {
+      "harness": "claude",
+      "model": "claude-sonnet-5"
+     },
+     {
+      "harness": "codex",
+      "model": "gpt-5.5"
+     }
+    ]
+   },
+   {
+    "when": "risky",
+    "approval": "captain",
+    "use": {
+     "harness": "claude"
+    }
+   },
+   {
+    "when": "ordered",
+    "select": "ordered",
+    "use": [
+     {
+      "harness": "codex"
+     },
+     {
+      "harness": "claude",
+      "effort": "high"
+     }
+    ]
+   }
+  ],
+  "default": [
+   {
+    "harness": "claude",
+    "effort": "medium"
+   }
+  ]
+ },
+ "classifier_response": {
+  "model": "jev-1",
+  "answers": {
+   "rule": {
+    "choice": "rule_3",
+    "confidence": 0.9,
+    "probabilities": {
+     "rule_1": 0.033333333333333326,
+     "rule_2": 0.033333333333333326,
+     "rule_3": 0.9,
+     "default": 0.033333333333333326
+    }
+   }
+  }
+ },
+ "http_code": 200,
+ "quota": {
+  "schemaVersion": 5,
+  "providers": [
+   {
+    "provider": "claude",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 70,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.2
+       }
+      }
+     ]
+    }
+   },
+   {
+    "provider": "codex",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 40,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.7
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "firstmate": {
+  "status": "clear",
+  "profile": {
+   "harness": "codex",
+   "model": null,
+   "effort": null
+  },
+  "candidates": [
+   {
+    "harness": "codex",
+    "model": null,
+    "eligible": true
+   },
+   {
+    "harness": "claude",
+    "model": null,
+    "eligible": true
+   }
+  ]
+ },
+ "firstmate_output": "dispatch-resolve:\n  status: clear\n  model: jev-1   latency_ms: 0   tokens: -/-\n  rule: rule_3 (ordered)   confidence: 0.9\n  probabilities: rule_1=0.033333333333333326 rule_2=0.033333333333333326 rule_3=0.9 default=0.033333333333333326\n  note: rule matched\n  select: ordered\n  candidate: codex:-  provider=codex  scope=all_models  remaining=40%  spendPriority=0.7  runway=through_reset  -> eligible\n  candidate: claude:-  provider=claude  scope=all_models  remaining=70%  spendPriority=0.2  runway=through_reset  -> eligible\n  selected: codex:- (first eligible profile in listed order)\n  profile: --harness 'codex'\n"
+}
