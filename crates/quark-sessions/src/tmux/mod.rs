@@ -431,17 +431,20 @@ impl Handler for Reader {
     }
 
     fn pause(&mut self, client: &ControlClient<Tag>, pane: &str) {
-        // tmux dropped this pane's queued output. Repaint, then continue.
+        // tmux dropped this pane's queued output. Continue, then repaint:
+        // output before the capture is in it and output after follows, so
+        // nothing written in between is lost.
         let client = client.clone();
         let pane = pane.to_string();
         tokio::spawn(async move {
-            if TmuxBackend::request_repaint(&client, &pane).await.is_ok() {
-                let _ = client
-                    .send(
-                        &format!("refresh-client -A '{pane}:continue'"),
-                        Waiter::Discard,
-                    )
-                    .await;
+            let resumed = client
+                .send(
+                    &format!("refresh-client -A '{pane}:continue'"),
+                    Waiter::Discard,
+                )
+                .await;
+            if resumed.is_ok() {
+                let _ = TmuxBackend::request_repaint(&client, &pane).await;
             }
         });
     }
