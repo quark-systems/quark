@@ -65,6 +65,7 @@ async fn metrics_count_the_projects_own_events() {
         chat: Arc::new(quarkd::chat::RecordingInput::new()),
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: events.clone(),
+        triggers: None,
     });
     let project = store
         .create_project(CreateProject {

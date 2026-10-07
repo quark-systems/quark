@@ -19,7 +19,7 @@
 //! | 3 worker protocol | `answer` |
 //! | 4 supervision | `send_message`, `control`, `spawn`, `coordinator_terminals`, `account_envs` |
 //! | 5 dispatch | `resolve_dispatch`, `resolve_description`, `set_crew_dispatch` |
-//! | 7 sub-coordinators | `add_source`, `seed_workspace`, `start_coordinator` |
+//! | 7 sub-coordinators | `add_source`, `seed_workspace`, `start_coordinator`, `inbox_note` |
 //!
 //! Modes change at runtime with [`ShadowEngine::set_mode`] and
 //! [`ShadowEngine::rollback`]; each change is logged as a `slice.mode`
@@ -235,6 +235,12 @@ impl EngineAdapter for ShadowEngine {
     ) -> Result<(), EngineError> {
         self.acting(Slice::Supervision)
             .send_message(ws, task_id, text)
+            .await
+    }
+
+    async fn inbox_note(&self, ws: &WorkspaceRef, text: &str) -> Result<(), EngineError> {
+        self.acting(Slice::SubCoordinators)
+            .inbox_note(ws, text)
             .await
     }
 

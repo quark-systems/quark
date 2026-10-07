@@ -834,6 +834,126 @@
         }
       }
     },
+    "/v1/projects/{id}/automation": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "The Project's inbox, rules and away policy.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectAutomation"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The automation engine is off (`automation_off`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/away/policy": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Replace the Project's away policy.",
+        "description": "`routes` lists the cells that differ from the default; every other cell\ngoes back to its default. A policy where a decision or a failure would\nreach no one is refused.",
+        "operationId": "put_policy",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAwayPolicy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AwaySettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The automation engine is off (`automation_off`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/dispatch": {
       "get": {
         "tags": [
@@ -1015,6 +1135,80 @@
           },
           "409": {
             "description": "`dispatch.yaml` does not compile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/inbox": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Leave a note for the coordinator.",
+        "description": "Until slice 7 switches on, the note goes to today's coordinator through\nthe engine, which wakes it at its next check; the automation engine\nmirrors it into the inbox shortly after.",
+        "operationId": "post_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewInboxNote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued for the coordinator"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Project has no workspace yet (`workspace_missing`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The automation engine is off (`automation_off`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1685,6 +1879,136 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/triggers/{rule}": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Add or replace a trigger rule.",
+        "operationId": "put_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule",
+            "in": "path",
+            "description": "Rule id: 1-64 letters, digits, '-', '_' or '.'",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutTriggerRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The rule does not parse or would never run safely",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The automation engine is off (`automation_off`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Remove a trigger rule.",
+        "operationId": "delete_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The automation engine is off (`automation_off`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3181,6 +3505,111 @@
           "not_configured",
           "unknown"
         ]
+      },
+      "AwayOccasion": {
+        "type": "string",
+        "description": "What happened, as far as routing cares.",
+        "enum": [
+          "progress",
+          "paused",
+          "done",
+          "decision",
+          "blocked",
+          "failed",
+          "stale",
+          "inbound",
+          "trigger_fired",
+          "trigger_failed"
+        ]
+      },
+      "AwayPosture": {
+        "type": "string",
+        "description": "Where the user is.",
+        "enum": [
+          "present",
+          "away",
+          "quiet"
+        ]
+      },
+      "AwayReach": {
+        "type": "string",
+        "description": "How the user hears about an occasion.",
+        "enum": [
+          "silent",
+          "digest",
+          "notify",
+          "hold"
+        ]
+      },
+      "AwayRoute": {
+        "type": "object",
+        "description": "One cell of the away policy.",
+        "required": [
+          "posture",
+          "occasion",
+          "wake",
+          "user"
+        ],
+        "properties": {
+          "occasion": {
+            "$ref": "#/components/schemas/AwayOccasion"
+          },
+          "overridden": {
+            "type": "boolean",
+            "description": "Differs from the built-in default because the Project or the global\npolicy set it."
+          },
+          "posture": {
+            "$ref": "#/components/schemas/AwayPosture"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AwayReach"
+          },
+          "wake": {
+            "type": "boolean",
+            "description": "Wake the coordinator for judgment."
+          }
+        }
+      },
+      "AwaySettings": {
+        "type": "object",
+        "description": "The away policy in force for a Project.",
+        "required": [
+          "posture",
+          "digest_secs",
+          "routes",
+          "waiting",
+          "held"
+        ],
+        "properties": {
+          "digest_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds between digests.",
+            "minimum": 0
+          },
+          "held": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items held for the user's return.",
+            "minimum": 0
+          },
+          "posture": {
+            "$ref": "#/components/schemas/AwayPosture"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AwayRoute"
+            },
+            "description": "Every posture and occasion."
+          },
+          "waiting": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items waiting for the next digest.",
+            "minimum": 0
+          }
+        }
       },
       "ChangedFile": {
         "type": "object",
@@ -4876,6 +5305,42 @@
           }
         }
       },
+      "InboxMessage": {
+        "type": "object",
+        "description": "A message from any channel, waiting until the coordinator handles it.",
+        "required": [
+          "id",
+          "channel",
+          "from",
+          "body",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "body": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "description": "`inbox` for notes; email, voice and mentions later."
+          },
+          "from": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "Interventions": {
         "type": "object",
         "description": "Times work stopped for someone: a worker asking for a decision or\nreporting it is stuck.",
@@ -5226,6 +5691,18 @@
           "automatic"
         ]
       },
+      "NewInboxNote": {
+        "type": "object",
+        "description": "A note for the coordinator.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          }
+        }
+      },
       "Project": {
         "type": "object",
         "description": "A Project: a goal-driven workspace that owns tasks, decisions and PRs.",
@@ -5322,6 +5799,42 @@
               "null"
             ],
             "description": "Local path of the Project workspace, once it is provisioned or attached."
+          }
+        }
+      },
+      "ProjectAutomation": {
+        "type": "object",
+        "description": "Everything the Automation screen shows, in one read.",
+        "required": [
+          "project_id",
+          "acting",
+          "inbox",
+          "rules",
+          "away"
+        ],
+        "properties": {
+          "acting": {
+            "type": "boolean",
+            "description": "Whether the native engine acts on rules and routes, or only records\nwhat it would do beside the current engine."
+          },
+          "away": {
+            "$ref": "#/components/schemas/AwaySettings"
+          },
+          "inbox": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxMessage"
+            },
+            "description": "Messages waiting for the coordinator, oldest first."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TriggerRule"
+            }
           }
         }
       },
@@ -5740,6 +6253,31 @@
           }
         ],
         "description": "Request body for `PUT /v1/projects/{id}/dispatch`."
+      },
+      "PutTriggerRule": {
+        "type": "object",
+        "description": "A rule to add or replace under the id in the path.",
+        "required": [
+          "when",
+          "then"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "then": {
+            "type": "object"
+          },
+          "when": {
+            "type": "object"
+          }
+        }
       },
       "QuotaState": {
         "type": "string",
@@ -6597,6 +7135,51 @@
           "tool_result"
         ]
       },
+      "TriggerRule": {
+        "type": "object",
+        "description": "A condition-to-action rule as defined.\n\n`when` is one of `{\"source\": \"event\", \"kind\", \"task\"?, \"fields\"?}`,\n`{\"source\": \"every\", \"secs\"}`, `{\"source\": \"at\", \"at\"}` or\n`{\"source\": \"command\", \"argv\", \"interval_secs\"?, \"stable\"?,\n\"timeout_secs\"?, \"expect\"?, \"error_budget\"?}`. `then` is one of\n`{\"do\": \"wake\", \"note\"}`, `{\"do\": \"inbox\", \"body\"}`,\n`{\"do\": \"steer\", \"task\", \"text\"}` or\n`{\"do\": \"command\", \"argv\", \"timeout_secs\"?}`.",
+        "required": [
+          "id",
+          "description",
+          "enabled",
+          "once",
+          "when",
+          "then",
+          "defined_at",
+          "fires"
+        ],
+        "properties": {
+          "defined_at": {
+            "type": "string",
+            "description": "When this version of the rule was defined, RFC 3339."
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "fires": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fires so far (or would-be fires, when the engine is not acting).",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean",
+            "description": "Stops after its first fire. Time (`at`) and command conditions\nalways fire once."
+          },
+          "then": {
+            "type": "object"
+          },
+          "when": {
+            "type": "object"
+          }
+        }
+      },
       "UnavailableMetric": {
         "type": "object",
         "description": "A metric the dashboard shows as not measured yet.",
@@ -6634,6 +7217,26 @@
               "type": "string"
             },
             "description": "Replaces the account's pools."
+          }
+        }
+      },
+      "UpdateAwayPolicy": {
+        "type": "object",
+        "description": "Replace a Project's away policy: the digest interval and every cell that\nshould differ from the default (`overridden` is ignored).",
+        "required": [
+          "digest_secs"
+        ],
+        "properties": {
+          "digest_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AwayRoute"
+            }
           }
         }
       },

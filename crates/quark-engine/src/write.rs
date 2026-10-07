@@ -38,6 +38,7 @@ pub const PR_MERGE: &str = "fm-pr-merge.sh";
 pub const PROJECT_YOLO: &str = "fm-project-yolo.sh";
 pub const CAPTAIN_HOLD: &str = "fm-captain-hold.sh";
 pub const GATES: &str = "fm-gates.sh";
+pub const INBOX: &str = "fm-inbox.sh";
 pub const CREW_DISPATCH: &str = "fm-crew-dispatch.sh";
 
 /// Largest gate config accepted, in bytes (`fm-gates.sh` refuses more).
@@ -53,6 +54,8 @@ pub const MAX_CREW_DISPATCH_CONFIG_BYTES: usize = 256 * 1024;
 
 /// The target name [`WriteOp::CrewDispatchConfig`] reports.
 pub const CREW_DISPATCH_TARGET: &str = "crew-dispatch";
+/// The target [`WriteOp::InboxNote`] names: the workspace's own inbox.
+pub const INBOX_TARGET: &str = "inbox";
 
 /// Longest scope or project description accepted, in characters.
 pub const MAX_LINE_CHARS: usize = 600;
@@ -162,6 +165,9 @@ pub enum WriteOp {
     /// JSON in `FM_CREW_DISPATCH_CONFIG_JSON`. The script validates it and
     /// exits 1, leaving the old file in place, when it is invalid.
     CrewDispatchConfig { json: String },
+    /// Leave the user's note in the workspace inbox, waking the coordinator
+    /// at its next check: `fm-inbox.sh note <text>`.
+    InboxNote { text: String },
 }
 
 /// How a pull request is merged on GitHub. GitLab uses the project's setting.
@@ -213,6 +219,7 @@ impl WriteOp {
             WriteOp::ProjectYolo { .. } => PROJECT_YOLO,
             WriteOp::GatesConfig { .. } => GATES,
             WriteOp::CrewDispatchConfig { .. } => CREW_DISPATCH,
+            WriteOp::InboxNote { .. } => INBOX,
         }
     }
 
@@ -230,6 +237,7 @@ impl WriteOp {
             WriteOp::HomeSeed { id, .. } | WriteOp::SpawnSecondmate { id, .. } => id,
             WriteOp::GatesConfig { .. } => GATES_TARGET,
             WriteOp::CrewDispatchConfig { .. } => CREW_DISPATCH_TARGET,
+            WriteOp::InboxNote { .. } => INBOX_TARGET,
         }
     }
 
@@ -243,7 +251,8 @@ impl WriteOp {
             | WriteOp::Answer { .. }
             | WriteOp::AnswerHold { .. }
             | WriteOp::GatesConfig { .. }
-            | WriteOp::CrewDispatchConfig { .. } => Duration::from_secs(60),
+            | WriteOp::CrewDispatchConfig { .. }
+            | WriteOp::InboxNote { .. } => Duration::from_secs(60),
             WriteOp::PrMerge { .. } => Duration::from_secs(300),
             WriteOp::Exit { .. } => Duration::from_secs(120),
             WriteOp::Relaunch { .. } | WriteOp::SpawnSecondmate { .. } => Duration::from_secs(300),
@@ -423,6 +432,14 @@ impl WriteOp {
             }
             WriteOp::ProjectYolo { name, on } => {
                 Ok(vec![name.clone(), if *on { "on" } else { "off" }.into()])
+            }
+            WriteOp::InboxNote { text } => {
+                check_message(text).map_err(invalid)?;
+                // `note -` reads the body from standard input.
+                if text.trim() == "-" {
+                    return Err(invalid("a note may not be just \"-\"".into()));
+                }
+                Ok(vec!["note".into(), text.clone()])
             }
             WriteOp::GatesConfig { json } => {
                 check_json_object("gates config", json, MAX_GATES_CONFIG_BYTES).map_err(invalid)?;
@@ -749,6 +766,19 @@ mod tests {
         WriteOp::Send {
             task_id: "t1".into(),
             text: text.into(),
+        }
+    }
+
+    #[test]
+    fn inbox_note_renders_and_refuses_stdin() {
+        let note = |t: &str| WriteOp::InboxNote { text: t.into() };
+        assert_eq!(note("look at CI").script(), INBOX);
+        assert_eq!(
+            note("look at CI").argv().unwrap(),
+            vec!["note", "look at CI"]
+        );
+        for bad in ["-", " - ", "", "--x", "/quit"] {
+            assert!(note(bad).argv().is_err(), "{bad:?}");
         }
     }
 

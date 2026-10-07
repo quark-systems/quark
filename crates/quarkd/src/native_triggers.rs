@@ -2,7 +2,7 @@
 //! bash engine.
 //!
 //! Slice 7 switches on after slices 1 to 6, so firstmate still owns every
-//! Project's inbox, away posture and watches. When [`ENV`] is `1`, quarkd
+//! Project's inbox, away posture and watches. Unless [`ENV`] is `0`, quarkd
 //! runs the native engine in shadow mode on a timer:
 //!
 //! - mirrors each Project's firstmate inbox notes and away posture into
@@ -11,8 +11,8 @@
 //!   away classifier, recording disagreements as `shadow.divergence`;
 //! - evaluates trigger rules and records what would have fired.
 //!
-//! It never wakes, notifies or steers anyone. See
-//! `docs/engine/triggers.md`.
+//! It never wakes, notifies or steers anyone. The same engine serves the
+//! Automation API (`api/automation.rs`). See `docs/engine/triggers.md`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,16 +23,16 @@ use quark_triggers::{Engine, Mode, NoEffects, Processes};
 
 use crate::store::Store;
 
-/// Set to `1` to run the slice 7 engine in shadow mode.
+/// Set to `0` to turn the slice 7 shadow engine off.
 pub const ENV: &str = "QUARK_NATIVE_TRIGGERS";
 
 pub fn enabled() -> bool {
-    std::env::var(ENV).is_ok_and(|v| v == "1")
+    !std::env::var(ENV).is_ok_and(|v| v == "0")
 }
 
 /// The shadow engine and the Projects it mirrors.
 pub struct ShadowTriggers {
-    engine: Engine,
+    engine: Arc<Engine>,
     store: Arc<Store>,
 }
 
@@ -46,7 +46,15 @@ impl ShadowTriggers {
             Arc::new(Processes),
         )
         .await?;
-        Ok(Self { engine, store })
+        Ok(Self {
+            engine: Arc::new(engine),
+            store,
+        })
+    }
+
+    /// The engine, for the API.
+    pub fn engine(&self) -> Arc<Engine> {
+        self.engine.clone()
     }
 
     /// Mirror every Project's firstmate home, then evaluate.

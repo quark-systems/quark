@@ -250,6 +250,58 @@ function settingsOf(proj) {
   };
 }
 
+// The Automation tab (slice 7): inbox, trigger rules and the away policy. Like quarkd before slice 7
+// switches on, the mock is not acting: rules only count would-be fires. A note lands in the inbox
+// at once (quarkd mirrors firstmate's on its next pass).
+const ROUTE_WAKE = new Set(["done", "decision", "blocked", "failed", "inbound", "trigger_failed"]);
+const ROUTE_USER = {
+  progress: ["silent", "silent", "silent"], paused: ["silent", "silent", "silent"], stale: ["silent", "silent", "silent"],
+  done: ["notify", "digest", "digest"], decision: ["notify", "hold", "notify"], blocked: ["notify", "hold", "digest"],
+  failed: ["notify", "digest", "notify"], inbound: ["silent", "silent", "silent"],
+  trigger_fired: ["digest", "digest", "digest"], trigger_failed: ["notify", "digest", "notify"],
+};
+const POSTURES = ["present", "away", "quiet"];
+const defaultRoute = (posture, occasion) => ({ wake: ROUTE_WAKE.has(occasion), user: ROUTE_USER[occasion][POSTURES.indexOf(posture)] });
+const automation = new Map(); // project id -> { inbox, rules: Map, digest_secs, overrides: Map("posture/occasion" -> route) }
+function automationState(proj) {
+  if (!automation.has(proj.id)) {
+    automation.set(proj.id, {
+      inbox: [{ id: "1-seed", channel: "inbox", from: "cli", body: "Check whether the nightly build is still red.", at: now(), task_id: null }],
+      rules: new Map([["upstream-quark-12", {
+        id: "upstream-quark-12", description: "Follow up on the upstream issue", enabled: true, once: true,
+        when: { source: "command", argv: ["gh", "issue", "view", "12", "--json", "state"], interval_secs: 3600, stable: 1, timeout_secs: 60, expect: { op: "differs", value: "OPEN" }, error_budget: 24 },
+        then: { do: "wake", note: "The upstream issue changed." }, defined_at: now(), fires: 0,
+      }]]),
+      digest_secs: 3600, overrides: new Map(),
+    });
+  }
+  return automation.get(proj.id);
+}
+function awayOf(a) {
+  const routes = [];
+  for (const posture of POSTURES) for (const occasion of Object.keys(ROUTE_USER)) {
+    const o = a.overrides.get(`${posture}/${occasion}`);
+    routes.push({ posture, occasion, ...(o ?? defaultRoute(posture, occasion)), overridden: !!o });
+  }
+  return { posture: "present", digest_secs: a.digest_secs, routes, waiting: 0, held: 0 };
+}
+const automationOf = (proj) => {
+  const a = automationState(proj);
+  return { project_id: proj.id, acting: false, inbox: a.inbox, rules: [...a.rules.values()], away: awayOf(a) };
+};
+function ruleProblem(id, b) {
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(id)) return "a rule id is 1 to 64 letters, digits, '-', '_' or '.'";
+  const w = b?.when, t = b?.then;
+  if (!w || !["event", "every", "at", "command"].includes(w.source)) return "when: unknown condition source";
+  if (!t || !["wake", "inbox", "steer", "command"].includes(t.do)) return "then: unknown action";
+  if (w.source === "event" && !w.kind) return "an event condition needs a kind";
+  if (w.source === "event" && String(w.kind).startsWith("trigger.")) return "a rule cannot watch trigger events";
+  if (w.source === "every" && !(w.secs > 0)) return "an interval must be at least one second";
+  if (w.source === "at" && isNaN(Date.parse(w.at))) return "at must be an RFC 3339 time";
+  if ((w.source === "command" && !w.argv?.length) || (t.do === "command" && !t.argv?.length)) return "a command needs at least one argument";
+  return null;
+}
+
 // POST /v1/projects/{id}/dispatch:test. The mock has no classifier, except that a description
 // sharing a word with a rule's condition (a rename or a typo, for the trivial-edit rule) matches
 // that rule, so both outcomes can be seen. Like quarkd, it does not resolve rules that are not saved.
@@ -762,6 +814,55 @@ const server = http.createServer(async (req, res) => {
       provision(proj);
       return send(res, 202);
     }
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/automation$/)) && req.method === "GET") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    return send(res, 200, automationOf(proj));
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/inbox$/)) && req.method === "POST") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const b = await readJson(req);
+    if (!b || typeof b.body !== "string" || !b.body.trim()) return invalid(res, "a note needs a body");
+    const a = automationState(proj);
+    a.inbox.push({ id: `${Date.now()}-${a.inbox.length}`, channel: "inbox", from: "app", body: b.body.trim(), at: now(), task_id: null });
+    return send(res, 202);
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/triggers\/([^/]+)$/)) && (req.method === "PUT" || req.method === "DELETE")) {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const a = automationState(proj), id = decodeURIComponent(r[2]);
+    if (req.method === "DELETE") {
+      if (!a.rules.delete(id)) return send(res, 404, { error: { code: "not_found", message: `no rule ${id}` } });
+      return send(res, 204);
+    }
+    const b = await readJson(req);
+    const problem = ruleProblem(id, b);
+    if (problem) return invalid(res, problem);
+    const was = a.rules.get(id);
+    const rule = { id, description: b.description ?? "", enabled: b.enabled ?? true, once: !!b.once, when: b.when, then: b.then, defined_at: was?.defined_at ?? now(), fires: was?.fires ?? 0 };
+    a.rules.set(id, rule);
+    return send(res, 200, rule);
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/away\/policy$/)) && req.method === "PUT") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const b = await readJson(req);
+    if (!b || !(b.digest_secs > 0)) return invalid(res, "digest interval must be at least one second");
+    const overrides = new Map();
+    for (const c of b.routes ?? []) {
+      if (!POSTURES.includes(c.posture) || !ROUTE_USER[c.occasion]) return invalid(res, "unknown posture or occasion");
+      const d = defaultRoute(c.posture, c.occasion);
+      if (d.wake !== c.wake || d.user !== c.user) overrides.set(`${c.posture}/${c.occasion}`, { wake: !!c.wake, user: c.user });
+    }
+    for (const posture of POSTURES) for (const occasion of ["decision", "failed", "trigger_failed"]) {
+      const c = overrides.get(`${posture}/${occasion}`) ?? defaultRoute(posture, occasion);
+      if (!c.wake && c.user === "silent") return invalid(res, `while ${posture}, a ${occasion.replace("_", " ")} would reach no one`);
+    }
+    const a = automationState(proj);
+    a.digest_secs = b.digest_secs; a.overrides = overrides;
+    return send(res, 200, awayOf(a));
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/metrics$/)) && req.method === "GET") {
     const proj = projects.get(decodeURIComponent(r[1]));

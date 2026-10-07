@@ -102,6 +102,11 @@ export function Settings({ project: pid }: { project: string }) {
             <a className="btn" href={href({ name: "dispatch", project: pid })} data-testid="settings-open-dispatch">Edit dispatch rules</a>
           </Section>
 
+          <Section title="Automation" testId="settings-automation">
+            <p className="faint">The coordinator's inbox, trigger rules, and what reaches you while you are away or quiet.</p>
+            <a className="btn" href={href({ name: "automation", project: pid })} data-testid="settings-open-automation">Open automation</a>
+          </Section>
+
           <Section title="Memory" testId="settings-memory">
             {s && <p data-testid="settings-memory-summary">
               {plural(s.memory.entries, "entry", "entries")}, {plural(s.memory.proposals_to_review, "proposal")} to review.

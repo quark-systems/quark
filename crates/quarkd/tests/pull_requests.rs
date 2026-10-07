@@ -59,6 +59,7 @@ async fn harness() -> Harness {
         chat: Arc::new(RecordingInput::new()),
         forge: forge.clone(),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
+        triggers: None,
     });
     let project = store
         .create_project(CreateProject {

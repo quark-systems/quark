@@ -661,3 +661,52 @@ test("metrics: the dashboard's Metrics tab shows how the work went and changes i
   await expect(page.getByTestId("metrics-coverage")).toContainText("Last 30 days");
   await expect(page.getByTestId("metrics-day")).toHaveCount(30);
 });
+
+test("automation: leave a note, add and remove a rule, change what reaches you while away", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await page.getByTestId("nav-automation").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/automation$/);
+  await expect(page.getByTestId("automation-shadow")).toBeVisible();
+
+  // A note goes to the coordinator's inbox.
+  const inbox = page.getByTestId("automation-inbox");
+  await inbox.getByLabel("Note for the coordinator").fill("Look at the flaky test");
+  await inbox.getByRole("button", { name: "Leave note" }).click();
+  await expect(page.getByTestId("automation-note-sent")).toBeVisible();
+  await expect(page.getByTestId("automation-inbox-item").last()).toContainText("Look at the flaky test");
+
+  // A rule: an invalid interval is refused with the daemon's reason, a valid one is listed.
+  const rules = page.getByTestId("automation-rules");
+  await page.getByTestId("automation-add-rule").click();
+  const form = page.getByTestId("automation-rule-form");
+  await form.getByLabel("Rule id").fill("nightly");
+  await form.getByLabel("Condition").selectOption("every");
+  await form.getByLabel("Interval seconds").fill("0");
+  await form.getByLabel("Wake note").fill("Check the nightly build.");
+  await form.getByRole("button", { name: "Save rule" }).click();
+  await expect(page.getByTestId("automation-rule-error")).toContainText("at least one second");
+  await form.getByLabel("Interval seconds").fill("86400");
+  await form.getByRole("button", { name: "Save rule" }).click();
+  const nightly = page.getByTestId("automation-rule").filter({ hasText: "nightly" });
+  await expect(nightly).toContainText("every day → wake the coordinator");
+  await expect(nightly.getByTestId("automation-rule-fires")).toHaveText("0 fires");
+  await nightly.getByRole("button", { name: "Delete" }).click();
+  await expect(rules.getByTestId("automation-rule").filter({ hasText: "nightly" })).toHaveCount(0);
+
+  // The away policy: losing a decision is refused; sending done right away while away sticks.
+  const away = page.getByTestId("automation-away");
+  await expect(page.getByTestId("automation-posture")).toHaveText("Present");
+  const decision = page.getByTestId("automation-route-decision");
+  await decision.getByLabel("Decision away: wake the coordinator").uncheck();
+  await decision.getByLabel("Decision away: you hear").selectOption("silent");
+  await away.getByRole("button", { name: "Save policy" }).click();
+  await expect(page.getByTestId("automation-away-error")).toContainText("would reach no one");
+  await decision.getByLabel("Decision away: wake the coordinator").check();
+  await decision.getByLabel("Decision away: you hear").selectOption("hold");
+  await page.getByTestId("automation-route-done").getByLabel("Done away: you hear").selectOption("notify");
+  await away.getByRole("button", { name: "Save policy" }).click();
+  await expect(page.getByTestId("automation-away-error")).toHaveCount(0);
+  const a = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/automation")).json());
+  const overridden = a.away.routes.filter((r: { overridden: boolean }) => r.overridden);
+  expect(overridden).toEqual([{ posture: "away", occasion: "done", wake: true, user: "notify", overridden: true }]);
+});

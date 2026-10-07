@@ -12,6 +12,7 @@ export const ROUTES = {
   dispatch: "p/:project/dispatch", // the Project's dispatch rules: edit, save, test
   settings: "p/:project/settings", // the Project dashboard's Settings tab: every per-Project switch
   metrics: "p/:project/metrics", // the Project dashboard's Metrics tab: how the work has gone
+  automation: "p/:project/automation", // the Project's inbox, trigger rules and away policy
   task: "t/:id", // worker view
   inbox: "inbox/:id?", // decisions inbox, optionally with one decision selected
   prs: "prs", // PR center

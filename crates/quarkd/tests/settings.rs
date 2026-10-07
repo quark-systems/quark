@@ -73,6 +73,7 @@ async fn settings_read_every_switch_and_change_holdout_and_standing_approval() {
         chat: Arc::new(quarkd::chat::RecordingInput::new()),
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
+        triggers: None,
     });
 
     let project = store

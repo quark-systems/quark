@@ -9,6 +9,7 @@
 //! than growing an existing one.
 
 mod account;
+mod automation;
 mod dispatch;
 mod event;
 mod harness;
@@ -23,6 +24,7 @@ mod terminal;
 mod transcript;
 
 pub use account::*;
+pub use automation::*;
 pub use dispatch::*;
 pub use event::*;
 pub use harness::*;

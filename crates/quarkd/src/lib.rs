@@ -142,16 +142,19 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host()),
     );
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
-    let triggers_task = if native_triggers::enabled() {
+    let (triggers, triggers_task) = if native_triggers::enabled() {
         match native_triggers::ShadowTriggers::open(store.clone(), Arc::new(events.clone())).await {
-            Ok(t) => Some(tokio::spawn(t.run(config.refresh_interval))),
+            Ok(t) => (
+                Some(t.engine()),
+                Some(tokio::spawn(t.run(config.refresh_interval))),
+            ),
             Err(e) => {
                 tracing::warn!(error = %format!("{e:#}"), "slice 7 shadow not started");
-                None
+                (None, None)
             }
         }
     } else {
-        None
+        (None, None)
     };
     let slices = engine::shadow::slices_from_env()?;
     let verify_task = (slices.mode(quark_core::Slice::Verification)
@@ -184,6 +187,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         )),
         forge,
         events,
+        triggers,
     });
     if let Some(n) = &native {
         app = app.nest(native::WORKER_PREFIX, n.worker_router());

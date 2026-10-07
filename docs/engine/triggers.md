@@ -72,11 +72,24 @@ Until slice 7 switches on, the engine runs in `Mode::Shadow` beside firstmate:
 - Each `firstmate.status` line the slice 1 bridge records is routed natively and compared with firstmate's classifier (`status_is_captain_relevant`, ported as `firstmate::bash_escalates`). A disagreement is a `shadow.divergence` event for slice `sub_coordinators`, operation `away.route`; every pass that compared something records `away.shadowed` with its counts.
 - Rules are evaluated and recorded as `trigger.would_fire`; no action runs and nobody is woken, notified or steered. Polled conditions do run their commands.
 
-In quarkd, `QUARK_NATIVE_TRIGGERS=1` runs this pass on the projector's interval (`crates/quarkd/src/native_triggers.rs`).
+quarkd runs this pass on the projector's interval unless `QUARK_NATIVE_TRIGGERS=0` (`crates/quarkd/src/native_triggers.rs`).
+
+## API and dashboard
+
+The Project dashboard's Automation tab (`app/src/screens/dashboard/Automation.tsx`) reads and edits all of it through quarkd (`crates/quarkd/src/api/automation.rs`):
+
+| Endpoint | Does |
+|---|---|
+| `GET /v1/projects/{id}/automation` | inbox, rules with their fire counts, and the away policy with every cell |
+| `POST /v1/projects/{id}/inbox` | leaves a note for the coordinator; until slice 7 acts, through `fm-inbox.sh` so firstmate's coordinator reads it, and the next pass mirrors it |
+| `PUT`, `DELETE /v1/projects/{id}/triggers/{rule}` | defines, replaces or removes a rule |
+| `PUT /v1/projects/{id}/away/policy` | replaces the Project's policy; cells equal to the default are dropped, and one that loses a decision or failure is refused |
+
+Posture is not set here: firstmate's `/afk` and `/quiet` own it until slice 7 switches on, and the engine mirrors it.
+With the engine off, these answer 503 `automation_off`.
 
 ## Not yet
 
-- The HTTP API (post to and acknowledge the inbox, define rules, set posture and policy) and the dashboard editors for rules and the away policy.
 - quarkd's `Effects` for native mode (waking the coordinator, notifications, digests, steering through the supervisor).
 - Email, voice and public mentions as `Channel` plug-ins.
 - Comparing rules with firstmate's registered when-then watches.

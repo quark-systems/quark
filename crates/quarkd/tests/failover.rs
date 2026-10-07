@@ -81,6 +81,7 @@ fn setup() -> Setup {
         chat: Arc::new(quarkd::chat::RecordingInput::new()),
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
+        triggers: None,
     });
     let failover = Failover::new(store.clone(), engine.clone(), accounts, harnesses);
     // Default accounts keep their logs under the fake home; added accounts

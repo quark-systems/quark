@@ -167,6 +167,11 @@ impl EngineAdapter for FirstmateEngine {
         self.write(ws, op).await
     }
 
+    async fn inbox_note(&self, ws: &WorkspaceRef, text: &str) -> Result<(), EngineError> {
+        self.write(ws, WriteOp::InboxNote { text: text.into() })
+            .await
+    }
+
     /// Open keyed decisions (`<task>:<key>`) are answered through the task's
     /// inbox, which closes the key in the same act. Captain holds (a backlog
     /// task id) are answered with the engine's hold record: a held work item
