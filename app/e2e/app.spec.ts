@@ -788,3 +788,27 @@ test("settings: pick the project's persona", async ({ page }) => {
   await page.getByTestId("persona-picker").selectOption("");
   await expect(page.getByTestId("coordinator-chat").getByLabel("Message the coordinator")).toBeVisible();
 });
+
+test("hosts: every host's health, telemetry, Projects and worktrees, and a Project's slice on its dashboard", async ({ page }) => {
+  await open(page, "#/");
+  await page.getByTestId("nav-hosts").click();
+  await expect(page).toHaveURL(/#\/hosts$/);
+
+  const host = page.getByTestId("host");
+  await expect(host).toHaveCount(1);
+  await expect(host).toContainText("MacBook Pro");
+  await expect(page.getByTestId("host-health")).toContainText("Healthy");
+  await expect(page.getByTestId("host-cpu").locator("svg")).toBeVisible();
+  await expect(page.getByTestId("host-quark-disk")).toContainText("event log");
+  await expect(page.getByTestId("host-project").first()).toContainText("Quark");
+  await expect(page.getByTestId("host-worktrees")).toContainText("in use");
+  await page.getByTestId("hosts-hours-24").click();
+  await expect(page.getByTestId("hosts-hours-24")).toHaveAttribute("aria-pressed", "true");
+
+  // A Project links to its dashboard, whose Overview and Metrics carry its slice of the host.
+  await page.getByTestId("host-project").first().getByRole("link").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/overview$/);
+  await expect(page.getByTestId("overview-hosts").getByTestId("project-host")).toContainText("of the host");
+  await page.getByTestId("dash-tab-metrics").click();
+  await expect(page.getByTestId("metrics-hosts").getByTestId("project-host-memory").locator("svg")).toBeVisible();
+});

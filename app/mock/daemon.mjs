@@ -319,6 +319,56 @@ function ruleProblem(id, b) {
   return null;
 }
 
+// GET /v1/hosts and /v1/projects/{id}/hosts: the Hosts view and a Project's slice of its hosts. quarkd
+// folds host registrations, telemetry samples and worktree pool reports from its event log; the mock
+// makes up one healthy Mac whose running tasks each use a little of it.
+const GB = 1024 ** 3, MB = 1024 ** 2;
+function hostSamples(hours) {
+  const n = Math.min(120, hours * 60), now = Date.now(), step = (hours * 3_600_000) / n;
+  return Array.from({ length: n }, (_, i) => {
+    const w = Math.sin(i / 9) * 0.5 + 0.5;
+    return { at: new Date(now - (n - 1 - i) * step).toISOString(), cpu: 0.15 + 0.35 * w, memory_used_bytes: Math.round((14 + 6 * w) * GB), memory_pressure: 0.1 + 0.2 * w, disk_free_bytes: Math.round((180 - i * 0.05) * GB) };
+  });
+}
+function hostUsage(proj) {
+  const running = [...tasks.values()].filter((t) => t.project_id === proj.id && ["running", "in_review", "needs_decision", "blocked"].includes(t.state));
+  const parts = [{ engine_task: null, task_id: null, title: null, cpu: 0.02, memory_bytes: 380 * MB, disk_bytes: 0 },
+    ...running.map((t, i) => ({ engine_task: t.id, task_id: t.id, title: t.title, cpu: 0.04 + 0.03 * i, memory_bytes: (600 + 150 * i) * MB, disk_bytes: (220 + 40 * i) * MB }))];
+  const sum = (k) => parts.reduce((a, p) => a + p[k], 0);
+  return { project_id: proj.id, project_name: proj.name, cpu: sum("cpu"), memory_bytes: sum("memory_bytes"), disk_bytes: sum("disk_bytes"), parts };
+}
+function hostSlots() {
+  const slots = [];
+  for (const t of tasks.values()) if (["running", "in_review", "needs_decision", "blocked"].includes(t.state)) {
+    slots.push({ path: `/Users/you/.quark/pools/${t.project_id}/wt-${slots.length + 1}`, repo: `/Users/you/.quark/projects/${t.project_id}/projects/quark`, state: "in_use", holder: t.id, project_id: t.project_id });
+  }
+  for (let i = 0; i < 2; i++) slots.push({ path: `/Users/you/.quark/pools/idle-${i + 1}`, repo: "/Users/you/.quark/projects/quark/projects/quark", state: "idle", holder: null, project_id: "quark" });
+  return slots;
+}
+const MAC = { id: "mac", name: "MacBook Pro", runtime: "local", os: "macos", arch: "aarch64",
+  capacity: { cpus: 12, memory_bytes: 36 * GB, disk_bytes: 0, max_workers: 6 }, health: { status: "healthy", reason: null, since: null } };
+function hostReading(series) {
+  const p = series.at(-1);
+  return { ...p, memory_total_bytes: MAC.capacity.memory_bytes, quark_disk: { worktrees_bytes: 3.2 * GB, logs_bytes: 410 * MB, caches_bytes: 1.1 * GB, event_log_bytes: 64 * MB } };
+}
+function hostsOf(hours) {
+  const series = hostSamples(hours);
+  const slots = hostSlots();
+  const count = (st) => slots.filter((s) => s.state === st).length;
+  const projectsHere = [...projects.values()].map(hostUsage).filter((u) => u.parts.length > 1).sort((a, b) => b.memory_bytes - a.memory_bytes);
+  return { hours, error: null, hosts: [{ ...MAC, latest: hostReading(series), series, projects: projectsHere,
+    worktrees: { at: new Date().toISOString(), idle: count("idle"), in_use: count("in_use"), dirty: 0, leased: 0, quarantined: 0, error: null, slots } }] };
+}
+function projectHostsOf(proj, hours) {
+  const series = hostSamples(hours);
+  const now = hostUsage(proj);
+  const slots = hostSlots().filter((s) => s.project_id === proj.id);
+  if (now.parts.length <= 1 && slots.length === 0) return { project_id: proj.id, hours, hosts: [], error: null };
+  const scale = (p) => 0.6 + 0.4 * (p.cpu - 0.15) / 0.35;
+  return { project_id: proj.id, hours, error: null, hosts: [{ host_id: MAC.id, name: MAC.name, health: MAC.health, capacity: MAC.capacity, now, host: hostReading(series),
+    series: series.map((p) => ({ at: p.at, cpu: now.cpu * scale(p), memory_bytes: Math.round(now.memory_bytes * scale(p)), disk_bytes: now.disk_bytes })), worktrees: slots }] };
+}
+
 // GET /v1/projects/{id}/overview: the dashboard's Overview tab. quarkd folds its event log; the mock
 // folds the tasks it holds for live status and its own task events for the digest after `since`.
 const PULSE = { queued: "working", running: "working", in_review: "working", unknown: "working", needs_decision: "needs_decision", blocked: "blocked", paused: "paused", done: "done", failed: "failed" };
@@ -924,6 +974,14 @@ const server = http.createServer(async (req, res) => {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);
     return send(res, 200, metricsOf(proj, Number(url.searchParams.get("days")) || 7));
+  }
+  if (url.pathname === "/v1/hosts" && req.method === "GET") {
+    return send(res, 200, hostsOf(Math.min(48, Math.max(1, Number(url.searchParams.get("hours")) || 6))));
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/hosts$/)) && req.method === "GET") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    return send(res, 200, projectHostsOf(proj, Math.min(48, Math.max(1, Number(url.searchParams.get("hours")) || 6))));
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/overview$/)) && req.method === "GET") {
     const proj = projects.get(decodeURIComponent(r[1]));

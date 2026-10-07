@@ -68,6 +68,9 @@ export function App() {
           <a className={"side-item" + (route.name === "accounts" ? " active" : "")} href={href({ name: "accounts" })} data-testid="nav-accounts">
             <span className="glyph">@</span>Accounts
           </a>
+          <a className={"side-item" + (route.name === "hosts" ? " active" : "")} href={href({ name: "hosts" })} data-testid="nav-hosts">
+            <span className="glyph">▤</span>Hosts
+          </a>
           <a className={"side-item" + (route.name === "new" ? " active" : "")} href={href({ name: "new" })} data-testid="nav-new-project">
             <span className="glyph">+</span>New project
           </a>

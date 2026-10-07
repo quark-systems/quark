@@ -22,6 +22,7 @@ use super::MODULES;
         (name = "harnesses"),
         (name = "personas"),
         (name = "accounts"),
+        (name = "hosts"),
         (name = "terminals"),
         (name = "coordinators"),
         (name = "events")

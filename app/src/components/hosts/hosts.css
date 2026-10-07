@@ -1,0 +1,29 @@
+/* Hosts view and the Project host slice. Colors come from the theme tokens in styles.css. */
+.hosts { overflow-y: auto; }
+.hs-body { max-width: 1000px; padding: 14px 18px 40px; display: flex; flex-direction: column; gap: 12px; }
+.hs-body > p { margin: 0; }
+.hs-error { color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
+.hs-host { background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.hs-host-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hs-host-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.hs-health { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.hs-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.hs-meta { font-size: 12px; }
+.hs-sparks { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.hs-spark { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.hs-spark svg { width: 100%; height: 32px; display: block; background: var(--bg-2); border-radius: 4px; }
+.hs-spark-empty { height: 32px; display: flex; align-items: center; font-size: 11px; }
+.hs-spark-head { display: flex; justify-content: space-between; gap: 6px; }
+.hs-label { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); }
+.hs-now { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hs-sub { margin: 0; font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); }
+.hs-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.hs-table th { text-align: left; font-weight: 600; color: var(--fg-faint); padding: 3px 10px 3px 0; border-bottom: 1px solid var(--line); }
+.hs-table td { padding: 3px 10px 3px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.hs-table td.hs-part { padding-left: 14px; }
+.hs-counts { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+.hs-counts b { font-variant-numeric: tabular-nums; }
+.hs-details summary { cursor: pointer; font-size: 12px; }
+.hs-hours { display: flex; gap: 4px; }
+.hs-slice { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.hs-slice-host { display: flex; flex-direction: column; gap: 6px; }

@@ -7,6 +7,7 @@ import { href } from "../../nav";
 import { useStore } from "../../store";
 import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
+import { ProjectHostSlice } from "../../components/hosts/ProjectHostSlice";
 import { DashboardTabs } from "./Tabs";
 import "./overview.css";
 import "./metrics.css";
@@ -92,6 +93,11 @@ export function Metrics({ project: pid }: { project: string }) {
               </table>
             )}
             <a className="btn" href={href({ name: "accounts" })}>Accounts and pools</a>
+          </section>
+
+          <section className="met-section" data-testid="metrics-hosts">
+            <h2>Hosts, last 48 hours</h2>
+            <ProjectHostSlice project={pid} hours={48} detail />
           </section>
 
           {m.unavailable.length > 0 && (

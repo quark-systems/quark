@@ -23,7 +23,7 @@ use quark_core::slice::Divergence;
 use quark_core::{EventLog, HostId, NewEvent, ProjectId, Slice, TaskId};
 use quark_dispatch::shadow::{self, Observed};
 use quark_dispatch::{ClassifierSettings, DispatchConfig, ProviderFamilies, QuotaAxi, QuotaSource};
-use quark_hosts::{EventHosts, HostSampler, Probe, SamplerConfig, StaticWorkloads, SystemProbe};
+use quark_hosts::{EventHosts, HostSampler, Probe, SamplerConfig, SystemProbe, Workloads};
 use quark_systems::DispatchStatus;
 
 use crate::config::Config;
@@ -36,6 +36,8 @@ pub const ENV: &str = "QUARK_NATIVE_DISPATCH";
 pub const MAX_WORKERS_ENV: &str = "QUARK_MAX_WORKERS";
 /// How often this host is sampled.
 pub const SAMPLE_EVERY: Duration = Duration::from_secs(60);
+/// How often directory sizes are walked again.
+pub const DISK_EVERY: Duration = Duration::from_secs(300);
 
 pub fn enabled() -> bool {
     std::env::var(ENV).is_ok_and(|v| v == "1")
@@ -177,7 +179,13 @@ pub struct HostTelemetry {
 }
 
 impl HostTelemetry {
-    pub async fn start(config: &Config, log: Arc<dyn EventLog>) -> anyhow::Result<Self> {
+    /// Registers this host and samples it, attributing usage with
+    /// `workloads`.
+    pub async fn start(
+        config: &Config,
+        log: Arc<dyn EventLog>,
+        workloads: impl Workloads + 'static,
+    ) -> anyhow::Result<Self> {
         let host = crate::event_ingest::host();
         let home = config.home.clone();
         let (probe, memory) = tokio::task::spawn_blocking(move || {
@@ -212,13 +220,15 @@ impl HostTelemetry {
             })
             .await?;
         let mut sc = SamplerConfig::new(host, config.home.clone());
+        // Sizing task worktrees walks every file in them.
+        sc.disk_every = DISK_EVERY;
         sc.quark.logs = vec![config.home.join("logs")];
         let events = config.events_path();
         sc.quark.event_log = ["", "-wal", "-shm"]
             .iter()
             .map(|s| PathBuf::from(format!("{}{s}", events.display())))
             .collect();
-        let sampler = HostSampler::new(sc, probe, StaticWorkloads::default());
+        let sampler = HostSampler::new(sc, probe, workloads);
         let task = tokio::spawn(async move {
             quark_hosts::recorder::run(&sampler, log.as_ref(), SAMPLE_EVERY, std::future::pending())
                 .await

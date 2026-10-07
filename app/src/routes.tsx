@@ -12,6 +12,7 @@ import { Inbox } from "./screens/Inbox";
 import { PullRequests } from "./screens/PullRequests";
 import { PullRequestView } from "./screens/PullRequestView";
 import { Accounts } from "./screens/Accounts";
+import { Hosts } from "./screens/Hosts";
 import { Settings } from "./screens/dashboard/Settings";
 import { Metrics } from "./screens/dashboard/Metrics";
 import { Automation } from "./screens/dashboard/Automation";
@@ -34,6 +35,7 @@ export const SCREENS: Screens = {
   prs: () => <PullRequests />,
   pr: (r) => <PullRequestView key={r.id} id={r.id} />,
   accounts: () => <Accounts />,
+  hosts: () => <Hosts />,
 };
 
 /** Renders the current route's screen. */

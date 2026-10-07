@@ -8,6 +8,7 @@ import { useStore } from "../../store";
 import { ago, errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import { HarnessLogo } from "../../components/WorkerCard/HarnessLogo";
+import { ProjectHostSlice } from "../../components/hosts/ProjectHostSlice";
 import { DashboardTabs } from "./Tabs";
 import { lastSeen, PULSE, saveSeen, summarize } from "./overview";
 import "./settings.css";
@@ -113,6 +114,11 @@ export function Overview({ project: pid }: { project: string }) {
                 {o.live.tasks.map((t) => <Pulse key={t.engine_task} t={t} />)}
               </ul>
             )}
+          </section>
+
+          <section className="set-section" data-testid="overview-hosts">
+            <div className="ov-head"><h2>Hosts</h2></div>
+            <ProjectHostSlice project={pid} />
           </section>
         </div>
       </div>

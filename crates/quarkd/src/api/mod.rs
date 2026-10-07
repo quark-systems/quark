@@ -7,6 +7,7 @@ mod dispatch;
 mod error;
 mod events;
 mod harnesses;
+mod hosts;
 mod memory;
 mod metrics;
 mod openapi;
@@ -111,6 +112,10 @@ const MODULES: &[Module] = &[
     Module {
         router: overview::router,
         openapi: <overview::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: hosts::router,
+        openapi: <hosts::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,
