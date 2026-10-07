@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+# journey-durability: the durability journeys (features/durability.md).
+# Each journey launches its own run, provisions a Project, disrupts it the way
+# a real failure would, then checks from outside (the /v1 API, the event
+# stream, the terminals and the app) that nothing was lost and every agent
+# came back. Nothing here knows which engine runs: the same journeys are the
+# switch-on bar for every native slice.
+#
+#   quark-verify journey durability [--only NAME]... [--recovery SECS] [-- <launch args>]
+#
+# Journeys: sleep, daemon-crash, tmux-loss, reboot (all four by default, in
+# that order). Launch args default to the stub engine; agent checks need an
+# engine that opens agent windows, for example
+#   -- --engine firstmate --engine-dir ../firstmate --harness fake
+# Every check prints one line, PASS, FAIL or SKIP (with the unmet
+# prerequisite). The summary lands in $QUARK_VERIFY_HOME/journeys/ and each
+# journey's evidence in its run's evidence/<journey>/. Exits 1 when any check
+# fails.
+set -uo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+Q=${QV_HELPER:-$here/quark-verify}
+base=${QUARK_VERIFY_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/quark-verify}
+
+only=() recovery=60 launch_args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --only) only+=("$2"); shift 2 ;;
+    --recovery) recovery=$2; shift 2 ;;
+    --) shift; launch_args=("$@"); break ;;
+    *) echo "journey-durability: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+[ ${#only[@]} -gt 0 ] || only=(sleep daemon-crash tmux-loss reboot)
+
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$base/journeys"
+summary=$base/journeys/durability-$stamp.txt
+fails=0
+
+ev=""
+say() {
+  echo "$*"; echo "$*" >>"$summary"
+  [ -z "$ev" ] || echo "$*" >>"$ev/result.txt"
+}
+pass() { say "PASS $journey: $*"; }
+fail() { say "FAIL $journey: $*"; fails=$((fails + 1)); }
+skip() { say "SKIP $journey: $*"; }
+
+api() { "$Q" api "$@" 2>/dev/null; }
+
+# The state a person relies on, normalized so a restart that only rewrites
+# timestamps compares equal: every Project, its tasks and every decision.
+state() {
+  local p
+  {
+    api GET /v1/projects | jq -c '[.[] | {id, name, status, goal}] | sort_by(.id)'
+    for p in $(api GET /v1/projects | jq -r '.[].id' | sort); do
+      api GET "/v1/projects/$p/tasks" | jq -c --arg p "$p" '{project: $p, tasks: ([.[] | {id, state, title}] | sort_by(.id))}'
+    done
+    api GET /v1/decisions | jq -c '[.[] | {id, state}] | sort_by(.id)'
+  }
+}
+
+last_seq() { api GET /v1/health | jq -r '.last_seq // empty'; }
+
+# Agent terminals of the journey's Project: "<terminal-id> <role>" per line.
+terminals() { api GET "/v1/projects/$project/terminals" | jq -r '.[] | "\(.id) \(.role)"' 2>/dev/null; }
+
+# The terminal's current screen, as text.
+screen() {
+  api POST "/v1/terminals/$1/snapshot" |
+    jq -r '[.. | objects | select(has("data_b64")) | .data_b64][0] // empty' | base64 -d 2>/dev/null
+}
+
+# The fake harness prints its pid on its screen; a real harness does not, and
+# then the process checks are skipped.
+agent_pid() { screen "$1" | grep -o 'fake-agent [a-z]* pid [0-9]*' | tail -1 | awk '{print $4}'; }
+
+# Whether the fake harness started <pid> as a resumed conversation.
+resumed() { "$Q" agents | jq -e --argjson pid "$1" 'select(.pid == $pid) | .resumed' >/dev/null 2>&1; }
+
+# Type a line into a terminal and wait for the agent to echo it.
+answers() { # terminal-id word
+  api POST "/v1/terminals/$1/input" "{\"data_b64\":\"$(printf '%s\r' "$2" | base64)\"}" >/dev/null || return 1
+  for _ in $(seq 1 25); do
+    screen "$1" | grep -q "got $2" && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+wait_for() { # secs cmd... ; true once cmd succeeds
+  local deadline=$((SECONDS + $1)); shift
+  until "$@"; do [ $SECONDS -lt "$deadline" ] || return 1; sleep 1; done
+}
+
+health_ok() { api GET /v1/health | jq -e '.status == "ok"' >/dev/null; }
+
+# A fresh bare repository with a main branch, for the Project to clone.
+fixture_repo() {
+  local dir=$run_dir/instance/fixture
+  rm -rf "$dir"; mkdir -p "$dir"
+  git init -q --bare -b main "$dir/repo.git"
+  git -C "$dir" clone -q repo.git work 2>/dev/null
+  git -C "$dir/work" -c user.name=quark-verify -c user.email=verify@quark.invalid \
+    commit -q --allow-empty -m "Durability fixture"
+  git -C "$dir/work" push -q origin main 2>/dev/null
+  echo "$dir/repo.git"
+}
+
+new_project() { # name ; prints the id once it is no longer provisioning
+  local repo id
+  repo=$(fixture_repo)
+  id=$(api POST /v1/projects "$(jq -nc --arg n "$1" --arg r "$repo" \
+    '{name: $n, goal: "Durability journey", repos: [{url: $r}],
+      agent_config: {harness: "claude-code", effort: "low"}, delivery: "direct"}')" | jq -r '.id // empty')
+  [ -n "$id" ] || return 1
+  wait_for 120 bash -c "'$Q' api GET /v1/projects/$id 2>/dev/null | jq -e '.status != \"provisioning\"' >/dev/null"
+  echo "$id"
+}
+
+# Records the agents to follow: terminal id, role and (fake harness) pid.
+record_agents() {
+  agents=()
+  local t role pid
+  while read -r t role; do
+    [ -n "$t" ] || continue
+    pid=$(agent_pid "$t")
+    agents+=("$t|$role|${pid:-?}")
+  done < <(terminals)
+}
+
+# Every agent recorded before is back within the recovery bound: listed as a
+# terminal again, answering input, and (fake harness) either the same process
+# or a new one started as a resumed conversation. $1 is what is expected of
+# the process: "same" (it must not have been restarted) or "back".
+check_agents() {
+  local expect=$1 a t role pid now
+  if [ ${#agents[@]} -eq 0 ]; then
+    skip "agents: the engine opened no agent terminals for the Project (needs an engine with agent windows, e.g. --engine firstmate --harness fake)"
+    return
+  fi
+  for a in "${agents[@]}"; do
+    IFS='|' read -r t role pid <<<"$a"
+    if ! wait_for "$recovery" bash -c "'$Q' api GET /v1/projects/$project/terminals 2>/dev/null | jq -e --arg t '$t' 'any(.[]; .id == \$t)' >/dev/null"; then
+      fail "$role agent $t: its terminal is not listed ${recovery}s after recovery began"
+      continue
+    fi
+    if ! wait_for "$recovery" answers "$t" "durability$RANDOM"; then
+      fail "$role agent $t: listed, but its terminal does not answer input within ${recovery}s"
+      continue
+    fi
+    if [ "$pid" = "?" ]; then
+      pass "$role agent $t: back and answering (process identity not checked: not the fake harness)"
+      continue
+    fi
+    now=$(agent_pid "$t")
+    if [ "$now" = "$pid" ]; then
+      pass "$role agent $t: the same process (pid $pid) kept running and answers"
+    elif [ "$expect" = same ]; then
+      fail "$role agent $t: was restarted (pid $pid -> ${now:-none}); nothing should have restarted it"
+    elif [ -n "$now" ] && resumed "$now"; then
+      pass "$role agent $t: relaunched (pid $pid -> $now) and resumed its conversation"
+    else
+      fail "$role agent $t: relaunched (pid $pid -> ${now:-none}) as a fresh conversation, not resumed"
+    fi
+  done
+}
+
+check_state() { # before-file
+  local after=$ev/state-after.jsonl
+  state >"$after"
+  if diff -u "$1" "$after" >"$ev/state.diff"; then
+    pass "state: every Project, task and decision reads back unchanged"
+  else
+    fail "state: Projects, tasks or decisions changed (diff in $ev/state.diff)"
+  fi
+}
+
+# Replaying the stream from the last seq seen before the disruption returns
+# only later events, each seq once and in order.
+check_events() { # seq-before
+  local frames=$ev/events-after.jsonl
+  "$Q" events --since "$1" --for 2 >"$frames" 2>/dev/null
+  if jq -s -e --argjson s "$1" '
+      [.[] | select(has("seq")) | .seq] as $q
+      | all($q[]; . > $s) and ($q == ($q | unique)) and ($q == ($q | sort))' "$frames" >/dev/null; then
+    pass "events: replay from seq $1 returns only later events, each once and in order ($(jq -s 'length' "$frames") frames)"
+  else
+    fail "events: replay from seq $1 repeats, reorders or returns old events (frames in $frames)"
+  fi
+  local now; now=$(last_seq)
+  if [ -n "$now" ] && [ "$now" -ge "$1" ]; then
+    pass "events: last_seq continues ($1 -> $now)"
+  else
+    fail "events: last_seq went back ($1 -> ${now:-none})"
+  fi
+}
+
+# The app, left open across the disruption, shows the daemon connected again
+# without a reload, and the Project's board.
+check_app() {
+  if "$Q" browser wait --testid connection --contains connected --timeout $((recovery * 1000)) >/dev/null 2>&1 &&
+    ! "$Q" browser text --testid connection 2>/dev/null | grep -q disconnected; then
+    pass "app: reconnected to the daemon without a reload"
+  else
+    fail "app: still disconnected ${recovery}s after recovery began"
+  fi
+  "$Q" browser screenshot --path "$journey/02-after.png" >/dev/null 2>&1 || true
+}
+
+# A Project created after the disruption provisions and gets its agents, so
+# the daemon can still start work, not only show old work.
+check_new_work() {
+  local id
+  id=$(new_project "After $journey") || { fail "new work: creating a Project after recovery failed"; return; }
+  local p; p=$(api GET "/v1/projects/$id")
+  if echo "$p" | jq -e '.status == "ready"' >/dev/null; then
+    pass "new work: a Project created after recovery reaches ready"
+  else
+    fail "new work: a Project created after recovery ends $(echo "$p" | jq -r .status): $(echo "$p" | jq -r '.status_detail // ""' | grep -v '^●' | grep . | tail -1)"
+  fi
+}
+
+run_journey() {
+  journey=$1
+  local id="$stamp-$journey"
+  export QUARK_VERIFY_RUN=$id
+  echo "== $journey (run $id)"
+  if ! "$Q" launch --run "$id" "${launch_args[@]}" >/dev/null 2>"$base/journeys/launch-$id.log"; then
+    ev=""; fail "launch failed (log $base/journeys/launch-$id.log)"; return
+  fi
+  run_dir=$base/$id
+  # shellcheck disable=SC1091
+  . "$run_dir/instance/run.env"
+  ev=$QV_EVIDENCE/$journey; mkdir -p "$ev"
+  say "---- $journey: run $id, build $QV_COMMIT, daemon $QV_MODE, engine $QV_ENGINE, harness $QV_HARNESS"
+
+  project=$(new_project "Durability $journey")
+  if [ -z "$project" ] || ! api GET "/v1/projects/$project" | jq -e '.status == "ready"' >/dev/null; then
+    fail "setup: the Project did not provision ($(api GET "/v1/projects/$project" | jq -r '.status_detail // "no id"' | tail -1))"
+    "$Q" cleanup >/dev/null 2>&1; return
+  fi
+  # Give the engine a moment to open the Project's agents, then follow them.
+  wait_for 20 bash -c "[ -n \"\$('$Q' api GET /v1/projects/$project/terminals 2>/dev/null | jq -r '.[].id')\" ]" || true
+  record_agents
+  state >"$ev/state-before.jsonl"
+  local seq; seq=$(last_seq)
+  "$Q" browser open "#/p/$project" >/dev/null 2>&1
+  "$Q" browser wait --testid connection --contains connected --timeout 10000 >/dev/null 2>&1
+  "$Q" browser screenshot --path "$journey/01-before.png" >/dev/null 2>&1 || true
+  say "     before: ${#agents[@]} agent(s) ${agents[*]:-}; last_seq $seq"
+
+  case $journey in
+    sleep)
+      "$Q" sleep 20 >>"$ev/disrupt.txt" 2>&1
+      if wait_for 5 health_ok; then pass "daemon: answers within 5s of waking"; else fail "daemon: does not answer 5s after waking"; fi
+      check_state "$ev/state-before.jsonl"
+      check_events "$seq"
+      check_agents same
+      check_app ;;
+    daemon-crash)
+      "$Q" crash daemon >>"$ev/disrupt.txt" 2>&1
+      sleep 2
+      if "$Q" restart >>"$ev/disrupt.txt" 2>&1; then pass "daemon: starts again on the same home"; else fail "daemon: does not start again (see $ev/disrupt.txt)"; fi
+      check_state "$ev/state-before.jsonl"
+      check_events "$seq"
+      check_agents same
+      check_app
+      check_new_work ;;
+    tmux-loss)
+      if ! "$Q" crash tmux >>"$ev/disrupt.txt" 2>&1; then
+        skip "the run has no tmux server to lose (the engine opened no windows)"
+        "$Q" cleanup >/dev/null 2>&1; unset QUARK_VERIFY_RUN; return
+      fi
+      if wait_for 5 health_ok; then pass "daemon: keeps answering after the tmux server is lost"; else fail "daemon: stopped answering after the tmux server was lost"; fi
+      check_agents back
+      check_state "$ev/state-before.jsonl"
+      check_events "$seq"
+      check_new_work ;;
+    reboot)
+      "$Q" crash host >>"$ev/disrupt.txt" 2>&1
+      sleep 2
+      if "$Q" restart >>"$ev/disrupt.txt" 2>&1; then pass "daemon: starts again on the same home after the reboot"; else fail "daemon: does not start again (see $ev/disrupt.txt)"; fi
+      check_agents back
+      check_state "$ev/state-before.jsonl"
+      check_events "$seq"
+      check_app
+      check_new_work ;;
+    *) fail "unknown journey" ;;
+  esac
+  "$Q" capture "$journey/agents" -- "$Q" agents >/dev/null 2>&1 || true
+  "$Q" cleanup >/dev/null 2>&1
+  unset QUARK_VERIFY_RUN
+}
+
+for j in "${only[@]}"; do run_journey "$j"; done
+echo
+echo "summary: $(grep -c '^PASS' "$summary") passed, $(grep -c '^FAIL' "$summary") failed, $(grep -c '^SKIP' "$summary") skipped ($summary)"
+[ "$fails" -eq 0 ]

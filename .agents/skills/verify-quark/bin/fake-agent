@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# fake-agent: a stand-in for a harness CLI (installed as `claude` on the
+# daemon's PATH by `quark-verify launch --harness fake`), so journeys can run
+# agents without a signed-in account or network. It is not an LLM: it draws a
+# prompt, echoes what is typed, and stays alive until its terminal goes away.
+#
+# Every start appends one JSON line to $QV_AGENT_JOURNAL (when set):
+#   {"ts":..., "pid":..., "name":"claude", "cwd":..., "resumed":true|false, "argv":[...]}
+# "resumed" is true when the launch asks the harness to continue an earlier
+# conversation (--resume or --continue, as Claude Code takes them), which is
+# how a journey tells a resumed agent from a fresh one.
+set -u
+
+name=$(basename "$0")
+resumed=false
+for a in "$@"; do
+  case $a in --resume | --resume=* | --continue | -c | -r) resumed=true ;; esac
+done
+
+json_str() { # escape for a JSON string
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; s=${s//$'\t'/\\t}
+  printf '"%s"' "$s"
+}
+
+if [ -n "${QV_AGENT_JOURNAL:-}" ]; then
+  # One write per start, so agents starting together never interleave.
+  entry=$(printf '{"ts":%s,"pid":%s,"name":%s,"cwd":%s,"resumed":%s,"argv":[' \
+    "$(date +%s)" "$$" "$(json_str "$name")" "$(json_str "$PWD")" "$resumed")
+  sep=""
+  for a in "$@"; do entry+="$sep$(json_str "$a")"; sep=","; done
+  printf '%s]}\n' "$entry" >>"$QV_AGENT_JOURNAL"
+fi
+
+# Non-interactive calls (version probes, `-p` one-shots) answer and exit.
+case "${1:-}" in
+  --version | -v) echo "0.0.0 (fake-agent)"; exit 0 ;;
+  -p | --print) echo "fake-agent"; exit 0 ;;
+esac
+
+echo "fake-agent $name pid $$ ($([ "$resumed" = true ] && echo resumed || echo fresh))"
+echo "Working..."
+while IFS= read -r line; do
+  echo "fake-agent: got ${line}"
+done
