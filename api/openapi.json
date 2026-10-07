@@ -1684,6 +1684,58 @@
         }
       }
     },
+    "/v1/projects/{id}/overview": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "What is happening in a Project now and, with `since`, what happened\nafter that point in its event log.",
+        "description": "Live status folds every task's status lines into its latest state, open\ndecisions and pull request; finished tasks stay listed for a day. The\ndigest counts spawns, results and decisions after `since` and lists the\nnotable ones, newest first. An unreadable event log is reported in\n`error` rather than failing the call.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "The `head` an earlier read returned: adds a digest of everything the\nProject logged after it. `0` digests the whole log.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectOverview"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/settings": {
       "get": {
         "tags": [
@@ -3990,6 +4042,70 @@
           "old"
         ]
       },
+      "DigestItem": {
+        "type": "object",
+        "description": "One notable event.",
+        "required": [
+          "seq",
+          "at",
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "engine_task": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's id for the task, and the Quark task and its title when\nthe daemon has one."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DigestKind"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "The status line's note, or the harness and model of a spawn."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A pull request URL the line named."
+          }
+        }
+      },
+      "DigestKind": {
+        "type": "string",
+        "description": "What a digest highlight was.",
+        "enum": [
+          "spawned",
+          "decision_opened",
+          "decision_resolved",
+          "done",
+          "failed"
+        ]
+      },
       "DispatchCandidate": {
         "type": "object",
         "required": [
@@ -5409,6 +5525,33 @@
           }
         }
       },
+      "LiveStatus": {
+        "type": "object",
+        "description": "Every task's latest state, folded from its status lines.",
+        "required": [
+          "counts",
+          "tasks"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/StatusCounts"
+          },
+          "last_activity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the Project's newest event was logged (RFC 3339)."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskPulse"
+            },
+            "description": "Open tasks first, then finished ones; most recent activity first\nwithin each group. Finished tasks older than a day are left out."
+          }
+        }
+      },
       "MemoryCommit": {
         "type": "object",
         "description": "A Project repo commit that touched `memory/`.",
@@ -5703,6 +5846,91 @@
           }
         }
       },
+      "OverviewDigest": {
+        "type": "object",
+        "description": "What changed in a Project after `since`.",
+        "required": [
+          "since",
+          "events",
+          "spawned",
+          "done",
+          "pull_requests",
+          "failed",
+          "decisions_opened",
+          "decisions_resolved",
+          "highlights",
+          "truncated"
+        ],
+        "properties": {
+          "decisions_opened": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "decisions_resolved": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "done": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks that reported done, and how many of those named a pull request.",
+            "minimum": 0
+          },
+          "events": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Every event of this Project after `since`.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the first and last event after `since` were logged (RFC 3339)."
+          },
+          "highlights": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DigestItem"
+            },
+            "description": "The notable events (spawns, decisions, results), newest first."
+          },
+          "pull_requests": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "since": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "spawned": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Workers spawned or relaunched.",
+            "minimum": 0
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More notable events happened than `highlights` holds."
+          }
+        }
+      },
       "Project": {
         "type": "object",
         "description": "A Project: a goal-driven workspace that owns tasks, decisions and PRs.",
@@ -5907,6 +6135,47 @@
               "$ref": "#/components/schemas/UnavailableMetric"
             },
             "description": "Metrics the daemon cannot compute yet, and why."
+          }
+        }
+      },
+      "ProjectOverview": {
+        "type": "object",
+        "description": "One Project's live status and, when asked for, the digest of what\nchanged since a given point in its event log.",
+        "required": [
+          "project_id",
+          "head",
+          "live"
+        ],
+        "properties": {
+          "digest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OverviewDigest",
+                "description": "Present when the request named `since`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the event log could not be read; `live` is then empty."
+          },
+          "head": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The event log's head when this was read. Send it back as `since` on\nthe next visit to get a digest of everything after it.",
+            "minimum": 0
+          },
+          "live": {
+            "$ref": "#/components/schemas/LiveStatus"
+          },
+          "project_id": {
+            "type": "string"
           }
         }
       },
@@ -6234,6 +6503,18 @@
           "closed"
         ]
       },
+      "PulseState": {
+        "type": "string",
+        "description": "Coarse state of one task, from its last status line and open decisions.",
+        "enum": [
+          "working",
+          "needs_decision",
+          "blocked",
+          "paused",
+          "done",
+          "failed"
+        ]
+      },
       "PutDispatchRules": {
         "allOf": [
           {
@@ -6526,6 +6807,50 @@
           }
         }
       },
+      "StatusCounts": {
+        "type": "object",
+        "description": "Tasks per [`PulseState`], each task once. Like the live list, done and\nfailed only count tasks that finished in the last day.",
+        "required": [
+          "working",
+          "needs_decision",
+          "blocked",
+          "paused",
+          "done",
+          "failed"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "done": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "needs_decision": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "paused": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "working": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "SupervisionConfidence": {
         "type": "string",
         "description": "How confidently the daemon can tell when an agent is busy or done.",
@@ -6724,6 +7049,79 @@
           "ship",
           "scout"
         ]
+      },
+      "TaskPulse": {
+        "type": "object",
+        "description": "One task's latest state.",
+        "required": [
+          "engine_task",
+          "state",
+          "verb",
+          "note",
+          "at",
+          "open_decisions"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When the last line was logged (RFC 3339)."
+          },
+          "engine_task": {
+            "type": "string",
+            "description": "The engine's id for the task, as its events carry it."
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Harness and model of the newest worker generation, when known."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "The last status line's note."
+          },
+          "open_decisions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys of decisions still open on this task."
+          },
+          "pull_request": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last pull request URL a status line named."
+          },
+          "state": {
+            "$ref": "#/components/schemas/PulseState"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Quark task, when the daemon has one for it."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verb": {
+            "type": "string",
+            "description": "The last status line's verb, as written."
+          }
+        }
       },
       "TaskState": {
         "type": "string",

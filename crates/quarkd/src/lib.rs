@@ -23,6 +23,7 @@ pub mod metrics;
 pub mod native;
 pub mod native_dispatch;
 pub mod native_triggers;
+pub mod overview;
 pub mod pr_center;
 pub mod project_repo;
 pub mod projector;
