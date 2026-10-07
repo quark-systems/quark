@@ -1438,6 +1438,126 @@
         }
       }
     },
+    "/v1/projects/{id}/settings": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Every per-Project switch.",
+        "description": "Standing approval, delivery and the agent config come from the Project;\nthe verification gates, with each source's holdout tests, from\n`project.yaml` on the Project repo's `main`; dispatch rules and memory are\nsummarized from theirs. A part that cannot be read says why in its\n`error` rather than failing the call.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSettings"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Change Project settings.",
+        "description": "`holdout` turns a source's holdout tests on or off in `project.yaml`, in\none commit on the Project repo's `main` (comments in the file are not\nkept); the engine takes the new gates on the daemon's next refresh.\n`standing_approval` is applied to the engine as `PATCH /v1/projects/{id}`\napplies it. Holdout changes are made first, so a refused one changes\nnothing. Answers the settings as they are now.",
+        "operationId": "patch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`main` has another `project.yaml` revision (`settings_changed`), the checkout has an uncommitted edit of it (`uncommitted_changes`), the Project has no Project repo or `project.yaml` (`no_project_repo`), or standing approval needs the workspace (`workspace_missing`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/tasks": {
       "get": {
         "tags": [
@@ -3859,6 +3979,42 @@
           "not_consulted"
         ]
       },
+      "DispatchSummary": {
+        "type": "object",
+        "description": "The Project's dispatch rules, in brief; the Dispatch screen edits them.",
+        "required": [
+          "rules",
+          "default_candidates"
+        ],
+        "properties": {
+          "classifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Classifier provider in effect; `none` when the coordinator picks."
+          },
+          "default_candidates": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Candidates of the default.",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the rules could not be read, when they could not."
+          },
+          "rules": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rules besides the default.",
+            "minimum": 0
+          }
+        }
+      },
       "DispatchTest": {
         "type": "object",
         "description": "What a Project's dispatch rules would do with a task description\n(ADR-11). Nothing is dispatched or recorded.",
@@ -4274,6 +4430,55 @@
           }
         }
       },
+      "GateCheck": {
+        "type": "object",
+        "description": "A repo check: a command that must exit 0.",
+        "required": [
+          "name",
+          "run"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "timeout_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "GateJourneys": {
+        "type": "object",
+        "description": "Where the journeys run.",
+        "required": [
+          "start",
+          "url"
+        ],
+        "properties": {
+          "dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Directory, relative to the source, the journeys run from."
+          },
+          "start": {
+            "type": "string",
+            "description": "Command that starts the app."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL the journeys open."
+          }
+        }
+      },
       "GateKind": {
         "type": "string",
         "description": "The verification gates of ADR-15, run in this order before a PR opens.",
@@ -4459,6 +4664,51 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "HoldoutChange": {
+        "type": "object",
+        "description": "Turn one source's holdout tests on or off.",
+        "required": [
+          "source",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "HoldoutSettings": {
+        "type": "object",
+        "description": "Holdout tests for one source: tests workers never see, kept in the\nProject repo under `holdout/<source>/`.",
+        "required": [
+          "enabled",
+          "categories"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Category directories under `holdout/<source>/` on `main`."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Not turned off with `holdout: false`. The tests run when this is on\nand there is at least one category."
+          },
+          "timeout_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -4678,6 +4928,28 @@
           "coordinator"
         ]
       },
+      "MemorySummary": {
+        "type": "object",
+        "description": "The Project's memory, in brief; the Memory screen reviews it.",
+        "required": [
+          "entries",
+          "proposals_to_review"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Entries under `memory/` on the Project repo's `main`.",
+            "minimum": 0
+          },
+          "proposals_to_review": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Proposals waiting for review.",
+            "minimum": 0
+          }
+        }
+      },
       "MergeMethod": {
         "type": "string",
         "description": "How to merge a pull request.",
@@ -4818,6 +5090,51 @@
               "null"
             ],
             "description": "Local path of the Project workspace, once it is provisioned or attached."
+          }
+        }
+      },
+      "ProjectSettings": {
+        "type": "object",
+        "description": "Every per-Project switch, read in one call.\n\nStanding approval and holdout tests change through\n`PATCH /v1/projects/{id}/settings`; dispatch rules and memory have their\nown endpoints, summarized here.",
+        "required": [
+          "project_id",
+          "standing_approval",
+          "delivery",
+          "verification",
+          "dispatch",
+          "memory"
+        ],
+        "properties": {
+          "agent_config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentConfig",
+                "description": "Harness, model, effort and account pool the coordinator and, by\ndefault, workers use."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/DeliveryPolicy",
+            "description": "How changes reach a pull request. Chosen when the Project is created;\nthe engine cannot change it afterwards yet, so it is read-only here."
+          },
+          "dispatch": {
+            "$ref": "#/components/schemas/DispatchSummary"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemorySummary"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "standing_approval": {
+            "type": "boolean",
+            "description": "Merge this Project's pull requests as soon as they are green, without\nasking."
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationSettings"
           }
         }
       },
@@ -5329,6 +5646,41 @@
           "text": {
             "type": "string",
             "description": "Plain text for the worker to read; may span several lines."
+          }
+        }
+      },
+      "SourceVerification": {
+        "type": "object",
+        "description": "One workspace source's gates.",
+        "required": [
+          "source",
+          "checks",
+          "holdout"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateCheck"
+            },
+            "description": "Repo checks, in order."
+          },
+          "holdout": {
+            "$ref": "#/components/schemas/HoldoutSettings"
+          },
+          "journeys": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateJourneys",
+                "description": "Playwright journeys, when declared."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
           }
         }
       },
@@ -5965,6 +6317,33 @@
           }
         }
       },
+      "UpdateProjectSettings": {
+        "type": "object",
+        "description": "Change Project settings. Absent fields are left unchanged.",
+        "properties": {
+          "holdout": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HoldoutChange"
+            },
+            "description": "Turn holdout tests on or off per source. Written to `project.yaml`\nin one commit on the Project repo's `main`; the engine takes the new\ngates on the daemon's next refresh."
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`verification.revision` the change was made against; a holdout change\nis refused when `main` has another."
+          },
+          "standing_approval": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Turn standing approval on or off."
+          }
+        }
+      },
       "UserMemoryEntry": {
         "type": "object",
         "description": "One entry of user-level memory: a file under `~/.quark/memory/`, which\nevery Project's coordinator reads. A file written by hand carries only\n`id`, `path` and `text`.",
@@ -6066,6 +6445,36 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "VerificationSettings": {
+        "type": "object",
+        "description": "The verification gates `project.yaml` on the Project repo's `main`\ndeclares, per workspace source.",
+        "required": [
+          "sources"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the gates could not be read, when `project.yaml` does not compile."
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Blob id of `project.yaml` on `main`; send it back with a holdout\nchange. Absent without a Project repo or the file."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceVerification"
+            },
+            "description": "One per workspace source, in `project.yaml` order."
           }
         }
       }

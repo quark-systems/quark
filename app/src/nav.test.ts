@@ -4,7 +4,7 @@ import { repoUrl, validRepo } from "./screens/NewProject";
 
 describe("routes", () => {
   it("round-trips every route", () => {
-    for (const r of [{ name: "projects" }, { name: "new" }, { name: "project", id: "a b/c" }, { name: "task", id: "t-1" }, { name: "inbox" }, { name: "inbox", id: "d 1" }, { name: "memory", project: "a b" }, { name: "memory", project: "p", id: "2026-10-01-x" }, { name: "dispatch", project: "a b" }, { name: "prs" }, { name: "pr", id: "quark-systems/quark#12" }, { name: "accounts" }] as const) {
+    for (const r of [{ name: "projects" }, { name: "new" }, { name: "project", id: "a b/c" }, { name: "task", id: "t-1" }, { name: "inbox" }, { name: "inbox", id: "d 1" }, { name: "memory", project: "a b" }, { name: "memory", project: "p", id: "2026-10-01-x" }, { name: "dispatch", project: "a b" }, { name: "settings", project: "a b" }, { name: "prs" }, { name: "pr", id: "quark-systems/quark#12" }, { name: "accounts" }] as const) {
       expect(parseRoute(href(r))).toEqual(r);
     }
   });

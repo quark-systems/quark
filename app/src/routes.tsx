@@ -12,6 +12,7 @@ import { Inbox } from "./screens/Inbox";
 import { PullRequests } from "./screens/PullRequests";
 import { PullRequestView } from "./screens/PullRequestView";
 import { Accounts } from "./screens/Accounts";
+import { Settings } from "./screens/dashboard/Settings";
 
 type Screens = { [N in Route["name"]]: (r: Extract<Route, { name: N }>) => React.ReactNode };
 
@@ -21,6 +22,7 @@ export const SCREENS: Screens = {
   project: (r) => <ProjectBoard key={r.id} id={r.id} />,
   memory: (r) => <Memory key={r.project} project={r.project} id={r.id} />,
   dispatch: (r) => <Dispatch key={r.project} project={r.project} />,
+  settings: (r) => <Settings key={r.project} project={r.project} />,
   task: (r) => <WorkerView key={r.id} id={r.id} />,
   inbox: (r) => <Inbox id={r.id} />,
   prs: () => <PullRequests />,

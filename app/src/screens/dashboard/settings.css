@@ -1,0 +1,19 @@
+/* Project dashboard, Settings tab. Colors come from the theme tokens in styles.css. */
+.settings { overflow-y: auto; }
+.set-body { max-width: 760px; padding: 14px 18px 40px; display: flex; flex-direction: column; gap: 12px; }
+.set-section { background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.set-section h2 { margin: 0; font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); }
+.set-section p { margin: 0; }
+.set-section .standing { padding: 0; }
+.set-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.set-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; font-size: 12px; }
+.set-kv dt { color: var(--fg-faint); }
+.set-kv dd { margin: 0; }
+.set-source { width: 100%; border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.set-source:first-of-type { border-top: 0; padding-top: 0; }
+.set-source-name { font-weight: 600; }
+.set-gate { display: flex; gap: 10px; align-items: baseline; font-size: 12px; min-width: 0; }
+.set-gate-kind { flex: none; width: 64px; color: var(--fg-faint); }
+.set-gate ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.set-error { color: var(--red); font-size: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+.settings > .set-error { margin: 14px 18px 0; }

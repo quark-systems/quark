@@ -574,3 +574,38 @@ test("dispatch: edit rules, test them, save them as a commit and test again", as
   await expect(rows).toHaveCount(1);
   await expect(page.getByTestId("dispatch-error")).toHaveCount(0);
 });
+
+test("settings: every Project switch in one place, holdout and standing approval change there", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await page.getByTestId("nav-settings").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/settings$/);
+
+  await expect(page.getByTestId("settings-delivery-mode")).toHaveText("Gated");
+  await expect(page.getByTestId("settings-dispatch-summary")).toContainText(/\d+ rules? and \d+ default candidates?/);
+  await expect(page.getByTestId("settings-memory-summary")).toContainText(/to review/);
+
+  // One gate row per source; the quark source has a check and one holdout category.
+  const quark = page.getByTestId("settings-source").filter({ hasText: "cargo test --workspace" });
+  await expect(page.getByTestId("settings-source")).toHaveCount(2);
+  await expect(quark.getByTestId("settings-holdout-state")).toHaveText("Runs 1 category: daemon-api");
+
+  // Holdout off is written to the daemon, and back on again.
+  await quark.getByTestId("settings-holdout").click();
+  await expect(quark.getByTestId("settings-holdout-state")).toHaveText("Off (1 category not run)");
+  let s = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/settings")).json());
+  expect(s.verification.sources.find((v: { source: string }) => v.source === "quark").holdout.enabled).toBe(false);
+  await quark.getByTestId("settings-holdout").click();
+  await expect(quark.getByTestId("settings-holdout-state")).toHaveText("Runs 1 category: daemon-api");
+
+  // Standing approval flips and sticks on the daemon.
+  const standing = page.getByTestId("settings-merging").getByTestId("standing-approval");
+  const before = (await standing.getAttribute("class"))?.includes("on") ?? false;
+  await standing.click();
+  await expect(standing).toHaveClass(before ? /^standing$/ : /standing on/);
+  s = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/settings")).json());
+  expect(s.standing_approval).toBe(!before);
+
+  // The dispatch and memory summaries lead to the screens that edit them.
+  await page.getByTestId("settings-open-dispatch").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
+});

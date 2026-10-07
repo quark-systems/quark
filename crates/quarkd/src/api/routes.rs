@@ -205,7 +205,7 @@ pub async fn update_project(
 /// Applies standing approval to the engine for the Project's repos, so its
 /// coordinator merges green work too. A Project without repos has nothing
 /// registered with the engine; the daemon alone applies it.
-async fn set_standing_approval(
+pub(super) async fn set_standing_approval(
     state: &AppState,
     project: &Project,
     on: bool,
