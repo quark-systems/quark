@@ -446,6 +446,21 @@ function seed() {
     transcript(t, "tool_call", "cargo test -p quarkd", { ...at(28), tool_name: "bash", tool_call_id: "c1", tool: { kind: "shell", title: "Run cargo test -p quarkd", command: "cargo test -p quarkd" } });
     transcript(t, "tool_result", "running 14 tests\n..............\ntest result: ok. 14 passed; 0 failed", { ...at(28), tool_name: "bash", tool_call_id: "c1" });
     transcript(t, "assistant", "The tests pass on the base. Next I'll write the failing test for the new behaviour, then the change.", at(20));
+    transcript(t, "user", "Please keep the change inside the events module.", at(19));
+    transcript(t, "thinking", "The resync path lives in events.rs; the test goes beside it.", at(19));
+    transcript(t, "tool_call", '{"file_path":"crates/quarkd/src/events.rs"}', { ...at(18), tool_name: "Read", tool_call_id: "c2", tool: { kind: "read", title: "Read crates/quarkd/src/events.rs", path: "crates/quarkd/src/events.rs" } });
+    transcript(t, "tool_result", "pub fn resync(…)", { ...at(18), tool_call_id: "c2" });
+    transcript(t, "tool_call", "{}", { ...at(16), tool_name: "Edit", tool_call_id: "c3", tool: {
+      kind: "edit", title: "Edit crates/quarkd/src/events.rs", path: "crates/quarkd/src/events.rs", additions: 3, deletions: 1,
+      diff: [{ kind: "context", text: "    let after = cursor.seq;" }, { kind: "del", text: "    store.events_after(after)" },
+        { kind: "add", text: "    match store.events_after(after) {" }, { kind: "add", text: "        Err(e) if e.is_lagged() => resync(store)," },
+        { kind: "add", text: "        r => r," }] } });
+    transcript(t, "tool_result", "ok", { ...at(16), tool_call_id: "c3" });
+    transcript(t, "tool_call", '{"command":"cargo test -p quarkd events"}', { ...at(15), tool_name: "Bash", tool_call_id: "c4", tool: { kind: "shell", title: "Run cargo test -p quarkd events", command: "cargo test -p quarkd events" } });
+    transcript(t, "tool_result", "test events::lagged_receiver_resyncs ... FAILED", { ...at(14), tool_call_id: "c4", is_error: true });
+    transcript(t, "tool_call", '{"command":"cargo test -p quarkd events"}', { ...at(13), tool_name: "Bash", tool_call_id: "c5", tool: { kind: "shell", title: "Run cargo test -p quarkd events", command: "cargo test -p quarkd events" } });
+    transcript(t, "tool_result", "test result: ok. 6 passed", { ...at(12), tool_call_id: "c5" });
+    transcript(t, "assistant", "Kept it in `events.rs`. The lagged receiver now resyncs from the store, and the new test covers it.", at(12));
     const term = terms.get(t.id);
     term.screen = `\x1b[1;35m${t.harness}\x1b[0m working on \x1b[1m${t.title}\x1b[0m\r\n\r\n` +
       `\x1b[32m✓\x1b[0m read the task contract\r\n\x1b[32m✓\x1b[0m cargo test -p quarkd (14 passed)\r\n` +
@@ -470,6 +485,10 @@ function seed() {
 
   chat(quark.id, "user", "Split Phase 1 into tasks and start the event stream and terminal work.", { ts: minutesAgo(35) });
   chat(quark.id, "thinking", "Two independent workstreams; dispatch both.", { ts: minutesAgo(35) });
+  chat(quark.id, "tool_call", '{"command":"bin/fm-spawn.sh event-stream"}', { ts: minutesAgo(35), tool_name: "Bash", tool_call_id: "k1", tool: { kind: "shell", title: "Run bin/fm-spawn.sh event-stream", command: "bin/fm-spawn.sh event-stream" } });
+  chat(quark.id, "tool_result", "spawned", { ts: minutesAgo(34), tool_call_id: "k1" });
+  chat(quark.id, "tool_call", '{"command":"bin/fm-spawn.sh terminals"}', { ts: minutesAgo(34), tool_name: "Bash", tool_call_id: "k2", tool: { kind: "shell", title: "Run bin/fm-spawn.sh terminals", command: "bin/fm-spawn.sh terminals" } });
+  chat(quark.id, "tool_result", "spawned", { ts: minutesAgo(34), tool_call_id: "k2" });
   chat(quark.id, "assistant", "Dispatched two workers:\n\n- **Event stream**: resync slow clients from the store (Claude Code)\n- **Terminal sessions** over tmux control mode (Codex)\n\nThe decision-records task is waiting on a question for you.", { ts: minutesAgo(34) });
 }
 
@@ -855,7 +874,8 @@ const server = http.createServer(async (req, res) => {
       // Like quarkd: not echoed; the session records it shortly after.
       setTimeout(() => {
         chat(cid, "user", text);
-        chat(cid, "tool_call", "fm-spawn.sh", { tool_name: "bash" });
+        chat(cid, "tool_call", "fm-spawn.sh", { tool_name: "bash", tool_call_id: "spawn", tool: { kind: "shell", title: "Run bin/fm-spawn.sh", command: "bin/fm-spawn.sh" } });
+        chat(cid, "tool_result", "spawned", { tool_name: "bash", tool_call_id: "spawn" });
         const t = addTask(cid, { title: text.slice(0, 70), state: "queued", harness: projects.get(cid).agent_config?.harness ?? "claude-code" });
         chat(cid, "assistant", `On it. I wrote a task contract and queued **${t.title}**.`);
       }, QUIET ? 50 : 700);

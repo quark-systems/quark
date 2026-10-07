@@ -1,15 +1,15 @@
 // J4: one worker in one view. Live terminal and steering on the left; transcript, changed
 // files with their diff, and why this agent on the right; cancel and relaunch in the header.
-import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
 import { loadTranscript, refreshTask, useStore } from "../store";
 import { attach, getTerm, resetTerm, TermHandle } from "../terminal";
 import { ago, errText, isActive, stateMeta } from "../util";
-import { renderMarkdown } from "../markdown";
 import { DiffFile, parseUnifiedDiff } from "../diff";
 import { FileDiff } from "../components/FileDiff";
 import { Unavailable } from "../components/Unavailable";
+import { Transcript } from "../components/Transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
 
 export function WorkerView({ id }: { id: string }) {
@@ -204,51 +204,19 @@ function TranscriptPanel({ taskId }: { taskId: string }) {
   const entries = useStore((s) => s.transcripts[taskId]) ?? NO_ENTRIES;
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
-  const log = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
 
   useEffect(() => {
     loadTranscript(taskId).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
   }, [taskId]);
-  useLayoutEffect(() => {
-    if (stick.current && log.current) log.current.scrollTop = log.current.scrollHeight;
-  });
 
-  const sorted = useMemo(() => [...entries].sort((a, b) => a.id - b.id), [entries]);
   if (status === "unavailable") return <Unavailable what="The transcript" endpoint={`GET /v1/tasks/${taskId}/transcript`} />;
   return (
-    <div className="transcript" ref={log} data-testid="transcript" onScroll={(e) => {
-      const el = e.currentTarget;
-      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    }}>
+    <Transcript items={entries} agent="worker" testId="transcript" className="transcript"
+      empty={status === "ok" ? <div className="empty">No transcript yet.</div> : status === "loading" ? <div className="empty">Loading…</div> : null}>
       {status === "error" && <div className="form-error">{err}</div>}
-      {status === "loading" && <div className="empty">Loading…</div>}
-      {status === "ok" && !sorted.length && <div className="empty">No transcript yet.</div>}
-      {sorted.map((e) => <Entry key={e.id} e={e} />)}
-    </div>
+    </Transcript>
   );
 }
-
-const Entry = memo(function Entry({ e }: { e: TranscriptItem }) {
-  const markdown = e.role === "user" || e.role === "assistant";
-  const html = useMemo(() => (markdown ? renderMarkdown(e.text) : ""), [markdown, e.text]);
-  if (!markdown) {
-    const label = e.role === "thinking" ? "thinking" : (e.tool_name ?? "tool") + (e.role === "tool_result" ? " result" : "");
-    return (
-      <details className={"t-entry tool" + (e.is_error ? " error" : "")}>
-        <summary><span className="pill">{label}</span> <span className="mono ellipsis">{e.tool?.title ?? e.text.split("\n")[0]}</span></summary>
-        <pre>{e.text}{e.truncated ? "\n…" : ""}</pre>
-      </details>
-    );
-  }
-  return (
-    <div className={"t-entry " + e.role}>
-      <div className="who">{e.role === "assistant" ? "worker" : "you"} <span className="faint">{ago(e.ts)}</span></div>
-      <div className="md" dangerouslySetInnerHTML={{ __html: html }} />
-      {e.truncated && <div className="faint small-text">Truncated by the daemon.</div>}
-    </div>
-  );
-});
 
 // ---- changes and diff ----
 

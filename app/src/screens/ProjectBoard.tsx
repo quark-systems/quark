@@ -1,11 +1,12 @@
 // J3: the Project's board, live from the event stream, beside the coordinator chat.
-import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Project, Task, TranscriptItem } from "../api";
 import { href } from "../nav";
 import { loadChat, useStore } from "../store";
 import { ago, errText, STATES } from "../util";
-import { renderMarkdown } from "../markdown";
 import { Unavailable } from "../components/Unavailable";
+import { Composer } from "../components/Composer";
+import { Transcript, UserMessage } from "../components/Transcript";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
 
@@ -100,7 +101,6 @@ function ProvisionBar({ project }: { project: Project }) {
 }
 
 const EMPTY: TranscriptItem[] = [];
-const CHAT_ROLES = new Set(["user", "assistant"]);
 
 export function CoordinatorChat({ cid }: { cid: string }) {
   const loaded = useStore((s) => s.chat[cid]);
@@ -111,24 +111,18 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const [sending, setSending] = useState(false);
   // Sent messages are not echoed: they appear once the coordinator's session records them.
   const [pending, setPending] = useState<{ key: number; text: string; confirmed: boolean }[]>([]);
-  const log = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
 
   useEffect(() => {
     loadChat(cid).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
   }, [cid]);
-  useLayoutEffect(() => {
-    if (stick.current && log.current) log.current.scrollTop = log.current.scrollHeight;
-  });
 
-  const sorted = useMemo(() => [...items].sort((a, b) => a.id - b.id), [items]);
   // Drop a pending message once a user entry with the same text arrives.
   useEffect(() => {
     if (!pending.length) return;
-    const seen = new Set(sorted.filter((m) => m.role === "user").map((m) => m.text.trim()));
+    const seen = new Set(items.filter((m) => m.role === "user").map((m) => m.text.trim()));
     const left = pending.filter((p) => !seen.has(p.text));
     if (left.length !== pending.length) setPending(left);
-  }, [sorted, pending]);
+  }, [items, pending]);
 
   const send = async () => {
     const t = text.trim();
@@ -136,7 +130,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
     setSending(true); setErr(null);
     try {
       const r = await api.sendChat(cid, t);
-      setText(""); stick.current = true;
+      setText("");
       setPending((p) => [...p, { key: Date.now(), text: t, confirmed: r?.confirmed ?? true }]);
     } catch (e) { setErr(errText(e)); }
     finally { setSending(false); }
@@ -149,79 +143,19 @@ export function CoordinatorChat({ cid }: { cid: string }) {
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
-          <div className="chat-log" ref={log} onScroll={(e) => {
-            const el = e.currentTarget;
-            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-          }}>
-            {groupForChat(sorted).map((g) =>
-              g.kind === "msg" ? <Message key={g.item.id} m={g.item} /> : <Activity key={g.items[0].id} items={g.items} />,
-            )}
-            {pending.map((p) => (
-              <div className="msg pending" key={p.key}>
-                <div className="avatar user">you</div>
-                <div>
-                  <div className="who">you <span className="faint">{p.confirmed ? "sent" : "typed, not confirmed; check before sending again"}</span></div>
-                  <div className="md">{p.text}</div>
-                </div>
-              </div>
+          <Transcript items={items} agent="coordinator" className="chat-log"
+            empty={status === "ok" ? <div className="empty">Ask the coordinator to plan or delegate work.</div>
+              : status === "loading" ? <div className="empty">Loading…</div> : null}>
+            {pending.length > 0 && pending.map((p) => (
+              <UserMessage key={p.key} pending item={{ text: p.text, ts: null, truncated: false }}
+                note={p.confirmed ? "sent" : "typed, not confirmed; check before sending again"} />
             ))}
-            {status === "ok" && !sorted.length && !pending.length && <div className="empty">Ask the coordinator to plan or delegate work.</div>}
-            {status === "loading" && <div className="empty">Loading…</div>}
-          </div>
+          </Transcript>
           {err && <div className="form-error">{err}</div>}
-          <div className="composer">
-            <textarea rows={2} value={text} placeholder="Message the coordinator (Enter to send, Shift+Enter for a newline)"
-              aria-label="Message the coordinator" onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
-              }} />
-            <button className="btn" onClick={() => void send()} disabled={sending || !text.trim()}>Send</button>
-          </div>
+          <Composer value={text} onChange={setText} onSend={() => void send()} sending={sending}
+            label="Message the coordinator" placeholder="Message the coordinator (Enter to send, Shift+Enter for a newline)" />
         </>
       )}
     </aside>
   );
 }
-
-type ChatGroup = { kind: "msg"; item: TranscriptItem } | { kind: "activity"; items: TranscriptItem[] };
-
-/** Chat shows user and assistant entries; runs of thinking and tool entries collapse into one line. */
-export function groupForChat(items: TranscriptItem[]): ChatGroup[] {
-  const out: ChatGroup[] = [];
-  for (const item of items) {
-    if (CHAT_ROLES.has(item.role)) { out.push({ kind: "msg", item }); continue; }
-    const last = out[out.length - 1];
-    if (last?.kind === "activity") last.items.push(item);
-    else out.push({ kind: "activity", items: [item] });
-  }
-  return out;
-}
-
-function Activity({ items }: { items: TranscriptItem[] }) {
-  const tools = items.filter((i) => i.role === "tool_call").length;
-  const errors = items.filter((i) => i.is_error).length;
-  return (
-    <details className="activity">
-      <summary>
-        {tools ? `${tools} tool ${tools === 1 ? "call" : "calls"}` : "Thinking"}
-        {errors > 0 && <span className="bad"> · {errors} failed</span>}
-      </summary>
-      {items.map((i) => (
-        <pre key={i.id} className={i.is_error ? "bad" : ""}>{i.tool ? i.tool.title : (i.tool_name ? i.tool_name + ": " : "") + i.text}</pre>
-      ))}
-    </details>
-  );
-}
-
-const Message = memo(function Message({ m }: { m: TranscriptItem }) {
-  const html = useMemo(() => renderMarkdown(m.text), [m.text]);
-  return (
-    <div className="msg">
-      <div className={"avatar " + (m.role === "user" ? "user" : "coordinator")}>{m.role === "user" ? "you" : "Q"}</div>
-      <div>
-        <div className="who">{m.role === "user" ? "you" : "coordinator"} <span className="faint">{ago(m.ts)}</span></div>
-        <div className="md" dangerouslySetInnerHTML={{ __html: html }} />
-      </div>
-    </div>
-  );
-});
