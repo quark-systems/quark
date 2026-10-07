@@ -24,8 +24,7 @@
 //! restart the server is still running, so terminals reattach where they
 //! were and start again from a snapshot.
 
-pub mod control;
-pub mod server;
+pub use quark_sessions::tmux::{control, server};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +38,9 @@ use tokio::sync::{oneshot, Notify};
 use crate::store::{self, Store};
 pub use control::ControlError;
 use control::{ControlClient, Handler, Reply, Waiter};
+use quark_sessions::tmux::snapshot::{
+    parse_cursor, render_snapshot, send_keys, Cursor, CURSOR_FORMAT,
+};
 pub use server::{PaneInfo, Server, ServerError, WindowSpec};
 
 /// Output kept per terminal in the event log.
@@ -353,15 +355,6 @@ impl Sessions {
     }
 }
 
-fn send_keys(pane: &str, bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut cmd = format!("send-keys -t {pane} -H");
-    for b in bytes {
-        write!(cmd, " {b:02x}").unwrap();
-    }
-    cmd
-}
-
 /// Who a window target belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Owner {
@@ -395,16 +388,6 @@ struct PaneRoute {
     /// Output is forwarded only once the pane's first snapshot is out.
     live: bool,
     cursor: Option<Cursor>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Cursor {
-    x: u16,
-    y: u16,
-    cols: u16,
-    rows: u16,
-    alternate: bool,
-    visible: bool,
 }
 
 impl Hub {
@@ -617,10 +600,7 @@ async fn request_snapshot(
 ) -> Result<(), ControlError> {
     client
         .send(
-            &format!(
-                "display-message -p -t {pane} \
-                 '#{{cursor_x}} #{{cursor_y}} #{{pane_width}} #{{pane_height}} #{{alternate_on}} #{{cursor_flag}}'"
-            ),
+            &format!("display-message -p -t {pane} '{CURSOR_FORMAT}'"),
             Waiter::Reader(Tag::Cursor(pane.to_string())),
         )
         .await?;
@@ -704,7 +684,10 @@ impl Handler for PaneHandler {
     fn reply(&mut self, tag: Tag, reply: Reply) {
         match tag {
             Tag::Cursor(pane) => {
-                let cursor = parse_cursor(&reply);
+                let cursor = reply
+                    .ok
+                    .then(|| reply.lines.first().and_then(|l| parse_cursor(l)))
+                    .flatten();
                 if let Some(route) = self.panes.lock().unwrap().get_mut(&pane) {
                     route.cursor = cursor;
                     if let Some(c) = cursor {
@@ -747,58 +730,6 @@ impl Handler for PaneHandler {
             hub.layout_changed.notify_one();
         }
     }
-}
-
-fn parse_cursor(reply: &Reply) -> Option<Cursor> {
-    if !reply.ok {
-        return None;
-    }
-    let line = String::from_utf8_lossy(reply.lines.first()?).into_owned();
-    let f: Vec<u16> = line
-        .split_whitespace()
-        .map(|v| v.parse().ok())
-        .collect::<Option<_>>()?;
-    let [x, y, cols, rows, alternate, visible] = f[..] else {
-        return None;
-    };
-    Some(Cursor {
-        x,
-        y,
-        cols,
-        rows,
-        alternate: alternate == 1,
-        visible: visible == 1,
-    })
-}
-
-/// Bytes that repaint a terminal: reset, switch to the alternate screen if
-/// the program uses it, draw each captured row in place, restore the cursor.
-fn render_snapshot(lines: &[Vec<u8>], cursor: Option<Cursor>) -> Vec<u8> {
-    use std::io::Write as _;
-    let mut out = Vec::new();
-    out.extend_from_slice(b"\x1bc");
-    if cursor.is_some_and(|c| c.alternate) {
-        out.extend_from_slice(b"\x1b[?1049h");
-    }
-    let rows = cursor.map_or(lines.len(), |c| c.rows as usize);
-    for (i, line) in lines.iter().take(rows).enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        write!(out, "\x1b[{};1H", i + 1).unwrap();
-        out.extend_from_slice(line);
-        out.extend_from_slice(b"\x1b[0m");
-    }
-    match cursor {
-        Some(c) => {
-            write!(out, "\x1b[{};{}H", c.y + 1, c.x + 1).unwrap();
-            if !c.visible {
-                out.extend_from_slice(b"\x1b[?25l");
-            }
-        }
-        None => out.extend_from_slice(b"\x1b[H"),
-    }
-    out
 }
 
 /// Terminal bytes on their way to the event log.
@@ -900,52 +831,4 @@ fn resnapshot(shared: &Shared, terminal_id: &str) {
     shared.runtime.spawn(async move {
         let _ = request_snapshot(&client, &pane, None).await;
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn renders_snapshots() {
-        let cursor = Cursor {
-            x: 2,
-            y: 1,
-            cols: 10,
-            rows: 3,
-            alternate: true,
-            visible: false,
-        };
-        let out = render_snapshot(
-            &[b"ab".to_vec(), Vec::new(), b"\x1b[31mc".to_vec()],
-            Some(cursor),
-        );
-        assert_eq!(
-            out,
-            b"\x1bc\x1b[?1049h\x1b[1;1Hab\x1b[0m\x1b[3;1H\x1b[31mc\x1b[0m\x1b[2;3H\x1b[?25l"
-        );
-    }
-
-    #[test]
-    fn parses_cursor_replies() {
-        let reply = Reply {
-            ok: true,
-            lines: vec![b"10 0 100 30 0 1".to_vec()],
-        };
-        let c = parse_cursor(&reply).unwrap();
-        assert_eq!(
-            (c.x, c.y, c.cols, c.rows, c.alternate, c.visible),
-            (10, 0, 100, 30, false, true)
-        );
-        assert!(parse_cursor(&Reply {
-            ok: true,
-            lines: vec![b"1 2".to_vec()]
-        })
-        .is_none());
-    }
-
-    #[test]
-    fn builds_send_keys() {
-        assert_eq!(send_keys("%3", b"hi\r"), "send-keys -t %3 -H 68 69 0d");
-    }
 }

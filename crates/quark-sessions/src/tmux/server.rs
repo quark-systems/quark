@@ -1,4 +1,4 @@
-//! One-shot commands against a workspace's private tmux server.
+//! One-shot commands against Quark's private tmux server.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -114,6 +114,18 @@ impl Server {
             });
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Runs one tmux command, such as `["kill-pane", "-t", "%3"]`, and
+    /// returns its standard output.
+    pub async fn run<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> Result<String, ServerError> {
+        let what = args
+            .first()
+            .map(|a| a.as_ref().to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut c = self.command();
+        c.args(args);
+        self.output(c, &what).await
     }
 
     /// Whether a server is listening on the socket.
