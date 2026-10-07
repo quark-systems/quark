@@ -16,8 +16,15 @@
 //! It is a heuristic: whether a turn acted is read from firstmate's
 //! transcript ([`crate::baseline`]), and the two sides are matched by time,
 //! not by cause. A turn is judged once the log has moved [`WINDOW`] past
-//! it, and only while the shadow was running from [`WINDOW`] before it, so
-//! the transcript's history from before the shadow started is not judged.
+//! it, and only when the shadow was running for the whole [`WINDOW`] either
+//! side of it, so the transcript's history from before the shadow started,
+//! and turns firstmate took while the daemon was down, are not judged.
+//!
+//! The fold learns when the daemon ran from its starts: each start is
+//! recorded before the daemon writes anything else
+//! ([`WakeCoverage::daemon_started`]), so the run before it ended at the
+//! last event the log holds ahead of it. That end is early when the log was
+//! quiet before the daemon stopped, which only leaves more turns unjudged.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -42,10 +49,20 @@ pub struct Miss {
 /// The fold that finds [`Miss`]es, fed every event in log order.
 #[derive(Default)]
 pub struct WakeCoverage {
-    /// Shadow runs, oldest first: when each started and whether it ran the
-    /// coordinator's shadow.
-    runs: Vec<(OffsetDateTime, bool)>,
+    /// Daemon runs, oldest first.
+    runs: Vec<Run>,
+    /// The newest event time folded.
+    last: Option<OffsetDateTime>,
     projects: BTreeMap<ProjectId, Project>,
+}
+
+/// One daemon run.
+struct Run {
+    start: OffsetDateTime,
+    /// The last event before the next run started; `None` while running.
+    end: Option<OffsetDateTime>,
+    /// Whether it ran the coordinator's shadow; `None` until it says.
+    shadow: Option<bool>,
 }
 
 #[derive(Default)]
@@ -62,23 +79,46 @@ impl WakeCoverage {
         Self::default()
     }
 
-    /// A daemon started at `at`, running the coordinator's shadow or not.
-    pub fn started(&mut self, at: OffsetDateTime, coordinator: bool) {
-        self.runs.push((at, coordinator));
+    /// A daemon started at `at`, before writing anything else: the run
+    /// before it ended with the last event folded.
+    pub fn daemon_started(&mut self, at: OffsetDateTime) {
+        self.open(at, None);
     }
 
-    /// Whether a turn at `at` could have been seen: the run it fell in ran
-    /// the shadow, and had been running for a [`WINDOW`].
-    fn watched(&self, at: OffsetDateTime) -> bool {
-        self.runs
-            .iter()
-            .rev()
-            .find(|(start, _)| *start <= at)
-            .is_some_and(|(start, on)| *on && at - *start >= WINDOW)
+    /// A daemon started at `at` running the coordinator's shadow or not.
+    /// It says so after [`Self::daemon_started`]; a log from before those
+    /// were recorded has only this, and its run starts here.
+    pub fn started(&mut self, at: OffsetDateTime, coordinator: bool) {
+        match self.runs.last_mut() {
+            Some(run) if run.end.is_none() && run.shadow.is_none() => {
+                run.shadow = Some(coordinator)
+            }
+            _ => self.open(at, Some(coordinator)),
+        }
+        self.seen(at);
+    }
+
+    fn open(&mut self, at: OffsetDateTime, shadow: Option<bool>) {
+        let last = self.last;
+        if let Some(run) = self.runs.last_mut() {
+            run.end
+                .get_or_insert(last.unwrap_or(run.start).max(run.start));
+        }
+        self.runs.push(Run {
+            start: at,
+            end: None,
+            shadow,
+        });
+        self.seen(at);
+    }
+
+    fn seen(&mut self, at: OffsetDateTime) {
+        self.last = Some(self.last.map_or(at, |l| l.max(at)));
     }
 
     /// Fold `e` and return the turns it proves were missed.
     pub fn apply(&mut self, e: &Event) -> Vec<Miss> {
+        self.seen(e.ts);
         if e.kind
             .as_str()
             .strip_prefix(crate::events::PREFIX)
@@ -93,10 +133,8 @@ impl WakeCoverage {
                     if turn.cause == Cause::Wake && turn.acts =>
                 {
                     if let Ok(at) = OffsetDateTime::parse(&turn.at, &Rfc3339) {
-                        if self.watched(at) {
-                            let p = self.projects.entry(e.project.clone()).or_default();
-                            p.waiting.push((at, turn));
-                        }
+                        let p = self.projects.entry(e.project.clone()).or_default();
+                        p.waiting.push((at, turn));
                     }
                 }
                 _ => {}
@@ -108,6 +146,7 @@ impl WakeCoverage {
     /// Judge every waiting turn the log has moved [`WINDOW`] past.
     fn judge(&mut self, now: OffsetDateTime) -> Vec<Miss> {
         let mut missed = Vec::new();
+        let runs = &self.runs;
         for (project, p) in &mut self.projects {
             let wakes = &p.wakes;
             p.waiting.retain(|(at, turn)| {
@@ -119,6 +158,9 @@ impl WakeCoverage {
                 }
                 if now - *at <= WINDOW {
                     return true;
+                }
+                if !watched(runs, *at) {
+                    return false;
                 }
                 missed.push(Miss {
                     project: project.clone(),
@@ -135,6 +177,19 @@ impl WakeCoverage {
         }
         missed
     }
+}
+
+/// Whether a turn at `at` could have been seen: the run it fell in ran the
+/// shadow from a [`WINDOW`] before it to a [`WINDOW`] after it.
+fn watched(runs: &[Run], at: OffsetDateTime) -> bool {
+    runs.iter()
+        .rev()
+        .find(|run| run.start <= at)
+        .is_some_and(|run| {
+            run.shadow == Some(true)
+                && at - run.start >= WINDOW
+                && run.end.is_none_or(|end| at + WINDOW <= end)
+        })
 }
 
 #[cfg(test)]
@@ -223,5 +278,37 @@ mod tests {
         c.started(at(40), false);
         c.apply(&event(60, &turn(50, Cause::Wake, true)));
         assert!(c.apply(&tick(120)).is_empty());
+    }
+
+    #[test]
+    fn turns_while_the_daemon_was_down_are_not_judged() {
+        let mut c = WakeCoverage::new();
+        c.daemon_started(at(0));
+        c.started(at(0), true);
+        assert!(c.apply(&tick(30)).is_empty());
+        // The daemon stops after 30; one turn was read just before.
+        assert!(c.apply(&event(31, &turn(28, Cause::Wake, true))).is_empty());
+        // Back at 90: the new run's first events come before its shadows.
+        c.daemon_started(at(90));
+        assert!(c.apply(&tick(90)).is_empty());
+        c.started(at(90), true);
+        // Turns read from the transcript after the restart, one while down.
+        assert!(c.apply(&event(91, &turn(60, Cause::Wake, true))).is_empty());
+        assert!(c.apply(&tick(200)).is_empty());
+        // A turn well inside the new run is still judged.
+        c.apply(&event(121, &turn(120, Cause::Wake, true)));
+        let missed = c.apply(&tick(140));
+        assert_eq!(missed.len(), 1);
+        assert_eq!(missed[0].turn.id, "u120");
+    }
+
+    #[test]
+    fn a_log_without_daemon_starts_ends_runs_at_the_next_start() {
+        let mut c = WakeCoverage::new();
+        c.started(at(0), true);
+        c.apply(&tick(30));
+        c.started(at(90), true);
+        c.apply(&event(91, &turn(60, Cause::Wake, true)));
+        assert!(c.apply(&tick(200)).is_empty());
     }
 }

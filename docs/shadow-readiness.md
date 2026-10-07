@@ -78,14 +78,15 @@ A `snapshot` divergence's two sides map task id to `{"state": ...}` (`{}` when t
 | Slice | Operation | Compared | Not compared |
 |---|---|---|---|
 | 3 | `status_line` | for each status line, its kind (ask, done, report), state word, decision key, text and PR link, as firstmate's scripts read it and as `quark_worker::parse_status_line` reads it | `resolved` and `captain-held` lines, which firstmate writes, not workers; lines the native protocol skips (blank, `#`) |
-| 4 | `supervised_state` | which tasks exist, and each status-log state, against what the native supervisor's rules (`quark_supervisor::rules`) would have made of the same spawns and lines | the same gaps as slice 1's `snapshot`; session liveness (panes against native sessions) |
-| 6 | `acting_wake` | each wake turn in which firstmate's coordinator acted (from its transcript) has a native `would_wake` for the Project within 10 minutes either side | native wakes where firstmate did nothing (they cost tokens; the Metrics tab counts them); turns the user started; turns from before the shadow ran |
+| 4 | `supervised_state` | which tasks exist, and each status-log state, against what the native supervisor's rules (`quark_supervisor::rules`) would have made of the same spawns and lines | the same gaps as slice 1's `snapshot` |
+| 4 | `session_liveness` | for each task whose tmux pane firstmate read (a state from the pane or status log, or "backend target gone"), whether the pane is there, against whether the native tmux session backend lists it alive on the shared server | tasks firstmate judged from a validation run or could not reach; panes whose agent exited but whose shell remains, which a native session (running the agent itself) cannot have; remote and non-tmux workers; window-index targets |
+| 6 | `acting_wake` | each wake turn in which firstmate's coordinator acted (from its transcript) has a native `would_wake` for the Project within 10 minutes either side | native wakes where firstmate did nothing (they cost tokens; the Metrics tab counts them); turns the user started; turns from before the shadow ran, and turns within 10 minutes of the daemon being down |
 | 8 | `overview_live` | which tasks the Overview tab lists, and each status-log state, against firstmate's fleet | finished tasks the Overview keeps for a day after firstmate cleaned them up; the Hosts view, whose telemetry firstmate has no counterpart for |
 
 Slices 3 and 6 judge events already in the log (`crates/quarkd/src/log_shadow.rs`): each event is judged once, and a checkpoint written with the divergences survives restarts.
 Slices 4 and 8 run beside every firstmate `snapshot`, like slice 1, and record a divergence only when it holds on a second read.
 Slice 6 matches turns by time, not by cause, so read its examples as leads: a miss can be firstmate acting on a heartbeat the native engine handles itself.
-A turn that falls while quarkd was stopped also reads as a miss, because the native wake for it comes only when the daemon starts again.
+Each daemon start first records a `shadow.daemon_started` event, so slice 6 knows a run ended with the last event before it and skips turns from the downtime. A run that was quiet before it stopped ends early by that reckoning, which only leaves more turns unjudged.
 
 ## Roll back
 

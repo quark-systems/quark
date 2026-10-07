@@ -6,15 +6,16 @@
 //! [`quark_coordinator::shadow::WINDOW`]. Each one without is a
 //! `shadow.divergence` (operation `acting_wake`), judged by
 //! [`quark_coordinator::shadow::WakeCoverage`]. Daemon starts
-//! ([`crate::shadows::STARTED`]) say when the shadow was watching, so
-//! firstmate's turns from before it ran are not judged.
+//! ([`crate::shadows::DAEMON_STARTED`], then [`crate::shadows::STARTED`])
+//! say when the shadow was watching, so firstmate's turns from before it
+//! ran, or from while the daemon was down, are not judged.
 
 use quark_coordinator::shadow::{WakeCoverage, WINDOW};
 use quark_core::{Event, Slice};
 use serde_json::json;
 
 use crate::log_shadow::{Found, Judge};
-use crate::shadows::{Started, STARTED};
+use crate::shadows::{Started, DAEMON_STARTED, STARTED};
 
 /// Operation the misses are recorded under.
 pub const OPERATION: &str = "acting_wake";
@@ -33,6 +34,10 @@ impl Judge for WakeTurns {
     }
 
     fn judge(&mut self, event: &Event) -> Vec<Found> {
+        if event.kind.as_str() == DAEMON_STARTED {
+            self.0.daemon_started(event.ts);
+            return Vec::new();
+        }
         if event.kind.as_str() == STARTED {
             if let Ok(s) = event.decode::<Started>() {
                 self.0

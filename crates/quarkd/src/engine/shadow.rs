@@ -102,7 +102,24 @@ pub trait SnapshotCheck: Send + Sync {
     fn slice(&self) -> Slice;
     /// The operation its divergences are recorded under.
     fn operation(&self) -> &'static str;
-    async fn view(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError>;
+    /// The slice's view of the fleet, for the default [`Self::diverges`].
+    async fn view(&self, _ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
+        Err(EngineError::Invalid(format!(
+            "{} has no fleet view",
+            self.operation()
+        )))
+    }
+    /// What each side says when the view disagrees with firstmate's
+    /// snapshot `bash`, or `None` when they agree. The default compares
+    /// fleet views; a check that compares something else overrides it.
+    async fn diverges(
+        &self,
+        ws: &WorkspaceRef,
+        bash: &FleetSnapshot,
+    ) -> Result<Option<(serde_json::Value, serde_json::Value)>, EngineError> {
+        let native = self.view(ws).await?;
+        Ok(fleet_view(bash, &unfinished_extras(bash, native)))
+    }
     /// Whether the slice switch turns it on. A check that returns false
     /// runs whenever it is installed, because its own flag decided that.
     fn switched(&self) -> bool {
@@ -144,17 +161,13 @@ impl ShadowEngine {
             if check.switched() && self.mode(check.slice()) != SliceMode::Shadow {
                 continue;
             }
-            let Ok(native) = check.view(ws).await else {
+            let Ok(Some(_)) = check.diverges(ws, bash).await else {
                 continue;
             };
-            if fleet_view(bash, &unfinished_extras(bash, native)).is_none() {
-                continue;
-            }
-            let (Ok(bash), Ok(native)) = (self.bash.snapshot(ws).await, check.view(ws).await)
-            else {
+            let Ok(bash) = self.bash.snapshot(ws).await else {
                 continue;
             };
-            if let Some((b, n)) = fleet_view(&bash, &unfinished_extras(&bash, native)) {
+            if let Ok(Some((b, n))) = check.diverges(ws, &bash).await {
                 let d = Divergence {
                     slice: check.slice(),
                     operation: check.operation().to_string(),
