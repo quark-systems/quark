@@ -1,0 +1,60 @@
+{
+ "rules": {
+  "classifier": {
+   "provider": "system1"
+  },
+  "rules": [
+   {
+    "when": "x",
+    "use": [
+     {
+      "harness": "claude"
+     },
+     {
+      "harness": "pi",
+      "pricing": "budget"
+     }
+    ]
+   }
+  ]
+ },
+ "classifier_response": {
+  "model": "jev-1",
+  "answers": {
+   "rule": {
+    "choice": "rule_1",
+    "confidence": 0.9,
+    "probabilities": {
+     "rule_1": 0.9,
+     "default": 0.09999999999999998
+    }
+   }
+  }
+ },
+ "http_code": 200,
+ "quota": {
+  "schemaVersion": 5,
+  "providers": []
+ },
+ "firstmate": {
+  "status": "clear",
+  "profile": {
+   "harness": "pi",
+   "model": null,
+   "effort": null
+  },
+  "candidates": [
+   {
+    "harness": "claude",
+    "model": null,
+    "eligible": true
+   },
+   {
+    "harness": "pi",
+    "model": null,
+    "eligible": true
+   }
+  ]
+ },
+ "firstmate_output": "dispatch-resolve:\n  status: clear\n  model: jev-1   latency_ms: 0   tokens: -/-\n  rule: rule_1 (x)   confidence: 0.9\n  probabilities: rule_1=0.9 default=0.09999999999999998\n  note: rule matched\n  note: 1 eligible candidate(s) unranked (claude)\n  candidate: claude:-  provider=claude  -> eligible, unranked: provider claude not in the quota snapshot: disclosed uncertainty\n  candidate: pi:-  -> eligible, budget-based: no quota\n  selected: pi:- (budget-based, after every rankable quota candidate)\n  budget: pi:- chosen as budget-based (priced by budget, no quota)\n  profile: --harness 'pi'\n"
+}

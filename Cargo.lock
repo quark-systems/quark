@@ -932,6 +932,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-dispatch"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "quark-hosts",
+ "quark-supervisor",
+ "quark-systems",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "quark-engine"
 version = "0.0.1"
 dependencies = [
@@ -1154,9 +1170,11 @@ dependencies = [
  "http-body-util",
  "notify",
  "quark-core",
+ "quark-dispatch",
  "quark-engine",
  "quark-eventlog",
  "quark-harness",
+ "quark-hosts",
  "quark-isolation",
  "quark-sessions",
  "quark-supervisor",

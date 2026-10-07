@@ -1,0 +1,85 @@
+{
+ "rules": {
+  "classifier": {
+   "provider": "system1"
+  },
+  "rules": [
+   {
+    "when": "x",
+    "floor": {
+     "provider": "claude",
+     "scope": "all_models",
+     "min_percent": 80
+    },
+    "use": {
+     "harness": "codex"
+    }
+   },
+   {
+    "when": "y",
+    "use": {
+     "harness": "claude",
+     "floor": {
+      "scope": "all_models",
+      "min_percent": 90
+     }
+    }
+   }
+  ],
+  "default": {
+   "harness": "claude",
+   "effort": "low"
+  }
+ },
+ "classifier_response": {
+  "model": "jev-1",
+  "answers": {
+   "rule": {
+    "choice": "rule_1",
+    "confidence": 0.9,
+    "probabilities": {
+     "rule_1": 0.9,
+     "rule_2": 0.04999999999999999,
+     "default": 0.04999999999999999
+    }
+   }
+  }
+ },
+ "http_code": 200,
+ "quota": {
+  "schemaVersion": 5,
+  "providers": [
+   {
+    "provider": "codex",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 40,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.2
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "firstmate": {
+  "status": "escalate",
+  "profile": null,
+  "candidates": [
+   {
+    "harness": "codex",
+    "model": null,
+    "eligible": true
+   }
+  ]
+ },
+ "firstmate_output": "dispatch-resolve:\n  status: escalate\n  model: jev-1   latency_ms: 0   tokens: -/-\n  rule: rule_1 (x)   confidence: 0.9\n  probabilities: rule_1=0.9 rule_2=0.04999999999999999 default=0.04999999999999999\n  reason: rule rule_1 floor claude/all_models is unverifiable\n  candidate: codex:-  provider=codex  scope=all_models  remaining=40%  spendPriority=0.2  runway=through_reset  -> eligible\n"
+}

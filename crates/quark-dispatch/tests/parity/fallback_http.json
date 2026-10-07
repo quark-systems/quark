@@ -1,0 +1,112 @@
+{
+ "rules": {
+  "classifier": {
+   "provider": "system1",
+   "on_failure": "default"
+  },
+  "rules": [
+   {
+    "when": "trivial",
+    "use": [
+     {
+      "harness": "claude",
+      "model": "claude-sonnet-5"
+     },
+     {
+      "harness": "codex",
+      "model": "gpt-5.5"
+     }
+    ]
+   },
+   {
+    "when": "risky",
+    "approval": "captain",
+    "use": {
+     "harness": "claude"
+    }
+   },
+   {
+    "when": "ordered",
+    "select": "ordered",
+    "use": [
+     {
+      "harness": "codex"
+     },
+     {
+      "harness": "claude",
+      "effort": "high"
+     }
+    ]
+   }
+  ],
+  "default": [
+   {
+    "harness": "claude",
+    "effort": "medium"
+   }
+  ]
+ },
+ "classifier_response": {
+  "error": "boom"
+ },
+ "http_code": 500,
+ "quota": {
+  "schemaVersion": 5,
+  "providers": [
+   {
+    "provider": "claude",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 70,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.2
+       }
+      }
+     ]
+    }
+   },
+   {
+    "provider": "codex",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 40,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.7
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "firstmate": {
+  "status": "clear",
+  "profile": {
+   "harness": "claude",
+   "model": null,
+   "effort": "medium"
+  },
+  "candidates": [
+   {
+    "harness": "claude",
+    "model": null,
+    "eligible": true
+   }
+  ]
+ },
+ "firstmate_output": "dispatch-resolve:\n  status: clear\n  fallback: default (http 500 after 4 ms: {\"error\": \"boom\"})\n  note: classifier fell back to the default profiles (on_failure default): http 500 after 4 ms: {\"error\": \"boom\"}\n  candidate: claude:-  provider=claude  scope=all_models  remaining=70%  spendPriority=0.2  runway=through_reset  -> eligible\n  profile: --harness 'claude' --effort 'medium'\n"
+}

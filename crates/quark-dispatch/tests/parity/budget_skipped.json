@@ -1,0 +1,99 @@
+{
+ "rules": {
+  "classifier": {
+   "provider": "system1"
+  },
+  "rules": [
+   {
+    "when": "x",
+    "use": [
+     {
+      "harness": "claude"
+     },
+     {
+      "harness": "pi",
+      "pricing": "budget"
+     }
+    ]
+   }
+  ]
+ },
+ "classifier_response": {
+  "model": "jev-1",
+  "answers": {
+   "rule": {
+    "choice": "rule_1",
+    "confidence": 0.9,
+    "probabilities": {
+     "rule_1": 0.9,
+     "default": 0.09999999999999998
+    }
+   }
+  }
+ },
+ "http_code": 200,
+ "quota": {
+  "schemaVersion": 5,
+  "providers": [
+   {
+    "provider": "claude",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 70,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.3
+       }
+      }
+     ]
+    }
+   },
+   {
+    "provider": "codex",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 40,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.1
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "firstmate": {
+  "status": "clear",
+  "profile": {
+   "harness": "claude",
+   "model": null,
+   "effort": null
+  },
+  "candidates": [
+   {
+    "harness": "claude",
+    "model": null,
+    "eligible": true
+   },
+   {
+    "harness": "pi",
+    "model": null,
+    "eligible": true
+   }
+  ]
+ },
+ "firstmate_output": "dispatch-resolve:\n  status: clear\n  model: jev-1   latency_ms: 0   tokens: -/-\n  rule: rule_1 (x)   confidence: 0.9\n  probabilities: rule_1=0.9 default=0.09999999999999998\n  note: rule matched\n  candidate: claude:-  provider=claude  scope=all_models  remaining=70%  spendPriority=0.3  runway=through_reset  -> eligible\n  candidate: pi:-  -> eligible, budget-based: no quota\n  profile: --harness 'claude'\n"
+}

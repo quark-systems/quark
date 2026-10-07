@@ -1,0 +1,104 @@
+{
+ "rules": {
+  "classifier": {
+   "provider": "system1"
+  },
+  "rules": [
+   {
+    "when": "x",
+    "floor": {
+     "provider": "claude",
+     "scope": "all_models",
+     "min_percent": 80
+    },
+    "use": {
+     "harness": "codex"
+    }
+   },
+   {
+    "when": "y",
+    "use": {
+     "harness": "claude",
+     "floor": {
+      "scope": "all_models",
+      "min_percent": 90
+     }
+    }
+   }
+  ],
+  "default": {
+   "harness": "claude",
+   "effort": "low"
+  }
+ },
+ "classifier_response": {
+  "model": "jev-1",
+  "answers": {
+   "rule": {
+    "choice": "rule_2",
+    "confidence": 0.9,
+    "probabilities": {
+     "rule_1": 0.04999999999999999,
+     "rule_2": 0.9,
+     "default": 0.04999999999999999
+    }
+   }
+  }
+ },
+ "http_code": 200,
+ "quota": {
+  "schemaVersion": 5,
+  "providers": [
+   {
+    "provider": "claude",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 70,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.3
+       }
+      }
+     ]
+    }
+   },
+   {
+    "provider": "codex",
+    "quotaSemantics": {
+     "status": "known",
+     "effectiveAvailability": [
+      {
+       "scope": "all_models",
+       "status": "known",
+       "effectivePercentRemaining": 40,
+       "runway": {
+        "status": "through_reset"
+       },
+       "selection": {
+        "spendPriority": 0.1
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "firstmate": {
+  "status": "escalate",
+  "profile": null,
+  "candidates": [
+   {
+    "harness": "claude",
+    "model": null,
+    "eligible": false
+   }
+  ]
+ },
+ "firstmate_output": "dispatch-resolve:\n  status: escalate\n  model: jev-1   latency_ms: 0   tokens: -/-\n  rule: rule_2 (y)   confidence: 0.9\n  probabilities: rule_1=0.04999999999999999 rule_2=0.9 default=0.04999999999999999\n  reason: no rankable eligible candidate\n  note: rule matched\n  candidate: claude:-  provider=claude  scope=all_models  remaining=70%  spendPriority=-  runway=through_reset  -> not eligible: profile floor all_models below 90%\n"
+}
