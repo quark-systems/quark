@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use quark_core::isolation::ProcessSpec;
 use quark_core::session::{SessionBackend, SessionId, SessionInfo, SessionSpec, TermSize};
-use quark_core::worker::{WorkerEnvelope, WorkerMessage};
+use quark_core::worker::WorkerEnvelope;
 use quark_core::worktree::{ReturnOutcome, WorktreeRequest};
 use quark_core::{
     replay, CoreError, EventLog, HostId, Isolation, NewEvent, ProjectId, Result, Seq, TaskEvent,
@@ -537,25 +537,17 @@ impl Supervisor {
         answer: &str,
     ) -> Result<String> {
         self.refresh().await?;
-        let open = self
-            .ledger
-            .states()
-            .get(project, task)
-            .is_some_and(|r| r.open_decisions.contains(key));
-        if !open {
+        let record = self.ledger.states().get(project, task);
+        let events = record
+            .as_ref()
+            .and_then(|r| crate::rules::answer_transitions(r.state, &r.open_decisions, key));
+        let Some(events) = events else {
             return Err(CoreError::NotFound(format!(
                 "open decision {key} on {task}"
             )));
-        }
-        if self.state(project, task) == TaskState::NeedsDecision {
-            self.transition(
-                project,
-                task,
-                TaskEvent::DecisionAnswered {
-                    key: key.to_string(),
-                },
-            )
-            .await?;
+        };
+        for e in events {
+            self.transition(project, task, e).await?;
         }
         self.steer(project, task, &format!("Answer to [{key}]: {answer}"))
             .await
@@ -954,46 +946,8 @@ impl Supervisor {
         let Some(record) = self.ledger.states().get(project, &env.task) else {
             return 0;
         };
-        let paused = matches!(record.state, TaskState::Blocked | TaskState::Paused);
-        let mut events = Vec::new();
-        match &env.message {
-            WorkerMessage::Report { state, note } => match state.to_ascii_lowercase().as_str() {
-                "blocked" => events.push(TaskEvent::Blocked {
-                    reason: note.clone(),
-                }),
-                "paused" => events.push(TaskEvent::Paused {
-                    reason: note.clone(),
-                }),
-                "failed" => events.push(TaskEvent::Failed {
-                    reason: note.clone(),
-                }),
-                _ if paused => events.push(TaskEvent::Resumed),
-                _ => {}
-            },
-            WorkerMessage::Ask { key, question } => {
-                if !record.open_decisions.contains(key) {
-                    if paused {
-                        events.push(TaskEvent::Resumed);
-                    }
-                    events.push(TaskEvent::DecisionNeeded {
-                        key: key.clone(),
-                        question: question.clone(),
-                    });
-                }
-            }
-            WorkerMessage::Done { pull_request, .. } => {
-                if paused {
-                    events.push(TaskEvent::Resumed);
-                }
-                events.push(match pull_request {
-                    Some(pr) => TaskEvent::InReview {
-                        pull_request: Some(pr.clone()),
-                    },
-                    None => TaskEvent::Completed,
-                });
-            }
-            WorkerMessage::Learned { .. } | WorkerMessage::Signal { .. } => {}
-        }
+        let events =
+            crate::rules::message_transitions(record.state, &record.open_decisions, &env.message);
         let mut n = 0;
         for e in events {
             match self.transition(project, &env.task, e).await {

@@ -9,7 +9,9 @@ pub mod api;
 pub mod chat;
 pub mod classifier;
 pub mod config;
+pub mod coordinator_shadow;
 pub mod crew_dispatch;
+pub mod dashboard_shadow;
 pub mod dispatch;
 pub mod dispatch_test;
 pub mod engine;
@@ -20,6 +22,7 @@ pub mod gates;
 pub mod harness;
 pub mod host_sources;
 pub mod hosts;
+pub mod log_shadow;
 pub mod memory;
 pub mod metrics;
 pub mod native;
@@ -38,6 +41,7 @@ pub mod shadows;
 pub mod store;
 pub mod transcripts;
 pub mod verify_shadow;
+pub mod worker_shadow;
 pub mod worktree;
 
 use std::sync::Arc;
@@ -89,14 +93,24 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let firstmate = engine == EngineKind::Firstmate;
     let mut engine: Arc<dyn EngineAdapter> =
         config::build_engine(engine, &config, store.clone(), tmux)?;
+    let dashboard_shadow = firstmate && dashboard_shadow::enabled();
     if firstmate {
         // Slice 1 in shadow: the fleet is read back from the event log too.
+        // Later slices' checks compare each firstmate snapshot.
+        let mut checks: Vec<Arc<dyn engine::shadow::SnapshotCheck>> = Vec::new();
+        if dashboard_shadow {
+            checks.push(Arc::new(dashboard_shadow::OverviewCheck::new(
+                events.clone(),
+                bridge.clone(),
+            )));
+        }
         engine = engine::eventlog::shadowed(
             engine,
             engine::shadow::slices_from_env()?,
             events.clone(),
             bridge.clone(),
             event_ingest::host(),
+            checks,
         );
     }
     let layout = provision::Layout::new(&config.home).with_user_memory(config.user_memory.clone());
@@ -224,6 +238,19 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                     .run(config.refresh_interval),
             )
         });
+    let worker_task = (slices.mode(quark_core::Slice::WorkerProtocol)
+        == quark_core::SliceMode::Shadow)
+        .then(|| {
+            tracing::info!("slice 3 (worker protocol) in shadow: reading firstmate's status lines");
+            tokio::spawn(
+                log_shadow::LogShadow::new(
+                    events.clone(),
+                    event_ingest::host(),
+                    worker_shadow::StatusLines,
+                )
+                .run(config.refresh_interval),
+            )
+        });
     {
         use quark_core::Slice;
         let running = [
@@ -232,9 +259,15 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                 slices.mode(Slice::EventLog) == quark_core::SliceMode::Shadow,
             ),
             (Slice::Verification, verify_task.is_some()),
+            (Slice::WorkerProtocol, worker_task.is_some()),
+            (
+                Slice::Supervision,
+                slices.mode(Slice::Supervision) == quark_core::SliceMode::Shadow,
+            ),
             (Slice::Dispatch, native_dispatch::enabled()),
             (Slice::Coordinator, coordinator_task.is_some()),
             (Slice::SubCoordinators, triggers_task.is_some()),
+            (Slice::Sandbox, dashboard_shadow),
             (Slice::WorktreePool, native_worktrees::enabled()),
         ];
         let on = running
@@ -244,6 +277,17 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             .collect();
         shadows::record_started(&events, event_ingest::host(), on).await;
     }
+    // After the start is recorded, so the judge knows the shadow is watching.
+    let wake_task = coordinator_task.is_some().then(|| {
+        tokio::spawn(
+            log_shadow::LogShadow::new(
+                events.clone(),
+                event_ingest::host(),
+                coordinator_shadow::WakeTurns::default(),
+            )
+            .run(config.refresh_interval),
+        )
+    });
 
     let mut app = api::router(AppState {
         store,
@@ -279,6 +323,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         t.abort();
     }
     if let Some(t) = verify_task {
+        t.abort();
+    }
+    if let Some(t) = worker_task {
+        t.abort();
+    }
+    if let Some(t) = wake_task {
         t.abort();
     }
     pr_task.abort();

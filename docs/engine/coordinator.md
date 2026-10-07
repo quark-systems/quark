@@ -90,6 +90,7 @@ Nobody is woken and no tool runs.
 
 Deciding is the LLM's job, so there is no decision to compare one by one; what shadow mode measures is when the coordinator would be woken.
 Whether firstmate's coordinator would have been woken for the same status lines is already compared by the slice 7 shadow (`away.route` divergences).
+The slice 6 shadow checks the other direction: every wake turn in which firstmate's coordinator acted should have a native `would_wake` within 10 minutes, and each one without is a `shadow.divergence` (operation `acting_wake`; `crates/quarkd/src/coordinator_shadow.rs`, `docs/shadow-readiness.md`).
 
 ## Not yet
 

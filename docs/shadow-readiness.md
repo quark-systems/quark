@@ -17,9 +17,12 @@ That turns on every shadow that only observes:
 |---|---|---|
 | 1 event log | firstmate events ingested into `events.db`, and the fleet read back from it and compared with firstmate's | `QUARK_ENGINE_SLICES=1=shadow` |
 | 2 verification | firstmate's merge-guard decisions replayed with native rules | `QUARK_ENGINE_SLICES=1=shadow,2=shadow` |
+| 3 worker protocol | every firstmate status line read by the native file protocol too | `QUARK_ENGINE_SLICES=1=shadow,2=shadow,3=shadow` |
+| 4 supervision | firstmate's spawns and status lines replayed through the native supervisor's rules | `QUARK_ENGINE_SLICES=1=shadow,2=shadow,3=shadow,4=shadow` |
 | 5 dispatch | each dispatch resolved natively too | `QUARK_NATIVE_DISPATCH=1` |
-| 6 coordinator | coordinator turns recorded for the Metrics tab | `QUARK_NATIVE_COORDINATOR` (already on unless `0`) |
+| 6 coordinator | coordinator turns recorded for the Metrics tab, and firstmate's acting wakes checked against native would-wakes | `QUARK_NATIVE_COORDINATOR` (already on unless `0`) |
 | 7 sub-coordinators | the away classifier's routing | `QUARK_NATIVE_TRIGGERS` (already on unless `0`) |
+| 8 sandbox | the dashboard Overview's live task states compared with firstmate's fleet | `QUARK_SHADOW_DASHBOARD=1` |
 | 9 worktree pool | the native pool asked what it would do on each treehouse call | `QUARK_NATIVE_WORKTREES=1` |
 
 Firstmate keeps deciding and acting in every shadow; nothing native acts.
@@ -54,10 +57,8 @@ Time the daemon was stopped counts toward it, so a laptop that was asleep for da
 
 ## What the report can't judge yet
 
-Slices 3, 4, 6 and 8 read `no check`:
-
-- 3 worker protocol, 4 supervision, 8 sandbox: no shadow yet.
-- 6 coordinator: it compares turns, not decisions; see the Metrics tab's Coordinator section.
+Every slice now has a shadow that compares with firstmate, so none reads `no check`.
+The comparisons below are partial: each says what it can't see.
 
 ## What slice 1 compares
 
@@ -71,6 +72,20 @@ The log carries firstmate's status lines and worker records, not its backlog, pa
 | `status_tail` | the lines and the next offset | a line appended between the two reads |
 
 A `snapshot` divergence's two sides map task id to `{"state": ...}` (`{}` when the state is not compared, `null` when that engine has no such task).
+
+## What slices 3, 4, 6 and 8 compare
+
+| Slice | Operation | Compared | Not compared |
+|---|---|---|---|
+| 3 | `status_line` | for each status line, its kind (ask, done, report), state word, decision key, text and PR link, as firstmate's scripts read it and as `quark_worker::parse_status_line` reads it | `resolved` and `captain-held` lines, which firstmate writes, not workers; lines the native protocol skips (blank, `#`) |
+| 4 | `supervised_state` | which tasks exist, and each status-log state, against what the native supervisor's rules (`quark_supervisor::rules`) would have made of the same spawns and lines | the same gaps as slice 1's `snapshot`; session liveness (panes against native sessions) |
+| 6 | `acting_wake` | each wake turn in which firstmate's coordinator acted (from its transcript) has a native `would_wake` for the Project within 10 minutes either side | native wakes where firstmate did nothing (they cost tokens; the Metrics tab counts them); turns the user started; turns from before the shadow ran |
+| 8 | `overview_live` | which tasks the Overview tab lists, and each status-log state, against firstmate's fleet | finished tasks the Overview keeps for a day after firstmate cleaned them up; the Hosts view, whose telemetry firstmate has no counterpart for |
+
+Slices 3 and 6 judge events already in the log (`crates/quarkd/src/log_shadow.rs`): each event is judged once, and a checkpoint written with the divergences survives restarts.
+Slices 4 and 8 run beside every firstmate `snapshot`, like slice 1, and record a divergence only when it holds on a second read.
+Slice 6 matches turns by time, not by cause, so read its examples as leads: a miss can be firstmate acting on a heartbeat the native engine handles itself.
+A turn that falls while quarkd was stopped also reads as a miss, because the native wake for it comes only when the daemon starts again.
 
 ## Roll back
 

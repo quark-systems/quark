@@ -119,15 +119,15 @@ const SPECS: [Spec; 9] = [
     },
     Spec {
         slice: Slice::WorkerProtocol,
-        switch: None,
-        compares: false,
-        note: "no shadow yet",
+        switch: Some("QUARK_ENGINE_SLICES=1=shadow,2=shadow,3=shadow"),
+        compares: true,
+        note: "reads every firstmate status line with the native file protocol and compares the reading with firstmate's",
     },
     Spec {
         slice: Slice::Supervision,
-        switch: None,
-        compares: false,
-        note: "no shadow yet; QUARK_NATIVE_SUPERVISOR runs the native supervisor itself and compares nothing",
+        switch: Some("QUARK_ENGINE_SLICES=1=shadow,2=shadow,3=shadow,4=shadow"),
+        compares: true,
+        note: "replays firstmate's spawns and status lines through the native supervisor's rules and compares each task's state with firstmate's",
     },
     Spec {
         slice: Slice::Dispatch,
@@ -138,8 +138,8 @@ const SPECS: [Spec; 9] = [
     Spec {
         slice: Slice::Coordinator,
         switch: Some("QUARK_NATIVE_COORDINATOR (on unless 0)"),
-        compares: false,
-        note: "compares coordinator turns, not decisions; see the Metrics tab's Coordinator section",
+        compares: true,
+        note: "checks that every wake turn in which firstmate's coordinator acted had a native would-wake within 10 minutes",
     },
     Spec {
         slice: Slice::SubCoordinators,
@@ -149,9 +149,9 @@ const SPECS: [Spec; 9] = [
     },
     Spec {
         slice: Slice::Sandbox,
-        switch: None,
-        compares: false,
-        note: "no shadow yet",
+        switch: Some("QUARK_SHADOW_DASHBOARD=1"),
+        compares: true,
+        note: "compares the Overview's live task states with firstmate's fleet",
     },
     Spec {
         slice: Slice::WorktreePool,
@@ -501,7 +501,9 @@ mod tests {
         let s = all_slices();
         assert_eq!(s.mode(Slice::EventLog), SliceMode::Shadow);
         assert_eq!(s.mode(Slice::Verification), SliceMode::Shadow);
-        assert_eq!(s.mode(Slice::WorkerProtocol), SliceMode::Bash);
+        assert_eq!(s.mode(Slice::WorkerProtocol), SliceMode::Shadow);
+        assert_eq!(s.mode(Slice::Supervision), SliceMode::Shadow);
+        assert_eq!(s.mode(Slice::Dispatch), SliceMode::Bash);
         crate::config::check_slices(&s).unwrap();
     }
 
@@ -585,7 +587,7 @@ mod tests {
             slice(&r, Slice::SubCoordinators).status,
             ShadowStatus::Diverging
         );
-        assert_eq!(slice(&r, Slice::Supervision).status, ShadowStatus::NoCheck);
+        assert_eq!(slice(&r, Slice::Supervision).status, ShadowStatus::Off);
 
         let text = render(&r);
         assert!(text.contains("resolve_dispatch x3"), "{text}");

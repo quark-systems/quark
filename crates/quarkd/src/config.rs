@@ -93,9 +93,16 @@ pub fn build_engine(
 }
 
 /// The slices with a native side that can run in shadow: slice 1's ingest
-/// bridge (`event_ingest`) and slice 2's decision shadow (`verify_shadow`).
-/// Neither acts, so firstmate keeps serving every call.
-pub const SHADOWABLE: [Slice; 2] = [Slice::EventLog, Slice::Verification];
+/// bridge (`event_ingest`), slice 2's decision shadow (`verify_shadow`),
+/// slice 3's status-line reading (`worker_shadow`) and slice 4's supervision
+/// rules (`engine::eventlog::SupervisionCheck`). None acts, so firstmate
+/// keeps serving every call.
+pub const SHADOWABLE: [Slice; 4] = [
+    Slice::EventLog,
+    Slice::Verification,
+    Slice::WorkerProtocol,
+    Slice::Supervision,
+];
 
 /// Refuses any slice mode quarkd can't run: `shadow` outside
 /// [`SHADOWABLE`], and `native` for every slice, rather than silently
@@ -180,14 +187,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_slices_one_and_two_may_shadow() {
-        for ok in ["", "1=shadow", "1=shadow,2=shadow"] {
+    fn only_slices_one_to_four_may_shadow() {
+        for ok in [
+            "",
+            "1=shadow",
+            "1=shadow,2=shadow",
+            "1=shadow,2=shadow,3=shadow",
+            "1=shadow,2=shadow,3=shadow,4=shadow",
+        ] {
             assert!(
                 check_slices(&SliceSwitch::parse(ok).unwrap()).is_ok(),
                 "{ok}"
             );
         }
-        for bad in ["1=native", "1=shadow,2=shadow,3=shadow"] {
+        for bad in ["1=native", "1=shadow,2=shadow,3=shadow,4=shadow,5=shadow"] {
             let err = check_slices(&SliceSwitch::parse(bad).unwrap()).unwrap_err();
             assert!(
                 err.to_string().contains("no native engine for it yet"),

@@ -9,6 +9,10 @@
 //! and is refused: [`super::shadow::ShadowEngine`] only asks this engine
 //! for slice-1 reads.
 //!
+//! [`SupervisionCheck`] serves slice 4's shadow from the same log: the
+//! states firstmate's tasks would have under the native supervisor's rules
+//! (`quark_supervisor::shadow`).
+//!
 //! What it can't answer yet: the log carries no backlog, so queued work
 //! that has no worker is missing; and firstmate's current state also reads
 //! the worker's pane and validation run, which the log does not carry, so a
@@ -20,6 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use quark_core::{replay, ProjectId, TaskId};
 use quark_eventlog::{FirstmateBridge, FirstmateFleet, FleetTask, SqliteEventLog};
+use quark_supervisor::shadow::SupervisedFleet;
 use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind};
 
 use super::{
@@ -35,6 +40,7 @@ pub struct EventLogEngine {
     log: SqliteEventLog,
     bridge: FirstmateBridge,
     fleet: FirstmateFleet,
+    supervised: SupervisedFleet,
 }
 
 impl EventLogEngine {
@@ -45,6 +51,7 @@ impl EventLogEngine {
             log,
             bridge,
             fleet: FirstmateFleet::new(),
+            supervised: SupervisedFleet::new(),
         }
     }
 
@@ -54,9 +61,11 @@ impl EventLogEngine {
             .ingest(&project, &ws.root)
             .await
             .map_err(|e| EngineError::Command(format!("event log ingest: {e}")))?;
-        replay(&self.log, &self.fleet, REPLAY_BATCH)
-            .await
-            .map_err(|e| EngineError::Command(format!("event log replay: {e}")))?;
+        for model in [&self.fleet as &dyn quark_core::ReadModel, &self.supervised] {
+            replay(&self.log, model, REPLAY_BATCH)
+                .await
+                .map_err(|e| EngineError::Command(format!("event log replay: {e}")))?;
+        }
         Ok(project)
     }
 
@@ -213,22 +222,74 @@ impl EngineAdapter for EventLogEngine {
 }
 
 /// Wrap `bash` in a [`super::shadow::ShadowEngine`] whose slice-1 reads
-/// are also answered from the event log, when slice 1 is in shadow.
+/// are also answered from the event log, when slice 1 is in shadow, and
+/// whose snapshots also feed slice 4's check and `checks`.
 pub fn shadowed(
     bash: Arc<dyn EngineAdapter>,
     switch: quark_core::SliceSwitch,
     log: SqliteEventLog,
     bridge: FirstmateBridge,
     host: quark_core::HostId,
+    checks: Vec<Arc<dyn super::shadow::SnapshotCheck>>,
 ) -> Arc<dyn EngineAdapter> {
-    if switch.mode(quark_core::Slice::EventLog) == quark_core::SliceMode::Bash {
+    let slice_one = switch.mode(quark_core::Slice::EventLog) != quark_core::SliceMode::Bash;
+    if !slice_one && checks.is_empty() {
         return bash;
     }
     let native = Arc::new(EventLogEngine::new(log.clone(), bridge));
-    Arc::new(
-        super::shadow::ShadowEngine::new(bash, native, switch, Arc::new(log), host)
-            .comparing(&[quark_core::Slice::EventLog]),
-    )
+    let compared: &[quark_core::Slice] = if slice_one {
+        &[quark_core::Slice::EventLog]
+    } else {
+        &[]
+    };
+    let mut engine =
+        super::shadow::ShadowEngine::new(bash, native.clone(), switch, Arc::new(log), host)
+            .comparing(compared)
+            .checking(Arc::new(SupervisionCheck(native)));
+    for check in checks {
+        engine = engine.checking(check);
+    }
+    Arc::new(engine)
+}
+
+/// Slice 4's snapshot check: firstmate's tasks under the native
+/// supervisor's rules.
+pub struct SupervisionCheck(pub Arc<EventLogEngine>);
+
+#[async_trait]
+impl super::shadow::SnapshotCheck for SupervisionCheck {
+    fn slice(&self) -> quark_core::Slice {
+        quark_core::Slice::Supervision
+    }
+
+    fn operation(&self) -> &'static str {
+        "supervised_state"
+    }
+
+    async fn view(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
+        let project = self.0.catch_up(ws).await?;
+        Ok(FleetSnapshot {
+            tasks: self
+                .0
+                .supervised
+                .tasks(&project)
+                .iter()
+                .filter(|t| t.kind.as_deref() != Some("secondmate"))
+                .map(|t| EngineTask {
+                    id: t.task.to_string(),
+                    title: t.task.to_string(),
+                    kind: None,
+                    state: t.state,
+                    state_note: None,
+                    state_source: Some(SOURCE.to_string()),
+                    harness: None,
+                    pull_request_url: None,
+                    terminal: None,
+                    worktree: None,
+                })
+                .collect(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -303,5 +364,39 @@ mod tests {
         // Cleanup removes the record.
         std::fs::remove_file(state.join("t1.meta")).unwrap();
         assert!(engine.snapshot(&ws).await.unwrap().tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn supervision_check_reads_native_rule_states() {
+        use crate::engine::shadow::SnapshotCheck;
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("t1.meta"),
+            "spawn_gen=s1.1.1\nharness=claude\nkind=ship\n",
+        )
+        .unwrap();
+        append(
+            &state.join("t1.status"),
+            "working: go\nneeds-decision [key=api]: which\nblocked: stuck\nresolved [key=api]: b\n",
+        );
+        let db = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(db.path().join("events.db")).unwrap();
+        let engine = Arc::new(EventLogEngine::new(
+            log.clone(),
+            FirstmateBridge::new(log, HostId::from("h")),
+        ));
+        let ws = WorkspaceRef {
+            project_id: "p".into(),
+            root: home.path().into(),
+        };
+        let view = SupervisionCheck(engine.clone()).view(&ws).await.unwrap();
+        assert_eq!(view.tasks.len(), 1);
+        // Native rules don't answer a decision while the task is blocked.
+        assert_eq!(view.tasks[0].state, TaskState::Blocked);
+        // firstmate's own fold has closed it.
+        let holds = engine.holds(&ws).await.unwrap();
+        assert!(holds.iter().all(|h| h.id != "t1:api"), "{holds:?}");
     }
 }
