@@ -20,6 +20,7 @@
 
 pub mod eventlog;
 pub mod firstmate;
+pub mod liveness;
 pub mod shadow;
 
 use std::collections::HashMap;

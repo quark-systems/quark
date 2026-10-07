@@ -34,6 +34,9 @@ use time::{Duration, OffsetDateTime};
 pub const ENV: &str = "QUARK_SHADOWS";
 /// Which shadows a daemon start ran. Payload: [`Started`].
 pub const STARTED: &str = "shadow.started";
+/// A daemon start, recorded before it writes anything else, so the run
+/// before it ended with the last event ahead of it. No payload.
+pub const DAEMON_STARTED: &str = "shadow.daemon_started";
 /// Default window of `quarkd shadows` and `GET /v1/shadows`.
 pub const DEFAULT_DAYS: u32 = 7;
 /// Most examples listed per slice.
@@ -75,6 +78,23 @@ pub fn all_slices() -> SliceSwitch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Started {
     pub slices: Vec<Slice>,
+}
+
+/// Record that a daemon started. Call before anything else appends.
+pub async fn record_daemon_started(log: &dyn EventLog, host: quark_core::HostId) {
+    let event = NewEvent::typed(
+        host,
+        ProjectId::engine(),
+        None,
+        DAEMON_STARTED,
+        &serde_json::json!({}),
+    );
+    if let Err(e) = match event {
+        Ok(e) => log.append(e).await.map(drop),
+        Err(e) => Err(e),
+    } {
+        tracing::warn!(error = %e, "could not record the daemon start");
+    }
 }
 
 /// Record that this start runs the shadows of `slices`.

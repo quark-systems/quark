@@ -90,6 +90,8 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let events_path = config.events_path();
     let events = quark_eventlog::SqliteEventLog::open(&events_path)
         .with_context(|| format!("opening {}", events_path.display()))?;
+    // First, so every event after it is this run's (slice 6's downtime).
+    shadows::record_daemon_started(&events, event_ingest::host()).await;
     let bridge = quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host());
     let firstmate = engine == EngineKind::Firstmate;
     let mut engine: Arc<dyn EngineAdapter> =
@@ -105,9 +107,18 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                 bridge.clone(),
             )));
         }
+        // Slice 4 also reads firstmate's panes through the native tmux
+        // backend on the shared server.
+        let switch = engine::shadow::slices_from_env()?;
+        let supervision = switch.mode(quark_core::Slice::Supervision);
+        if let (quark_core::SliceMode::Shadow, Ok(server)) = (supervision, sessions.server()) {
+            checks.push(Arc::new(engine::liveness::SessionLiveness::new(
+                server.clone(),
+            )));
+        }
         engine = engine::eventlog::shadowed(
             engine,
-            engine::shadow::slices_from_env()?,
+            switch,
             events.clone(),
             bridge.clone(),
             event_ingest::host(),
