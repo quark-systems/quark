@@ -22,6 +22,8 @@ quark-isolation = { path = "crates/quark-isolation" }
 quark-supervisor = { path = "crates/quark-supervisor" }
 quark-worktree = { path = "crates/quark-worktree" }
 quark-triggers = { path = "crates/quark-triggers" }
+quark-runtime = { path = "crates/quark-runtime" }
+quark-subcoordinator = { path = "crates/quark-subcoordinator" }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"

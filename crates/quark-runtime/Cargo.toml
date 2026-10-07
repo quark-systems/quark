@@ -1,0 +1,21 @@
+[package]
+name = "quark-runtime"
+description = "Runtimes for the native Quark engine: run commands, move files and host terminal sessions on the local machine or an SSH host, behind one interface."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
