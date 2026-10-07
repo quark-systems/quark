@@ -18,6 +18,8 @@ pub mod failover;
 pub mod forge;
 pub mod gates;
 pub mod harness;
+pub mod host_sources;
+pub mod hosts;
 pub mod memory;
 pub mod metrics;
 pub mod native;
@@ -110,21 +112,34 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_command(layout.command_workspace())
         .with_user_config(layout.user_config())
         .with_failover(Arc::new(failover));
-    let telemetry = if native_dispatch::enabled() {
-        let log: Arc<dyn quark_core::EventLog> = Arc::new(events.clone());
+    let log: Arc<dyn quark_core::EventLog> = Arc::new(events.clone());
+    if native_dispatch::enabled() {
         projector = projector.with_dispatch_shadow(Arc::new(native_dispatch::DispatchShadow::new(
             &config,
             log.clone(),
         )));
-        match native_dispatch::HostTelemetry::start(&config, log).await {
-            Ok(t) => Some(t),
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "host telemetry not started");
-                None
-            }
-        }
+    }
+    // Host telemetry feeds the Hosts view and admission control.
+    let host_view = host_sources::EngineView::new(
+        store.clone(),
+        engine.clone(),
+        sessions.clone(),
+        layout.command_workspace(),
+    );
+    let (telemetry, pools_task) = if host_sources::enabled() || native_dispatch::enabled() {
+        let workloads = host_sources::EngineWorkloads(host_view.clone());
+        let telemetry =
+            match native_dispatch::HostTelemetry::start(&config, log.clone(), workloads).await {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!(error = %format!("{e:#}"), "host telemetry not started");
+                    None
+                }
+            };
+        let pools = host_sources::PoolReporter::new(host_view, log.clone(), event_ingest::host());
+        (telemetry, Some(tokio::spawn(pools.run())))
     } else {
-        None
+        (None, None)
     };
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
     let native = if native::enabled() {
@@ -215,6 +230,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     }
     if let Some(t) = telemetry {
         t.stop();
+    }
+    if let Some(t) = pools_task {
+        t.abort();
     }
     // The tmux server keeps running; the next start reattaches.
     sessions.detach_all();

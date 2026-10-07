@@ -623,6 +623,40 @@
         }
       }
     },
+    "/v1/hosts": {
+      "get": {
+        "tags": [
+          "hosts"
+        ],
+        "summary": "Every host Quark knows: identity, platform, capacity and health, the\nnewest telemetry sample and a series over `hours`, each Project's share\nof the newest sample, and the host's worktree pools.",
+        "description": "Hosts register and are sampled once a minute while host telemetry is on\n(`QUARK_HOST_TELEMETRY`, on unless `0`). An unreadable event log is\nreported in `error` rather than failing the call.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "hours",
+            "in": "query",
+            "description": "Hours of history in each series, ending now: 1 to 48, default 6.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostsView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/memory": {
       "get": {
         "tags": [
@@ -1194,6 +1228,57 @@
           },
           "409": {
             "description": "`dispatch.yaml` does not compile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/hosts": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "One Project's slice of every host it used in the last `hours` or has\nworktrees on: its CPU, memory and worktree disk now and over the window,\nbroken down by coordinator and task, beside the host's own readings.",
+        "operationId": "project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hours",
+            "in": "query",
+            "description": "Hours of history in each series, ending now: 1 to 48, default 6.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectHosts"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5577,6 +5662,326 @@
           }
         }
       },
+      "HostCapacity": {
+        "type": "object",
+        "required": [
+          "cpus",
+          "memory_bytes",
+          "disk_bytes",
+          "max_workers"
+        ],
+        "properties": {
+          "cpus": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "0 when not reported.",
+            "minimum": 0
+          },
+          "max_workers": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Most workers placed here at once; 0 for no cap.",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HostHealth": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is degraded or unreachable."
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the host last changed to this health (RFC 3339 UTC)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/HostHealthStatus"
+          }
+        }
+      },
+      "HostHealthStatus": {
+        "type": "string",
+        "enum": [
+          "healthy",
+          "degraded",
+          "unreachable"
+        ]
+      },
+      "HostPoint": {
+        "type": "object",
+        "description": "A point of a host's time series.",
+        "required": [
+          "at",
+          "cpu",
+          "memory_used_bytes",
+          "memory_pressure",
+          "disk_free_bytes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339 UTC; the last sample the point covers."
+          },
+          "cpu": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_pressure": {
+            "type": "number",
+            "format": "double"
+          },
+          "memory_used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HostReading": {
+        "type": "object",
+        "description": "One sample of a host.",
+        "required": [
+          "at",
+          "cpu",
+          "memory_used_bytes",
+          "memory_total_bytes",
+          "memory_pressure",
+          "disk_free_bytes",
+          "quark_disk"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339 UTC."
+          },
+          "cpu": {
+            "type": "number",
+            "format": "double",
+            "description": "0 to 1 across all cores."
+          },
+          "disk_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_pressure": {
+            "type": "number",
+            "format": "double",
+            "description": "0 (none) to 1 (critical)."
+          },
+          "memory_total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "quark_disk": {
+            "$ref": "#/components/schemas/QuarkDiskUse",
+            "description": "Disk Quark itself fills on this host."
+          }
+        }
+      },
+      "HostRuntime": {
+        "type": "string",
+        "description": "How a host is reached.",
+        "enum": [
+          "local",
+          "ssh",
+          "hosted",
+          "private_cloud"
+        ]
+      },
+      "HostView": {
+        "type": "object",
+        "description": "One host in the Hosts view.",
+        "required": [
+          "id",
+          "name",
+          "runtime",
+          "os",
+          "arch",
+          "capacity",
+          "health",
+          "series",
+          "projects"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/HostCapacity"
+          },
+          "health": {
+            "$ref": "#/components/schemas/HostHealth"
+          },
+          "id": {
+            "type": "string"
+          },
+          "latest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HostReading",
+                "description": "The newest sample; absent when the host was never sampled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string",
+            "description": "`macos` or `linux`."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectUsage"
+            },
+            "description": "Each Project's share of the newest sample, largest memory first."
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/HostRuntime"
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostPoint"
+            },
+            "description": "Samples in the window, oldest first, thinned to at most\n[`SERIES_POINTS`] points (each the mean of the samples it covers)."
+          },
+          "worktrees": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HostWorktrees",
+                "description": "The worktree pools on this host; absent when never reported."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "HostWorktrees": {
+        "type": "object",
+        "description": "The worktree pools on one host, as last reported.",
+        "required": [
+          "at",
+          "idle",
+          "in_use",
+          "dirty",
+          "leased",
+          "quarantined",
+          "slots"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When the pools were last read (RFC 3339 UTC)."
+          },
+          "dirty": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the pools could not be read, when they could not; the counts\nare then from the last good read."
+          },
+          "idle": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "in_use": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "leased": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "quarantined": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorktreeSlotView"
+            }
+          }
+        }
+      },
+      "HostsView": {
+        "type": "object",
+        "description": "Every host Quark knows, with its latest readings and what runs on it.",
+        "required": [
+          "hours",
+          "hosts"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the event log could not be read; `hosts` is then empty."
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostView"
+            }
+          },
+          "hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Hours of history in each `series`, ending now.",
+            "minimum": 0
+          }
+        }
+      },
       "InboxMessage": {
         "type": "object",
         "description": "A message from any channel, waiting until the coordinator handles it.",
@@ -6314,6 +6719,101 @@
           }
         }
       },
+      "ProjectHostSlice": {
+        "type": "object",
+        "required": [
+          "host_id",
+          "name",
+          "health",
+          "capacity",
+          "series",
+          "worktrees"
+        ],
+        "properties": {
+          "capacity": {
+            "$ref": "#/components/schemas/HostCapacity"
+          },
+          "health": {
+            "$ref": "#/components/schemas/HostHealth"
+          },
+          "host": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HostReading",
+                "description": "The host's own newest reading, to compare the share against."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "now": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProjectUsage",
+                "description": "The Project's share of the host's newest sample; absent when the\nProject uses nothing there now."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsagePoint"
+            },
+            "description": "The Project's share over the window, oldest first, thinned like\n[`HostView::series`]."
+          },
+          "worktrees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorktreeSlotView"
+            },
+            "description": "The Project's worktrees in this host's pools."
+          }
+        }
+      },
+      "ProjectHosts": {
+        "type": "object",
+        "description": "One Project's slice of every host it runs on.",
+        "required": [
+          "project_id",
+          "hours",
+          "hosts"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the event log could not be read."
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectHostSlice"
+            },
+            "description": "Hosts where the Project used anything in the window."
+          },
+          "hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Hours of history in each `series`, ending now.",
+            "minimum": 0
+          },
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
       "ProjectMetrics": {
         "type": "object",
         "description": "How a Project's work went over a window of days.\n\nTask outcomes, lead time, interventions and relaunches come from the\nevent log (`events.db`), which mirrors firstmate's status lines and\nspawns. A status line's time is when the daemon read it, so lines written\nbefore the log started all carry the log's first time: `log_started_at`\nsays how far back the numbers reach.",
@@ -6516,6 +7016,52 @@
           "ready",
           "failed"
         ]
+      },
+      "ProjectUsage": {
+        "type": "object",
+        "description": "One Project's share of a host.",
+        "required": [
+          "project_id",
+          "cpu",
+          "memory_bytes",
+          "disk_bytes",
+          "parts"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "number",
+            "format": "double",
+            "description": "0 to 1 of the host's CPU."
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size of the Project's task worktrees.",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsagePart"
+            },
+            "description": "The coordinator first (`engine_task` absent), then tasks, largest\nmemory first."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project's name, when the daemon knows the Project."
+          }
+        }
       },
       "PromoteMemoryEntry": {
         "type": "object",
@@ -6841,6 +7387,37 @@
           },
           "when": {
             "type": "object"
+          }
+        }
+      },
+      "QuarkDiskUse": {
+        "type": "object",
+        "required": [
+          "worktrees_bytes",
+          "logs_bytes",
+          "caches_bytes",
+          "event_log_bytes"
+        ],
+        "properties": {
+          "caches_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "event_log_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "logs_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "worktrees_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -8004,6 +8581,80 @@
           }
         }
       },
+      "UsagePart": {
+        "type": "object",
+        "description": "A coordinator's or task's share of a host.",
+        "required": [
+          "cpu",
+          "memory_bytes",
+          "disk_bytes"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "engine_task": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's task id; absent for the Project's coordinator."
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Quark task, when the daemon knows it."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UsagePoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "cpu",
+          "memory_bytes",
+          "disk_bytes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339 UTC; the last sample the point covers."
+          },
+          "cpu": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "UserMemoryEntry": {
         "type": "object",
         "description": "One entry of user-level memory: a file under `~/.quark/memory/`, which\nevery Project's coordinator reads. A file written by hand carries only\n`id`, `path` and `text`.",
@@ -8137,6 +8788,49 @@
             "description": "One per workspace source, in `project.yaml` order."
           }
         }
+      },
+      "WorktreeSlotState": {
+        "type": "string",
+        "enum": [
+          "idle",
+          "in_use",
+          "dirty",
+          "leased",
+          "quarantined"
+        ]
+      },
+      "WorktreeSlotView": {
+        "type": "object",
+        "required": [
+          "path",
+          "repo",
+          "state"
+        ],
+        "properties": {
+          "holder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who holds it: a task's engine id, or a lease owner."
+          },
+          "path": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project holding it, when known."
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/WorktreeSlotState"
+          }
+        }
       }
     }
   },
@@ -8167,6 +8861,9 @@
     },
     {
       "name": "accounts"
+    },
+    {
+      "name": "hosts"
     },
     {
       "name": "terminals"
