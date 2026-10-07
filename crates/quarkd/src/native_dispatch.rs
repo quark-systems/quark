@@ -29,7 +29,8 @@ use quark_systems::DispatchStatus;
 use crate::config::Config;
 use crate::engine::{EngineResolution, WorkspaceRef};
 
-/// Set to `1` to run native dispatch in shadow.
+/// Set to `1` to run native dispatch in shadow; unset, it follows
+/// `QUARK_SHADOWS=all`.
 pub const ENV: &str = "QUARK_NATIVE_DISPATCH";
 /// Most workers admission control will place on this host; unset or `0`
 /// for no cap.
@@ -40,7 +41,7 @@ pub const SAMPLE_EVERY: Duration = Duration::from_secs(60);
 pub const DISK_EVERY: Duration = Duration::from_secs(300);
 
 pub fn enabled() -> bool {
-    std::env::var(ENV).is_ok_and(|v| v == "1")
+    crate::shadows::opt_in(ENV)
 }
 
 /// Compares firstmate's dispatch resolutions with the native resolver's.

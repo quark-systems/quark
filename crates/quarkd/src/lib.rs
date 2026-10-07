@@ -34,6 +34,7 @@ pub mod projector;
 pub mod provision;
 pub mod sessions;
 pub mod settings;
+pub mod shadows;
 pub mod store;
 pub mod transcripts;
 pub mod verify_shadow;
@@ -214,6 +215,26 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                     .run(config.refresh_interval),
             )
         });
+    {
+        use quark_core::Slice;
+        let running = [
+            (
+                Slice::EventLog,
+                slices.mode(Slice::EventLog) == quark_core::SliceMode::Shadow,
+            ),
+            (Slice::Verification, verify_task.is_some()),
+            (Slice::Dispatch, native_dispatch::enabled()),
+            (Slice::Coordinator, coordinator_task.is_some()),
+            (Slice::SubCoordinators, triggers_task.is_some()),
+            (Slice::WorktreePool, native_worktrees::enabled()),
+        ];
+        let on = running
+            .into_iter()
+            .filter(|(_, on)| *on)
+            .map(|(s, _)| s)
+            .collect();
+        shadows::record_started(&events, event_ingest::host(), on).await;
+    }
 
     let mut app = api::router(AppState {
         store,

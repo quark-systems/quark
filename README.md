@@ -68,6 +68,9 @@ The optional classifier (`crates/quarkd/src/classifier.rs`) is a System-1-compat
 A user-level default lives under `classifier:` in `~/.quark/config.yaml`; a Project's `dispatch.yaml` overrides it field by field, and with neither the provider is `none`, so the coordinator picks every rule. The block in effect is compiled into `crew-dispatch.json` and a change to `config.yaml` is applied on the next refresh. The engine's `fm-dispatch-resolve.sh` honors it: it reads the key from the keychain, and below the floor, on a timeout or on a failure the task goes to the coordinator or, with `on_failure: default`, to the default rule, which the dispatch record shows as `decided_by: default_rule`.
 
 `.agents/skills/` holds agent skills for this repo, harness-neutral (`.claude/skills` links to it).
+
+Native slices run in shadow beside firstmate before they switch on: `QUARK_SHADOWS=all` turns on every shadow and `cargo run -p quarkd -- shadows` reports each slice's divergences (`docs/shadow-readiness.md`).
+
 `verify-quark` launches an isolated Quark (quarkd from this checkout, the app's web build against it, a headless Chromium) and drives it the way a user does, with evidence and cleanup; its `features/` map lists what to verify and which journey covers each feature.
 `create-verification` is the generic skill that generated it, adapted from Cursor's create-verification-skill (MIT), and generates a `verify-<app>` skill for any repo.
 
