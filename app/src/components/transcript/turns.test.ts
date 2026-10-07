@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { duration, groupTurns, newDay, stepTitle, summarize } from "./transcript";
-import type { ToolInfo, TranscriptItem, TranscriptRole } from "./api";
+import { breakLabel, duration, groupTurns, newDay, stepTitle, summarize, turnMarkdown } from "./turns";
+import type { ToolInfo, TranscriptItem, TranscriptRole } from "../../api";
 
 let next = 0;
 const item = (role: TranscriptRole, extra: Partial<TranscriptItem> = {}): TranscriptItem =>
@@ -67,5 +67,22 @@ describe("labels", () => {
     expect(newDay(a, undefined)).toBe(true);
     expect(newDay(a + 3_600_000, a)).toBe(false);
     expect(newDay(a + 86_400_000, a)).toBe(true);
+  });
+});
+
+describe("breaks and copying", () => {
+  it("marks a new day, or a new stretch after an hour idle", () => {
+    const a = Date.parse("2026-10-06T10:00:00");
+    expect(breakLabel(a, undefined)).toBeNull();
+    expect(breakLabel(a + 59 * 60_000, a)).toBeNull();
+    expect(breakLabel(a + 60 * 60_000, a)).toMatch(/11:00/);
+    expect(breakLabel(a + 86_400_000, a, a + 86_400_000)).toBe("Today");
+  });
+
+  it("copies a turn as the quoted prompt and the answer", () => {
+    const [t] = groupTurns([
+      item("user", { text: "Fix it\nplease" }), item("tool_call"), item("assistant", { text: "Fixed." }), item("assistant", { text: "Tests pass." }),
+    ]);
+    expect(turnMarkdown(t)).toBe("> Fix it\n> please\n\nFixed.\n\nTests pass.");
   });
 });

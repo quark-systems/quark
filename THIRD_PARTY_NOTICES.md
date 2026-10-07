@@ -12,7 +12,7 @@ Adapted in Quark:
 - the transparent, CSS-driven terminal theme, ANSI palettes and Nerd Font stack: `app/src/term/types.ts`, `app/src/term/xterm.ts`;
 - the translucent macOS window with a native blur and overlay title bar: `app/src-tauri/src/lib.rs`;
 - tool-call classification and readable titles: `crates/quark-transcript/src/tool.rs`;
-- transcript turn structure: `app/src/transcript.ts`, `app/src/components/Transcript.tsx`.
+- transcript turn structure, work fold, turn footer and scroll anchoring: `app/src/components/transcript/`.
 
 MonoCode's NOTICE disclaims harness and provider trademarks; Quark copies none of MonoCode's logos.
 

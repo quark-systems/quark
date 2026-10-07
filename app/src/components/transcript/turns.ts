@@ -2,7 +2,7 @@
 // a prompt, then the agent's work (thinking and tool calls, each paired with its
 // result), then what it wrote back. The turn layout follows MonoCode's agent
 // transcript (https://github.com/hardbeat920/monocode, MIT).
-import type { ToolKind, TranscriptItem } from "./api";
+import type { ToolKind, TranscriptItem } from "../../api";
 
 export type StepStatus = "running" | "ok" | "error";
 
@@ -150,6 +150,28 @@ export function duration(msTotal: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ${s % 60}s`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/** Idle time after which a turn opens a new stretch, marked with its time of day. */
+export const STRETCH_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * The separator before a turn starting at `at` when the previous one was at `prev`:
+ * the day when it opens a new day, the time after an hour idle, else none.
+ */
+export function breakLabel(at: number | undefined, prev: number | undefined, now = Date.now()): string | null {
+  if (at === undefined || prev === undefined) return null;
+  if (newDay(at, prev)) return dayLabel(at, now);
+  if (at - prev >= STRETCH_GAP_MS) return new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return null;
+}
+
+/** A finished turn as Markdown, for copying: the prompt quoted, then the agent's answer. */
+export function turnMarkdown(t: Turn): string {
+  const out: string[] = [];
+  if (t.prompt) out.push(t.prompt.text.split("\n").map((l) => `> ${l}`).join("\n"));
+  for (const p of t.parts) if (p.kind === "text") out.push(p.item.text);
+  return out.join("\n\n");
 }
 
 /** Whether a turn starting at `at` opens a new day after one at `prev`. */
