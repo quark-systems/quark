@@ -34,13 +34,16 @@ quarkd runs `FirstmateBridge` over every Project's firstmate home on the project
 |---|---|---|
 | each new line of `state/<task>.status` | `firstmate.status` | `StatusPayload`: verb, fold key, corr, note, the raw line and its byte offset |
 | each new worker generation in `state/<task>.meta` | `firstmate.spawn` | `quark_engine::meta::SpawnMeta` |
+| the set of tasks with a `state/<task>.meta`, when it changes (firstmate removes a task's record at cleanup) | `firstmate.tasks` | `TasksPayload`: the live task ids |
 
 Each file's read position is a checkpoint (`firstmate/<project>/<task>/status` holds device, inode and offset; `.../spawn` holds the last generation), committed with the events it covers, so a line lands exactly once however quarkd dies.
 A status file that is replaced or truncated is read again from the start, the same trade the engine makes.
 A partial last line waits for its newline.
 
 Status lines are wake-event history, not current task state, so the bridge stores them as written.
-Turning them into `task.transition` events and comparing them with firstmate's snapshot is the native read path's job when slice 1 goes to shadow.
+The native read path folds them back: `quark_eventlog::fleet::FirstmateFleet` keeps each live task's worker, status lines, open keyed decisions (firstmate's `status_open_decisions` rule) and current declaration (`status_current_line`), and drives a task state through the reference task machine toward what the status log says, counting any transition the machine refuses.
+It is a read model only and appends nothing; in slice 1's shadow, quarkd's `EventLogEngine` (`crates/quarkd/src/engine/eventlog.rs`) serves `snapshot`, `status_tail` and `holds` from it and the shadow engine compares them with firstmate's (see `docs/shadow-readiness.md`).
+A bridge's clones share one lock, so the ingest loop and a shadow read never run a pass at once.
 
 ## Crash tests
 

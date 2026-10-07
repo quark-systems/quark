@@ -136,6 +136,7 @@ fn task(state: TaskState) -> FleetSnapshot {
             kind: Some(TaskKind::Ship),
             state,
             state_note: None,
+            state_source: None,
             harness: Some("claude".into()),
             pull_request_url: Some("https://github.com/quark-systems/quark/pull/42".into()),
             worktree: None,

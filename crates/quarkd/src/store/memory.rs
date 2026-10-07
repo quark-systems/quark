@@ -346,6 +346,7 @@ mod tests {
                         kind: Some(TaskKind::Ship),
                         state,
                         state_note: None,
+                        state_source: None,
                         harness: None,
                         pull_request_url: Some("https://github.com/o/r/pull/7".into()),
                         worktree: None,

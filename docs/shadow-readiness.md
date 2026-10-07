@@ -15,7 +15,7 @@ That turns on every shadow that only observes:
 
 | Slice | Shadow | Setting `all` stands in for |
 |---|---|---|
-| 1 event log | firstmate events ingested into `events.db` | `QUARK_ENGINE_SLICES=1=shadow` |
+| 1 event log | firstmate events ingested into `events.db`, and the fleet read back from it and compared with firstmate's | `QUARK_ENGINE_SLICES=1=shadow` |
 | 2 verification | firstmate's merge-guard decisions replayed with native rules | `QUARK_ENGINE_SLICES=1=shadow,2=shadow` |
 | 5 dispatch | each dispatch resolved natively too | `QUARK_NATIVE_DISPATCH=1` |
 | 6 coordinator | coordinator turns recorded for the Metrics tab | `QUARK_NATIVE_COORDINATOR` (already on unless `0`) |
@@ -54,13 +54,23 @@ Time the daemon was stopped counts toward it, so a laptop that was asleep for da
 
 ## What the report can't judge yet
 
-Slices 1, 3, 4, 6 and 8 read `no check`:
+Slices 3, 4, 6 and 8 read `no check`:
 
-- 1 event log: firstmate events are ingested, but no native read path compares a snapshot with firstmate's.
 - 3 worker protocol, 4 supervision, 8 sandbox: no shadow yet.
 - 6 coordinator: it compares turns, not decisions; see the Metrics tab's Coordinator section.
 
-Because slices switch strictly in order, slice 1 is the first gate, and it needs a comparison before divergences can clear it.
+## What slice 1 compares
+
+Slice 1's shadow answers `snapshot`, `status_tail` and `holds` from the event log (`crates/quarkd/src/engine/eventlog.rs`) every time firstmate answers them, and records a divergence only when both engines still disagree on a second read.
+The log carries firstmate's status lines and worker records, not its backlog, panes or validation runs, so each read compares what the log can know:
+
+| Operation | Compared | Not compared |
+|---|---|---|
+| `snapshot` | which tasks exist; the state of each task whose state firstmate read from its status log (`done` and `in review` count as one) | queued work with no worker (backlog); states firstmate read from the pane or the validation run; titles, terminals, worktrees |
+| `holds` | each open keyed decision and its question, for tasks whose decisions firstmate kept from the status log | captain holds (backlog); decisions firstmate dropped because the pane or validation run moved on; secondmates |
+| `status_tail` | the lines and the next offset | a line appended between the two reads |
+
+A `snapshot` divergence's two sides map task id to `{"state": ...}` (`{}` when the state is not compared, `null` when that engine has no such task).
 
 ## Roll back
 

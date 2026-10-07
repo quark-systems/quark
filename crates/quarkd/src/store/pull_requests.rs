@@ -543,6 +543,7 @@ mod tests {
                         kind: None,
                         state: TaskState::InReview,
                         state_note: None,
+                        state_source: None,
                         harness: None,
                         pull_request_url: Some(URL.into()),
                         terminal: None,

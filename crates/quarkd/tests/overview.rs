@@ -73,6 +73,7 @@ async fn overview_reports_live_status_and_what_changed_since() {
                     kind: Some(TaskKind::Ship),
                     state: TaskState::Running,
                     state_note: None,
+                    state_source: None,
                     harness: Some("claude".into()),
                     pull_request_url: None,
                     terminal: None,

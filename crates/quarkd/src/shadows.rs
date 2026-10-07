@@ -108,8 +108,8 @@ const SPECS: [Spec; 9] = [
     Spec {
         slice: Slice::EventLog,
         switch: Some("QUARK_ENGINE_SLICES=1=shadow"),
-        compares: false,
-        note: "firstmate's events are ingested into the log, but no native read path compares with firstmate's snapshot yet",
+        compares: true,
+        note: "reads the fleet, status tails and open decisions back from the event log and compares them with firstmate's",
     },
     Spec {
         slice: Slice::Verification,
@@ -585,7 +585,6 @@ mod tests {
             slice(&r, Slice::SubCoordinators).status,
             ShadowStatus::Diverging
         );
-        assert_eq!(slice(&r, Slice::EventLog).status, ShadowStatus::NoCheck);
         assert_eq!(slice(&r, Slice::Supervision).status, ShadowStatus::NoCheck);
 
         let text = render(&r);
