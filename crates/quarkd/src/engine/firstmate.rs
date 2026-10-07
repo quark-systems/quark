@@ -37,6 +37,10 @@ pub struct FirstmateEngine {
     engine_root: PathBuf,
     log: Arc<dyn CallLog>,
     tmux: Option<String>,
+    /// Coordinators are tasks of the one command-center home, whose
+    /// `fm-spawn.sh` refuses to run beside another spawn there; provisioning
+    /// and coordinator recovery take turns instead.
+    coordinator_spawns: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl FirstmateEngine {
@@ -45,6 +49,7 @@ impl FirstmateEngine {
             engine_root: engine_root.into(),
             log,
             tmux: None,
+            coordinator_spawns: Arc::default(),
         }
     }
 
@@ -494,6 +499,7 @@ impl EngineAdapter for FirstmateEngine {
             effort: agent.effort.clone(),
             resume,
         };
+        let _turn = self.coordinator_spawns.lock().await;
         let out = self.write_env(command, op, account_env).await?;
         write::parse_spawned(&out).map_err(convert)?;
         Ok(())

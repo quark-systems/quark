@@ -507,7 +507,7 @@ async fn recovery_restarts_a_lost_server_and_resumes_missing_coordinators() {
     assert!(server.is_running().await);
     assert_eq!(starts(), vec![(project.id.clone(), true)]);
     recovery.pass().await;
-    assert_eq!(starts().len(), 1, "retried within the retry window");
+    assert_eq!(starts().len(), 1, "relaunched again right after a success");
 
     sessions.detach_all();
     server.kill().await;
