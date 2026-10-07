@@ -75,7 +75,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
     let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
     let pr_task = tokio::spawn(pr_center.run(config.pr_refresh_interval));
-    let harnesses = Arc::new(harness::HarnessRegistry::builtin());
+    let harnesses = Arc::new(harness::HarnessRegistry::load(
+        &config.home.join("harnesses"),
+    ));
     let quota_axi = accounts::QuotaAxi {
         bin: config.quota_axi.clone(),
     };

@@ -2,15 +2,14 @@
 //!
 //! A harness covers detection, models and effort, credential health per
 //! account, launch, turn signals, the session-log transcript and the
-//! interrupt and exit keys (ADR-9). The MVP implementations in [`builtin`]
-//! describe firstmate's verified adapters, so a launch delegates to the
-//! engine's own spawn; a harness that needs custom logic implements the
-//! trait directly and registers next to them.
+//! interrupt and exit keys (ADR-9). Each built-in harness is a
+//! `quark-harness` TOML manifest describing firstmate's verified adapter, so
+//! a launch delegates to the engine's own spawn; `<home>/harnesses/*.toml`
+//! adds or replaces manifests without a release, and a harness that needs
+//! custom logic implements the trait directly and registers next to them.
 
 mod builtin;
 
-use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,14 +20,12 @@ use quark_systems::{
     HarnessInstall, HarnessModels, HarnessSupervision, ModelSelection,
 };
 
-pub use builtin::{all as builtin, CliHarness, Spec, SPECS};
+pub use builtin::{all as builtin, from_manifests, ManifestHarness};
+pub use quark_harness::HostEnv;
 
 /// How long a detection result is reused before `GET /v1/harnesses` probes
 /// the executables again.
 pub const DETECT_TTL: Duration = Duration::from_secs(30);
-
-/// Longest a `--version` probe may run.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Longest model id accepted in an agent config.
 const MAX_MODEL_LEN: usize = 128;
@@ -45,65 +42,6 @@ pub fn pool_name_ok(pool: &str) -> bool {
         && pool
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
-
-/// The parts of the host environment harness checks read. Tests build one
-/// by hand so detection and credential checks never touch the real machine.
-#[derive(Debug, Clone, Default)]
-pub struct HostEnv {
-    pub path: Option<OsString>,
-    pub home: Option<PathBuf>,
-    pub vars: HashMap<String, String>,
-}
-
-impl HostEnv {
-    /// Snapshot of this process's environment.
-    pub fn current() -> Self {
-        Self {
-            path: std::env::var_os("PATH"),
-            home: std::env::var_os("HOME").map(PathBuf::from),
-            vars: std::env::vars().collect(),
-        }
-    }
-
-    /// A non-empty variable.
-    pub fn var(&self, name: &str) -> Option<&str> {
-        self.vars
-            .get(name)
-            .map(String::as_str)
-            .filter(|v| !v.is_empty())
-    }
-
-    /// `~/rel`, when a home directory is known.
-    pub fn home_join(&self, rel: &str) -> Option<PathBuf> {
-        self.home.as_ref().map(|h| h.join(rel))
-    }
-
-    /// The first executable named `name` on `PATH`.
-    pub fn which(&self, name: &str) -> Option<PathBuf> {
-        let path = self.path.as_ref()?;
-        std::env::split_paths(path)
-            .map(|dir| dir.join(name))
-            .find(|p| is_executable(p))
-    }
-}
-
-pub(crate) fn is_executable(p: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(p) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
 }
 
 /// An account a harness runs under: its own config directory, or the
@@ -126,12 +64,12 @@ pub enum SignalSource {
     Screen,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signals {
     pub busy: SignalSource,
     pub turn_end: SignalSource,
     /// Human-readable summary for the API.
-    pub summary: &'static str,
+    pub summary: String,
 }
 
 impl Signals {
@@ -144,16 +82,14 @@ impl Signals {
     }
 }
 
-/// A terminal key, in tmux `send-keys` notation.
-pub type Key = &'static str;
-
 /// Interrupt and exit sequences.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keys {
-    /// Keys that cancel the current turn without exiting.
-    pub interrupt: &'static [Key],
+    /// Keys, in tmux `send-keys` notation, that cancel the current turn
+    /// without exiting.
+    pub interrupt: Vec<String>,
     /// Slash command typed and submitted to exit.
-    pub exit_command: &'static str,
+    pub exit_command: String,
 }
 
 /// Session-log formats the transcript tap can parse.
@@ -177,7 +113,7 @@ pub struct TranscriptSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchPlan {
     /// The engine adapter name, e.g. firstmate's `claude`. Internal only.
-    pub engine_harness: &'static str,
+    pub engine_harness: String,
     pub model: Option<String>,
     /// Absent when unset or when the harness has no control for it.
     pub effort: Option<Effort>,
@@ -197,17 +133,22 @@ pub enum LaunchError {
 #[async_trait]
 pub trait Harness: Send + Sync {
     /// Stable id used in agent configs and dispatch rules.
-    fn id(&self) -> &'static str;
-    fn name(&self) -> &'static str;
-    fn roles(&self) -> &'static [AgentRole];
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
+    /// The name the engine reports for this harness, e.g. firstmate's
+    /// `claude` for `claude-code`.
+    fn engine_name(&self) -> &str {
+        self.id()
+    }
+    fn roles(&self) -> &[AgentRole];
 
     /// Installed executable and version.
     async fn detect(&self, env: &HostEnv) -> Detection;
-    fn install_hint(&self) -> &'static str;
+    fn install_hint(&self) -> &str;
 
     fn models(&self) -> HarnessModels;
     /// Accepted effort levels; empty when there is no effort control.
-    fn efforts(&self) -> &'static [Effort];
+    fn efforts(&self) -> &[Effort];
 
     /// Errors and warnings for `config`, which names this harness.
     fn validate(&self, config: &AgentConfig) -> (Vec<ConfigIssue>, Vec<ConfigIssue>) {
@@ -219,7 +160,7 @@ pub trait Harness: Send + Sync {
 
     /// The environment variable that points the harness at an account's
     /// config directory, when it supports more than one account.
-    fn account_env(&self) -> Option<&'static str>;
+    fn account_env(&self) -> Option<&str>;
 
     /// The default account's config directory: the account variable when it
     /// is set in the daemon's environment, else the harness's usual place.
@@ -229,7 +170,7 @@ pub trait Harness: Send + Sync {
 
     /// The `quota-axi --provider` name that reads one account's quota with
     /// `--profile-only`, when quota-axi supports the harness.
-    fn quota_provider(&self) -> Option<&'static str> {
+    fn quota_provider(&self) -> Option<&str> {
         None
     }
 
@@ -251,27 +192,6 @@ pub trait Harness: Send + Sync {
 pub struct Detection {
     pub path: Option<PathBuf>,
     pub version: Option<String>,
-}
-
-/// Runs `<exe> --version` with a timeout and returns its first non-empty
-/// output line.
-pub(crate) async fn probe_version(exe: &Path) -> Option<String> {
-    let run = tokio::process::Command::new(exe)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let out = tokio::time::timeout(PROBE_TIMEOUT, run).await.ok()?.ok()?;
-    let text = if out.stdout.is_empty() {
-        out.stderr
-    } else {
-        out.stdout
-    };
-    String::from_utf8_lossy(&text)
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .map(|l| l.chars().take(200).collect())
 }
 
 fn issue(field: &str, code: &str, message: impl Into<String>) -> ConfigIssue {
@@ -394,6 +314,17 @@ impl HarnessRegistry {
         Self::new(builtin(), HostEnv::current())
     }
 
+    /// The built-in harnesses overlaid with the manifests in `dir` (see
+    /// `quark_harness::load_dir`), against this process's environment.
+    /// Manifests that fail to load are logged and skipped.
+    pub fn load(dir: &Path) -> Self {
+        let (reg, errors) = quark_harness::ManifestRegistry::load(dir);
+        for e in errors {
+            tracing::warn!(path = %e.path.display(), error = %e.error, "skipping harness manifest");
+        }
+        Self::new(from_manifests(&reg), HostEnv::current())
+    }
+
     pub fn new(harnesses: Vec<Arc<dyn Harness>>, env: HostEnv) -> Self {
         Self {
             harnesses,
@@ -406,7 +337,7 @@ impl HarnessRegistry {
         self.harnesses.iter().find(|h| h.id() == id)
     }
 
-    pub fn ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+    pub fn ids(&self) -> impl Iterator<Item = &str> + '_ {
         self.harnesses.iter().map(|h| h.id())
     }
 
@@ -423,10 +354,8 @@ impl HarnessRegistry {
     /// The harness a task reports, by its id or the engine's adapter name
     /// (firstmate reports `claude` for Claude Code).
     pub fn resolve(&self, reported: &str) -> Option<&Arc<dyn Harness>> {
-        self.get(reported).or_else(|| {
-            let id = SPECS.iter().find(|s| s.engine == reported)?.id;
-            self.get(id)
-        })
+        self.get(reported)
+            .or_else(|| self.harnesses.iter().find(|h| h.engine_name() == reported))
     }
 
     /// Checks `config` for `role`. Unknown harnesses, unsupported roles,
@@ -506,7 +435,7 @@ impl HarnessRegistry {
                     auth: h.auth_status(&self.env, &account),
                     supervision: HarnessSupervision {
                         confidence: signals.confidence(),
-                        source: signals.summary.into(),
+                        source: signals.summary,
                     },
                     transcript: h.transcript(&self.env, &account).is_some(),
                     account_env: h.account_env().map(Into::into),

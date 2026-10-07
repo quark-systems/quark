@@ -1,0 +1,29 @@
+schema = 1
+id = "antigravity"
+name = "Antigravity CLI"
+aliases = ["agy"]
+roles = ["worker"]
+efforts = ["low", "medium", "high"]
+
+[detect]
+bins = ["agy"]
+version_args = ["--version"]
+install_hint = "Install the Antigravity CLI and put `agy` on PATH"
+
+[models]
+selection = "free_form"
+discovery = "agy models"
+
+[launch]
+argv = ["agy", "--dangerously-skip-permissions", "--prompt-interactive", "{prompt}"]
+optional = [["--model", "{model}"], ["--effort", "{effort}"]]
+prompt_via = "argv"
+
+[turn_signals]
+busy = "pane"
+turn_end = "pane"
+summary = "terminal screen"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/quit"

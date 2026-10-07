@@ -1,0 +1,31 @@
+schema = 1
+id = "omp"
+name = "Oh My Pi"
+roles = ["worker"]
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[detect]
+bins = ["omp"]
+version_args = ["--version"]
+install_hint = "Install Oh My Pi and put `omp` on PATH"
+
+[models]
+selection = "provider_qualified"
+discovery = "omp models"
+
+[launch]
+argv = ["omp", "--auto-approve", "--cwd", "{cwd}", "{prompt}"]
+optional = [["--model", "{model}"], ["--thinking", "{effort}"]]
+prompt_via = "argv"
+
+[launch.env]
+OMP_SKIP_SETUP = "1"
+
+[turn_signals]
+busy = "extension"
+turn_end = "extension"
+summary = "engine extension (agent_start, agent_end)"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/quit"

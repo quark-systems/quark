@@ -15,6 +15,7 @@ quark-engine = { path = "crates/quark-engine" }
 quark-transcript = { path = "crates/quark-transcript" }
 quark-core = { path = "crates/quark-core" }
 quark-worker = { path = "crates/quark-worker" }
+quark-harness = { path = "crates/quark-harness" }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"

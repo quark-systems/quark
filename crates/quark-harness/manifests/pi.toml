@@ -1,0 +1,39 @@
+schema = 1
+id = "pi"
+name = "Pi"
+roles = ["coordinator", "worker"]
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[detect]
+bins = ["pi"]
+version_args = ["--version"]
+install_hint = "npm install -g @mariozechner/pi-coding-agent"
+
+[models]
+selection = "free_form"
+discovery = "pi --list-models"
+
+[launch]
+argv = ["pi", "{prompt}"]
+optional = [["--model", "{model}"], ["--thinking", "{effort}"]]
+prompt_via = "argv"
+
+# Pi also reads provider API keys from many variables.
+[account]
+env = "PI_CODING_AGENT_DIR"
+config_dir = ".pi/agent"
+auth_files = ["auth.json"]
+
+[turn_signals]
+busy = "extension"
+turn_end = "extension"
+summary = "engine extension (agent_start, agent_settled)"
+
+[transcript]
+format = "pi-session"
+dir = "sessions"
+key = "cwd-slug"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/quit"

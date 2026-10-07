@@ -1,0 +1,47 @@
+schema = 1
+id = "codex"
+name = "Codex"
+roles = ["coordinator", "worker"]
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[detect]
+bins = ["codex"]
+version_args = ["--version"]
+install_hint = "npm install -g @openai/codex"
+
+[models]
+selection = "free_form"
+discovery = "the /model picker in Codex"
+
+[launch]
+argv = ["codex", "--dangerously-bypass-approvals-and-sandbox", "{prompt}"]
+optional = [["--model", "{model}"], ["-c", "model_reasoning_effort=\"{effort}\""]]
+prompt_via = "argv"
+
+[account]
+env = "CODEX_HOME"
+config_dir = ".codex"
+auth_env = ["OPENAI_API_KEY"]
+auth_files = ["auth.json"]
+auth_exhaustive = true
+
+[hooks]
+install = "codex-notify"
+events = { notify = "turn_end" }
+
+[turn_signals]
+busy = "pane"
+turn_end = "hooks"
+summary = "Codex notify hook for turn end; busy state from the screen"
+
+[transcript]
+format = "codex-rollout"
+dir = "sessions"
+key = "session-id"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/quit"
+
+[quota]
+provider = "codex"

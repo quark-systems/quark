@@ -1,0 +1,49 @@
+schema = 1
+id = "claude-code"
+name = "Claude Code"
+aliases = ["claude"]
+roles = ["coordinator", "worker"]
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[detect]
+bins = ["claude"]
+fallback_bins = [".claude/local/claude"]
+version_args = ["--version"]
+install_hint = "npm install -g @anthropic-ai/claude-code"
+
+[models]
+selection = "free_form"
+discovery = "the /model picker in Claude Code"
+
+[launch]
+argv = ["claude", "--dangerously-skip-permissions"]
+optional = [["--model", "{model}"], ["--effort", "{effort}"]]
+prompt_via = "paste"
+
+# macOS keeps the login in the keychain, so a missing file proves nothing.
+[account]
+env = "CLAUDE_CONFIG_DIR"
+config_dir = ".claude"
+auth_env = ["ANTHROPIC_API_KEY"]
+auth_files = [".credentials.json"]
+
+[hooks]
+install = "claude-settings"
+events = { UserPromptSubmit = "busy", Stop = "turn_end" }
+
+[turn_signals]
+busy = "hooks"
+turn_end = "hooks"
+summary = "Claude Code hooks (UserPromptSubmit, Stop)"
+
+[transcript]
+format = "claude-jsonl"
+dir = "projects"
+key = "cwd-slug"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/exit"
+
+[quota]
+provider = "claude"

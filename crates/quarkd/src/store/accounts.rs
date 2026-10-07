@@ -11,7 +11,6 @@ use quark_systems::{AccountQuota, AccountQuotaChanged, EventType, Task};
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use super::{append_event, get_project, Result, Store, StoreError, TASK_SELECT};
-use crate::harness::SPECS;
 
 const DEFAULT_PREFIX: &str = "default-";
 
@@ -333,10 +332,10 @@ pub(super) fn inherited_account(
     project_id: &str,
     reported_harness: &str,
 ) -> Option<String> {
-    let spec = SPECS
-        .iter()
-        .find(|s| s.id == reported_harness || s.engine == reported_harness)?;
-    spec.account_env?;
+    let manifest = quark_harness::ManifestRegistry::builtin()
+        .resolve(reported_harness)
+        .cloned()?;
+    manifest.account.as_ref()?.env.as_ref()?;
     let coordinator: Option<String> = tx
         .query_row(
             "SELECT coordinator_account_id FROM projects WHERE id = ?1",
@@ -356,9 +355,9 @@ pub(super) fn inherited_account(
                 )
                 .ok(),
         };
-        if harness.as_deref() == Some(spec.id) {
+        if harness.as_deref() == Some(manifest.id.as_str()) {
             return Some(account);
         }
     }
-    Some(default_account_id(spec.id))
+    Some(default_account_id(&manifest.id))
 }
