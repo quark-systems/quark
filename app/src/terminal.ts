@@ -9,6 +9,7 @@
 import { api, ApiError, b64ToBytes, NotAvailable, Terminal, TerminalOutput } from "./api";
 import { onOutput } from "./store";
 import { AdapterOptions, TermAdapter, TERM_FONT } from "./term/types";
+import { cssVar } from "./theme";
 
 /** xterm.js DOM renderer on Linux until WebGL is measured on a GPU (ADR-3); WebGL elsewhere. */
 export function defaultRenderer(): string {
@@ -81,7 +82,7 @@ async function open(h: TermHandle) {
 
   const { createXterm } = await import("./term/xterm");
   const opts: AdapterOptions = {
-    cols: info.cols || 120, rows: info.rows || 36, fontFamily: TERM_FONT, fontSize: 13, lineHeight: 1.15,
+    cols: info.cols || 120, rows: info.rows || 36, fontFamily: cssVar("--font-terminal") || TERM_FONT, fontSize: 13, lineHeight: 1.15,
     renderer: defaultRenderer(),
   };
   let resizeTimer = 0;

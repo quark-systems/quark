@@ -51,6 +51,7 @@ export function App() {
   return (
     <div className="app">
       <aside className="sidebar">
+        <div className="drag-strip" data-tauri-drag-region />
         <a className="brand" href={href({ name: "projects" })}><span className="dot" />QUARK</a>
         <div className="side-section">
           <a className={"side-item" + (route.name === "projects" ? " active" : "")} href={href({ name: "projects" })}>
