@@ -1,0 +1,27 @@
+schema = 1
+id = "opencode"
+name = "OpenCode"
+roles = ["worker"]
+
+[detect]
+bins = ["opencode"]
+version_args = ["--version"]
+install_hint = "npm install -g opencode-ai"
+
+[models]
+selection = "provider_qualified"
+discovery = "opencode models"
+
+[launch]
+argv = ["opencode", "--prompt", "{prompt}"]
+optional = [["--model", "{model}"]]
+prompt_via = "argv"
+
+[turn_signals]
+busy = "extension"
+turn_end = "extension"
+summary = "engine plugin (session.status)"
+
+[keys]
+interrupt = ["Escape", "Escape"]
+exit = "/exit"

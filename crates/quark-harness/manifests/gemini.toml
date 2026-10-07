@@ -1,0 +1,38 @@
+schema = 1
+id = "gemini"
+name = "Gemini CLI"
+roles = ["worker"]
+
+[detect]
+bins = ["gemini"]
+version_args = ["--version"]
+install_hint = "npm install -g @google/gemini-cli"
+
+[models]
+selection = "free_form"
+discovery = "the /model dialog in Gemini CLI"
+
+[launch]
+argv = ["gemini", "-y", "{prompt}"]
+optional = [["--model", "{model}"]]
+prompt_via = "argv"
+
+[launch.env]
+GEMINI_CLI_TRUST_WORKSPACE = "true"
+
+[account]
+config_dir = ".gemini"
+auth_env = ["GEMINI_API_KEY"]
+
+[hooks]
+install = "gemini-settings"
+events = { BeforeAgent = "busy", AfterAgent = "turn_end" }
+
+[turn_signals]
+busy = "hooks"
+turn_end = "hooks"
+summary = "Gemini CLI hooks (BeforeAgent, AfterAgent)"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/quit"

@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 quark-systems.workspace = true
 quark-core.workspace = true
+quark-harness.workspace = true
 quark-engine.workspace = true
 quark-transcript.workspace = true
 anyhow.workspace = true

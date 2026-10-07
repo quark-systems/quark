@@ -1,0 +1,32 @@
+schema = 1
+id = "rovo"
+name = "Rovo Dev"
+roles = ["worker"]
+# Set through --config-override (agent.efficiencyLevel), which a plugin builds.
+efforts = ["low", "medium", "high", "max"]
+
+[detect]
+bins = ["rovo"]
+fallback_bins = [".local/bin/rovo"]
+version_args = ["--version"]
+install_hint = "Install the Rovo CLI and put `rovo` on PATH"
+
+[models]
+selection = "free_form"
+discovery = "/models in a Rovo session"
+
+# A positional brief is dropped, so the brief is typed once the banner shows.
+[launch]
+argv = ["rovo", "run", "--yolo"]
+optional = [["--model", "{model}"]]
+prompt_via = "paste"
+
+[turn_signals]
+busy = "pane"
+turn_end = "pane"
+summary = "terminal screen"
+idle_patterns = ["Welcome to Rovo!"]
+
+[keys]
+interrupt = ["Escape"]
+exit = "/exit"

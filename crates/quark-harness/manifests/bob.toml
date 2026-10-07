@@ -1,0 +1,35 @@
+schema = 1
+id = "bob"
+name = "IBM Bob"
+roles = ["worker"]
+
+[detect]
+bins = ["bob"]
+version_args = ["--version"]
+install_hint = "Install IBM Bob and put `bob` on PATH"
+
+[models]
+selection = "automatic"
+
+[launch]
+argv = ["bob", "chat", "--auto-approve", "--trust", "--max-turns", "500"]
+prompt_via = "paste"
+
+[account]
+config_dir = ".bob"
+auth_env = ["BOB_API_KEY"]
+auth_files = ["settings/auth-secrets.json"]
+auth_exhaustive = true
+
+[hooks]
+install = "bob-settings"
+events = { UserPromptSubmit = "busy", Stop = "turn_end" }
+
+[turn_signals]
+busy = "hooks"
+turn_end = "hooks"
+summary = "Bob hooks (UserPromptSubmit, Stop)"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/exit"

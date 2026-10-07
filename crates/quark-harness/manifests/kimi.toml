@@ -1,0 +1,31 @@
+schema = 1
+id = "kimi"
+name = "Kimi Code"
+roles = ["worker"]
+
+[detect]
+bins = ["kimi"]
+fallback_bins = [".kimi-code/bin/kimi"]
+version_args = ["--version"]
+install_hint = "Install Kimi Code and put `kimi` on PATH"
+
+[models]
+selection = "free_form"
+discovery = "kimi provider list --json"
+
+[launch]
+argv = ["kimi", "--auto"]
+prompt_via = "paste"
+
+[hooks]
+install = "kimi-hooks"
+events = { Stop = "turn_end" }
+
+[turn_signals]
+busy = "pane"
+turn_end = "hooks"
+summary = "Kimi turn-end hook; busy state from the screen"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/exit"

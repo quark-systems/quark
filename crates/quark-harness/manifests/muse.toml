@@ -1,0 +1,34 @@
+schema = 1
+id = "muse"
+name = "Muse Code"
+roles = ["worker"]
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[detect]
+bins = ["muse"]
+version_args = ["--version"]
+install_hint = "Install Muse Code and put `muse` on PATH"
+
+[models]
+selection = "free_form"
+
+# Muse calls max `ultra`; the engine maps it before substitution.
+[launch]
+argv = ["muse", "{prompt}"]
+optional = [["--model", "{model}"], ["--reasoning-effort", "{effort}"]]
+prompt_via = "argv"
+
+[account]
+config_dir = ".config/muse"
+auth_env = ["META_API_KEY"]
+auth_files = ["auth.json"]
+auth_exhaustive = true
+
+[turn_signals]
+busy = "transcript"
+turn_end = "transcript"
+summary = "Muse session event log"
+
+[keys]
+interrupt = ["Escape", "C-u"]
+exit = "/exit"

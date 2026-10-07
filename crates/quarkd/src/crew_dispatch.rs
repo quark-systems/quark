@@ -37,7 +37,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::classifier;
-use crate::harness::SPECS;
 
 /// The Project repo file this module compiles.
 pub const FILE: &str = "dispatch.yaml";
@@ -284,7 +283,10 @@ fn from_value<T: DeserializeOwned>(v: serde_yaml_ng::Value) -> Result<T, String>
 /// The engine's adapter name for a Quark harness id. Names Quark has no
 /// built-in harness for pass through, for the engine to accept or refuse.
 fn engine_harness(id: &str) -> &str {
-    SPECS.iter().find(|s| s.id == id).map_or(id, |s| s.engine)
+    quark_harness::builtin()
+        .iter()
+        .find(|m| m.id == id)
+        .map_or(id, |m| quark_harness::engine_name(m))
 }
 
 /// The editable part of a config [`as_written`] read.

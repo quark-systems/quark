@@ -1,0 +1,36 @@
+schema = 1
+id = "grok"
+name = "Grok Build"
+roles = ["worker"]
+efforts = ["low", "medium", "high"]
+
+[detect]
+bins = ["grok"]
+version_args = ["--version"]
+install_hint = "Install Grok Build and put `grok` on PATH"
+
+[models]
+selection = "free_form"
+discovery = "grok models"
+
+[launch]
+argv = ["grok", "--always-approve", "{prompt}"]
+optional = [["--model", "{model}"], ["--reasoning-effort", "{effort}"]]
+prompt_via = "argv"
+
+[account]
+env = "GROK_HOME"
+config_dir = ".grok"
+
+[hooks]
+install = "grok-hooks"
+events = { Stop = "turn_end" }
+
+[turn_signals]
+busy = "pane"
+turn_end = "hooks"
+summary = "Grok turn-end hook; busy state from the screen"
+
+[keys]
+interrupt = ["C-c"]
+exit = "/exit"

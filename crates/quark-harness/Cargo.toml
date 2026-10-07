@@ -1,0 +1,20 @@
+[package]
+name = "quark-harness"
+description = "Declarative harness manifests: the built-in TOML manifests, the loader and registry, and the detection, credential and launch logic every engine shares."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+quark-systems.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["process", "time"] }
+toml = "0.9"
+
+[dev-dependencies]
+tempfile = "3"
+tokio.workspace = true

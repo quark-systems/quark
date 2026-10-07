@@ -1,0 +1,28 @@
+schema = 1
+id = "cursor-agent"
+name = "Cursor Agent"
+aliases = ["cursor"]
+roles = ["worker"]
+
+[detect]
+bins = ["cursor-agent", "agent"]
+version_args = ["--version"]
+install_hint = "curl https://cursor.com/install -fsS | bash"
+
+[models]
+selection = "free_form"
+discovery = "cursor-agent --list-models (effort is part of the model id)"
+
+[launch]
+argv = ["cursor-agent", "--trust", "--yolo", "--workspace", "{cwd}", "{prompt}"]
+optional = [["--model", "{model}"]]
+prompt_via = "argv"
+
+[turn_signals]
+busy = "transcript"
+turn_end = "transcript"
+summary = "Cursor conversation transcript"
+
+[keys]
+interrupt = ["Escape"]
+exit = "/exit"
