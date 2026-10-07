@@ -16,8 +16,9 @@
 //!    the coordinator starts fresh from its charter, which beats leaving the
 //!    Project without one.
 //!
-//! A Project is retried at most once per [`RETRY_AFTER`], so a coordinator
-//! that cannot start does not relaunch in a loop. A window that is listed
+//! A Project whose relaunch fails is retried after [`FIRST_RETRY`], doubling
+//! up to [`MAX_RETRY`], so a coordinator that cannot start does not relaunch
+//! in a loop while one that hit a passing race comes back quickly. A window that is listed
 //! is never touched, whatever runs in it: only a missing window is proof
 //! the agent is gone, so recovery never starts a second coordinator.
 //! Worker windows are the coordinator's to recover once it is back.
@@ -36,9 +37,17 @@ use crate::store::Store;
 
 /// How often recovery looks for a lost server or coordinator.
 pub const INTERVAL: Duration = Duration::from_secs(3);
-/// How long a Project waits before its coordinator is started again after
-/// an attempt.
-pub const RETRY_AFTER: Duration = Duration::from_secs(60);
+/// How long a Project waits after a failed relaunch before the next one.
+pub const FIRST_RETRY: Duration = Duration::from_secs(5);
+/// The longest wait between relaunches of one Project.
+pub const MAX_RETRY: Duration = Duration::from_secs(60);
+
+/// When a Project's coordinator may be relaunched next, and the last wait
+/// after a failure (zero after a success).
+struct Backoff {
+    next: Instant,
+    wait: Duration,
+}
 
 pub struct CoordinatorRecovery {
     store: Arc<Store>,
@@ -46,7 +55,7 @@ pub struct CoordinatorRecovery {
     accounts: Arc<Accounts>,
     sessions: Sessions,
     command: PathBuf,
-    attempts: Mutex<HashMap<String, Instant>>,
+    attempts: Mutex<HashMap<String, Backoff>>,
 }
 
 impl CoordinatorRecovery {
@@ -129,28 +138,55 @@ impl CoordinatorRecovery {
             if listed.contains(target) || !self.due(&project.id) {
                 continue;
             }
-            self.relaunch(&project, target).await;
+            let ok = self.relaunch(&project, target).await;
+            self.record(&project.id, ok);
         }
     }
 
-    /// Records an attempt for `project_id` unless one was made within
-    /// [`RETRY_AFTER`].
+    /// Whether `project_id`'s coordinator may be relaunched now.
     fn due(&self, project_id: &str) -> bool {
-        let mut attempts = self.attempts.lock().unwrap();
-        let now = Instant::now();
-        if let Some(at) = attempts.get(project_id) {
-            if now.duration_since(*at) < RETRY_AFTER {
-                return false;
-            }
-        }
-        attempts.insert(project_id.to_string(), now);
-        true
+        self.attempts
+            .lock()
+            .unwrap()
+            .get(project_id)
+            .is_none_or(|b| Instant::now() >= b.next)
     }
 
-    async fn relaunch(&self, project: &Project, target: &str) {
-        let (Some(agent), Some(root)) = (&project.agent_config, &project.workspace_path) else {
-            return;
+    /// Records how a relaunch went. A failure waits [`FIRST_RETRY`], then
+    /// twice as long each time. A success waits [`MAX_RETRY`] before the
+    /// next relaunch, should the window still not be listed, and starts the
+    /// failure waits over.
+    fn record(&self, project_id: &str, ok: bool) {
+        let mut attempts = self.attempts.lock().unwrap();
+        let (after, wait) = if ok {
+            (MAX_RETRY, Duration::ZERO)
+        } else {
+            let wait = match attempts.get(project_id) {
+                Some(b) if !b.wait.is_zero() => (b.wait * 2).min(MAX_RETRY),
+                _ => FIRST_RETRY,
+            };
+            (wait, wait)
         };
+        attempts.insert(
+            project_id.to_string(),
+            Backoff {
+                next: Instant::now() + after,
+                wait,
+            },
+        );
+    }
+
+    /// Whether the coordinator is running again.
+    async fn relaunch(&self, project: &Project, target: &str) -> bool {
+        let (Some(agent), Some(root)) = (&project.agent_config, &project.workspace_path) else {
+            return false;
+        };
+        // The server can go between the check above and the engine's spawn
+        // (a dying server still answers for a moment), and the spawn needs it.
+        if let Err(e) = self.sessions.ensure_server().await {
+            tracing::warn!(error = %e, "could not start the tmux server again");
+            return false;
+        }
         let ws = WorkspaceRef {
             project_id: project.id.clone(),
             root: PathBuf::from(root),
@@ -165,7 +201,7 @@ impl CoordinatorRecovery {
             Ok(lease) => lease.map(|l| l.env).unwrap_or_default(),
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "coordinator recovery could not choose an account");
-                return;
+                return false;
             }
         };
         match self
@@ -175,7 +211,7 @@ impl CoordinatorRecovery {
         {
             Ok(()) => {
                 tracing::info!(project = %project.id, "coordinator relaunched in its conversation");
-                return;
+                return true;
             }
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "coordinator could not resume; starting it fresh");
@@ -186,9 +222,13 @@ impl CoordinatorRecovery {
             .start_coordinator(&self.command, &ws, agent, &env, false)
             .await
         {
-            Ok(()) => tracing::info!(project = %project.id, "coordinator relaunched fresh"),
+            Ok(()) => {
+                tracing::info!(project = %project.id, "coordinator relaunched fresh");
+                true
+            }
             Err(e) => {
-                tracing::warn!(project = %project.id, error = %e, "coordinator relaunch failed")
+                tracing::warn!(project = %project.id, error = %e, "coordinator relaunch failed");
+                false
             }
         }
     }
