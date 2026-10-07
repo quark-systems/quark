@@ -4091,6 +4091,101 @@
           }
         }
       },
+      "CoordinatorMetrics": {
+        "type": "object",
+        "description": "Coordinator token efficiency over the window.\n\nA turn that changed nothing (no task started, steered, answered or\ncancelled, nothing told or asked of the user) only acknowledged status;\nthe native coordinator's target share of those is near zero.",
+        "required": [
+          "tasks",
+          "baseline",
+          "native",
+          "would_wake_turns"
+        ],
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/CoordinatorTurns",
+            "description": "firstmate's coordinator (Claude Code transcripts only)."
+          },
+          "native": {
+            "$ref": "#/components/schemas/CoordinatorTurns",
+            "description": "The native coordinator; no turns until slice 6 switches on."
+          },
+          "tasks": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks seen in the window, the divisor of the per-task figures.",
+            "minimum": 0
+          },
+          "would_wake_turns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "While slice 6 runs in shadow: turns the native coordinator would\nhave taken.",
+            "minimum": 0
+          }
+        }
+      },
+      "CoordinatorTurns": {
+        "type": "object",
+        "description": "One coordinator's turns and tokens.",
+        "required": [
+          "turns",
+          "ack_turns",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens"
+        ],
+        "properties": {
+          "ack_share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "0 to 1."
+          },
+          "ack_turns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Turns that only acknowledged status.",
+            "minimum": 0
+          },
+          "cache_read_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of the input tokens, how many were cache reads.",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Input tokens, including prompt cache reads and writes.",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tokens_per_task": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "turns": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "turns_per_task": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "CreateAccount": {
         "type": "object",
         "description": "Add an account for a harness.",
@@ -6837,6 +6932,10 @@
               "$ref": "#/components/schemas/AccountUse"
             },
             "description": "Accounts this Project's tasks ran under, with their quota now."
+          },
+          "coordinator": {
+            "$ref": "#/components/schemas/CoordinatorMetrics",
+            "description": "The coordinator's turns and tokens: firstmate's, read from its\ntranscript, beside the native coordinator's."
           },
           "days": {
             "type": "integer",

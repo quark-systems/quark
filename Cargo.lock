@@ -918,6 +918,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-coordinator"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "quark-eventlog",
+ "quark-persona",
+ "quark-triggers",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "quark-core"
 version = "0.0.1"
 dependencies = [
@@ -1181,6 +1199,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "notify",
+ "quark-coordinator",
  "quark-core",
  "quark-dispatch",
  "quark-engine",

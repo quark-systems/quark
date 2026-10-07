@@ -14,12 +14,21 @@ export interface Interventions { decisions: number; blockers: number; per_finish
 export interface Failovers { relaunched: number; no_healthy_account: number; relaunch_failed: number }
 export interface AccountUse { account_id: string; harness: string; label: string; tasks: number; quota: AccountQuota }
 export interface UnavailableMetric { metric: string; reason: string }
+/** One coordinator's turns and tokens; shares are 0 to 1. A turn that changed nothing only acknowledged status. */
+export interface CoordinatorTurns {
+  turns: number; ack_turns: number; input_tokens: number; output_tokens: number; cache_read_tokens: number;
+  turns_per_task?: number | null; tokens_per_task?: number | null; ack_share?: number | null;
+}
+/** firstmate's coordinator (read from its transcript) beside the native one. */
+export interface CoordinatorMetrics { tasks: number; baseline: CoordinatorTurns; native: CoordinatorTurns; would_wake_turns: number }
 export interface ProjectMetrics {
   project_id: string; days: number; from: string; to: string;
   /** The Project's first event in the log; numbers reach no further back. */
   log_started_at?: string | null;
   throughput: Throughput; lead_time: LeadTime; gates: GateMetrics; interventions: Interventions;
   failovers: Failovers; accounts: AccountUse[]; unavailable: UnavailableMetric[];
+  /** Absent from daemons older than the native coordinator. */
+  coordinator?: CoordinatorMetrics;
 }
 
 export const metricsApi = {
