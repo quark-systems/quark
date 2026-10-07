@@ -50,6 +50,23 @@ const accounts = new Map(); // account id -> Account, in the daemon's order (def
 const dispatches = new Map(); // task id -> DispatchRecord[], oldest first; kept after the task ends
 const memoryCommits = new Map(); // commit id -> MemoryCommit
 const userMemory = []; // UserMemoryEntry[] (user-level memory, shared by every Project)
+// Persona packs, as quarkd ships them. The demo's default is plain, so it reads
+// with neutral names unless a Project picks a pack.
+const PERSONAS = [
+  { id: "plain", name: "Plain", builtin: true, address: null, voice: "Write plainly and concisely.", vocabulary: [], roles: {}, ui_labels: {} },
+  {
+    id: "nautical", name: "Nautical", builtin: true, address: "captain", voice: "Address the user as captain.", vocabulary: ["aye", "shipshape"],
+    roles: { user: "captain", coordinator: "first mate", worker: "crewmate", sub_coordinator: "second mate", investigation: "scout", decision: "captain's call" },
+    ui_labels: { decisions: "Captain's calls", standing_approval: "Standing orders", memory: "Logbook" },
+  },
+  {
+    id: "kitchen-brigade", name: "Kitchen brigade", builtin: true, address: "chef", voice: "Calm, brisk service talk.", vocabulary: ["heard", "all day"],
+    roles: { user: "chef", coordinator: "expo", worker: "line cook", sub_coordinator: "sous chef", investigation: "tasting", decision: "chef's call" },
+    ui_labels: { task: "Ticket", tasks: "Tickets", decisions: "Chef's calls", memory: "Recipe book", standing_approval: "Standing order" },
+  },
+];
+let defaultPersona = "plain";
+const personaOverrides = new Map(); // project id -> pack id
 
 const events = []; // { seq, ... } bounded
 let seq = 0;
@@ -1048,6 +1065,28 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, promoted);
   }
   if (p === "/v1/memory" && req.method === "GET") return send(res, 200, userMemory);
+  if (p === "/v1/personas" && req.method === "GET") return send(res, 200, { default: defaultPersona, packs: PERSONAS, errors: [] });
+  if (p === "/v1/personas/default" && req.method === "PUT") {
+    const b = (await readJson(req)) ?? {};
+    if (!PERSONAS.some((x) => x.id === b.persona)) return invalid(res, `no persona pack ${JSON.stringify(b.persona)}`);
+    defaultPersona = b.persona;
+    return send(res, 200, { default: defaultPersona, packs: PERSONAS, errors: [] });
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/persona$/)) && (req.method === "GET" || req.method === "PUT")) {
+    const id = decodeURIComponent(r[1]);
+    if (!projects.has(id)) return notFound(res);
+    if (req.method === "PUT") {
+      const b = (await readJson(req)) ?? {};
+      if (b.persona == null) personaOverrides.delete(id);
+      else if (PERSONAS.some((x) => x.id === b.persona)) personaOverrides.set(id, b.persona);
+      else return invalid(res, `no persona pack ${JSON.stringify(b.persona)}`);
+    }
+    const chosen = personaOverrides.get(id) ?? defaultPersona;
+    return send(res, 200, {
+      project_id: id, persona: PERSONAS.find((x) => x.id === chosen),
+      project_override: personaOverrides.get(id) ?? null, default: defaultPersona, fallback: null,
+    });
+  }
   if (p === "/v1/harnesses" && req.method === "GET") return send(res, 200, HARNESSES);
   if (p === "/v1/harnesses:validate" && req.method === "POST") {
     const b = await readJson(req);

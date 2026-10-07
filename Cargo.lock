@@ -1012,6 +1012,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-persona"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "quark-runtime"
 version = "0.0.1"
 dependencies = [
@@ -1176,6 +1188,7 @@ dependencies = [
  "quark-harness",
  "quark-hosts",
  "quark-isolation",
+ "quark-persona",
  "quark-sessions",
  "quark-supervisor",
  "quark-systems",

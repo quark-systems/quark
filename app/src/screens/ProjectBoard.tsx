@@ -8,6 +8,8 @@ import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
 import { Transcript, UserMessage } from "../components/transcript";
+import { PersonaPicker } from "../components/PersonaPicker";
+import { useLabels } from "../persona";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
 
@@ -17,6 +19,7 @@ export function ProjectBoard({ id }: { id: string }) {
   const tasks = useStore((s) => s.tasks);
   const [chatOpen, setChatOpen] = useState(true);
   const proposals = useStore((s) => s.memoryProposals);
+  const l = useLabels(id);
   const toReview = useMemo(() => Object.values(proposals).filter((m) => m.project_id === id && m.state === "proposed").length, [proposals, id]);
 
   const mine = useMemo(() => Object.values(tasks).filter((t) => t.project_id === id), [tasks, id]);
@@ -48,20 +51,20 @@ export function ProjectBoard({ id }: { id: string }) {
         <span className="spacer" />
         <a className="btn" href={href({ name: "overview", project: id })} data-testid="nav-overview" title="What is happening now, and what changed since you last looked">Overview</a>
         <a className="btn" href={href({ name: "memory", project: id })} data-testid="nav-memory" title="Review what finished tasks learned">
-          Memory{toReview > 0 && <span className="pill accent" data-testid="memory-count">{toReview}</span>}
+          {l.ui("memory", "Memory")}{toReview > 0 && <span className="pill accent" data-testid="memory-count">{toReview}</span>}
         </a>
         <a className="btn" href={href({ name: "dispatch", project: id })} data-testid="nav-dispatch" title="Which agent each kind of task gets">Dispatch</a>
         <a className="btn" href={href({ name: "metrics", project: id })} data-testid="nav-metrics" title="How this Project's work has gone">Metrics</a>
         <a className="btn" href={href({ name: "automation", project: id })} data-testid="nav-automation" title="Inbox, trigger rules and the away policy">Automation</a>
         <a className="btn" href={href({ name: "settings", project: id })} data-testid="nav-settings" title="Every switch for this Project">Settings</a>
-        <button className={"btn" + (chatOpen ? " on" : "")} onClick={() => setChatOpen(!chatOpen)}>Coordinator</button>
+        <button className={"btn" + (chatOpen ? " on" : "")} onClick={() => setChatOpen(!chatOpen)}>{l.Role("coordinator")}</button>
       </div>
       {project.status && project.status !== "ready" && <ProvisionBar project={project} />}
       <div className={"screen board-layout" + (chatOpen ? " with-chat" : "")}>
         <div className="board" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(180px, 1fr))` }}>
           {columns.map((c) => (
             <div className="col" key={c.id} data-testid={`col-${c.id}`}>
-              <div className="col-head"><span className="swatch" style={{ background: c.color }} />{c.label}<span className="n">{c.tasks.length}</span></div>
+              <div className="col-head"><span className="swatch" style={{ background: c.color }} />{c.id === "needs_decision" ? `Needs ${l.role("decision")}` : c.label}<span className="n">{c.tasks.length}</span></div>
               <div className="col-body">
                 {c.tasks.map((t) => (
                   <WorkerCard key={t.id + (changed.has(t.id) ? ":" + t.state : "")} task={t} flash={changed.has(t.id)} />
@@ -105,6 +108,8 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const [sending, setSending] = useState(false);
   // Sent messages are not echoed: they appear once the coordinator's session records them.
   const [pending, setPending] = useState<{ key: number; text: string; confirmed: boolean }[]>([]);
+  const l = useLabels(cid);
+  const coordinator = l.role("coordinator");
 
   useEffect(() => {
     loadChat(cid).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
@@ -132,13 +137,13 @@ export function CoordinatorChat({ cid }: { cid: string }) {
 
   return (
     <aside className="side-chat" data-testid="coordinator-chat">
-      <div className="panel-head">Coordinator</div>
+      <div className="panel-head">{l.Role("coordinator")}<span className="spacer" /><PersonaPicker projectId={cid} /></div>
       {status === "unavailable" ? (
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
           <Transcript key={cid} items={items} agent="coordinator" actions className="chat-log"
-            empty={status === "ok" ? <div className="empty">Ask the coordinator to plan or delegate work.</div>
+            empty={status === "ok" ? <div className="empty">Ask the {coordinator} to plan or delegate work.</div>
               : status === "loading" ? <div className="empty">Loading…</div> : null}>
             {pending.length > 0 && pending.map((p) => (
               <UserMessage key={p.key} pending item={{ text: p.text, ts: null, truncated: false }}
@@ -147,7 +152,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
           </Transcript>
           {err && <div className="form-error">{err}</div>}
           <Composer value={text} onChange={setText} onSend={() => void send()} sending={sending}
-            label="Message the coordinator" placeholder="Message the coordinator (Enter to send, Shift+Enter for a newline)" />
+            label={`Message the ${coordinator}`} placeholder={`Message the ${coordinator} (Enter to send, Shift+Enter for a newline)`} />
         </>
       )}
     </aside>

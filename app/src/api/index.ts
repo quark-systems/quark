@@ -19,6 +19,7 @@ export * from "./settings";
 export * from "./metrics";
 export * from "./automation";
 export * from "./overview";
+export * from "./personas";
 
 import { projectsApi } from "./projects";
 import { tasksApi } from "./tasks";
@@ -34,6 +35,7 @@ import { settingsApi } from "./settings";
 import { metricsApi } from "./metrics";
 import { automationApi } from "./automation";
 import { overviewApi } from "./overview";
+import { personasApi } from "./personas";
 
 export const api = {
   ...projectsApi,
@@ -50,4 +52,5 @@ export const api = {
   ...metricsApi,
   ...automationApi,
   ...overviewApi,
+  ...personasApi,
 };

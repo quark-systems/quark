@@ -11,6 +11,7 @@ mod memory;
 mod metrics;
 mod openapi;
 mod overview;
+mod personas;
 mod pull_requests;
 mod routes;
 mod terminals;
@@ -86,6 +87,10 @@ const MODULES: &[Module] = &[
     Module {
         router: accounts::router,
         openapi: <accounts::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: personas::router,
+        openapi: <personas::Api as OpenApi>::openapi,
     },
     Module {
         router: terminals::router,

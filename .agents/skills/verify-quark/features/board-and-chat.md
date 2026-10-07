@@ -34,3 +34,4 @@ Preconditions:
 
 - A real coordinator answers in its own words and may take minutes; wait on the queued card, not on chat wording.
 - With the stub engine the chat accepts nothing useful: there is no coordinator behind it.
+- A real daemon reads with the `nautical` persona by default, so the chat box is "Message the first mate"; pick "Plain" in the Persona select (see [personas](personas.md)) to use the labels above.

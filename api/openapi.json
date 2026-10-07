@@ -656,6 +656,65 @@
         }
       }
     },
+    "/v1/personas": {
+      "get": {
+        "tags": [
+          "personas"
+        ],
+        "summary": "Every installed persona pack, the built-in ones first, and the global\ndefault.",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/personas/default": {
+      "put": {
+        "tags": [
+          "personas"
+        ],
+        "summary": "Choose the pack every Project uses unless it picks its own.",
+        "operationId": "set_default",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultPersona"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaList"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects": {
       "get": {
         "tags": [
@@ -1720,6 +1779,103 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProjectOverview"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/persona": {
+      "get": {
+        "tags": [
+          "personas"
+        ],
+        "summary": "The pack a Project reads with: its role names, form of address and app\nlabels.",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPersona"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "personas"
+        ],
+        "summary": "Pick a Project's own pack, or send `null` to follow the global default.",
+        "operationId": "set_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProjectPersona"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPersona"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -5931,6 +6087,98 @@
           }
         }
       },
+      "Persona": {
+        "type": "object",
+        "description": "One persona pack, as the app needs it. Prompt fragments stay in the\ndaemon.",
+        "required": [
+          "id",
+          "name",
+          "builtin",
+          "voice",
+          "vocabulary",
+          "roles",
+          "ui_labels"
+        ],
+        "properties": {
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How agents address the user, such as `captain`."
+          },
+          "builtin": {
+            "type": "boolean",
+            "description": "Shipped with Quark rather than added under the Quark home."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable id such as `nautical` or `kitchen-brigade`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "object",
+            "description": "Label per neutral role (`user`, `coordinator`, `worker`,\n`sub_coordinator`, `investigation`, `decision`). A role left out\nkeeps its neutral name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "ui_labels": {
+            "type": "object",
+            "description": "App label per neutral label id (`tasks`, `decisions`, `memory`, ...).\nAn id left out keeps the app's neutral text.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "vocabulary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Flavor words agents may use sparingly."
+          },
+          "voice": {
+            "type": "string",
+            "description": "Voice and tone guidance added to agent prompts."
+          }
+        }
+      },
+      "PersonaList": {
+        "type": "object",
+        "description": "Every installed pack and the global default.",
+        "required": [
+          "default",
+          "packs",
+          "errors"
+        ],
+        "properties": {
+          "default": {
+            "type": "string",
+            "description": "Id of the pack every Project uses unless it overrides it."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Packs under the Quark home that could not be loaded, and why."
+          },
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Persona"
+            }
+          }
+        }
+      },
       "Project": {
         "type": "object",
         "description": "A Project: a goal-driven workspace that owns tasks, decisions and PRs.",
@@ -6176,6 +6424,42 @@
           },
           "project_id": {
             "type": "string"
+          }
+        }
+      },
+      "ProjectPersona": {
+        "type": "object",
+        "description": "The pack a Project reads with, and where that choice comes from.",
+        "required": [
+          "project_id",
+          "persona",
+          "default"
+        ],
+        "properties": {
+          "default": {
+            "type": "string",
+            "description": "The global default's id."
+          },
+          "fallback": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the pack in effect is not the one chosen, when a chosen pack is\nno longer installed."
+          },
+          "persona": {
+            "$ref": "#/components/schemas/Persona",
+            "description": "The pack in effect."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_override": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project's own choice; absent when it uses the default."
           }
         }
       },
@@ -6769,6 +7053,30 @@
           "text": {
             "type": "string",
             "description": "Plain text for the worker to read; may span several lines."
+          }
+        }
+      },
+      "SetDefaultPersona": {
+        "type": "object",
+        "description": "Choose the global default pack.",
+        "required": [
+          "persona"
+        ],
+        "properties": {
+          "persona": {
+            "type": "string"
+          }
+        }
+      },
+      "SetProjectPersona": {
+        "type": "object",
+        "description": "Choose a Project's pack. `null` clears its override so it follows the\nglobal default again.",
+        "properties": {
+          "persona": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -7853,6 +8161,9 @@
     },
     {
       "name": "harnesses"
+    },
+    {
+      "name": "personas"
     },
     {
       "name": "accounts"

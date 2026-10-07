@@ -9,6 +9,7 @@ import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import { StandingApproval } from "../../components/StandingApproval";
 import { DashboardTabs } from "./Tabs";
+import { PersonaPicker } from "../../components/PersonaPicker";
 import "./settings.css";
 import "./overview.css";
 
@@ -115,6 +116,11 @@ export function Settings({ project: pid }: { project: string }) {
               {plural(s.memory.entries, "entry", "entries")}, {plural(s.memory.proposals_to_review, "proposal")} to review.
             </p>}
             <a className="btn" href={href({ name: "memory", project: pid })} data-testid="settings-open-memory">Open memory</a>
+          </Section>
+
+          <Section title="Persona" testId="settings-persona">
+            <PersonaPicker projectId={pid} />
+            <p className="faint">Role names, how agents address you and some labels. It changes how the Project reads, not what it does.</p>
           </Section>
         </div>
       </div>

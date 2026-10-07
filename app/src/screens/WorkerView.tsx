@@ -12,6 +12,7 @@ import { Unavailable } from "../components/Unavailable";
 import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
 import { HarnessLogo, harnessMark } from "../components/WorkerCard";
+import { useLabels } from "../persona";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
@@ -164,6 +165,7 @@ function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: strin
 // ---- steering ----
 
 function SteerBox({ taskId }: { taskId: string }) {
+  const worker = useLabels(useStore((s) => s.tasks[taskId]?.project_id)).role("worker");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
@@ -175,16 +177,16 @@ function SteerBox({ taskId }: { taskId: string }) {
     try {
       await api.steer(taskId, t);
       setText("");
-      setNote({ ok: true, text: "Delivered to the worker's inbox" });
+      setNote({ ok: true, text: `Delivered to the ${worker}'s inbox` });
     } catch (e) {
-      setNote({ ok: false, text: e instanceof NotAvailable ? "Messaging a worker is not available from this daemon yet" : errText(e) });
+      setNote({ ok: false, text: e instanceof NotAvailable ? `Messaging a ${worker} is not available from this daemon yet` : errText(e) });
     } finally { setBusy(false); }
   };
 
   return (
     <div className="composer steer">
-      <textarea rows={2} value={text} aria-label="Message the worker"
-        placeholder="Message the worker (Enter to send, Shift+Enter for a newline)"
+      <textarea rows={2} value={text} aria-label={`Message the ${worker}`}
+        placeholder={`Message the ${worker} (Enter to send, Shift+Enter for a newline)`}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
