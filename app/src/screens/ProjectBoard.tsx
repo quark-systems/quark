@@ -7,7 +7,7 @@ import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
-import { Transcript, UserMessage } from "../components/transcript";
+import { lastId, PendingMessage, stillPending, Transcript, UserMessage } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
 import { useLabels } from "../persona";
 
@@ -107,7 +107,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   // Sent messages are not echoed: they appear once the coordinator's session records them.
-  const [pending, setPending] = useState<{ key: number; text: string; confirmed: boolean }[]>([]);
+  const [pending, setPending] = useState<PendingMessage[]>([]);
   const l = useLabels(cid);
   const coordinator = l.role("coordinator");
 
@@ -115,22 +115,22 @@ export function CoordinatorChat({ cid }: { cid: string }) {
     loadChat(cid).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
   }, [cid]);
 
-  // Drop a pending message once a user entry with the same text arrives.
+  // Drop a pending message once the log records it.
   useEffect(() => {
-    if (!pending.length) return;
-    const seen = new Set(items.filter((m) => m.role === "user").map((m) => m.text.trim()));
-    const left = pending.filter((p) => !seen.has(p.text));
-    if (left.length !== pending.length) setPending(left);
+    const left = stillPending(pending, items);
+    if (left !== pending) setPending(left);
   }, [items, pending]);
 
   const send = async () => {
     const t = text.trim();
     if (!t || sending) return;
     setSending(true); setErr(null);
+    // Only entries recorded after this point can be this message.
+    const after = lastId(items);
     try {
       const r = await api.sendChat(cid, t);
       setText("");
-      setPending((p) => [...p, { key: Date.now(), text: t, confirmed: r?.confirmed ?? true }]);
+      setPending((p) => [...p, { key: Date.now(), text: t, confirmed: r?.confirmed ?? true, after }]);
     } catch (e) { setErr(errText(e)); }
     finally { setSending(false); }
   };

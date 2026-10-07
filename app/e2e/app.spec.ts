@@ -47,7 +47,9 @@ test("the board updates live when the coordinator queues a task", async ({ page 
   await expect(chat).toContainText("Dispatched two workers");
   await chat.getByLabel("Message the coordinator").fill("Add tests for the parser");
   await chat.getByLabel("Message the coordinator").press("Enter");
-  await expect(chat.locator(".msg.pending")).toContainText("Add tests for the parser");
+  // The message shows at once: pending until the coordinator's session records it,
+  // which the demo daemon does within ~50ms, so it may already be recorded here.
+  await expect(chat.locator(".msg", { hasText: "Add tests for the parser" }).last()).toBeVisible();
   await expect(chat).toContainText("I wrote a task contract and queued Add tests");
   await expect(chat.locator(".msg.pending")).toHaveCount(0);
   await expect(page.getByTestId("col-queued")).toContainText("Add tests for the parser");
