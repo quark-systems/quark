@@ -884,6 +884,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-core"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-systems",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "quark-engine"
 version = "0.0.1"
 dependencies = [
@@ -923,6 +937,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "notify",
+ "quark-core",
  "quark-engine",
  "quark-systems",
  "quark-transcript",
@@ -1627,6 +1642,7 @@ checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
