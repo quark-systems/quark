@@ -26,6 +26,7 @@ pub mod native;
 pub mod native_coordinator;
 pub mod native_dispatch;
 pub mod native_triggers;
+pub mod native_worktrees;
 pub mod overview;
 pub mod pr_center;
 pub mod project_repo;
@@ -137,7 +138,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                     None
                 }
             };
-        let pools = host_sources::PoolReporter::new(host_view, log.clone(), event_ingest::host());
+        let pools = host_sources::PoolReporter::new(
+            host_view,
+            log.clone(),
+            event_ingest::host(),
+            native_worktrees::pool(log.clone(), event_ingest::host()),
+        );
         (telemetry, Some(tokio::spawn(pools.run())))
     } else {
         (None, None)

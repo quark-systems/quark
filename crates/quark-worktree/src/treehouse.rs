@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use quark_core::{CoreError, Result};
@@ -91,6 +92,27 @@ pub trait Pool: Send + Sync {
 
     /// Every slot in `repo`'s pool.
     async fn list(&self, repo: &Path) -> Result<Vec<PoolEntry>>;
+}
+
+#[async_trait]
+impl<P: Pool + ?Sized> Pool for Arc<P> {
+    async fn acquire(
+        &self,
+        repo: &Path,
+        holder: &str,
+        branch: Option<&str>,
+        base: Option<&str>,
+    ) -> Result<LeaseInfo> {
+        (**self).acquire(repo, holder, branch, base).await
+    }
+
+    async fn release(&self, repo: &Path, path: &Path, lease_id: &str) -> Result<Release> {
+        (**self).release(repo, path, lease_id).await
+    }
+
+    async fn list(&self, repo: &Path) -> Result<Vec<PoolEntry>> {
+        (**self).list(repo).await
+    }
 }
 
 /// [`Pool`] backed by the `treehouse` command.

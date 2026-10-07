@@ -7,7 +7,8 @@
 //! - starts `quark-ptyd` (from [`PTYD_ENV`], else next to this binary) on
 //!   `run/ptyd.sock`, or reuses the one already listening, so worker
 //!   sessions outlive a daemon crash;
-//! - builds a [`Supervisor`] over the event log, treehouse worktrees, the
+//! - builds a [`Supervisor`] over the event log, treehouse worktrees
+//!   (shadowed by the native pool with `QUARK_NATIVE_WORKTREES=1`), the
 //!   harness manifests in `<home>/harnesses`, and the host's sandbox;
 //! - adopts the sessions that survived the last daemon and supervises on a
 //!   timer;
@@ -66,8 +67,9 @@ impl NativeSupervision {
         let sessions = PtyClient::start(&socket, &ptyd)
             .await
             .with_context(|| format!("starting {}", ptyd.display()))?;
+        let pool = crate::native_worktrees::pool(log.clone(), host.clone());
         let worktrees: Arc<dyn WorktreeProvider> =
-            Arc::new(TreehouseProvider::treehouse().with_events(log.clone(), host.clone()));
+            Arc::new(TreehouseProvider::new(pool).with_events(log.clone(), host.clone()));
         let (manifests, errors) = ManifestRegistry::load(&config.home.join("harnesses"));
         for e in errors {
             tracing::warn!(path = %e.path.display(), error = %e.error, "harness manifest skipped");
