@@ -125,3 +125,29 @@ pub async fn delete(
     state.accounts.delete(&id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(list, get, create, update, delete),
+    components(schemas(
+        quark_systems::QuotaState,
+        quark_systems::AccountQuotaChanged,
+        quark_systems::AccountFailover,
+        quark_systems::FailoverOutcome,
+    ))
+)]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::get;
+    axum::Router::new()
+        .route("/v1/accounts", get(list).post(create))
+        .route(
+            "/v1/accounts/{id}",
+            get(self::get).patch(update).delete(self::delete),
+        )
+}

@@ -489,3 +489,38 @@ pub async fn list_user_entries(
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "user_memory_failed", e))?;
     Ok(Json(entries))
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(
+        list_proposals,
+        accept,
+        reject,
+        list_entries,
+        get_commit,
+        promote,
+        list_user_entries
+    ),
+    components(schemas(quark_systems::MemorySource, quark_systems::MemoryProposalState,))
+)]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/v1/projects/{id}/memory", get(list_entries))
+        // POST serves the custom method `.../memory/{entry_id}:promote`.
+        .route("/v1/projects/{id}/memory/{entry_id}", post(entry_action))
+        .route("/v1/projects/{id}/memory/commits/{commit}", get(get_commit))
+        .route("/v1/memory", get(list_user_entries))
+        .route("/v1/projects/{id}/memory/proposals", get(list_proposals))
+        // POST serves the custom methods `.../{proposal_id}:accept` and `:reject`.
+        .route(
+            "/v1/projects/{id}/memory/proposals/{proposal_id}",
+            post(proposal_action),
+        )
+}

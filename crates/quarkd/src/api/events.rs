@@ -114,3 +114,19 @@ async fn send(socket: &mut WebSocket, event: &Event) -> anyhow::Result<()> {
 fn api_err(e: ApiError) -> anyhow::Error {
     anyhow::anyhow!("{e:?}")
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(stream),
+    components(schemas(quark_systems::Event, quark_systems::EventType,))
+)]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::get;
+    axum::Router::new().route("/v1/events", get(stream))
+}

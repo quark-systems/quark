@@ -145,3 +145,28 @@ pub async fn snapshot(
 ) -> Result<Json<Event>, ApiError> {
     Ok(Json(state.sessions.snapshot(&id).await?))
 }
+
+/// This module's endpoints, plus schemas the generator does not reach from
+/// them (event payloads), merged into the served document by
+/// [`super::ApiDoc`].
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(list_terminals, get_terminal, input, resize, snapshot),
+    components(schemas(
+        quark_systems::TerminalRole,
+        quark_systems::TerminalChunkKind,
+        quark_systems::TerminalOutput,
+    ))
+)]
+pub(super) struct Api;
+
+/// This module's routes, merged into the `/v1` router.
+pub(super) fn router() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/v1/projects/{id}/terminals", get(list_terminals))
+        .route("/v1/terminals/{id}", get(get_terminal))
+        .route("/v1/terminals/{id}/input", post(input))
+        .route("/v1/terminals/{id}/resize", post(resize))
+        .route("/v1/terminals/{id}/snapshot", post(snapshot))
+}
