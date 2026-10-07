@@ -90,6 +90,24 @@ pub struct ShadowEngine {
     compared: Option<BTreeSet<Slice>>,
     /// Per project, per task: firstmate's last snapshot.
     seen: Mutex<HashMap<String, HashMap<String, Seen>>>,
+    /// Later slices' checks of firstmate's snapshot.
+    checks: Vec<Arc<dyn SnapshotCheck>>,
+}
+
+/// A later slice's view of the fleet, compared with every firstmate
+/// snapshot while that slice is in shadow, the way slice 1 compares its own
+/// (which tasks exist, and status-log states).
+#[async_trait]
+pub trait SnapshotCheck: Send + Sync {
+    fn slice(&self) -> Slice;
+    /// The operation its divergences are recorded under.
+    fn operation(&self) -> &'static str;
+    async fn view(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError>;
+    /// Whether the slice switch turns it on. A check that returns false
+    /// runs whenever it is installed, because its own flag decided that.
+    fn switched(&self) -> bool {
+        true
+    }
 }
 
 impl ShadowEngine {
@@ -108,6 +126,44 @@ impl ShadowEngine {
             host,
             compared: None,
             seen: Mutex::new(HashMap::new()),
+            checks: Vec::new(),
+        }
+    }
+
+    /// Compare `check`'s view with firstmate's snapshot while its slice is
+    /// in shadow.
+    pub fn checking(mut self, check: Arc<dyn SnapshotCheck>) -> Self {
+        self.checks.push(check);
+        self
+    }
+
+    /// Run every check whose slice is in shadow against `bash`, asking both
+    /// again before recording, as [`Self::read_compared`] does.
+    async fn run_checks(&self, ws: &WorkspaceRef, bash: &FleetSnapshot) {
+        for check in &self.checks {
+            if check.switched() && self.mode(check.slice()) != SliceMode::Shadow {
+                continue;
+            }
+            let Ok(native) = check.view(ws).await else {
+                continue;
+            };
+            if fleet_view(bash, &unfinished_extras(bash, native)).is_none() {
+                continue;
+            }
+            let (Ok(bash), Ok(native)) = (self.bash.snapshot(ws).await, check.view(ws).await)
+            else {
+                continue;
+            };
+            if let Some((b, n)) = fleet_view(&bash, &unfinished_extras(&bash, native)) {
+                let d = Divergence {
+                    slice: check.slice(),
+                    operation: check.operation().to_string(),
+                    bash: b,
+                    native: n,
+                };
+                self.record(ProjectId::new(&ws.project_id), kinds::SHADOW_DIVERGENCE, &d)
+                    .await;
+            }
         }
     }
 
@@ -336,6 +392,19 @@ fn fleet_view(
     (b != n).then(|| (view(b), view(n)))
 }
 
+/// `native` without the finished tasks firstmate no longer lists: a later
+/// slice's view may keep a task a while after firstmate cleaned it up.
+fn unfinished_extras(bash: &FleetSnapshot, mut native: FleetSnapshot) -> FleetSnapshot {
+    native.tasks.retain(|t| {
+        bash.tasks.iter().any(|b| b.id == t.id)
+            || !matches!(
+                t.state,
+                TaskState::InReview | TaskState::Done | TaskState::Failed
+            )
+    });
+    native
+}
+
 /// Slice 1's holds comparison, for the tasks in `seen` whose open decisions
 /// firstmate keeps from the status log. Firstmate drops a task's decisions
 /// when its pane or validation run says it moved on, which the log can't
@@ -415,14 +484,19 @@ impl EngineAdapter for ShadowEngine {
 
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
         let project = ws.project_id.as_str();
-        self.read_compared(
-            Slice::EventLog,
-            "snapshot",
-            project,
-            |e| e.snapshot(ws),
-            Some(&|b: &FleetSnapshot, n: &FleetSnapshot| self.compare_snapshot(project, b, n)),
-        )
-        .await
+        let snapshot = self
+            .read_compared(
+                Slice::EventLog,
+                "snapshot",
+                project,
+                |e| e.snapshot(ws),
+                Some(&|b: &FleetSnapshot, n: &FleetSnapshot| self.compare_snapshot(project, b, n)),
+            )
+            .await;
+        if let Ok(s) = &snapshot {
+            self.run_checks(ws, s).await;
+        }
+        snapshot
     }
 
     async fn status_tail(
@@ -1046,5 +1120,44 @@ mod tests {
             "the second answer is served"
         );
         assert!(log.events().is_empty());
+    }
+
+    struct FixedCheck(FleetSnapshot);
+
+    #[async_trait]
+    impl SnapshotCheck for FixedCheck {
+        fn slice(&self) -> Slice {
+            Slice::Supervision
+        }
+        fn operation(&self) -> &'static str {
+            "supervised_state"
+        }
+        async fn view(&self, _: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_checks_run_only_while_their_slice_shadows() {
+        let check = || {
+            Arc::new(FixedCheck(FleetSnapshot {
+                tasks: vec![task("t1", TaskState::Blocked)],
+            }))
+        };
+        let r = rig("1=shadow,2=shadow,3=shadow");
+        let engine = r.engine.comparing(&[]).checking(check());
+        engine.snapshot(&ws()).await.unwrap();
+        assert!(r.log.events().is_empty(), "slice 4 is bash");
+
+        let r = rig("1=shadow,2=shadow,3=shadow,4=shadow");
+        let engine = r.engine.comparing(&[]).checking(check());
+        let snap = engine.snapshot(&ws()).await.unwrap();
+        assert_eq!(snap.tasks[0].state, TaskState::Running, "bash still serves");
+        let events = r.log.events();
+        assert_eq!(events.len(), 1);
+        let d: Divergence = events[0].decode().unwrap();
+        assert_eq!(d.slice, Slice::Supervision);
+        assert_eq!(d.operation, "supervised_state");
+        assert_eq!(d.native["t1"]["state"], "blocked");
     }
 }

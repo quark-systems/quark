@@ -26,6 +26,8 @@
 pub mod events;
 mod fleet;
 pub mod launch;
+pub mod rules;
+pub mod shadow;
 mod supervisor;
 
 pub use events::{Assignment, Cause, SupervisorEvent};

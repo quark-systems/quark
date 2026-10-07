@@ -27,6 +27,7 @@ pub mod efficiency;
 pub mod events;
 pub mod mcp;
 pub mod prompt;
+pub mod shadow;
 pub mod tools;
 pub mod wake;
 

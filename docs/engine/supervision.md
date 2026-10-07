@@ -52,5 +52,5 @@ Slice 4 cannot switch on before slices 1 to 3, so firstmate still spawns every w
 ## Not yet
 
 - Installing harness hooks and MCP config per task (`hooks.install`); workers use the status file until then.
-- A native `EngineAdapter` for the slice 4 operations, and the shadow comparison, once slices 1 to 3 have theirs.
+- A native `EngineAdapter` for the slice 4 operations. The shadow comparison exists: `quark_supervisor::shadow` replays firstmate's spawns and status lines through the supervisor's own rules (`quark_supervisor::rules`), and quarkd compares the resulting states with firstmate's (`docs/shadow-readiness.md`). Session liveness is not compared yet.
 - Relaunching from an open decision keeps the task in `NeedsDecision`: the reference machine has no `Started` from there, so the ledger keeps the older generation id while the fleet has the current one. A small `quark-core` amendment could allow it.

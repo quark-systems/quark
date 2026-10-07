@@ -56,6 +56,6 @@ quarkd's `ShadowEngine` is an `EngineAdapter` that routes each operation by its 
 - `shadow`: firstmate answers. Reads also run on the native engine and any disagreement that survives a second read of both is appended as a `shadow.divergence` event. Writes go to firstmate only, so nothing acts twice; a native slice that wants to compare its decision for a write (a merge verdict, a dispatch choice) does so inside its own crate without acting.
 - `native`: the native engine only.
 
-Mode changes are logged as `slice.mode` events. Startup modes come from `QUARK_ENGINE_SLICES`, such as `1=shadow`; quarkd accepts `shadow` for slice 1 (the event log ingest, and the fleet read back from it) and slice 2 (the verification shadow, `docs/engine/verify.md`) and refuses any other non-`bash` mode until that slice's native side lands.
+Mode changes are logged as `slice.mode` events. Startup modes come from `QUARK_ENGINE_SLICES`, such as `1=shadow`; quarkd accepts `shadow` for slice 1 (the event log ingest, and the fleet read back from it), slice 2 (the verification shadow, `docs/engine/verify.md`), slice 3 (status lines read by the native protocol) and slice 4 (the native supervisor's rules replayed over firstmate's workers), and refuses any other non-`bash` mode until that slice's native side lands.
 A slice moves from `shadow` to `native` only after its divergences are gone and the verify-quark journeys pass.
 `QUARK_SHADOWS=all` turns on every shadow at once, and `quarkd shadows` (or `GET /v1/shadows`) reports each slice's divergences; see `docs/shadow-readiness.md`.
