@@ -19,6 +19,7 @@
 //! refresh a workspace as soon as a worker reports, not only on its timer.
 
 pub mod firstmate;
+pub mod shadow;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -202,6 +203,12 @@ pub enum EngineError {
 pub trait EngineAdapter: Send + Sync {
     /// Short name reported by `GET /v1/health`.
     fn name(&self) -> &'static str;
+
+    /// Which engine serves each slice of the native port. Every slice is
+    /// bash unless this is a [`shadow::ShadowEngine`].
+    fn slices(&self) -> quark_core::SliceSwitch {
+        quark_core::SliceSwitch::new()
+    }
 
     /// Every task currently known to the workspace.
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError>;

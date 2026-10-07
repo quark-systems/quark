@@ -1,0 +1,22 @@
+[package]
+name = "quark-core"
+description = "Contracts for the native Quark engine: event, task, worktree, session, harness, worker, verification, isolation, host, telemetry and persona traits, plus in-memory fakes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-systems.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { version = "1.53", default-features = false, features = ["sync"] }
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tokio.workspace = true

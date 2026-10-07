@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use std::time::UNIX_EPOCH;
 
+use quark_core::SliceMode;
 use quark_engine::runner::{AdapterCall, CallKind, CallLog};
 
 use crate::engine::firstmate::FirstmateEngine;
@@ -76,6 +77,19 @@ pub fn build_engine(
     store: Arc<Store>,
     tmux: Option<String>,
 ) -> anyhow::Result<Arc<dyn EngineAdapter>> {
+    // No native slice exists yet, so any non-bash mode is refused rather
+    // than silently ignored.
+    let slices = crate::engine::shadow::slices_from_env()?;
+    if let Some((slice, mode)) = slices
+        .modes()
+        .into_iter()
+        .find(|(_, m)| *m != SliceMode::Bash)
+    {
+        anyhow::bail!(
+            "slice {slice} can't be {}: no native engine for it yet",
+            mode.as_str()
+        );
+    }
     match kind {
         EngineKind::Stub => Ok(Arc::new(StubEngine::new())),
         EngineKind::Firstmate => Ok(Arc::new(
