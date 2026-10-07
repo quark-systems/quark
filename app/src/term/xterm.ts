@@ -2,13 +2,24 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { AdapterCallbacks, AdapterOptions, TermAdapter, TERM_THEME } from "./types";
+import { AdapterCallbacks, AdapterOptions, TermAdapter, terminalTheme } from "./types";
+import { cssColor, isLight, SCHEME_EVENT } from "../theme";
+
+// Open terminals repaint when the light/dark scheme changes.
+const live = new Set<Terminal>();
+const themeNow = () => terminalTheme(isLight(), cssColor);
+if (typeof window !== "undefined") {
+  window.addEventListener(SCHEME_EVENT, () => { const t = themeNow(); for (const term of live) term.options.theme = t; });
+}
 
 export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapter {
   const term = new Terminal({
     cols: o.cols, rows: o.rows, fontFamily: o.fontFamily, fontSize: o.fontSize, lineHeight: o.lineHeight,
-    scrollback: 5000, theme: TERM_THEME, allowProposedApi: true, cursorBlink: false,
+    scrollback: 5000, theme: themeNow(), allowTransparency: true, allowProposedApi: true, cursorBlink: false,
   });
+  live.add(term);
+  const dispose = term.dispose.bind(term);
+  term.dispose = () => { live.delete(term); dispose(); };
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.onData(cb.onData);

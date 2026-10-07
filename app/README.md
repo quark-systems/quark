@@ -19,6 +19,7 @@ The same frontend runs in a plain browser.
   Keys: `j`/`k` move, `p`/`a` switch between proposed and accepted, `e` or `Enter` edits, `Ctrl/Cmd+Enter` accepts, `x` twice rejects, `u` promotes, `c` shows the commit, `t` opens the task.
 
 `Ctrl/Cmd+K` opens a palette that jumps to any Project, task or open decision.
+It also switches the theme (dark, light, or match the system).
 
 ## Run
 
@@ -37,6 +38,8 @@ npm run mock                       # http://127.0.0.1:7380; add -- --port N or -
 
 The daemon URL comes from `?daemon=<url>` in the web build, `QUARK_DAEMON` for the desktop app, or the address in the status bar, which you can click to change.
 The terminal renderer is xterm.js's DOM renderer on Linux and WebGL elsewhere, until WebGL is measured on a GPU; `?renderer=dom|webgl` (or `QUARK_QUERY=renderer=webgl`) overrides it.
+Colors come from design tokens at the top of `src/styles.css`; new CSS uses them, never raw hex. `?theme=light|dark` forces a theme for one load.
+On macOS the desktop window is translucent with a native blur behind it and the title bar overlays the sidebar; `QUARK_GLASS=0` keeps it opaque.
 
 On Linux the desktop build needs `libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev build-essential`.
 

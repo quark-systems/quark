@@ -3,7 +3,7 @@ import type { TaskState } from "./api";
 export const STATES: { id: TaskState; label: string; color: string }[] = [
   { id: "queued", label: "Queued", color: "var(--fg-faint)" },
   { id: "running", label: "Running", color: "var(--blue)" },
-  { id: "needs_decision", label: "Needs decision", color: "var(--accent)" },
+  { id: "needs_decision", label: "Needs decision", color: "var(--violet)" },
   { id: "blocked", label: "Blocked", color: "var(--red)" },
   { id: "paused", label: "Paused", color: "var(--yellow)" },
   { id: "in_review", label: "In review", color: "var(--yellow)" },
