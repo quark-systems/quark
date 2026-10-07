@@ -985,6 +985,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-worktree"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "quarkd"
 version = "0.0.1"
 dependencies = [
