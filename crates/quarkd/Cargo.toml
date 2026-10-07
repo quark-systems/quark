@@ -19,6 +19,7 @@ quark-isolation.workspace = true
 quark-engine.workspace = true
 quark-eventlog.workspace = true
 quark-transcript.workspace = true
+quark-triggers.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true

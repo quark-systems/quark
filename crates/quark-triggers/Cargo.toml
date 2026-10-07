@@ -1,0 +1,23 @@
+[package]
+name = "quark-triggers"
+description = "Triggers, channels (the inbox first) and the away policy for the native Quark engine (slice 7), recorded in the event log and shadowed against firstmate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v8"] }
+
+[dev-dependencies]
+quark-eventlog.workspace = true
+tempfile = "3"

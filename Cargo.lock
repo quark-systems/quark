@@ -1050,6 +1050,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-triggers"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "quark-eventlog",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "quark-worker"
 version = "0.0.1"
 dependencies = [
@@ -1098,6 +1114,7 @@ dependencies = [
  "quark-supervisor",
  "quark-systems",
  "quark-transcript",
+ "quark-triggers",
  "quark-worker",
  "quark-worktree",
  "rusqlite",
