@@ -30,6 +30,7 @@ pub mod sessions;
 pub mod settings;
 pub mod store;
 pub mod transcripts;
+pub mod verify_shadow;
 pub mod worktree;
 
 use std::sync::Arc;
@@ -135,6 +136,23 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     } else {
         None
     };
+    let slices = engine::shadow::slices_from_env()?;
+    let verify_task = (slices.mode(quark_core::Slice::Verification)
+        == quark_core::SliceMode::Shadow)
+        .then(|| {
+            tracing::info!(
+                "slice 2 (verification) in shadow: comparing firstmate's guard decisions"
+            );
+            let shadow = quark_verify::ShadowVerifier::new(
+                Arc::new(verify_shadow::LogCheckpoints(events.clone())),
+                Some(Arc::new(quark_verify::GhForge::default())),
+                event_ingest::host(),
+            );
+            tokio::spawn(
+                verify_shadow::VerifyShadow::new(store.clone(), shadow)
+                    .run(config.refresh_interval),
+            )
+        });
 
     let mut app = api::router(AppState {
         store,
@@ -163,6 +181,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     projector_task.abort();
     ingest_task.abort();
     if let Some(t) = triggers_task {
+        t.abort();
+    }
+    if let Some(t) = verify_task {
         t.abort();
     }
     pr_task.abort();
