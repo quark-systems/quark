@@ -7,6 +7,7 @@ mod error;
 mod events;
 mod harnesses;
 mod memory;
+mod metrics;
 mod openapi;
 mod pull_requests;
 mod routes;
@@ -44,6 +45,8 @@ pub struct AppState {
     pub chat: Arc<dyn CoordinatorInput>,
     /// Reads pull requests from their forge.
     pub forge: Arc<dyn crate::forge::Forge>,
+    /// The native event log (`events.db`) the dashboard reads.
+    pub events: quark_eventlog::SqliteEventLog,
 }
 
 /// One API module: its routes and its part of the OpenAPI document.
@@ -86,6 +89,10 @@ const MODULES: &[Module] = &[
     Module {
         router: dashboard::router,
         openapi: <dashboard::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: metrics::router,
+        openapi: <metrics::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,

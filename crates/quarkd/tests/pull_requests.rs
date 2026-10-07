@@ -58,6 +58,7 @@ async fn harness() -> Harness {
         layout: Layout::new(dir.path().join("home")),
         chat: Arc::new(RecordingInput::new()),
         forge: forge.clone(),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
     });
     let project = store
         .create_project(CreateProject {

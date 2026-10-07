@@ -49,6 +49,7 @@ fn harness() -> Harness {
         engine: engine.clone(),
         chat: chat.clone(),
         forge: Arc::new(quarkd::forge::StubForge::new()),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(dir.path().join("home")),
     });
@@ -335,6 +336,7 @@ async fn without_a_session_client_messages_are_refused() {
         engine: Arc::new(StubEngine::new()),
         chat: Arc::new(quarkd::chat::NoSessions),
         forge: Arc::new(quarkd::forge::StubForge::new()),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(std::env::temp_dir().join("quark-test-home")),
     });

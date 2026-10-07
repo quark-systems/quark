@@ -56,6 +56,7 @@ async fn harness() -> Harness {
         layout: Layout::new(home.path()),
         chat,
         forge: Arc::new(quarkd::forge::StubForge::new()),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

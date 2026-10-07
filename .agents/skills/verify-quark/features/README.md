@@ -46,3 +46,4 @@ This table links each feature to the journey tests that script it and the modes 
 | Memory (no file yet) | J8 | "memory: review proposals ..." | mock | |
 | Dispatch rules (no file yet) | J9 | "dispatch: edit rules, test them ..." | mock | |
 | [Project settings](settings.md) | D1 | "settings: every Project switch in one place ..." | mock, real+stub | real: a Project with a Project repo |
+| [Project metrics](metrics.md) | D3 | "metrics: the dashboard's Metrics tab ..." | mock, real+stub | real: firstmate state files in the Project workspace |

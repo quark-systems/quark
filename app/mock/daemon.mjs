@@ -201,6 +201,42 @@ function verificationOf(proj) {
   }
   return verification.get(proj.id);
 }
+// GET /v1/projects/{id}/metrics: the dashboard's Metrics tab. The mock derives a plausible history
+// from the Project's tasks: each finished task lands on a day of the window by its index.
+function metricsOf(proj, days) {
+  days = Math.min(90, Math.max(1, days));
+  const day = 86400000, end = new Date(), start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()) - (days - 1) * day);
+  const per_day = Array.from({ length: days }, (_, i) => ({ date: new Date(start.getTime() + i * day).toISOString().slice(0, 10), done: 0, failed: 0 }));
+  const mine = [...tasks.values()].filter((t) => t.project_id === proj.id);
+  let done = 0, failed = 0, i = 0;
+  for (const t of mine) {
+    if (t.state !== "done" && t.state !== "failed") continue;
+    const d = per_day[per_day.length - 1 - (i++ % Math.min(days, 5))];
+    if (t.state === "done") { d.done++; done++; } else { d.failed++; failed++; }
+  }
+  const decisions = mine.filter((t) => t.state === "needs_decision").length;
+  const blockers = mine.filter((t) => t.state === "blocked").length;
+  const used = {};
+  for (const t of mine) if (t.account_id) used[t.account_id] = (used[t.account_id] ?? 0) + 1;
+  const finished = done + failed;
+  return {
+    project_id: proj.id, days, from: start.toISOString(), to: end.toISOString(),
+    log_started_at: new Date(start.getTime() - day).toISOString(),
+    throughput: { done, failed, per_day },
+    lead_time: { tasks: done, median_s: done ? 2 * 3600 + 900 : null, p90_s: done ? 7 * 3600 : null },
+    gates: { pass_rate: finished ? done / finished : null, first_time_green: Math.max(0, done - 1), first_time_green_rate: done ? Math.max(0, done - 1) / done : null },
+    interventions: { decisions, blockers, per_finished_task: finished ? (decisions + blockers) / finished : null, relaunches: 1 },
+    failovers: { relaunched: 1, no_healthy_account: 0, relaunch_failed: 0 },
+    accounts: Object.entries(used).flatMap(([id, n]) => {
+      const a = accounts.get(id);
+      return a ? [{ account_id: id, harness: a.harness, label: a.label, tasks: n, quota: a.quota }] : [];
+    }),
+    unavailable: [
+      { metric: "spend", reason: "Workers' token use and cost are not recorded yet; quota per account is shown instead." },
+      { metric: "coordinator_tokens", reason: "The coordinator's token use is not recorded in the event log yet." },
+    ],
+  };
+}
 function settingsOf(proj) {
   const rules = rulesOf(proj);
   return {
@@ -726,6 +762,11 @@ const server = http.createServer(async (req, res) => {
       provision(proj);
       return send(res, 202);
     }
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/metrics$/)) && req.method === "GET") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    return send(res, 200, metricsOf(proj, Number(url.searchParams.get("days")) || 7));
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/settings$/)) && (req.method === "GET" || req.method === "PATCH")) {
     const proj = projects.get(decodeURIComponent(r[1]));

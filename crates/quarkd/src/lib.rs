@@ -19,6 +19,7 @@ pub mod forge;
 pub mod gates;
 pub mod harness;
 pub mod memory;
+pub mod metrics;
 pub mod pr_center;
 pub mod project_repo;
 pub mod projector;
@@ -107,7 +108,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_context(|| format!("opening {}", events_path.display()))?;
     let ingest = event_ingest::EventIngest::new(
         store.clone(),
-        quark_eventlog::FirstmateBridge::new(events, event_ingest::host()),
+        quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host()),
     );
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
 
@@ -123,6 +124,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             quark_transcript::SessionRoots::from_env(),
         )),
         forge,
+        events,
     });
     let listener = TcpListener::bind(config.listen)
         .await

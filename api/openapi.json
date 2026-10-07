@@ -1438,6 +1438,58 @@
         }
       }
     },
+    "/v1/projects/{id}/metrics": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Throughput, lead time, gate pass and first-time-green, interventions,\nfailovers and the quota of the accounts the Project's tasks ran under.",
+        "description": "Computed from the event log (`events.db`) on each call; failovers come\nfrom the tasks that recorded them and quota from the latest reading.\nMetrics the daemon cannot compute yet are listed in `unavailable`.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "description": "Days covered, ending now: 1 to 90, default 7.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectMetrics"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/settings": {
       "get": {
         "tags": [
@@ -2990,6 +3042,37 @@
           }
         }
       },
+      "AccountUse": {
+        "type": "object",
+        "description": "One account the Project's tasks ran under.",
+        "required": [
+          "account_id",
+          "harness",
+          "label",
+          "tasks",
+          "quota"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/AccountQuota"
+          },
+          "tasks": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The Project's tasks started under it.",
+            "minimum": 0
+          }
+        }
+      },
       "AgentConfig": {
         "type": "object",
         "description": "A harness with its model and effort.",
@@ -3376,6 +3459,30 @@
               "null"
             ],
             "description": "Attach an existing workspace instead of provisioning one."
+          }
+        }
+      },
+      "DayCount": {
+        "type": "object",
+        "required": [
+          "date",
+          "done",
+          "failed"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "`YYYY-MM-DD` (UTC)."
+          },
+          "done": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -4338,6 +4445,32 @@
           "relaunch_failed"
         ]
       },
+      "Failovers": {
+        "type": "object",
+        "description": "Rate-limit failovers (ADR-11) handled in the window.",
+        "required": [
+          "relaunched",
+          "no_healthy_account",
+          "relaunch_failed"
+        ],
+        "properties": {
+          "no_healthy_account": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "relaunch_failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "relaunched": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "FileChangeStatus": {
         "type": "string",
         "description": "How a file differs between a task's base and its working tree.",
@@ -4487,6 +4620,37 @@
           "journeys",
           "holdout"
         ]
+      },
+      "GateMetrics": {
+        "type": "object",
+        "description": "How often finished work got through on its own.",
+        "required": [
+          "first_time_green"
+        ],
+        "properties": {
+          "first_time_green": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Done tasks that never reported `failed` or `blocked` and were never\nrelaunched.",
+            "minimum": 0
+          },
+          "first_time_green_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`first_time_green` over done tasks, 0 to 1; absent when none were done."
+          },
+          "pass_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Share of finished tasks that ended `done` rather than `failed`, 0 to\n1; absent when none finished."
+          }
+        }
       },
       "GateState": {
         "type": "string",
@@ -4708,6 +4872,74 @@
               "null"
             ],
             "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "Interventions": {
+        "type": "object",
+        "description": "Times work stopped for someone: a worker asking for a decision or\nreporting it is stuck.",
+        "required": [
+          "decisions",
+          "blockers",
+          "relaunches"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`blocked` lines in the window.",
+            "minimum": 0
+          },
+          "decisions": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`needs-decision` lines in the window.",
+            "minimum": 0
+          },
+          "per_finished_task": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Interventions per finished task; absent when none finished."
+          },
+          "relaunches": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Workers started again after their first spawn, for any reason.",
+            "minimum": 0
+          }
+        }
+      },
+      "LeadTime": {
+        "type": "object",
+        "description": "From a task's first spawn to its `done`, over tasks done in the window.",
+        "required": [
+          "tasks"
+        ],
+        "properties": {
+          "median_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "p90_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "tasks": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks measured.",
             "minimum": 0
           }
         }
@@ -5090,6 +5322,78 @@
               "null"
             ],
             "description": "Local path of the Project workspace, once it is provisioned or attached."
+          }
+        }
+      },
+      "ProjectMetrics": {
+        "type": "object",
+        "description": "How a Project's work went over a window of days.\n\nTask outcomes, lead time, interventions and relaunches come from the\nevent log (`events.db`), which mirrors firstmate's status lines and\nspawns. A status line's time is when the daemon read it, so lines written\nbefore the log started all carry the log's first time: `log_started_at`\nsays how far back the numbers reach.",
+        "required": [
+          "project_id",
+          "days",
+          "from",
+          "to",
+          "throughput",
+          "lead_time",
+          "gates",
+          "interventions",
+          "failovers",
+          "accounts",
+          "unavailable"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountUse"
+            },
+            "description": "Accounts this Project's tasks ran under, with their quota now."
+          },
+          "days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days covered, ending now.",
+            "minimum": 0
+          },
+          "failovers": {
+            "$ref": "#/components/schemas/Failovers"
+          },
+          "from": {
+            "type": "string",
+            "description": "Start of the window (RFC 3339 UTC)."
+          },
+          "gates": {
+            "$ref": "#/components/schemas/GateMetrics"
+          },
+          "interventions": {
+            "$ref": "#/components/schemas/Interventions"
+          },
+          "lead_time": {
+            "$ref": "#/components/schemas/LeadTime"
+          },
+          "log_started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project's first event in the log; absent when it has none."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "throughput": {
+            "$ref": "#/components/schemas/Throughput"
+          },
+          "to": {
+            "type": "string",
+            "description": "End of the window, when the metrics were computed (RFC 3339 UTC)."
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnavailableMetric"
+            },
+            "description": "Metrics the daemon cannot compute yet, and why."
           }
         }
       },
@@ -6070,6 +6374,36 @@
           }
         }
       },
+      "Throughput": {
+        "type": "object",
+        "description": "Tasks that finished in the window.",
+        "required": [
+          "done",
+          "failed",
+          "per_day"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks whose last word was `done`.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks whose last word was `failed`.",
+            "minimum": 0
+          },
+          "per_day": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DayCount"
+            },
+            "description": "One entry per UTC day of the window, oldest first."
+          }
+        }
+      },
       "ToolDiffLine": {
         "type": "object",
         "description": "One line of a [`ToolInfo`] diff preview.",
@@ -6262,6 +6596,23 @@
           "tool_call",
           "tool_result"
         ]
+      },
+      "UnavailableMetric": {
+        "type": "object",
+        "description": "A metric the dashboard shows as not measured yet.",
+        "required": [
+          "metric",
+          "reason"
+        ],
+        "properties": {
+          "metric": {
+            "type": "string",
+            "description": "e.g. `spend` or `coordinator_tokens`."
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
       },
       "UpdateAccount": {
         "type": "object",

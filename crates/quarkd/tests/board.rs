@@ -97,6 +97,7 @@ fn setup(workspace: &Path) -> Setup {
             layout: Layout::new(home.path()),
             chat: Arc::new(RecordingInput::new()),
             forge: Arc::new(quarkd::forge::StubForge::new()),
+            events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         }),
         _home: home,
         projector: Projector::new(store.clone(), engine.clone())
