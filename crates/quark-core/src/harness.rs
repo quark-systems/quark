@@ -15,6 +15,9 @@ use crate::Result;
 /// Current manifest schema version, the `schema` key.
 pub const MANIFEST_SCHEMA: u32 = 1;
 
+/// Values of `turn_signals.busy` and `turn_signals.turn_end`.
+pub const SIGNAL_SOURCES: &[&str] = &["hooks", "extension", "transcript", "pane", "none"];
+
 /// One harness, as written in `<id>.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +26,10 @@ pub struct HarnessManifest {
     /// Stable id such as `claude-code`.
     pub id: String,
     pub name: String,
+    /// Other names an engine reports for this harness, such as firstmate's
+    /// adapter name `claude` for `claude-code`.
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Which neutral roles may run on it (`coordinator`, `worker`, ...).
     #[serde(default)]
     pub roles: Vec<String>,
@@ -67,7 +74,9 @@ pub struct Detect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Models {
-    /// `free_form` (any id), `listed` (only `known`) or `none`.
+    /// `free_form` (any id), `provider_qualified` (a `provider/model` id),
+    /// `listed` (only `known`), `automatic` (the harness picks; a configured
+    /// model is ignored) or `none`.
     #[serde(default = "default_selection")]
     pub selection: String,
     #[serde(default)]
@@ -94,9 +103,10 @@ impl Default for Models {
     }
 }
 
-/// Launch command. `{model}`, `{effort}`, `{prompt_file}` and `{cwd}` are
-/// substituted; an argument whose placeholder has no value is dropped along
-/// with the flag in `optional`.
+/// Launch command. `{model}`, `{effort}`, `{prompt}`, `{prompt_file}` and
+/// `{cwd}` are substituted anywhere inside an argument; an argument whose
+/// placeholder has no value is dropped. `optional` flags go just before the
+/// first argument carrying `{prompt}` or `{prompt_file}`, else at the end.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Launch {
@@ -107,7 +117,9 @@ pub struct Launch {
     /// when the placeholder has a value.
     #[serde(default)]
     pub optional: Vec<Vec<String>>,
-    /// How the brief reaches the agent: `argv`, `stdin`, `file` or `paste`.
+    /// How the brief reaches the agent: `argv` (through `{prompt}` or
+    /// `{prompt_file}`), `stdin`, or `paste` (typed into the composer once
+    /// the agent is ready).
     #[serde(default = "default_prompt_via")]
     pub prompt_via: String,
 }
@@ -120,8 +132,10 @@ fn default_prompt_via() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Account {
-    /// Variable pointing the harness at an account's config directory.
-    pub env: String,
+    /// Variable pointing the harness at an account's config directory;
+    /// absent when the harness supports only its default account.
+    #[serde(default)]
+    pub env: Option<String>,
     /// Home-relative config directory of the default account.
     pub config_dir: String,
     /// API-key variables.
@@ -152,9 +166,14 @@ pub struct Hooks {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TurnSignals {
-    /// `hooks`, `transcript`, `pane` or `none`.
+    /// `hooks`, `extension` (an engine-owned plugin loaded into the
+    /// harness), `transcript`, `pane` or `none`.
     pub busy: String,
     pub turn_end: String,
+    /// One line for people, such as `Claude Code hooks (UserPromptSubmit,
+    /// Stop)`.
+    #[serde(default)]
+    pub summary: Option<String>,
     /// Pane text that means the agent is waiting, for `pane` signals.
     #[serde(default)]
     pub idle_patterns: Vec<String>,
@@ -229,11 +248,31 @@ impl HarnessManifest {
         if self.launch.argv.is_empty() {
             return bad("launch.argv is empty".into());
         }
+        if !matches!(self.launch.prompt_via.as_str(), "argv" | "stdin" | "paste") {
+            return bad(format!("launch.prompt_via {:?}", self.launch.prompt_via));
+        }
+        if self.launch.prompt_via == "argv"
+            && !self
+                .launch
+                .argv
+                .iter()
+                .any(|a| a.contains("{prompt}") || a.contains("{prompt_file}"))
+        {
+            return bad("launch.prompt_via is argv but no argument has {prompt}".into());
+        }
         if !matches!(
             self.models.selection.as_str(),
-            "free_form" | "listed" | "none"
+            "free_form" | "provider_qualified" | "listed" | "automatic" | "none"
         ) {
             return bad(format!("models.selection {:?}", self.models.selection));
+        }
+        for (key, v) in [
+            ("busy", &self.turn_signals.busy),
+            ("turn_end", &self.turn_signals.turn_end),
+        ] {
+            if !SIGNAL_SOURCES.contains(&v.as_str()) {
+                return bad(format!("turn_signals.{key} {v:?}"));
+            }
         }
         Ok(())
     }
@@ -290,6 +329,9 @@ mod tests {
     fn rejects_bad_manifests() {
         let mut m = claude();
         m.id = "Claude Code".into();
+        assert!(m.validate().is_err());
+        let mut m = claude();
+        m.turn_signals.busy = "telepathy".into();
         assert!(m.validate().is_err());
         let mut m = claude();
         m.schema = 2;
