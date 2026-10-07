@@ -27,7 +27,6 @@ pub fn spawn(spec: &SessionSpec) -> std::io::Result<Spawned> {
     rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC)?;
     grantpt(&master)?;
     unlockpt(&master)?;
-    set_size(master.as_fd(), spec.size)?;
     let name = ptsname(&master, Vec::new())?;
     let slave = std::fs::OpenOptions::new()
         .read(true)
@@ -36,6 +35,9 @@ pub fn spawn(spec: &SessionSpec) -> std::io::Result<Spawned> {
         .open(std::ffi::OsStr::new(
             std::str::from_utf8(name.as_bytes()).map_err(std::io::Error::other)?,
         ))?;
+    // Size the terminal only now that the program side is open: macOS 27
+    // answers TIOCSWINSZ on a master with ENOTTY until then.
+    set_size(master.as_fd(), spec.size)?;
 
     let (program, args) = match spec.argv.split_first() {
         Some((p, a)) => (p.clone(), a.to_vec()),

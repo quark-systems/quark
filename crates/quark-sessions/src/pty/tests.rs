@@ -102,6 +102,22 @@ async fn runs_a_shell_and_streams_its_screen() {
     assert!(sup.list().await.unwrap().is_empty());
 }
 
+/// The program sees the requested size from its first instruction, so the
+/// terminal must be sized at spawn (macOS 27 refuses to size a pty master
+/// before its program side is open).
+#[tokio::test]
+async fn sizes_the_terminal_at_spawn() {
+    let sup = PtySupervisor::new();
+    let info = sup
+        .create(&spec(&["/bin/sh", "-c", "stty size; sleep 600"]))
+        .await
+        .unwrap();
+    let mut stream = sup.attach(&info.id).await.unwrap();
+    let mut screen = vt100::Parser::new(10, 40, 0);
+    read_until(&mut stream, &mut screen, "10 40").await;
+    sup.kill(&info.id).await.unwrap();
+}
+
 #[tokio::test]
 async fn kill_ends_the_program() {
     let sup = PtySupervisor::new();
