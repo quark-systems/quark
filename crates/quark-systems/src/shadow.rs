@@ -24,6 +24,9 @@ pub struct ShadowStart {
     pub at: String,
     /// Slice names whose shadow ran, such as `dispatch`.
     pub slices: Vec<String>,
+    /// Slice names that ran native, such as `event_log`.
+    #[serde(default)]
+    pub native: Vec<String>,
 }
 
 /// Where a slice stands.
@@ -41,6 +44,8 @@ pub enum ShadowStatus {
     Diverging,
     /// On for the whole window with no divergences.
     Agreeing,
+    /// Switched to native on the daemon's latest start.
+    Native,
 }
 
 /// One slice's shadow and what it recorded.
@@ -58,6 +63,10 @@ pub struct SliceReadiness {
     /// Start of the unbroken run of daemon starts with this shadow on
     /// (RFC 3339).
     pub on_since: Option<String>,
+    /// While `watching`: when it reads `agreeing` if it keeps running and
+    /// nothing diverges, `on_since` plus the window (RFC 3339).
+    #[serde(default)]
+    pub agrees_at: Option<String>,
     /// Divergences in the window.
     pub divergences: u64,
     /// The window's divergences per operation, most first.

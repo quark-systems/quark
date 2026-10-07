@@ -47,13 +47,41 @@ It prints one row per slice, then each slice's note, the setting that turns it o
 | Status | Meaning |
 |---|---|
 | `agreeing` | The shadow ran for the whole window with no divergences. The slice still needs the G2 durability journeys before it switches native. |
-| `watching` | On with no divergences so far, but for less than the window. Leave it running. |
+| `watching` | On with no divergences so far, but for less than the window. Leave it running; "agreeing from" says when it qualifies. |
 | `diverging` | At least one divergence in the window. Read the examples; each is a bug in the native slice or a gap in firstmate's record. |
 | `off` | The shadow did not run on the latest start. |
 | `no check` | The slice has no shadow that compares with firstmate, so divergences can't judge it. |
+| `native` | The latest start ran the slice native. |
 
 "On since" is the first of the unbroken run of daemon starts that ran that shadow; a start without it resets the clock.
 Time the daemon was stopped counts toward it, so a laptop that was asleep for days reads as watched for those days.
+The bar is time only: a slice reads `agreeing` once "on since" is a whole window (7 days by default) old with no divergence in that window, and a `watching` slice prints the moment it gets there ("agreeing from", `agrees_at` in the JSON).
+A divergence keeps a slice `diverging` until it ages out of the window.
+
+## Switch slice 1 to native
+
+Slices switch native strictly in order, so slice 1 goes first, once it reads `agreeing` and the G2 durability journeys pass (`verify-quark`).
+Restart quarkd with slice 1 native and the rest still in shadow:
+
+```sh
+QUARK_SHADOWS=all QUARK_ENGINE_SLICES=1=native,2=shadow,3=shadow,4=shadow quarkd --engine firstmate
+```
+
+The explicit `QUARK_ENGINE_SLICES` replaces the shadow default for slices 1 to 4, which is why slices 2 to 4 are named.
+The report then reads `native` for slice 1 and prints `Running native: event_log`.
+
+Native slice 1 answers from the event log exactly what its shadow compared: which tasks exist, the state of each task whose state firstmate read from its status log, those tasks' keyed decisions, and status tails.
+Everything a later slice owns still comes from firstmate: queued backlog work, titles, terminals, worktrees, states read from a pane or validation run, and captain holds.
+Firstmate is still the writer the log ingests from, so if the log can't be read quarkd serves firstmate's answer and logs a warning.
+
+Roll back by restarting with `QUARK_ENGINE_SLICES=1=shadow,2=shadow,3=shadow,4=shadow` (or without it under `QUARK_SHADOWS=all`).
+Only slice 1 can run native so far; quarkd refuses `native` for any other slice at startup.
+
+## Slice 9 needs treehouse 3.1.2
+
+The native worktree pool is a port of treehouse 3.1.2, so slice 9's shadow only runs against 3.1.2 or a later 3.x.
+An older treehouse answers differently by design (2.x reports no checked-out branch and exits 0 on a dirty return), so quarkd leaves the shadow off, logs which version it found, and the report reads `off` for slice 9.
+Install 3.1.2 with `curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh` (or the release archive) and restart quarkd.
 
 ## What the report can't judge yet
 

@@ -7940,6 +7940,13 @@
             "type": "string",
             "description": "RFC 3339."
           },
+          "native": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Slice names that ran native, such as `event_log`."
+          },
           "slices": {
             "type": "array",
             "items": {
@@ -7957,7 +7964,8 @@
           "off",
           "watching",
           "diverging",
-          "agreeing"
+          "agreeing",
+          "native"
         ]
       },
       "SliceReadiness": {
@@ -7973,6 +7981,13 @@
           "examples"
         ],
         "properties": {
+          "agrees_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "While `watching`: when it reads `agreeing` if it keeps running and\nnothing diverges, `on_since` plus the window (RFC 3339)."
+          },
           "divergences": {
             "type": "integer",
             "format": "int64",
