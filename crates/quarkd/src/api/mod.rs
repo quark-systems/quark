@@ -15,6 +15,7 @@ mod overview;
 mod personas;
 mod pull_requests;
 mod routes;
+mod shadows;
 mod terminals;
 
 use std::sync::Arc;
@@ -120,6 +121,10 @@ const MODULES: &[Module] = &[
     Module {
         router: events::router,
         openapi: <events::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: shadows::router,
+        openapi: <shadows::Api as OpenApi>::openapi,
     },
 ];
 

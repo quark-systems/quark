@@ -58,3 +58,4 @@ quarkd's `ShadowEngine` is an `EngineAdapter` that routes each operation by its 
 
 Mode changes are logged as `slice.mode` events. Startup modes come from `QUARK_ENGINE_SLICES`, such as `1=shadow`; quarkd accepts `shadow` for slice 1 (the event log ingest) and slice 2 (the verification shadow, `docs/engine/verify.md`) and refuses any other non-`bash` mode until that slice's native side lands.
 A slice moves from `shadow` to `native` only after its divergences are gone and the verify-quark journeys pass.
+`QUARK_SHADOWS=all` turns on every shadow at once, and `quarkd shadows` (or `GET /v1/shadows`) reports each slice's divergences; see `docs/shadow-readiness.md`.

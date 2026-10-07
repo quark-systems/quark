@@ -94,11 +94,15 @@ pub fn build_engine(
 
 /// The slices with a native side that can run in shadow: slice 1's ingest
 /// bridge (`event_ingest`) and slice 2's decision shadow (`verify_shadow`).
-/// Neither acts, so firstmate keeps serving every call. Any other non-bash
-/// mode is refused rather than silently ignored.
+/// Neither acts, so firstmate keeps serving every call.
+pub const SHADOWABLE: [Slice; 2] = [Slice::EventLog, Slice::Verification];
+
+/// Refuses any slice mode quarkd can't run: `shadow` outside
+/// [`SHADOWABLE`], and `native` for every slice, rather than silently
+/// ignoring it.
 pub fn check_slices(slices: &SliceSwitch) -> anyhow::Result<()> {
     for (slice, mode) in slices.modes() {
-        let shadowable = matches!(slice, Slice::EventLog | Slice::Verification);
+        let shadowable = SHADOWABLE.contains(&slice);
         let ok = match mode {
             SliceMode::Bash => true,
             SliceMode::Shadow => shadowable,

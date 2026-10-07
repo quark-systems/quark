@@ -47,10 +47,13 @@ use super::{
 /// The variable holding startup slice modes, such as `1=shadow`.
 pub const SLICES_ENV: &str = "QUARK_ENGINE_SLICES";
 
-/// Startup slice modes from [`SLICES_ENV`]; every slice on bash when unset.
+/// Startup slice modes from [`SLICES_ENV`]. When it is unset, every slice
+/// is on bash, or under `QUARK_SHADOWS=all` every slice quarkd can shadow
+/// is in shadow ([`crate::shadows::all_slices`]).
 pub fn slices_from_env() -> Result<SliceSwitch, CoreError> {
     match std::env::var(SLICES_ENV) {
         Ok(spec) => SliceSwitch::parse(&spec),
+        Err(_) if crate::shadows::all() => Ok(crate::shadows::all_slices()),
         Err(_) => Ok(SliceSwitch::new()),
     }
 }

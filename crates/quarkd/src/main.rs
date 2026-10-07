@@ -21,6 +21,22 @@ enum Command {
     Serve(ServeArgs),
     /// Print the OpenAPI document for the /v1 API.
     Openapi,
+    /// Print how ready each native slice is to switch on, from its shadow's
+    /// divergences in the event log.
+    Shadows(ShadowsArgs),
+}
+
+#[derive(clap::Args)]
+struct ShadowsArgs {
+    /// Quark home directory [default: $QUARK_HOME or ~/.quark]
+    #[arg(long)]
+    home: Option<PathBuf>,
+    /// Days of history to count, ending now.
+    #[arg(long, default_value_t = quarkd::shadows::DEFAULT_DAYS)]
+    days: u32,
+    /// Print the report as JSON (the shape of GET /v1/shadows).
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -68,6 +84,23 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve(cli.serve)) {
         Command::Openapi => {
             print!("{}", quarkd::api::ApiDoc::json());
+            Ok(())
+        }
+        Command::Shadows(args) => {
+            let home = args.home.unwrap_or_else(config::default_home);
+            let path = home.join(quark_eventlog::FILE_NAME);
+            if !path.exists() {
+                anyhow::bail!("no event log at {}; has quarkd run?", path.display());
+            }
+            let log = quark_eventlog::SqliteEventLog::open(&path)?;
+            let mut model = quarkd::shadows::ReadinessModel::new(log);
+            model.catch_up().await?;
+            let report = model.report(args.days.max(1), time::OffsetDateTime::now_utc());
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", quarkd::shadows::render(&report));
+            }
             Ok(())
         }
         Command::Serve(args) => {

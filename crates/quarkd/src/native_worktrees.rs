@@ -14,11 +14,12 @@ use std::sync::Arc;
 use quark_core::{EventLog, HostId};
 use quark_worktree::{Pool, ShadowPool, TreehouseCli};
 
-/// Set to `1` to shadow treehouse with the native pool.
+/// Set to `1` to shadow treehouse with the native pool; unset, it follows
+/// `QUARK_SHADOWS=all`.
 pub const ENV: &str = "QUARK_NATIVE_WORKTREES";
 
 pub fn enabled() -> bool {
-    std::env::var(ENV).is_ok_and(|v| v == "1")
+    crate::shadows::opt_in(ENV)
 }
 
 /// The pool quarkd's worktree providers use: treehouse, shadowed by the
