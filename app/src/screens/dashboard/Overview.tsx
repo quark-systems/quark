@@ -10,7 +10,7 @@ import { Unavailable } from "../../components/Unavailable";
 import { HarnessLogo } from "../../components/WorkerCard/HarnessLogo";
 import { ProjectHostSlice } from "../../components/hosts/ProjectHostSlice";
 import { DashboardTabs } from "./Tabs";
-import { lastSeen, PULSE, saveSeen, summarize } from "./overview";
+import { lastSeen, PULSE, saveSeen, summarize } from "./summary";
 import "./settings.css";
 import "./overview.css";
 
