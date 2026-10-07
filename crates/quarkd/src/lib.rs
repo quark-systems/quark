@@ -23,6 +23,7 @@ pub mod hosts;
 pub mod memory;
 pub mod metrics;
 pub mod native;
+pub mod native_coordinator;
 pub mod native_dispatch;
 pub mod native_triggers;
 pub mod overview;
@@ -172,6 +173,24 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     } else {
         (None, None)
     };
+    let coordinator_task = if native_coordinator::enabled() {
+        match native_coordinator::ShadowCoordinator::open(
+            store.clone(),
+            Arc::new(events.clone()),
+            layout.clone(),
+            quark_transcript::SessionRoots::from_env(),
+        )
+        .await
+        {
+            Ok(c) => Some(tokio::spawn(c.run(config.refresh_interval))),
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "slice 6 shadow not started");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let slices = engine::shadow::slices_from_env()?;
     let verify_task = (slices.mode(quark_core::Slice::Verification)
         == quark_core::SliceMode::Shadow)
@@ -218,6 +237,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     projector_task.abort();
     ingest_task.abort();
     if let Some(t) = triggers_task {
+        t.abort();
+    }
+    if let Some(t) = coordinator_task {
         t.abort();
     }
     if let Some(t) = verify_task {

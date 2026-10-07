@@ -1,8 +1,9 @@
 // Project dashboard, Metrics tab: how the Project's work has gone over a window of days, computed by
 // the daemon from the event log. Throughput per day, lead time, how often work got through on its
-// own, interventions, failovers and the quota of the accounts its tasks ran under.
+// own, interventions, failovers, the quota of the accounts its tasks ran under and the coordinator's
+// turns and tokens.
 import React, { useEffect, useState } from "react";
-import { api, DayCount, NotAvailable, ProjectMetrics } from "../../api";
+import { api, CoordinatorMetrics, CoordinatorTurns, DayCount, NotAvailable, ProjectMetrics } from "../../api";
 import { href } from "../../nav";
 import { useStore } from "../../store";
 import { errText } from "../../util";
@@ -100,6 +101,8 @@ export function Metrics({ project: pid }: { project: string }) {
             <ProjectHostSlice project={pid} hours={48} detail />
           </section>
 
+          {m.coordinator && hasTurns(m.coordinator) && <Coordinator c={m.coordinator} />}
+
           {m.unavailable.length > 0 && (
             <section className="met-section" data-testid="metrics-unavailable">
               <h2>Not measured yet</h2>
@@ -113,6 +116,44 @@ export function Metrics({ project: pid }: { project: string }) {
 }
 
 const LABELS: Record<string, string> = { spend: "Spend", coordinator_tokens: "Coordinator token efficiency" };
+
+export function hasTurns(c: CoordinatorMetrics) { return c.baseline.turns + c.native.turns + c.would_wake_turns > 0; }
+
+/** Turns and tokens per task for firstmate's coordinator and the native one, and how many turns only acknowledged status. */
+function Coordinator({ c }: { c: CoordinatorMetrics }) {
+  const row = (name: string, t: CoordinatorTurns, testId: string) => (
+    <tr data-testid={testId}>
+      <td>{name}</td><td>{t.turns}</td><td>{tokens(t.input_tokens + t.output_tokens)}</td><td>{num(t.turns_per_task)}</td><td>{tokens(t.tokens_per_task)}</td>
+      <td>{pct(t.ack_share)}</td>
+    </tr>
+  );
+  return (
+    <section className="met-section" data-testid="metrics-coordinator">
+      <h2>Coordinator</h2>
+      <p className="faint">
+        {c.tasks > 0 && <>Over {c.tasks === 1 ? "1 task" : `${c.tasks} tasks`}. </>}A turn that changed nothing only acknowledged status; the native
+        coordinator is woken only for judgment, so its share should stay near zero.
+        {c.native.turns === 0 && c.would_wake_turns > 0 && <> Running beside today's coordinator, it would have taken {c.would_wake_turns} {c.would_wake_turns === 1 ? "turn" : "turns"}.</>}
+      </p>
+      <table className="met-table">
+        <thead><tr><th>Coordinator</th><th>Turns</th><th>Tokens</th><th>Turns per task</th><th>Tokens per task</th><th>Status-only turns</th></tr></thead>
+        <tbody>
+          {row("Today's (firstmate)", c.baseline, "metrics-coordinator-baseline")}
+          {c.native.turns > 0 && row("Native", c.native, "metrics-coordinator-native")}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function num(n?: number | null) { return n == null ? "–" : n.toFixed(1); }
+
+export function tokens(n?: number | null): string {
+  if (n == null) return "–";
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
 
 function Tile({ label, value, sub, testId }: { label: string; value: string; sub: string; testId: string }) {
   return (

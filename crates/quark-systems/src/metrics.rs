@@ -31,6 +31,10 @@ pub struct ProjectMetrics {
     pub failovers: Failovers,
     /// Accounts this Project's tasks ran under, with their quota now.
     pub accounts: Vec<AccountUse>,
+    /// The coordinator's turns and tokens: firstmate's, read from its
+    /// transcript, beside the native coordinator's.
+    #[serde(default)]
+    pub coordinator: CoordinatorMetrics,
     /// Metrics the daemon cannot compute yet, and why.
     pub unavailable: Vec<UnavailableMetric>,
 }
@@ -121,6 +125,41 @@ pub struct AccountUse {
     /// The Project's tasks started under it.
     pub tasks: u32,
     pub quota: AccountQuota,
+}
+
+/// Coordinator token efficiency over the window.
+///
+/// A turn that changed nothing (no task started, steered, answered or
+/// cancelled, nothing told or asked of the user) only acknowledged status;
+/// the native coordinator's target share of those is near zero.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CoordinatorMetrics {
+    /// Tasks seen in the window, the divisor of the per-task figures.
+    pub tasks: u32,
+    /// firstmate's coordinator (Claude Code transcripts only).
+    pub baseline: CoordinatorTurns,
+    /// The native coordinator; no turns until slice 6 switches on.
+    pub native: CoordinatorTurns,
+    /// While slice 6 runs in shadow: turns the native coordinator would
+    /// have taken.
+    pub would_wake_turns: u32,
+}
+
+/// One coordinator's turns and tokens.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CoordinatorTurns {
+    pub turns: u32,
+    /// Turns that only acknowledged status.
+    pub ack_turns: u32,
+    /// Input tokens, including prompt cache reads and writes.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Of the input tokens, how many were cache reads.
+    pub cache_read_tokens: u64,
+    pub turns_per_task: Option<f64>,
+    pub tokens_per_task: Option<f64>,
+    /// 0 to 1.
+    pub ack_share: Option<f64>,
 }
 
 /// A metric the dashboard shows as not measured yet.

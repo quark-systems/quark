@@ -1,0 +1,25 @@
+[package]
+name = "quark-coordinator"
+description = "The judgment-only coordinator for the native Quark engine (slice 6): layered prompt, wake queue, native tools and turn accounting, shadowed against firstmate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+quark-persona.workspace = true
+quark-triggers.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v8"] }
+
+[dev-dependencies]
+quark-eventlog.workspace = true
+tempfile = "3"

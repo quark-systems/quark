@@ -19,6 +19,7 @@ quark-worker.workspace = true
 quark-worktree.workspace = true
 quark-isolation.workspace = true
 quark-persona.workspace = true
+quark-coordinator.workspace = true
 quark-engine.workspace = true
 quark-eventlog.workspace = true
 quark-transcript.workspace = true

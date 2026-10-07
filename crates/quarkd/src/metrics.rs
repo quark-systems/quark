@@ -9,12 +9,13 @@
 
 use std::collections::BTreeMap;
 
+use quark_coordinator::{Efficiency, Side};
 use quark_core::{Event, TaskId};
 use quark_engine::meta::SpawnMeta;
 use quark_eventlog::firstmate::{kinds, StatusPayload};
 use quark_systems::{
-    AccountFailover, DayCount, Failovers, GateMetrics, Interventions, LeadTime, ProjectMetrics,
-    Throughput, UnavailableMetric,
+    AccountFailover, CoordinatorMetrics, CoordinatorTurns, DayCount, Failovers, GateMetrics,
+    Interventions, LeadTime, ProjectMetrics, Throughput, UnavailableMetric,
 };
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
@@ -168,6 +169,19 @@ pub fn compute(
         }
     }
 
+    let coordinator = coordinator(events, in_window);
+    let mut unavailable = vec![UnavailableMetric {
+        metric: "spend".into(),
+        reason:
+            "Workers' token use and cost are not recorded yet; quota per account is shown instead."
+                .into(),
+    }];
+    if coordinator.baseline.turns == 0 && coordinator.native.turns == 0 {
+        unavailable.push(UnavailableMetric {
+            metric: "coordinator_tokens".into(),
+            reason: "No coordinator turn is in the event log for this window yet. Turns are read from the coordinator's Claude Code transcript.".into(),
+        });
+    }
     ProjectMetrics {
         project_id: project_id.to_string(),
         days,
@@ -188,16 +202,33 @@ pub fn compute(
         interventions,
         failovers: fo,
         accounts: Vec::new(),
-        unavailable: vec![
-            UnavailableMetric {
-                metric: "spend".into(),
-                reason: "Workers' token use and cost are not recorded yet; quota per account is shown instead.".into(),
-            },
-            UnavailableMetric {
-                metric: "coordinator_tokens".into(),
-                reason: "The coordinator's token use is not recorded in the event log yet.".into(),
-            },
-        ],
+        coordinator,
+        unavailable,
+    }
+}
+
+/// Turns and tokens of firstmate's coordinator (`coordinator.baseline`) and
+/// the native one, from `quark_coordinator::efficiency`.
+fn coordinator(events: &[Event], in_window: impl Fn(OffsetDateTime) -> bool) -> CoordinatorMetrics {
+    let e = Efficiency::fold(events, |e| in_window(e.ts));
+    let side = |s: &Side| {
+        let per = s.per_task(e.tasks);
+        CoordinatorTurns {
+            turns: s.turns,
+            ack_turns: s.acks,
+            input_tokens: s.usage.input,
+            output_tokens: s.usage.output,
+            cache_read_tokens: s.usage.cache_read,
+            turns_per_task: per.map(|p| p.0),
+            tokens_per_task: per.map(|p| p.1),
+            ack_share: s.ack_share(),
+        }
+    };
+    CoordinatorMetrics {
+        tasks: e.tasks,
+        baseline: side(&e.baseline),
+        native: side(&e.native),
+        would_wake_turns: e.would_wake,
     }
 }
 
@@ -325,5 +356,53 @@ mod tests {
         assert_eq!(m.lead_time.median_s, None);
         assert_eq!(m.interventions.per_finished_task, None);
         assert_eq!(m.unavailable.len(), 2);
+    }
+
+    #[test]
+    fn coordinator_turns_come_from_the_baseline_in_the_window() {
+        let mut log = Log(Vec::new());
+        log.spawn(datetime!(2026-10-07 09:00 UTC), "t1");
+        log.spawn(datetime!(2026-10-07 09:30 UTC), "t2");
+        let turn = |id: &str, cause: &str, acts: bool| {
+            serde_json::json!({"type": "baseline", "turn": {"id": id, "at": "", "cause": cause,
+                "usage": {"input": 900, "output": 100, "cache_read": 800, "calls": 2},
+                "tool_calls": 1, "acts": acts}})
+        };
+        for (i, (cause, acts)) in [
+            ("wake", false),
+            ("wake", false),
+            ("wake", true),
+            ("user", true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut e = NewEvent::new(
+                HostId::from("h"),
+                ProjectId::from("p"),
+                None,
+                "coordinator.baseline",
+                turn(&i.to_string(), cause, acts),
+            );
+            e.ts = datetime!(2026-10-07 10:00 UTC);
+            let seq = Seq(log.0.len() as u64 + 1);
+            log.0.push(e.with_seq(seq));
+        }
+        let m = compute("p", &log.0, &[], NOW, 7);
+        let b = &m.coordinator.baseline;
+        assert_eq!(m.coordinator.tasks, 2);
+        assert_eq!((b.turns, b.ack_turns), (4, 2));
+        assert_eq!(
+            (b.input_tokens, b.output_tokens, b.cache_read_tokens),
+            (3600, 400, 3200)
+        );
+        assert_eq!(b.turns_per_task, Some(2.0));
+        assert_eq!(b.tokens_per_task, Some(2000.0));
+        assert_eq!(b.ack_share, Some(0.5));
+        assert_eq!(m.coordinator.native.turns, 0);
+        assert!(m
+            .unavailable
+            .iter()
+            .all(|u| u.metric != "coordinator_tokens"));
     }
 }
