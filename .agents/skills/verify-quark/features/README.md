@@ -39,6 +39,7 @@ This table links each feature to the journey tests that script it and the modes 
 | [Project board and coordinator chat](board-and-chat.md) | J3 | "the board updates live when the coordinator queues a task", "command palette jumps to a task" | mock; real+firstmate | firstmate: a signed-in coordinator harness |
 | [Worker terminal](worker-terminal.md) | J4 | "worker view: terminal, steering, transcript, changes, cancel and relaunch", "worker view: why this agent ...", "a queued task explains ..." | mock; real+firstmate | firstmate: a running task window |
 | [Decisions inbox](decisions.md) | J5 | "decisions inbox: answer from the keyboard, then see who answered" | mock; real+firstmate | firstmate: an open hold or worker decision |
+| [Durability](durability.md) | DUR | none (`quark-verify journey durability` scripts it against the real daemon) | real+firstmate+fake harness; real+stub for daemon checks | firstmate: none beyond the checkout (the fake harness needs no account) |
 | [Daemon API and event stream](daemon-api.md) | API | none (the `daemon-api` holdout covers it from outside) | real+stub, real+firstmate | none |
 | PR center (no file yet) | J6 | "PR center: list by state ...", "PR center: verification evidence ..." | mock | real: `gh` signed in and a task PR |
 | Accounts (no file yet) | ADR-11 | "accounts: add a second Claude account ..." | mock | |

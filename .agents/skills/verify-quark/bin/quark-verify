@@ -2,7 +2,7 @@
 # quark-verify: launch, doctor, drive and clean up an isolated Quark instance
 # for verification. See ../SKILL.md for the full recipe.
 #
-#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate] [--engine-dir DIR] [--run ID]
+#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate] [--engine-dir DIR] [--harness real|fake] [--run ID]
 #   quark-verify doctor
 #   quark-verify env                         print the run's variables (eval-able)
 #   quark-verify browser <command> ...       drive the app (bin/browser.mjs)
@@ -10,6 +10,11 @@
 #   quark-verify events [--since SEQ] [--for SECS]   print event-stream frames as JSON lines
 #   quark-verify tmux <args...>              tmux against the run's private server (real daemon only)
 #   quark-verify capture <name> -- <cmd...>  run a command, saving cmd, stdout, stderr and exit code as evidence
+#   quark-verify crash daemon|tmux|host      kill the daemon, the tmux server, or every process the run started (a reboot)
+#   quark-verify restart                     start the daemon again on its home and port, as a login would
+#   quark-verify sleep <secs>                stop every process the run started for <secs>, then continue them
+#   quark-verify agents                      the fake harness's start journal, one JSON line per agent start
+#   quark-verify journey <name> [args]       run a scripted journey in runs of its own (bin/journey-<name>)
 #   quark-verify cleanup                     stop everything the run started; evidence stays
 #
 # A run lives in $QUARK_VERIFY_HOME/<run-id> (default ~/.cache/quark-verify):
@@ -57,25 +62,27 @@ chromium_bin() {
   (cd "$repo/app" && node -e 'console.log(require("@playwright/test").chromium.executablePath())')
 }
 
-start_bg() { # name cmd... ; records instance/<name>.pid, logs to instance/<name>.log
+start_bg() { # name cmd... ; records instance/<name>.pid, appends to instance/<name>.log
   local name=$1; shift
-  setsid "$@" >"$inst/$name.log" 2>&1 < /dev/null &
+  setsid "$@" >>"$inst/$name.log" 2>&1 < /dev/null &
   echo $! >"$inst/$name.pid"
 }
 
 cmd_launch() {
-  local daemon=real engine=stub engine_dir="" id=""
+  local daemon=real engine=stub engine_dir="" harness=real id=""
   while [ $# -gt 0 ]; do
     case $1 in
       --daemon) daemon=$2; shift 2 ;;
       --engine) engine=$2; shift 2 ;;
       --engine-dir) engine_dir=$2; shift 2 ;;
+      --harness) harness=$2; shift 2 ;;
       --run) id=$2; shift 2 ;;
       *) die "launch: unknown argument $1" ;;
     esac
   done
   case $daemon in real|mock) ;; *) die "--daemon must be real or mock" ;; esac
   case $engine in stub|firstmate) ;; *) die "--engine must be stub or firstmate" ;; esac
+  case $harness in real|fake) ;; *) die "--harness must be real or fake" ;; esac
   [ "$engine" = firstmate ] && [ -z "$engine_dir" ] && die "--engine firstmate needs --engine-dir <quark-systems/firstmate checkout>"
   id=${id:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
   run_dir=$base/$id
@@ -102,7 +109,31 @@ cmd_launch() {
     if [ "$engine" = firstmate ]; then
       git clone --quiet "$engine_dir" "$home/engine" || die "cloning the engine from $engine_dir failed"
     fi
-    start_bg quarkd "$target/debug/quarkd" --home "$home" --listen "127.0.0.1:$dport" --engine "$engine"
+    # The daemon starts from a script so `restart` can start it again exactly
+    # as launched. With --harness fake, agents the engine opens run
+    # bin/fake-agent in place of the harness CLIs, and the tmux server (started
+    # by the daemon) inherits that PATH, a profile-free shell and the journal.
+    {
+      echo '#!/usr/bin/env bash'
+      if [ "$harness" = fake ]; then
+        mkdir -p "$inst/fakebin"
+        local h
+        for h in claude codex; do ln -s "$here/fake-agent" "$inst/fakebin/$h"; done
+        # A login shell's profile can put the real CLIs back in front of
+        # fakebin, so the tmux server's windows get a shell without profile.
+        # shellcheck disable=SC2016 # $PATH and $@ expand when the shell runs
+        printf '#!/usr/bin/env bash\nexport PATH=%q:"$PATH"\nexec bash --noprofile --norc "$@"\n' \
+          "$inst/fakebin" >"$inst/fakebin/shell"
+        chmod +x "$inst/fakebin/shell"
+        # shellcheck disable=SC2016
+        printf 'export PATH=%q:"$PATH"\n' "$inst/fakebin"
+        printf 'export SHELL=%q\n' "$inst/fakebin/shell"
+        printf 'export QV_AGENT_JOURNAL=%q\n' "$run_dir/evidence/agents.jsonl"
+      fi
+      printf 'exec %q --home %q --listen %q --engine %q\n' "$target/debug/quarkd" "$home" "127.0.0.1:$dport" "$engine"
+    } >"$inst/quarkd.sh"
+    chmod +x "$inst/quarkd.sh"
+    start_bg quarkd "$inst/quarkd.sh"
     sock=$home/run/tmux/quark
   else
     engine=mock
@@ -117,6 +148,7 @@ cmd_launch() {
 QV_RUN=$id
 QV_MODE=$daemon
 QV_ENGINE=$engine
+QV_HARNESS=$harness
 QV_DAEMON=$daemon_url
 QV_APP=http://127.0.0.1:$aport/
 QV_DAEMON_FOR_APP=http://127.0.0.1:$aport
@@ -221,6 +253,79 @@ stop_pid() { # name
   rm -f "$f"
 }
 
+# Process groups of every agent the run's tmux server holds (one per pane).
+pane_groups() {
+  [ -n "$QV_TMUX_SOCKET" ] || return 0
+  tmux -S "$QV_TMUX_SOCKET" list-panes -a -F '#{pane_pid}' 2>/dev/null | while read -r p; do
+    ps -o pgid= -p "$p" 2>/dev/null | tr -d ' '
+  done | sort -u
+}
+
+tmux_server_pid() {
+  [ -n "$QV_TMUX_SOCKET" ] || return 0
+  tmux -S "$QV_TMUX_SOCKET" display-message -p '#{pid}' 2>/dev/null || true
+}
+
+cmd_crash() {
+  load
+  inst=$run_dir/instance
+  [ "$QV_MODE" = real ] || die "crash: needs the real daemon"
+  local what=${1:-} pid g
+  case $what in
+    daemon)
+      # SIGKILL, so nothing shuts down cleanly: an engine call in flight dies with it.
+      pid=$(cat "$inst/quarkd.pid" 2>/dev/null) || die "crash: the daemon is not running"
+      kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      rm -f "$inst/quarkd.pid"
+      echo "crashed the daemon (pid $pid)" ;;
+    tmux)
+      pid=$(tmux_server_pid)
+      [ -n "$pid" ] || die "crash: the run's tmux server is not running"
+      kill -KILL "$pid"
+      echo "killed the tmux server (pid $pid); its agents lose their terminals" ;;
+    host)
+      # A reboot as the run sees it: the daemon, the tmux server and every agent
+      # are gone at once. The app server and Chromium stay up so the app can be
+      # read after the daemon comes back, as a person reopening it would.
+      for g in $(pane_groups); do kill -KILL -- "-$g" 2>/dev/null || true; done
+      pid=$(tmux_server_pid); [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null || true
+      pid=$(cat "$inst/quarkd.pid" 2>/dev/null || true)
+      if [ -n "$pid" ]; then kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true; fi
+      rm -f "$inst/quarkd.pid"
+      echo "rebooted: the daemon, the tmux server and every agent are gone; start the daemon with: quark-verify restart" ;;
+    *) die "crash: usage: crash daemon|tmux|host" ;;
+  esac
+}
+
+cmd_restart() {
+  load
+  inst=$run_dir/instance
+  [ "$QV_MODE" = real ] || die "restart: needs the real daemon"
+  alive quarkd && die "restart: the daemon is still running (pid $(cat "$inst/quarkd.pid"))"
+  start_bg quarkd "$inst/quarkd.sh"
+  wait_http "$QV_DAEMON/v1/health" 60 "the restarted daemon"
+  echo "restarted the daemon (pid $(cat "$inst/quarkd.pid"))"
+}
+
+cmd_sleep() {
+  load
+  inst=$run_dir/instance
+  [ "$QV_MODE" = real ] || die "sleep: needs the real daemon"
+  local secs=${1:-} groups pids p
+  [[ $secs =~ ^[0-9]+$ ]] || die "sleep: usage: sleep <secs>"
+  # Stop agents first and the daemon last, and continue in reverse, so no
+  # running process sees another one frozen.
+  groups=$(pane_groups)
+  pids="$(tmux_server_pid) $(cat "$inst/quarkd.pid" 2>/dev/null || true)"
+  for p in $groups; do kill -STOP -- "-$p" 2>/dev/null || true; done
+  for p in $pids; do kill -STOP -- "-$p" 2>/dev/null || kill -STOP "$p" 2>/dev/null || true; done
+  echo "asleep for ${secs}s (daemon, tmux server and $(echo "$groups" | grep -c .) agent groups stopped)"
+  sleep "$secs"
+  for p in $(echo "$pids" | tr ' ' '\n' | tac); do kill -CONT -- "-$p" 2>/dev/null || kill -CONT "$p" 2>/dev/null || true; done
+  for p in $groups; do kill -CONT -- "-$p" 2>/dev/null || true; done
+  echo "awake"
+}
+
 cmd_cleanup() {
   load
   inst=$run_dir/instance
@@ -248,6 +353,12 @@ case $sub in
   events) cmd_events "$@" ;;
   tmux) cmd_tmux "$@" ;;
   capture) cmd_capture "$@" ;;
+  crash) cmd_crash "$@" ;;
+  restart) cmd_restart ;;
+  sleep) cmd_sleep "$@" ;;
+  agents) load; cat "$QV_EVIDENCE/agents.jsonl" 2>/dev/null || true ;;
+  journey) [ -x "$here/journey-${1:-}" ] || die "journey: unknown journey ${1:-}; see ../features/README.md"
+           j=$1; shift; QV_HELPER="$here/quark-verify" exec "$here/journey-$j" "$@" ;;
   cleanup) cmd_cleanup ;;
-  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$sub" ] || exit 2 ;;
+  *) sed -n '2,/^set -euo/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'; [ -z "$sub" ] || exit 2 ;;
 esac

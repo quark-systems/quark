@@ -28,6 +28,7 @@ Requirements: `cargo`, `node` 22 with `npm`, `tmux` 3.2+, `curl`, `git`, and a C
 $Q launch                                                    # real quarkd, stub engine (no agents, no network)
 $Q launch --engine firstmate --engine-dir ../firstmate       # real quarkd driving a clone of a quark-systems/firstmate checkout
 $Q launch --daemon mock                                      # the app against app/mock/daemon.mjs (demo data, quiet)
+$Q launch --engine firstmate --engine-dir ../firstmate --harness fake   # agents run bin/fake-agent: no account or network needed
 ```
 
 Launch builds `app/dist` (`npm ci` first if `app/node_modules` is missing) and `quarkd` (`cargo build -p quarkd`), then starts, each on a free port and in its own process group:
@@ -88,6 +89,16 @@ $Q events --since 0 --for 2                                    # event frames as
 ```
 
 Engine terminals (real daemon): `$Q tmux list-windows -a` and `$Q tmux capture-pane -p -t <session:window>` read the private server the engine's windows run on. Drive them through the app's terminal; use tmux only to observe.
+
+Disruptions (real daemon), for durability work; [features/durability.md](features/durability.md) has the scripted journeys (`$Q journey durability`):
+
+```sh
+$Q sleep 20                                                    # stop every process the run started, then continue them
+$Q crash daemon                                                # SIGKILL the daemon; start it again with: $Q restart
+$Q crash tmux                                                  # SIGKILL the private tmux server; the daemon keeps running
+$Q crash host                                                  # a reboot: daemon, tmux server and agents gone at once
+$Q agents                                                      # the fake harness's start journal (pid, argv, resumed)
+```
 
 ## Hand-off to a person
 
