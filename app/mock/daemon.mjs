@@ -302,6 +302,45 @@ function ruleProblem(id, b) {
   return null;
 }
 
+// GET /v1/projects/{id}/overview: the dashboard's Overview tab. quarkd folds its event log; the mock
+// folds the tasks it holds for live status and its own task events for the digest after `since`.
+const PULSE = { queued: "working", running: "working", in_review: "working", unknown: "working", needs_decision: "needs_decision", blocked: "blocked", paused: "paused", done: "done", failed: "failed" };
+function overviewOf(proj, since) {
+  const mine = events.filter((e) => e.project_id === proj.id && e.type === "task.event");
+  const counts = { working: 0, needs_decision: 0, blocked: 0, paused: 0, done: 0, failed: 0 };
+  const open = new Set([...decisions.values()].filter((d) => d.project_id === proj.id && d.state === "open" && d.task_id).map((d) => d.task_id));
+  const day = Date.now() - 86_400_000;
+  const list = [...tasks.values()].filter((t) => t.project_id === proj.id)
+    .map((t) => ({ t, state: open.has(t.id) ? "needs_decision" : PULSE[t.state] ?? "working" }))
+    .filter(({ t, state }) => !(state === "done" || state === "failed") || Date.parse(t.updated_at) > day);
+  const live = list.map(({ t, state }) => {
+    counts[state]++;
+    const d = dispatches.get(t.id)?.at(-1);
+    return {
+      engine_task: t.id, task_id: t.id, title: t.title, state, verb: t.state.replace("_", "-"), note: t.state_note ?? t.title, at: t.updated_at,
+      harness: t.harness, model: d?.model ?? null, open_decisions: open.has(t.id) ? ["default"] : [], pull_request: t.pull_request_url,
+    };
+  }).sort((a, b) => Number(b.state !== "done" && b.state !== "failed") - Number(a.state !== "done" && a.state !== "failed") || b.at.localeCompare(a.at) || a.engine_task.localeCompare(b.engine_task));
+  const head = mine.at(-1)?.seq ?? 0;
+  let digest = null;
+  if (since != null) {
+    const after = mine.filter((e) => e.seq > since);
+    digest = { since, from: after[0]?.ts ?? null, to: after.at(-1)?.ts ?? null, events: after.length, spawned: 0, done: 0, pull_requests: 0, failed: 0, decisions_opened: 0, decisions_resolved: 0, highlights: [], truncated: false };
+    for (const e of [...after].reverse()) {
+      const { kind: state, note, task_id } = e.payload;
+      const url = state === "done" ? tasks.get(task_id)?.pull_request_url ?? null : null;
+      const kind = state === "done" ? "done" : state === "failed" ? "failed" : state === "needs_decision" ? "decision_opened"
+        : state === "running" && note.startsWith("Answered") ? "decision_resolved" : state === "running" ? "spawned" : null;
+      if (!kind) continue;
+      digest[{ done: "done", failed: "failed", decision_opened: "decisions_opened", decision_resolved: "decisions_resolved", spawned: "spawned" }[kind]]++;
+      if (url) digest.pull_requests++;
+      if (digest.highlights.length < 50) digest.highlights.push({ seq: e.seq, at: e.ts, engine_task: task_id, task_id, title: tasks.get(task_id)?.title ?? null, kind, text: note, url });
+      else digest.truncated = true;
+    }
+  }
+  return { project_id: proj.id, head, live: { counts, tasks: live, last_activity: mine.at(-1)?.ts ?? null }, digest, error: null };
+}
+
 // POST /v1/projects/{id}/dispatch:test. The mock has no classifier, except that a description
 // sharing a word with a rule's condition (a rename or a typo, for the trivial-edit rule) matches
 // that rule, so both outcomes can be seen. Like quarkd, it does not resolve rules that are not saved.
@@ -868,6 +907,12 @@ const server = http.createServer(async (req, res) => {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);
     return send(res, 200, metricsOf(proj, Number(url.searchParams.get("days")) || 7));
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/overview$/)) && req.method === "GET") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const since = url.searchParams.get("since");
+    return send(res, 200, overviewOf(proj, since == null ? null : Number(since)));
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/settings$/)) && (req.method === "GET" || req.method === "PATCH")) {
     const proj = projects.get(decodeURIComponent(r[1]));

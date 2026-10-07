@@ -1,0 +1,28 @@
+/* Project dashboard, Overview tab, and the dashboard's tab strip. Colors come from the theme tokens in styles.css. */
+.dash-tabs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; }
+.dash-tab { padding: 3px 10px; border-radius: 5px; color: var(--fg-dim); text-decoration: none; font-size: 12px; }
+.dash-tab:hover { background: var(--selection-subtle); color: var(--fg); }
+.dash-tab.on { background: var(--selection-strong); color: var(--fg); }
+
+.ov-body { max-width: 900px; }
+.ov-head { display: flex; align-items: baseline; gap: 10px; width: 100%; }
+.ov-summary { font-size: 14px; }
+.ov-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; width: 100%; }
+.ov-tile { background: var(--surface-2); border: 1px solid var(--stroke); border-radius: 7px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+.ov-tile.zero { opacity: .55; }
+.ov-n { font: 600 20px var(--mono); line-height: 1.1; }
+.ov-label { font-size: 11px; color: var(--fg-faint); }
+.ov-list { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; }
+.ov-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; border-top: 1px solid var(--stroke); min-width: 0; }
+.ov-row:first-child { border-top: 0; }
+.ov-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.ov-kind { flex: none; width: 64px; font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+.ov-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ov-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ov-task { font-weight: 600; color: var(--fg); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.ov-task:hover { text-decoration: underline; }
+.ov-link { font-size: 11px; color: var(--link); white-space: nowrap; }
+.ov-note { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-agent { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.ov-when { flex: none; width: 58px; text-align: right; font-size: 11px; }
+.pill.ov-decision { color: var(--violet); background: color-mix(in srgb, var(--violet) 14%, transparent); }

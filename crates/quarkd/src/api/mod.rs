@@ -10,6 +10,7 @@ mod harnesses;
 mod memory;
 mod metrics;
 mod openapi;
+mod overview;
 mod pull_requests;
 mod routes;
 mod terminals;
@@ -101,6 +102,10 @@ const MODULES: &[Module] = &[
     Module {
         router: automation::router,
         openapi: <automation::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: overview::router,
+        openapi: <overview::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,

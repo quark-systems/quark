@@ -54,3 +54,8 @@ It starts the `eventlog-crash` binary, lets it append (single events and three-e
 - after the last kill, one more bridge pass leaves exactly the file's lines in the log, in order, with no duplicates.
 
 `QUARK_CRASH_SEED` replays a run (the seed is in every failure message) and `QUARK_CRASH_ROUNDS` raises the round count from 20.
+
+## Readers
+
+The Project dashboard's Overview (`GET /v1/projects/{id}/overview`, `crates/quarkd/src/overview.rs`) folds the log into each task's latest status line, open decisions and pull request, and keeps a compact history so it can digest everything after a `seq` the app saved on its previous visit.
+It catches up from where it stopped on every read, so a request only reads what was appended since the last one.

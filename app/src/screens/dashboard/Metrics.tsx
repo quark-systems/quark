@@ -7,6 +7,8 @@ import { href } from "../../nav";
 import { useStore } from "../../store";
 import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
+import { DashboardTabs } from "./Tabs";
+import "./overview.css";
 import "./metrics.css";
 
 const WINDOWS = [7, 30, 90] as const;
@@ -42,6 +44,7 @@ export function Metrics({ project: pid }: { project: string }) {
           ))}
         </div>
         <button className="btn" onClick={() => void load()} title="Compute again">Refresh</button>
+        <DashboardTabs project={pid} current="metrics" />
       </div>
       <div className="screen metrics">
         {unavailable && <Unavailable what="Project metrics" endpoint={`GET /v1/projects/${pid}/metrics`} />}

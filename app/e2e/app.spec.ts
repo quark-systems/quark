@@ -710,3 +710,45 @@ test("automation: leave a note, add and remove a rule, change what reaches you w
   const overridden = a.away.routes.filter((r: { overridden: boolean }) => r.overridden);
   expect(overridden).toEqual([{ posture: "away", occasion: "done", wake: true, user: "notify", overridden: true }]);
 });
+
+test("overview: live status now, and what changed since you last looked", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await page.getByTestId("nav-overview").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/overview$/);
+
+  // Live status: one tile per state and every task, open ones first.
+  await expect(page.getByTestId(/^overview-count-/)).toHaveCount(6);
+  await expect(page.getByTestId("overview-count-working").locator(".ov-n")).not.toHaveText("0");
+  const tasks = page.getByTestId("overview-task");
+  await expect(tasks.first()).not.toHaveAttribute("data-state", /done|failed/);
+  await expect(tasks.filter({ hasText: "Event stream" })).toHaveCount(1);
+
+  // Start from a clean slate, then a worker fails and is relaunched while we are away.
+  await expect(page.getByTestId("overview-summary")).toBeVisible();
+  const mark = page.getByTestId("overview-mark-read");
+  if (await mark.isVisible()) await mark.click();
+  await expect(page.getByTestId("overview-summary")).toHaveText("Nothing new.");
+  await page.getByTestId("dash-tab-settings").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/settings$/);
+  await page.evaluate(async () => {
+    const base = "http://127.0.0.1:7392/v1";
+    const all: { id: string; state: string; title: string }[] = await (await fetch(`${base}/projects/quark/tasks`)).json();
+    const t = all.find((x) => x.title.startsWith("Event stream"))!;
+    await fetch(`${base}/tasks/${t.id}:cancel`, { method: "POST" });
+    await fetch(`${base}/tasks/${t.id}:relaunch`, { method: "POST" });
+  });
+
+  await page.getByTestId("dash-tab-overview").click();
+  await expect(page.getByTestId("overview-digest")).toContainText("Since you last looked");
+  await expect(page.getByTestId("overview-summary")).toHaveText("1 failed and 1 worker started.");
+  const highlights = page.getByTestId("overview-highlight");
+  await expect(highlights).toHaveCount(2);
+  await expect(highlights.first()).toHaveAttribute("data-kind", "spawned");
+  await expect(highlights.nth(1)).toContainText("Cancelled from the app");
+  await highlights.nth(1).getByRole("link", { name: "Event stream" }).click();
+  await expect(page).toHaveURL(/#\/t\//);
+
+  // The next visit starts where this one began.
+  await page.goBack();
+  await expect(page.getByTestId("overview-summary")).toHaveText("Nothing new.");
+});

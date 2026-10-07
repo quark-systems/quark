@@ -15,6 +15,7 @@ import { Accounts } from "./screens/Accounts";
 import { Settings } from "./screens/dashboard/Settings";
 import { Metrics } from "./screens/dashboard/Metrics";
 import { Automation } from "./screens/dashboard/Automation";
+import { Overview } from "./screens/dashboard/Overview";
 
 type Screens = { [N in Route["name"]]: (r: Extract<Route, { name: N }>) => React.ReactNode };
 
@@ -24,6 +25,7 @@ export const SCREENS: Screens = {
   project: (r) => <ProjectBoard key={r.id} id={r.id} />,
   memory: (r) => <Memory key={r.project} project={r.project} id={r.id} />,
   dispatch: (r) => <Dispatch key={r.project} project={r.project} />,
+  overview: (r) => <Overview key={r.project} project={r.project} />,
   settings: (r) => <Settings key={r.project} project={r.project} />,
   metrics: (r) => <Metrics key={r.project} project={r.project} />,
   automation: (r) => <Automation key={r.project} project={r.project} />,

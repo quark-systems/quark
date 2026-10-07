@@ -10,6 +10,7 @@ export const ROUTES = {
   project: "p/:id", // board and coordinator chat
   memory: "p/:project/memory/:id?", // the Project's memory, optionally with one proposal or entry selected
   dispatch: "p/:project/dispatch", // the Project's dispatch rules: edit, save, test
+  overview: "p/:project/overview", // the Project dashboard's Overview tab: live status and what changed since you last looked
   settings: "p/:project/settings", // the Project dashboard's Settings tab: every per-Project switch
   metrics: "p/:project/metrics", // the Project dashboard's Metrics tab: how the work has gone
   automation: "p/:project/automation", // the Project's inbox, trigger rules and away policy

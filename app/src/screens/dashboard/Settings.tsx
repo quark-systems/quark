@@ -8,7 +8,9 @@ import { useStore } from "../../store";
 import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import { StandingApproval } from "../../components/StandingApproval";
+import { DashboardTabs } from "./Tabs";
 import "./settings.css";
+import "./overview.css";
 
 const DELIVERY = {
   gated: ["Gated", "Every change passes the verification gates before its pull request opens."],
@@ -51,6 +53,7 @@ export function Settings({ project: pid }: { project: string }) {
         <h1>Settings</h1>
         <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
         <span className="spacer" />
+        <DashboardTabs project={pid} current="settings" />
       </div>
       <div className="screen settings">
         {unavailable && <Unavailable what="Project settings" endpoint={`GET /v1/projects/${pid}/settings`} />}
