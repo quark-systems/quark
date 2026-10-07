@@ -236,7 +236,7 @@ const Entry = memo(function Entry({ e }: { e: TranscriptItem }) {
     const label = e.role === "thinking" ? "thinking" : (e.tool_name ?? "tool") + (e.role === "tool_result" ? " result" : "");
     return (
       <details className={"t-entry tool" + (e.is_error ? " error" : "")}>
-        <summary><span className="pill">{label}</span> <span className="mono ellipsis">{e.text.split("\n")[0]}</span></summary>
+        <summary><span className="pill">{label}</span> <span className="mono ellipsis">{e.tool?.title ?? e.text.split("\n")[0]}</span></summary>
         <pre>{e.text}{e.truncated ? "\n…" : ""}</pre>
       </details>
     );

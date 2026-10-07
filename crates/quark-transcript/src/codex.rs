@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 
-use crate::{entry, input_text, str_at, text_of, tool_entry, TranscriptEntry, TranscriptRole};
+use crate::{entry, str_at, text_of, tool_call, tool_entry, TranscriptEntry, TranscriptRole};
 
 pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
     let ts = str_at(v, "timestamp");
@@ -49,21 +49,19 @@ fn response_item(item: &str, p: &Value, ts: Option<&str>) -> Vec<TranscriptEntry
                 .unwrap_or_default();
             entry(TranscriptRole::Thinking, &summary, ts)
         }
-        "function_call" => Some(tool_entry(
-            TranscriptRole::ToolCall,
-            &input_text(p.get("arguments")),
+        "function_call" => Some(tool_call(
+            p.get("arguments"),
             str_at(p, "name"),
             call_id,
-            false,
             ts,
+            None,
         )),
-        "custom_tool_call" => Some(tool_entry(
-            TranscriptRole::ToolCall,
-            &input_text(p.get("input")),
+        "custom_tool_call" => Some(tool_call(
+            p.get("input"),
             str_at(p, "name"),
             call_id,
-            false,
             ts,
+            None,
         )),
         "local_shell_call" => {
             let command = p
@@ -78,13 +76,12 @@ fn response_item(item: &str, p: &Value, ts: Option<&str>) -> Vec<TranscriptEntry
                         .join(" ")
                 })
                 .unwrap_or_default();
-            Some(tool_entry(
-                TranscriptRole::ToolCall,
-                &command,
+            Some(tool_call(
+                Some(&Value::String(command)),
                 Some("shell"),
                 call_id,
-                false,
                 ts,
+                None,
             ))
         }
         "function_call_output" | "custom_tool_call_output" => Some(tool_entry(

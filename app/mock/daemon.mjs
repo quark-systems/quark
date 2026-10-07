@@ -443,7 +443,7 @@ function seed() {
     const at = (m) => ({ ts: minutesAgo(m) });
     transcript(t, "user", `Task contract: ${t.title}. Worktree ready on branch \`quark/${t.id}\`.`, at(30));
     transcript(t, "assistant", "I'll start by reading the current implementation and its tests.", at(29));
-    transcript(t, "tool_call", "cargo test -p quarkd", { ...at(28), tool_name: "bash", tool_call_id: "c1" });
+    transcript(t, "tool_call", "cargo test -p quarkd", { ...at(28), tool_name: "bash", tool_call_id: "c1", tool: { kind: "shell", title: "Run cargo test -p quarkd", command: "cargo test -p quarkd" } });
     transcript(t, "tool_result", "running 14 tests\n..............\ntest result: ok. 14 passed; 0 failed", { ...at(28), tool_name: "bash", tool_call_id: "c1" });
     transcript(t, "assistant", "The tests pass on the base. Next I'll write the failing test for the new behaviour, then the change.", at(20));
     const term = terms.get(t.id);

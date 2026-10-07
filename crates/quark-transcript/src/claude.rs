@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use crate::{entry, input_text, str_at, text_of, tool_entry, TranscriptEntry, TranscriptRole};
+use crate::{entry, str_at, text_of, tool_call, tool_entry, TranscriptEntry, TranscriptRole};
 
 pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
     let kind = str_at(v, "type");
@@ -47,13 +47,12 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
                         str_at(b, "thinking").unwrap_or(""),
                         ts,
                     )),
-                    Some("tool_use") => out.push(tool_entry(
-                        TranscriptRole::ToolCall,
-                        &input_text(b.get("input")),
+                    Some("tool_use") => out.push(tool_call(
+                        b.get("input"),
                         str_at(b, "name"),
                         str_at(b, "id"),
-                        false,
                         ts,
+                        str_at(v, "cwd"),
                     )),
                     Some("tool_result") => out.push(tool_entry(
                         TranscriptRole::ToolResult,

@@ -5718,6 +5718,108 @@
           }
         }
       },
+      "ToolDiffLine": {
+        "type": "object",
+        "description": "One line of a [`ToolInfo`] diff preview.",
+        "required": [
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ToolDiffLineKind"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "ToolDiffLineKind": {
+        "type": "string",
+        "enum": [
+          "add",
+          "del",
+          "context"
+        ]
+      },
+      "ToolInfo": {
+        "type": "object",
+        "description": "A readable summary of one tool call, derived from its input.",
+        "required": [
+          "kind",
+          "title"
+        ],
+        "properties": {
+          "additions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Lines added, for `edit` and `write`.",
+            "minimum": 0
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The full shell command, for `shell`."
+          },
+          "deletions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Lines removed, for `edit`.",
+            "minimum": 0
+          },
+          "diff": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolDiffLine"
+            },
+            "description": "The first lines of the change, for `edit` and `write`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ToolKind"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file the call reads or changes; the first one when it changes\nseveral."
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The search pattern or web query, for `search` and `web`."
+          },
+          "title": {
+            "type": "string",
+            "description": "One line for the reader, such as `Read src/parser.rs` or\n`Run cargo test`."
+          }
+        }
+      },
+      "ToolKind": {
+        "type": "string",
+        "description": "What kind of work a tool call does.",
+        "enum": [
+          "read",
+          "edit",
+          "write",
+          "shell",
+          "search",
+          "web",
+          "agent",
+          "plan",
+          "other"
+        ]
+      },
       "TranscriptEntry": {
         "type": "object",
         "description": "One entry of a coordinator or worker transcript, parsed from the harness's\nown session log. Payload of `coordinator.message` and `worker.transcript`.",
@@ -5738,6 +5840,17 @@
           "text": {
             "type": "string",
             "description": "Markdown for `user`, `assistant` and `thinking`; tool input or output\notherwise."
+          },
+          "tool": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolInfo",
+                "description": "What a `tool_call` does, in a form the UI can show without parsing the\nharness's tool input. Absent on other roles, and on entries recorded\nbefore this field existed."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "tool_call_id": {
             "type": [
