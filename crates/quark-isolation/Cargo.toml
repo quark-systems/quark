@@ -1,0 +1,18 @@
+[package]
+name = "quark-isolation"
+description = "Isolation for the native Quark engine: native processes and sandboxes (Seatbelt on macOS, bubblewrap on Linux)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio.workspace = true

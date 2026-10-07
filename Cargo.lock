@@ -963,6 +963,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-isolation"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "quark-systems"
 version = "0.0.1"
 dependencies = [
