@@ -646,9 +646,10 @@ impl EngineAdapter for ShadowEngine {
         ws: &WorkspaceRef,
         agent: &AgentConfig,
         account_env: &[(String, String)],
+        resume: bool,
     ) -> Result<(), EngineError> {
         self.acting(Slice::SubCoordinators)
-            .start_coordinator(command, ws, agent, account_env)
+            .start_coordinator(command, ws, agent, account_env, resume)
             .await
     }
 
@@ -1089,6 +1090,7 @@ mod tests {
             _: &WorkspaceRef,
             _: &AgentConfig,
             _: &[(String, String)],
+            _: bool,
         ) -> Result<(), EngineError> {
             unimplemented!()
         }

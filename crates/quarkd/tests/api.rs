@@ -781,6 +781,7 @@ async fn creating_a_project_provisions_workspace_repo_and_coordinator() {
                 project_id: id.clone(),
                 harness: "claude-code".into(),
                 account_env: Vec::new(),
+                resume: false,
             },
         ]
     );

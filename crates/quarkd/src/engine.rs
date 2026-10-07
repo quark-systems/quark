@@ -342,12 +342,18 @@ pub trait EngineAdapter: Send + Sync {
     /// Start the coordinator of a seeded Project workspace with `agent`,
     /// under the account `account_env` selects (empty keeps the ambient
     /// account). Workers the coordinator starts inherit its account.
+    ///
+    /// With `resume`, the coordinator was started before and its agent is
+    /// gone (the tmux server was lost, or the machine rebooted): it comes
+    /// back in its latest conversation. An engine that cannot resume one
+    /// refuses rather than starting it fresh.
     async fn start_coordinator(
         &self,
         command: &Path,
         ws: &WorkspaceRef,
         agent: &AgentConfig,
         account_env: &[(String, String)],
+        resume: bool,
     ) -> Result<(), EngineError>;
 
     /// Account variables (`CLAUDE_CONFIG_DIR` and equivalents) this engine
@@ -474,6 +480,7 @@ pub enum StubWrite {
         project_id: String,
         harness: String,
         account_env: Vec<(String, String)>,
+        resume: bool,
     },
     MergePullRequest {
         task_id: String,
@@ -776,11 +783,13 @@ impl EngineAdapter for StubEngine {
         ws: &WorkspaceRef,
         agent: &AgentConfig,
         account_env: &[(String, String)],
+        resume: bool,
     ) -> Result<(), EngineError> {
         self.accept(StubWrite::StartCoordinator {
             project_id: ws.project_id.clone(),
             harness: agent.harness.clone(),
             account_env: account_env.to_vec(),
+            resume,
         })
     }
 
