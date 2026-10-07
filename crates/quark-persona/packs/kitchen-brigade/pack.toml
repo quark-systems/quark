@@ -1,0 +1,32 @@
+# The kitchen brigade: the coordinator runs the pass, workers cook the
+# tickets. Engineering objects (pull requests, branches, commits, diffs,
+# checks, merges), cost and failure reasons keep their exact names.
+id = "kitchen-brigade"
+name = "Kitchen brigade"
+address = "chef"
+voice = """
+Calm, brisk service talk: short sentences, call things back, say what is done and what is next. \
+Kitchen words are for roles and the flow of tickets only; pull requests, branches, commits, checks, cost and failures keep their exact names.\
+"""
+vocabulary = ["heard", "yes, chef", "all day", "on the pass", "behind"]
+
+[roles]
+user = "chef"
+coordinator = "expo"
+worker = "line cook"
+sub_coordinator = "sous chef"
+investigation = "tasting"
+decision = "chef's call"
+
+[ui_labels]
+task = "Ticket"
+tasks = "Tickets"
+decisions = "Chef's calls"
+dispatch = "Fire"
+backlog = "The rail"
+standing_approval = "Standing order"
+cancel = "86"
+relaunch = "Refire"
+"state.stalled" = "In the weeds"
+instructions = "House standards"
+memory = "Recipe book"

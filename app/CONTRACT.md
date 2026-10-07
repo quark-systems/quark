@@ -24,6 +24,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Memory review and promotion | `GET /v1/projects/{id}/memory/commits/{commit}`, `POST /v1/projects/{id}/memory/{entry_id}:promote` with optional `promoted_by`, `GET /v1/memory`; `MemoryEntry.commit` on listed entries | quark#30 |
 | Testing dispatch rules | `POST /v1/projects/{id}/dispatch:test` with `description` | quark#24 |
 | Dispatch rule editor | `GET/PUT /v1/projects/{id}/dispatch`; an optional `draft` on `dispatch:test` | quark#25 |
+| Persona packs | `GET /v1/personas`, `PUT /v1/personas/default`, `GET/PUT /v1/projects/{id}/persona` | N10 |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 | Project settings | `GET/PATCH /v1/projects/{id}/settings` (`ProjectSettings`, `UpdateProjectSettings`) | D1 Dashboard: Settings |
 | Project metrics | `GET /v1/projects/{id}/metrics?days=` (`ProjectMetrics`) | D3 Dashboard: Metrics |

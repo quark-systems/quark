@@ -1,0 +1,3 @@
+/* The persona picker sits in an uppercase panel head; keep its own text plain. */
+.persona-picker { display: inline-flex; align-items: center; gap: 4px; font: 400 12px var(--sans); text-transform: none; letter-spacing: 0; }
+.persona-picker select { background: var(--bg-2); color: var(--fg); border: 1px solid var(--line-2); border-radius: 4px; font: inherit; padding: 1px 4px; }

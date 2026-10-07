@@ -753,3 +753,38 @@ test("overview: live status now, and what changed since you last looked", async 
   await page.goBack();
   await expect(page.getByTestId("overview-summary")).toHaveText("Nothing new.");
 });
+
+test("switching a project's persona relabels its board, chat and workers", async ({ page }) => {
+  await open(page, "#/p/quark");
+  const chat = page.getByTestId("coordinator-chat");
+  await expect(chat.getByLabel("Message the coordinator")).toBeVisible();
+  await expect(page.getByTestId("persona-picker")).toHaveValue("");
+
+  await page.getByTestId("persona-picker").selectOption("kitchen-brigade");
+  await expect(chat.getByLabel("Message the expo")).toBeVisible();
+  await expect(page.locator(".header").getByRole("button", { name: "Expo" })).toBeVisible();
+  await expect(page.getByTestId("col-needs_decision")).toContainText("Needs chef's call");
+  await expect(page.getByTestId("nav-memory")).toContainText("Recipe book");
+
+  await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
+  await expect(page.getByLabel("Message the line cook")).toBeVisible();
+
+  // Following the default again brings the neutral names back.
+  await open(page, "#/p/quark");
+  await page.getByTestId("persona-picker").selectOption("");
+  await expect(chat.getByLabel("Message the coordinator")).toBeVisible();
+  await expect(page.getByTestId("col-needs_decision")).toContainText("Needs decision");
+});
+
+test("settings: pick the project's persona", async ({ page }) => {
+  await open(page, "#/p/quark/settings");
+  const picker = page.getByTestId("settings-persona").getByTestId("persona-picker");
+  await expect(picker).toHaveValue("");
+  await picker.selectOption("nautical");
+  const p = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/persona")).json());
+  expect(p.project_override).toBe("nautical");
+  await open(page, "#/p/quark");
+  await expect(page.getByTestId("coordinator-chat").getByLabel("Message the first mate")).toBeVisible();
+  await page.getByTestId("persona-picker").selectOption("");
+  await expect(page.getByTestId("coordinator-chat").getByLabel("Message the coordinator")).toBeVisible();
+});

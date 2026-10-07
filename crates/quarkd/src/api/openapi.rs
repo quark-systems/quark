@@ -20,6 +20,7 @@ use super::MODULES;
         (name = "memory"),
         (name = "pull-requests"),
         (name = "harnesses"),
+        (name = "personas"),
         (name = "accounts"),
         (name = "terminals"),
         (name = "coordinators"),

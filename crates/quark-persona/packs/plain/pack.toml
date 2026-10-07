@@ -1,0 +1,5 @@
+# The plain pack: neutral names everywhere, no flavor. It doubles as the
+# check that nothing depends on a persona.
+id = "plain"
+name = "Plain"
+voice = "Write plainly and concisely. No metaphors, no role-play."
