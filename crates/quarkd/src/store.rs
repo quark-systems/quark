@@ -23,6 +23,7 @@ use crate::now_rfc3339;
 mod accounts;
 mod failover;
 mod memory;
+mod migrations;
 mod pull_requests;
 
 pub use accounts::{default_account_id, AccountRow};
@@ -36,290 +37,6 @@ pub struct TerminalOutput {
     pub project_id: Option<String>,
     pub output: quark_systems::TerminalOutput,
 }
-
-const SCHEMA_VERSION: i64 = 13;
-
-const SCHEMA_V1: &str = r#"
-CREATE TABLE projects (
-    id             TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
-    goal           TEXT,
-    workspace_path TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
-);
-
-CREATE TABLE tasks (
-    id               TEXT PRIMARY KEY,
-    project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    engine_id        TEXT NOT NULL,
-    title            TEXT NOT NULL,
-    kind             TEXT,
-    state            TEXT NOT NULL,
-    state_note       TEXT,
-    harness          TEXT,
-    pull_request_url TEXT,
-    created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL,
-    UNIQUE (project_id, engine_id)
-);
-
-CREATE TABLE decisions (
-    id          TEXT PRIMARY KEY,
-    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    engine_id   TEXT NOT NULL,
-    task_id     TEXT,
-    question    TEXT NOT NULL,
-    state       TEXT NOT NULL,
-    answer      TEXT,
-    answered_by TEXT,
-    opened_at   TEXT NOT NULL,
-    answered_at TEXT,
-    UNIQUE (project_id, engine_id)
-);
-
-CREATE TABLE events (
-    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT,
-    type       TEXT NOT NULL,
-    ts         TEXT NOT NULL,
-    payload    TEXT NOT NULL
-);
-
-CREATE TABLE adapter_calls (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT NOT NULL,
-    project_id  TEXT,
-    operation   TEXT NOT NULL,
-    ok          INTEGER NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    detail      TEXT
-);
-"#;
-
-/// Engine script detail on adapter-call records. Rows written by the
-/// projector per operation leave these empty.
-const SCHEMA_V2: &str = r#"
-ALTER TABLE adapter_calls ADD COLUMN kind TEXT;
-ALTER TABLE adapter_calls ADD COLUMN script TEXT;
-ALTER TABLE adapter_calls ADD COLUMN args TEXT;
-ALTER TABLE adapter_calls ADD COLUMN exit_code INTEGER;
-ALTER TABLE adapter_calls ADD COLUMN workspace TEXT;
-"#;
-
-/// Project creation: lifecycle status and the creation inputs (`spec`, JSON
-/// with repos, agent config, dispatch preset and delivery policy).
-const SCHEMA_V3: &str = r#"
-ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'ready';
-ALTER TABLE projects ADD COLUMN status_detail TEXT;
-ALTER TABLE projects ADD COLUMN spec TEXT;
-ALTER TABLE projects ADD COLUMN project_repo_path TEXT;
-"#;
-
-/// Terminal output is the one high-volume event. `subject` names the terminal
-/// a `worker.output` event belongs to and `size` its byte count, so old
-/// output can be pruned per terminal.
-const SCHEMA_V4: &str = r#"
-ALTER TABLE events ADD COLUMN subject TEXT;
-ALTER TABLE events ADD COLUMN size INTEGER;
-CREATE INDEX events_subject ON events (subject, seq) WHERE subject IS NOT NULL;
-"#;
-
-/// Where each transcript source was last read. The session logs stay the
-/// source of truth: this holds offsets, not copies, and moves in the same
-/// transaction as the events read from them.
-const SCHEMA_V5: &str = r#"
-CREATE TABLE transcript_index (
-    source     TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    path       TEXT NOT NULL,
-    "offset"   INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-);
-"#;
-
-/// Task activity from status logs. `status_cursors` keeps each task's read
-/// offset in the same transaction as the entries it covers, so a restart
-/// resumes exactly where the last projection stopped.
-const SCHEMA_V6: &str = r#"
-ALTER TABLE tasks ADD COLUMN worktree_path TEXT;
-
-CREATE TABLE task_events (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id      TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    project_id   TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    decision_key TEXT,
-    note         TEXT NOT NULL,
-    raw          TEXT NOT NULL,
-    ts           TEXT NOT NULL
-);
-CREATE INDEX task_events_by_task ON task_events (task_id, id);
-
-CREATE TABLE status_cursors (
-    task_id     TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
-    byte_offset INTEGER NOT NULL
-);
-"#;
-
-/// The PR center: pull requests opened by tasks, with the checks and reviews
-/// last read from the forge, and each Project's standing approval.
-const SCHEMA_V7: &str = r#"
-ALTER TABLE projects ADD COLUMN standing_approval INTEGER NOT NULL DEFAULT 0;
-
-CREATE TABLE pull_requests (
-    id              TEXT PRIMARY KEY,
-    project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    task_id         TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-    url             TEXT NOT NULL,
-    provider        TEXT NOT NULL,
-    repo            TEXT NOT NULL,
-    number          INTEGER NOT NULL,
-    title           TEXT,
-    author          TEXT,
-    state           TEXT NOT NULL,
-    head_ref        TEXT,
-    base_ref        TEXT,
-    head_sha        TEXT,
-    mergeable       TEXT NOT NULL,
-    checks_state    TEXT NOT NULL,
-    review_decision TEXT NOT NULL,
-    additions       INTEGER,
-    deletions       INTEGER,
-    changed_files   INTEGER,
-    opened_at       TEXT,
-    updated_at      TEXT,
-    merged_at       TEXT,
-    closed_at       TEXT,
-    synced_at       TEXT,
-    sync_error      TEXT,
-    created_at      TEXT NOT NULL,
-    UNIQUE (project_id, url)
-);
-
-CREATE TABLE checks (
-    pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
-    name            TEXT NOT NULL,
-    status          TEXT NOT NULL,
-    conclusion      TEXT,
-    details_url     TEXT,
-    started_at      TEXT,
-    completed_at    TEXT,
-    PRIMARY KEY (pull_request_id, name)
-);
-
-CREATE TABLE reviews (
-    pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
-    id              TEXT NOT NULL,
-    author          TEXT,
-    state           TEXT NOT NULL,
-    body            TEXT NOT NULL,
-    submitted_at    TEXT,
-    commit_sha      TEXT,
-    PRIMARY KEY (pull_request_id, id)
-);
-"#;
-
-/// Verification gate evidence (ADR-15) per pull request, as API JSON.
-const SCHEMA_V8: &str = r#"
-ALTER TABLE pull_requests ADD COLUMN evidence TEXT;
-"#;
-
-/// A question asked again after its answer reuses its engine id, so a
-/// Project may hold several decisions for one engine id.
-const SCHEMA_V9: &str = r#"
-CREATE TABLE decisions_v9 (
-    id          TEXT PRIMARY KEY,
-    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    engine_id   TEXT NOT NULL,
-    task_id     TEXT,
-    question    TEXT NOT NULL,
-    state       TEXT NOT NULL,
-    answer      TEXT,
-    answered_by TEXT,
-    opened_at   TEXT NOT NULL,
-    answered_at TEXT
-);
-INSERT INTO decisions_v9 (id, project_id, engine_id, task_id, question, state, answer,
-                          answered_by, opened_at, answered_at)
-    SELECT id, project_id, engine_id, task_id, question, state, answer,
-           answered_by, opened_at, answered_at
-    FROM decisions;
-DROP TABLE decisions;
-ALTER TABLE decisions_v9 RENAME TO decisions;
-CREATE INDEX decisions_by_engine_id ON decisions (project_id, engine_id);
-"#;
-
-/// Memory proposals (journey J8): learnings from finished tasks awaiting
-/// review. Accepted entries live in the Project repo; `entry` keeps what was
-/// committed. A proposal from a status line names it, so a line is proposed
-/// once.
-const SCHEMA_V10: &str = r#"
-CREATE TABLE memory_proposals (
-    id            TEXT PRIMARY KEY,
-    project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    task_id       TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-    task_event_id INTEGER UNIQUE REFERENCES task_events(id) ON DELETE SET NULL,
-    text          TEXT NOT NULL,
-    evidence      TEXT NOT NULL,
-    source        TEXT NOT NULL,
-    state         TEXT NOT NULL,
-    proposed_at   TEXT NOT NULL,
-    decided_at    TEXT,
-    decided_by    TEXT,
-    entry         TEXT
-);
-CREATE INDEX memory_proposals_by_project ON memory_proposals (project_id, proposed_at);
-"#;
-
-/// Accounts and pools (ADR-11) are daemon configuration, not engine state.
-/// A harness's default account (`default-<harness>`) has no `accounts` row
-/// but can still be in pools and hold a quota reading. A task records the
-/// account it was started under; a Project records its coordinator's.
-const SCHEMA_V11: &str = r#"
-CREATE TABLE accounts (
-    id         TEXT PRIMARY KEY,
-    harness    TEXT NOT NULL,
-    label      TEXT NOT NULL,
-    config_dir TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE (harness, config_dir)
-);
-
-CREATE TABLE account_pools (
-    account_id TEXT NOT NULL,
-    pool       TEXT NOT NULL,
-    PRIMARY KEY (account_id, pool)
-);
-
-CREATE TABLE account_quota (
-    account_id TEXT PRIMARY KEY,
-    quota      TEXT NOT NULL
-);
-
-ALTER TABLE tasks ADD COLUMN account_id TEXT;
-ALTER TABLE projects ADD COLUMN coordinator_account_id TEXT;
-"#;
-
-/// Why each task got its agent (ADR-11), one row per worker spawn, as API
-/// JSON. History kept for scoring: no foreign key, so nothing that removes or
-/// cleans up a task removes its records, and nothing prunes them.
-const SCHEMA_V12: &str = r#"
-CREATE TABLE dispatch_records (
-    id          TEXT PRIMARY KEY,
-    task_id     TEXT NOT NULL,
-    project_id  TEXT NOT NULL,
-    generation  TEXT NOT NULL,
-    recorded_at TEXT NOT NULL,
-    record      TEXT NOT NULL,
-    UNIQUE (task_id, generation)
-);
-"#;
-
-/// Rate-limit failovers (ADR-11) per task, as API JSON, oldest first.
-const SCHEMA_V13: &str = r#"
-ALTER TABLE tasks ADD COLUMN failovers TEXT NOT NULL DEFAULT '[]';
-"#;
 
 /// A task whose status log the projector tails.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,7 +142,7 @@ impl Store {
         // on power loss but never corrupts, and it keeps terminal output
         // from costing an fsync per chunk.
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        migrate(&mut conn)?;
+        migrations::migrate(&mut conn)?;
         let (bus, _) = broadcast::channel(BUS_CAPACITY);
         Ok(Store {
             conn: Mutex::new(conn),
@@ -1554,94 +1271,6 @@ impl Store {
     }
 }
 
-fn migrate(conn: &mut Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version > SCHEMA_VERSION {
-        return Err(StoreError::Invalid(format!(
-            "database schema {version} is newer than this quarkd ({SCHEMA_VERSION})"
-        )));
-    }
-    if version < 1 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V1)?;
-        tx.pragma_update(None, "user_version", 1)?;
-        tx.commit()?;
-    }
-    if version < 2 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V2)?;
-        tx.pragma_update(None, "user_version", 2)?;
-        tx.commit()?;
-    }
-    if version < 3 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V3)?;
-        tx.pragma_update(None, "user_version", 3)?;
-        tx.commit()?;
-    }
-    if version < 4 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V4)?;
-        tx.pragma_update(None, "user_version", 4)?;
-        tx.commit()?;
-    }
-    if version < 5 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V5)?;
-        tx.pragma_update(None, "user_version", 5)?;
-        tx.commit()?;
-    }
-    if version < 6 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V6)?;
-        tx.pragma_update(None, "user_version", 6)?;
-        tx.commit()?;
-    }
-    if version < 7 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V7)?;
-        tx.pragma_update(None, "user_version", 7)?;
-        tx.commit()?;
-    }
-    if version < 8 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V8)?;
-        tx.pragma_update(None, "user_version", 8)?;
-        tx.commit()?;
-    }
-    if version < 9 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V9)?;
-        tx.pragma_update(None, "user_version", 9)?;
-        tx.commit()?;
-    }
-    if version < 10 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V10)?;
-        tx.pragma_update(None, "user_version", 10)?;
-        tx.commit()?;
-    }
-    if version < 11 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V11)?;
-        tx.pragma_update(None, "user_version", 11)?;
-        tx.commit()?;
-    }
-    if version < 12 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V12)?;
-        tx.pragma_update(None, "user_version", 12)?;
-        tx.commit()?;
-    }
-    if version < 13 {
-        let tx = conn.transaction()?;
-        tx.execute_batch(SCHEMA_V13)?;
-        tx.pragma_update(None, "user_version", 13)?;
-        tx.commit()?;
-    }
-    Ok(())
-}
-
 fn append_event(
     tx: &Transaction,
     events: &mut Vec<Event>,
@@ -2232,11 +1861,8 @@ mod tests {
             // an account (v11).
             let mut conn = Connection::open(&path).unwrap();
             let tx = conn.transaction().unwrap();
-            for sql in [
-                SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
-                SCHEMA_V8, SCHEMA_V9, SCHEMA_V10, SCHEMA_V11,
-            ] {
-                tx.execute_batch(sql).unwrap();
+            for m in &migrations::MIGRATIONS[..11] {
+                tx.execute_batch(m.sql).unwrap();
             }
             tx.execute(
                 "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('prj_1', 'demo', 't', 't')",
@@ -2258,7 +1884,7 @@ mod tests {
         let version: i64 = store
             .read(|c| Ok(c.query_row("PRAGMA user_version", [], |r| r.get(0))?))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, migrations::SCHEMA_VERSION);
         assert_eq!(
             store.get_task("tsk_1").unwrap().account_id.as_deref(),
             Some("acc_2")
