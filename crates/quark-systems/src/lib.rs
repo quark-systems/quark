@@ -1122,6 +1122,78 @@ pub struct TranscriptEntry {
     pub truncated: bool,
     /// RFC 3339 timestamp recorded by the harness, when present.
     pub ts: Option<String>,
+    /// What a `tool_call` does, in a form the UI can show without parsing the
+    /// harness's tool input. Absent on other roles, and on entries recorded
+    /// before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolInfo>,
+}
+
+/// What kind of work a tool call does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolKind {
+    /// Reads a file.
+    Read,
+    /// Changes an existing file.
+    Edit,
+    /// Creates or overwrites a file.
+    Write,
+    /// Runs a shell command.
+    Shell,
+    /// Searches file contents or names, or lists a directory.
+    Search,
+    /// Fetches a URL or searches the web.
+    Web,
+    /// Starts a subagent.
+    Agent,
+    /// Updates the agent's plan or todo list.
+    Plan,
+    /// Anything else, including MCP tools.
+    Other,
+}
+
+/// A readable summary of one tool call, derived from its input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ToolInfo {
+    pub kind: ToolKind,
+    /// One line for the reader, such as `Read src/parser.rs` or
+    /// `Run cargo test`.
+    pub title: String,
+    /// The file the call reads or changes; the first one when it changes
+    /// several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The full shell command, for `shell`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The search pattern or web query, for `search` and `web`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// Lines added, for `edit` and `write`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    /// Lines removed, for `edit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
+    /// The first lines of the change, for `edit` and `write`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diff: Vec<ToolDiffLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDiffLineKind {
+    Add,
+    Del,
+    Context,
+}
+
+/// One line of a [`ToolInfo`] diff preview.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ToolDiffLine {
+    pub kind: ToolDiffLineKind,
+    pub text: String,
 }
 
 /// A transcript entry as listed by the history endpoints.

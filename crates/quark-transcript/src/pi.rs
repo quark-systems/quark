@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use crate::{entry, input_text, str_at, text_of, tool_entry, TranscriptEntry, TranscriptRole};
+use crate::{entry, str_at, text_of, tool_call, tool_entry, TranscriptEntry, TranscriptRole};
 
 pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
     if str_at(v, "type") != Some("message") {
@@ -37,13 +37,12 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
                             ts,
                         ))
                     }
-                    Some("toolCall") => out.push(tool_entry(
-                        TranscriptRole::ToolCall,
-                        &input_text(b.get("arguments")),
+                    Some("toolCall") => out.push(tool_call(
+                        b.get("arguments"),
                         str_at(b, "name"),
                         str_at(b, "id"),
-                        false,
                         ts,
+                        None,
                     )),
                     _ => {}
                 }
@@ -64,13 +63,12 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
                 .get("exitCode")
                 .and_then(Value::as_i64)
                 .is_some_and(|c| c != 0);
-            out.push(tool_entry(
-                TranscriptRole::ToolCall,
-                command,
+            out.push(tool_call(
+                Some(&Value::String(command.to_string())),
                 Some("bash"),
                 None,
-                false,
                 ts,
+                None,
             ));
             out.push(tool_entry(
                 TranscriptRole::ToolResult,

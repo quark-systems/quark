@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use quark_transcript::{
-    locate, read_from, SessionFormat, SessionRoots, TranscriptEntry, TranscriptRole,
+    locate, read_from, SessionFormat, SessionRoots, ToolKind, TranscriptEntry, TranscriptRole,
 };
 
 use TranscriptRole::{Assistant, Thinking, ToolCall, ToolResult, User};
@@ -16,6 +16,18 @@ fn parse(format: SessionFormat, name: &str) -> Vec<TranscriptEntry> {
     let batch = read_from(&fixture(name), 0, format).unwrap();
     assert_eq!(batch.malformed, 0);
     batch.entries.into_iter().map(|(_, e)| e).collect()
+}
+
+/// Kind and title of each tool call's summary.
+fn tools(entries: &[TranscriptEntry]) -> Vec<(ToolKind, &str)> {
+    entries
+        .iter()
+        .filter(|e| e.role == ToolCall)
+        .map(|e| {
+            let t = e.tool.as_ref().expect("every tool call has a summary");
+            (t.kind, t.title.as_str())
+        })
+        .collect()
 }
 
 fn shape(entries: &[TranscriptEntry]) -> Vec<(TranscriptRole, &str, Option<&str>, bool)> {
@@ -53,6 +65,16 @@ fn claude_session_log() {
     assert_eq!(entries[2].tool_call_id.as_deref(), Some("toolu_1"));
     assert_eq!(entries[3].tool_call_id.as_deref(), Some("toolu_1"));
     assert_eq!(entries[0].ts.as_deref(), Some("2026-10-02T10:00:01.000Z"));
+    assert_eq!(
+        tools(&entries),
+        vec![
+            (ToolKind::Read, "Read src/parser.rs"),
+            (ToolKind::Shell, "Run cargo test")
+        ]
+    );
+    assert!(entries
+        .iter()
+        .all(|e| (e.role == ToolCall) == e.tool.is_some()));
 }
 
 #[test]
@@ -82,6 +104,13 @@ fn codex_rollout() {
     );
     assert_eq!(entries[2].tool_call_id.as_deref(), Some("call_1"));
     assert_eq!(entries[3].tool_call_id.as_deref(), Some("call_1"));
+    assert_eq!(
+        tools(&entries),
+        vec![
+            (ToolKind::Shell, "Run cargo test"),
+            (ToolKind::Edit, "Apply a patch")
+        ]
+    );
 }
 
 #[test]
@@ -100,6 +129,13 @@ fn pi_session_log() {
         ]
     );
     assert_eq!(entries[3].tool_call_id.as_deref(), Some("tc_1"));
+    assert_eq!(
+        tools(&entries),
+        vec![
+            (ToolKind::Read, "Read src/parser.rs"),
+            (ToolKind::Shell, "Run cargo test")
+        ]
+    );
 }
 
 #[test]

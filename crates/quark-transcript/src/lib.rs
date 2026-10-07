@@ -21,11 +21,15 @@ mod locate;
 mod pi;
 mod rate_limit;
 mod reader;
+mod tool;
 
 pub use locate::{locate, SessionRoots};
-pub use quark_systems::{TranscriptEntry, TranscriptRole};
+pub use quark_systems::{
+    ToolDiffLine, ToolDiffLineKind, ToolInfo, ToolKind, TranscriptEntry, TranscriptRole,
+};
 pub use rate_limit::RateLimit;
 pub use reader::{read_from, ReadBatch, MAX_BATCH_BYTES};
+pub use tool::MAX_DIFF_LINES;
 
 use serde_json::Value;
 
@@ -111,6 +115,7 @@ pub(crate) fn entry(role: TranscriptRole, text: &str, ts: Option<&str>) -> Optio
         is_error: false,
         truncated,
         ts: ts.map(str::to_string),
+        tool: None,
     })
 }
 
@@ -133,7 +138,33 @@ pub(crate) fn tool_entry(
         is_error,
         truncated,
         ts: ts.map(str::to_string),
+        tool: None,
     }
+}
+
+/// A tool call: its input as text, plus a readable [`ToolInfo`]. `cwd` is
+/// the agent's working directory when the log line records it.
+pub(crate) fn tool_call(
+    input: Option<&Value>,
+    name: Option<&str>,
+    call_id: Option<&str>,
+    ts: Option<&str>,
+    cwd: Option<&str>,
+) -> TranscriptEntry {
+    let mut e = tool_entry(
+        TranscriptRole::ToolCall,
+        &input_text(input),
+        name,
+        call_id,
+        false,
+        ts,
+    );
+    e.tool = Some(tool::describe(
+        name.unwrap_or(""),
+        input.unwrap_or(&Value::Null),
+        cwd,
+    ));
+    e
 }
 
 fn cap(s: &str) -> (String, bool) {

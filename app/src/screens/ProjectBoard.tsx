@@ -207,7 +207,7 @@ function Activity({ items }: { items: TranscriptItem[] }) {
         {errors > 0 && <span className="bad"> · {errors} failed</span>}
       </summary>
       {items.map((i) => (
-        <pre key={i.id} className={i.is_error ? "bad" : ""}>{(i.tool_name ? i.tool_name + ": " : "") + i.text}</pre>
+        <pre key={i.id} className={i.is_error ? "bad" : ""}>{i.tool ? i.tool.title : (i.tool_name ? i.tool_name + ": " : "") + i.text}</pre>
       ))}
     </details>
   );
