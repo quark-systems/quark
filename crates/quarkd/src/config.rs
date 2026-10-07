@@ -104,16 +104,19 @@ pub const SHADOWABLE: [Slice; 4] = [
     Slice::Supervision,
 ];
 
+/// The slices quarkd can run native: slice 1, whose reads the event log
+/// answers ([`crate::engine::shadow`]).
+pub const NATIVE: [Slice; 1] = [Slice::EventLog];
+
 /// Refuses any slice mode quarkd can't run: `shadow` outside
-/// [`SHADOWABLE`], and `native` for every slice, rather than silently
+/// [`SHADOWABLE`], and `native` outside [`NATIVE`], rather than silently
 /// ignoring it.
 pub fn check_slices(slices: &SliceSwitch) -> anyhow::Result<()> {
     for (slice, mode) in slices.modes() {
-        let shadowable = SHADOWABLE.contains(&slice);
         let ok = match mode {
             SliceMode::Bash => true,
-            SliceMode::Shadow => shadowable,
-            SliceMode::Native => false,
+            SliceMode::Shadow => SHADOWABLE.contains(&slice),
+            SliceMode::Native => NATIVE.contains(&slice),
         };
         if !ok {
             anyhow::bail!(
@@ -187,20 +190,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_slices_one_to_four_may_shadow() {
+    fn only_slices_one_to_four_may_shadow_and_only_slice_one_run_native() {
         for ok in [
             "",
             "1=shadow",
             "1=shadow,2=shadow",
             "1=shadow,2=shadow,3=shadow",
             "1=shadow,2=shadow,3=shadow,4=shadow",
+            "1=native",
+            "1=native,2=shadow,3=shadow,4=shadow",
         ] {
             assert!(
                 check_slices(&SliceSwitch::parse(ok).unwrap()).is_ok(),
                 "{ok}"
             );
         }
-        for bad in ["1=native", "1=shadow,2=shadow,3=shadow,4=shadow,5=shadow"] {
+        for bad in [
+            "1=native,2=native",
+            "1=shadow,2=shadow,3=shadow,4=shadow,5=shadow",
+        ] {
             let err = check_slices(&SliceSwitch::parse(bad).unwrap()).unwrap_err();
             assert!(
                 err.to_string().contains("no native engine for it yet"),

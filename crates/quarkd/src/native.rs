@@ -67,7 +67,7 @@ impl NativeSupervision {
         let sessions = PtyClient::start(&socket, &ptyd)
             .await
             .with_context(|| format!("starting {}", ptyd.display()))?;
-        let pool = crate::native_worktrees::pool(log.clone(), host.clone());
+        let pool = crate::native_worktrees::pool(log.clone(), host.clone()).await;
         let worktrees: Arc<dyn WorktreeProvider> =
             Arc::new(TreehouseProvider::new(pool).with_events(log.clone(), host.clone()));
         let (manifests, errors) = ManifestRegistry::load(&config.home.join("harnesses"));

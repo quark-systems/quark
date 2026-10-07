@@ -10,7 +10,7 @@
 //!   Writes go to firstmate only, so nothing acts twice. Comparing a native
 //!   *decision* for a write (for example a merge verdict) without acting on
 //!   it is each native slice's own job.
-//! - `native`: the native engine only.
+//! - `native`: the native engine only, except slice 1 (below).
 //!
 //! | Slice | Operations |
 //! |---|---|
@@ -27,6 +27,17 @@
 //! [`super::eventlog`]): which tasks exist, the state of those whose state
 //! firstmate read from the status log, their open decisions, and the status
 //! lines themselves.
+//!
+//! Slice 1 in `native` answers from the event log what its shadow
+//! compared, and nothing more: which tasks exist, the state of those whose
+//! state firstmate read from the status log, their keyed decisions, and the
+//! status lines. Everything else in a snapshot or the holds (queued work
+//! from the backlog, titles, terminals, worktrees, states read from a pane
+//! or validation run, captain holds) belongs to a later slice that is still
+//! firstmate's, so it still comes from firstmate. Firstmate stays the
+//! writer the log ingests from, so its watched directories still drive
+//! refreshes. If the log can't be read, firstmate's answer is served and a
+//! warning logged; if firstmate can't be read, the log's answer is.
 //!
 //! [`ShadowEngine::comparing`] limits which slices' reads go to the native
 //! engine; a shadow slice outside it is served by firstmate alone, because
@@ -297,6 +308,54 @@ impl ShadowEngine {
         }
     }
 
+    /// Slice 1 native: the event log's fleet, with firstmate filling in
+    /// what later slices own. Later slices' checks still judge firstmate's
+    /// snapshot.
+    async fn native_snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
+        let project = ws.project_id.as_str();
+        let bash = self.bash.snapshot(ws).await;
+        let native = self.native.snapshot(ws).await;
+        if let Ok(b) = &bash {
+            self.remember(project, b);
+            self.run_checks(ws, b).await;
+        }
+        match (bash, native) {
+            (Ok(b), Ok(n)) => Ok(compose_fleet(&b, &n)),
+            (Ok(b), Err(e)) => {
+                tracing::warn!(project, error = %e, "slice 1 native: event log unreadable, serving firstmate's snapshot");
+                Ok(b)
+            }
+            (Err(_), native) => native,
+        }
+    }
+
+    /// Slice 1 native: the event log's keyed decisions for the tasks whose
+    /// decisions it owns, firstmate's holds for the rest.
+    async fn native_holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
+        let project = ws.project_id.as_str();
+        let bash = self.bash.holds(ws).await;
+        let native = self.native.holds(ws).await;
+        let seen = self.seen.lock().unwrap().get(project).cloned();
+        match (bash, native, seen) {
+            (Ok(b), Ok(n), Some(seen)) => Ok(compose_holds(&seen, &b, &n)),
+            (Ok(b), Ok(_), None) => Ok(b),
+            (Ok(b), Err(e), _) => {
+                tracing::warn!(project, error = %e, "slice 1 native: event log unreadable, serving firstmate's holds");
+                Ok(b)
+            }
+            (Err(_), native, _) => native,
+        }
+    }
+
+    fn remember(&self, project: &str, bash: &FleetSnapshot) {
+        let seen: HashMap<String, Seen> = bash
+            .tasks
+            .iter()
+            .map(|t| (t.id.clone(), (t.state_source.clone(), t.state)))
+            .collect();
+        self.seen.lock().unwrap().insert(project.to_string(), seen);
+    }
+
     /// Slice 1's snapshot comparison; remembers firstmate's answer for
     /// [`Self::compare_holds`].
     fn compare_snapshot(
@@ -305,12 +364,7 @@ impl ShadowEngine {
         bash: &FleetSnapshot,
         native: &FleetSnapshot,
     ) -> Option<(serde_json::Value, serde_json::Value)> {
-        let seen: HashMap<String, Seen> = bash
-            .tasks
-            .iter()
-            .map(|t| (t.id.clone(), (t.state_source.clone(), t.state)))
-            .collect();
-        self.seen.lock().unwrap().insert(project.to_string(), seen);
+        self.remember(project, bash);
         fleet_view(bash, native)
     }
 
@@ -428,27 +482,74 @@ fn holds_view(
     bash: &[Hold],
     native: &[Hold],
 ) -> Option<(serde_json::Value, serde_json::Value)> {
-    let kept = |task: &Option<String>| {
-        let Some((source, state)) = task.as_ref().and_then(|t| seen.get(t)) else {
-            return false;
-        };
-        let moved_on = matches!(source.as_deref(), Some("run-step" | "pane"))
-            && !matches!(state, TaskState::NeedsDecision | TaskState::Blocked);
-        let finished = matches!(
-            state,
-            TaskState::InReview | TaskState::Done | TaskState::Failed
-        );
-        !moved_on && !finished
-    };
     let view = |holds: &[Hold]| {
         holds
             .iter()
-            .filter(|h| h.id.contains(':') && kept(&h.task_id))
+            .filter(|h| log_owns_hold(seen, h))
             .map(|h| (h.id.clone(), h.question.clone()))
             .collect::<BTreeMap<_, _>>()
     };
     let (b, n) = (view(bash), view(native));
     (b != n).then(|| (serde_json::json!(b), serde_json::json!(n)))
+}
+
+/// Whether `hold` is a keyed decision of a task whose open decisions
+/// firstmate keeps from the status log ([`holds_view`]), so the event log
+/// can answer it.
+fn log_owns_hold(seen: &HashMap<String, Seen>, hold: &Hold) -> bool {
+    let Some((source, state)) = hold.task_id.as_ref().and_then(|t| seen.get(t)) else {
+        return false;
+    };
+    let moved_on = matches!(source.as_deref(), Some("run-step" | "pane"))
+        && !matches!(state, TaskState::NeedsDecision | TaskState::Blocked);
+    let finished = matches!(
+        state,
+        TaskState::InReview | TaskState::Done | TaskState::Failed
+    );
+    hold.id.contains(':') && !moved_on && !finished
+}
+
+/// Slice 1 native's fleet: the tasks the event log knows, each task's
+/// status-log state from the log, and firstmate's queued work and every
+/// field the log doesn't carry ([`fleet_view`] compares the same parts).
+fn compose_fleet(bash: &FleetSnapshot, native: &FleetSnapshot) -> FleetSnapshot {
+    let ours: HashMap<&str, &super::EngineTask> =
+        native.tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut tasks = Vec::with_capacity(bash.tasks.len());
+    for t in &bash.tasks {
+        if t.state == TaskState::Queued {
+            tasks.push(t.clone());
+            continue;
+        }
+        let Some(n) = ours.get(t.id.as_str()) else {
+            continue;
+        };
+        let mut t = t.clone();
+        if t.state_source.as_deref() == Some(STATUS_LOG) {
+            t.state = n.state;
+            t.state_note = n.state_note.clone();
+            t.state_source = n.state_source.clone();
+        }
+        tasks.push(t);
+    }
+    tasks.extend(
+        native
+            .tasks
+            .iter()
+            .filter(|n| !bash.tasks.iter().any(|t| t.id == n.id))
+            .cloned(),
+    );
+    FleetSnapshot { tasks }
+}
+
+/// Slice 1 native's holds: the event log's for the decisions it owns
+/// ([`log_owns_hold`]), firstmate's for the rest.
+fn compose_holds(seen: &HashMap<String, Seen>, bash: &[Hold], native: &[Hold]) -> Vec<Hold> {
+    bash.iter()
+        .filter(|h| !log_owns_hold(seen, h))
+        .chain(native.iter().filter(|h| log_owns_hold(seen, h)))
+        .cloned()
+        .collect()
 }
 
 /// Slice 1's status tail comparison. The native read runs second, so a
@@ -497,6 +598,9 @@ impl EngineAdapter for ShadowEngine {
 
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
         let project = ws.project_id.as_str();
+        if self.mode(Slice::EventLog) == SliceMode::Native {
+            return self.native_snapshot(ws).await;
+        }
         let snapshot = self
             .read_compared(
                 Slice::EventLog,
@@ -530,6 +634,9 @@ impl EngineAdapter for ShadowEngine {
 
     async fn holds(&self, ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
         let project = ws.project_id.as_str();
+        if self.mode(Slice::EventLog) == SliceMode::Native {
+            return self.native_holds(ws).await;
+        }
         self.read_compared(
             Slice::EventLog,
             "holds",
@@ -540,12 +647,14 @@ impl EngineAdapter for ShadowEngine {
         .await
     }
 
+    // Firstmate's files, which the event log ingests on every read, until
+    // a later slice makes the native engine the writer.
     fn watch_dirs(&self, ws: &WorkspaceRef) -> Vec<PathBuf> {
-        self.acting(Slice::EventLog).watch_dirs(ws)
+        self.bash.watch_dirs(ws)
     }
 
     fn is_task_change(&self, path: &Path) -> bool {
-        self.acting(Slice::EventLog).is_task_change(path)
+        self.bash.is_task_change(path)
     }
 
     async fn send_message(
@@ -857,6 +966,72 @@ mod tests {
         r.engine.set_crew_dispatch(&ws(), "{}").await.unwrap();
         assert_eq!(r.bash.writes().len(), 1);
         assert!(r.log.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn slice_one_native_serves_the_log_and_firstmate_fills_the_rest() {
+        let r = rig("1=native,2=shadow");
+        let mut pane = task("t2", TaskState::Running);
+        pane.state_source = Some("pane".into());
+        pane.terminal = Some("fm:fm-t2".into());
+        let mut t1 = task("t1", TaskState::Running);
+        t1.title = "Fix the thing".into();
+        t1.worktree = Some("/wt/1".into());
+        r.bash.set_snapshot(FleetSnapshot {
+            tasks: vec![t1, pane, task("q1", TaskState::Queued)],
+        });
+        let mut logged = task("t1", TaskState::Blocked);
+        logged.state_source = Some("event-log".into());
+        r.native.set_snapshot(FleetSnapshot {
+            tasks: vec![
+                logged,
+                task("t2", TaskState::Blocked),
+                task("t3", TaskState::Running),
+            ],
+        });
+        let snap = r.engine.snapshot(&ws()).await.unwrap();
+        let by: HashMap<&str, &EngineTask> =
+            snap.tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+        // The status-log state is the log's; the rest is firstmate's.
+        assert_eq!(by["t1"].state, TaskState::Blocked);
+        assert_eq!(by["t1"].state_source.as_deref(), Some("event-log"));
+        assert_eq!(by["t1"].title, "Fix the thing");
+        assert_eq!(by["t1"].worktree.as_deref(), Some(Path::new("/wt/1")));
+        // A pane state belongs to supervision, still firstmate's.
+        assert_eq!(by["t2"].state, TaskState::Running);
+        assert_eq!(by["t2"].terminal.as_deref(), Some("fm:fm-t2"));
+        assert_eq!(by["q1"].state, TaskState::Queued);
+        assert!(by.contains_key("t3"));
+        assert_eq!(snap.tasks.len(), 4);
+
+        // Keyed decisions of status-log tasks come from the log; captain
+        // holds and pane tasks' decisions stay firstmate's.
+        r.bash.set_holds(vec![
+            hold("t1:k", "firstmate's"),
+            hold("t2:k", "pane"),
+            Hold {
+                id: "captain-1".into(),
+                task_id: None,
+                question: "merge?".into(),
+                answer: None,
+                answered_by: None,
+            },
+        ]);
+        r.native
+            .set_holds(vec![hold("t1:k", "the log's"), hold("t2:k", "log pane")]);
+        let holds = r.engine.holds(&ws()).await.unwrap();
+        let qs: BTreeMap<&str, &str> = holds
+            .iter()
+            .map(|h| (h.id.as_str(), h.question.as_str()))
+            .collect();
+        assert_eq!(qs["t1:k"], "the log's");
+        assert_eq!(qs["t2:k"], "pane");
+        assert_eq!(qs["captain-1"], "merge?");
+        assert_eq!(holds.len(), 3);
+
+        // Native acts, so nothing is recorded as a divergence.
+        assert!(r.log.events().is_empty());
+        assert!(r.bash.writes().is_empty());
     }
 
     #[tokio::test]

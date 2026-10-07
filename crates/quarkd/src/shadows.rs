@@ -78,6 +78,9 @@ pub fn all_slices() -> SliceSwitch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Started {
     pub slices: Vec<Slice>,
+    /// Slices running native.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native: Vec<Slice>,
 }
 
 /// Record that a daemon started. Call before anything else appends.
@@ -97,16 +100,23 @@ pub async fn record_daemon_started(log: &dyn EventLog, host: quark_core::HostId)
     }
 }
 
-/// Record that this start runs the shadows of `slices`.
-pub async fn record_started(log: &dyn EventLog, host: quark_core::HostId, slices: Vec<Slice>) {
+/// Record that this start runs the shadows of `slices`, and runs `native`
+/// natively.
+pub async fn record_started(
+    log: &dyn EventLog,
+    host: quark_core::HostId,
+    slices: Vec<Slice>,
+    native: Vec<Slice>,
+) {
     let names: Vec<&str> = slices.iter().map(|s| s.as_str()).collect();
-    tracing::info!(shadows = ?names, "shadows running");
+    let natives: Vec<&str> = native.iter().map(|s| s.as_str()).collect();
+    tracing::info!(shadows = ?names, native = ?natives, "shadows running");
     let event = NewEvent::typed(
         host,
         ProjectId::engine(),
         None,
         STARTED,
-        &Started { slices },
+        &Started { slices, native },
     );
     if let Err(e) = match event {
         Ok(e) => log.append(e).await.map(drop),
@@ -186,6 +196,8 @@ pub struct ReadinessModel {
     log: SqliteEventLog,
     after: Seq,
     starts: Vec<(OffsetDateTime, BTreeSet<Slice>)>,
+    /// The slices the latest start ran native.
+    native: BTreeSet<Slice>,
     slices: HashMap<Slice, SliceFold>,
 }
 
@@ -203,6 +215,7 @@ impl ReadinessModel {
             log,
             after: Seq::ZERO,
             starts: Vec::new(),
+            native: BTreeSet::new(),
             slices: HashMap::new(),
         }
     }
@@ -226,6 +239,7 @@ impl ReadinessModel {
             STARTED => {
                 if let Ok(s) = e.decode::<Started>() {
                     self.starts.push((e.ts, s.slices.into_iter().collect()));
+                    self.native = s.native.into_iter().collect();
                 }
             }
             kinds::SHADOW_DIVERGENCE => {
@@ -286,7 +300,9 @@ impl ReadinessModel {
                 let on_since = self.on_since(spec.slice);
                 let on = latest.is_some_and(|(_, s)| s.contains(&spec.slice));
                 let divergences = in_window.len() as u64;
-                let status = if !spec.compares {
+                let status = if self.native.contains(&spec.slice) {
+                    ShadowStatus::Native
+                } else if !spec.compares {
                     ShadowStatus::NoCheck
                 } else if divergences > 0 {
                     ShadowStatus::Diverging
@@ -304,6 +320,9 @@ impl ReadinessModel {
                     switch: spec.switch.map(str::to_string),
                     note: spec.note.to_string(),
                     on_since: on_since.map(rfc3339),
+                    agrees_at: (status == ShadowStatus::Watching)
+                        .then(|| on_since.map(|t| rfc3339(t + Duration::days(days.into()))))
+                        .flatten(),
                     divergences,
                     operations,
                     last_divergence_at: fold.and_then(|f| f.seen.last()).map(|(t, _)| rfc3339(*t)),
@@ -325,6 +344,7 @@ impl ReadinessModel {
             latest_start: latest.map(|(at, s)| ShadowStart {
                 at: rfc3339(*at),
                 slices: s.iter().map(|x| x.as_str().to_string()).collect(),
+                native: self.native.iter().map(|x| x.as_str().to_string()).collect(),
             }),
             slices,
             error: None,
@@ -377,6 +397,9 @@ pub fn render(r: &ShadowReadiness) -> String {
             let _ = writeln!(out, "No daemon start recorded which shadows ran");
         }
     }
+    if let Some(s) = r.latest_start.as_ref().filter(|s| !s.native.is_empty()) {
+        let _ = writeln!(out, "Running native: {}", s.native.join(", "));
+    }
     let _ = writeln!(out);
     let _ = writeln!(
         out,
@@ -404,6 +427,13 @@ pub fn render(r: &ShadowReadiness) -> String {
         let _ = writeln!(out, "{} {}: {}", s.number, s.slice, s.note);
         if let Some(sw) = &s.switch {
             let _ = writeln!(out, "  on with: {sw}");
+        }
+        if let Some(at) = &s.agrees_at {
+            let _ = writeln!(
+                out,
+                "  agreeing from: {} if it keeps running and nothing diverges",
+                short_time(at)
+            );
         }
         if !s.operations.is_empty() {
             let ops: Vec<String> = s
@@ -441,6 +471,7 @@ fn status_label(s: ShadowStatus) -> &'static str {
         ShadowStatus::Watching => "watching",
         ShadowStatus::Diverging => "diverging",
         ShadowStatus::Agreeing => "agreeing",
+        ShadowStatus::Native => "native",
     }
 }
 
@@ -490,6 +521,7 @@ mod tests {
     fn started(slices: &[Slice]) -> serde_json::Value {
         serde_json::to_value(Started {
             slices: slices.to_vec(),
+            native: vec![],
         })
         .unwrap()
     }
@@ -598,10 +630,12 @@ mod tests {
         assert!(d.examples[0].native.ends_with('…'));
         assert_eq!(d.examples[0].task.as_deref(), Some("t1"));
 
-        assert_eq!(
-            slice(&r, Slice::WorktreePool).status,
-            ShadowStatus::Watching
-        );
+        let w = slice(&r, Slice::WorktreePool);
+        assert_eq!(w.status, ShadowStatus::Watching);
+        let on = OffsetDateTime::parse(w.on_since.as_deref().unwrap(), &Rfc3339).unwrap();
+        let agrees = OffsetDateTime::parse(w.agrees_at.as_deref().unwrap(), &Rfc3339).unwrap();
+        assert_eq!(agrees - on, Duration::days(7));
+        assert!(v.agrees_at.is_none());
         // Diverged inside the window even though it is off now.
         assert_eq!(
             slice(&r, Slice::SubCoordinators).status,
@@ -625,5 +659,29 @@ mod tests {
         let r = model.report(DEFAULT_DAYS, now);
         assert_eq!(slice(&r, Slice::WorktreePool).status, ShadowStatus::Off);
         assert!(render(&r).contains("no shadows on"));
+    }
+
+    #[tokio::test]
+    async fn a_slice_switched_native_reads_native() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let now = OffsetDateTime::now_utc();
+        let payload = serde_json::to_value(Started {
+            slices: vec![Slice::Verification],
+            native: vec![Slice::EventLog],
+        })
+        .unwrap();
+        append(&log, at(60, now), STARTED, payload).await;
+        let mut model = ReadinessModel::new(log);
+        model.catch_up().await.unwrap();
+        let r = model.report(DEFAULT_DAYS, now);
+        assert_eq!(slice(&r, Slice::EventLog).status, ShadowStatus::Native);
+        assert_eq!(
+            slice(&r, Slice::Verification).status,
+            ShadowStatus::Watching
+        );
+        let text = render(&r);
+        assert!(text.contains("Running native: event_log"), "{text}");
+        assert!(text.contains("agreeing from:"), "{text}");
     }
 }

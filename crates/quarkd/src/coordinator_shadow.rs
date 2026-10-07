@@ -84,7 +84,7 @@ mod tests {
         let db = tempfile::tempdir().unwrap();
         let log = SqliteEventLog::open(db.path().join("events.db")).unwrap();
         let host = HostId::from("h");
-        crate::shadows::record_started(&log, host.clone(), vec![Slice::Coordinator]).await;
+        crate::shadows::record_started(&log, host.clone(), vec![Slice::Coordinator], vec![]).await;
 
         // A turn firstmate took well after the start, then the log moves on.
         let later: OffsetDateTime = OffsetDateTime::now_utc() + WINDOW * 2;

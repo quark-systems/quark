@@ -183,7 +183,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             host_view,
             log.clone(),
             event_ingest::host(),
-            native_worktrees::pool(log.clone(), event_ingest::host()),
+            native_worktrees::pool(log.clone(), event_ingest::host()).await,
         );
         (telemetry, Some(tokio::spawn(pools.run())))
     } else {
@@ -304,14 +304,20 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             (Slice::Coordinator, coordinator_task.is_some()),
             (Slice::SubCoordinators, triggers_task.is_some()),
             (Slice::Sandbox, dashboard_shadow),
-            (Slice::WorktreePool, native_worktrees::enabled()),
+            (Slice::WorktreePool, native_worktrees::shadowing()),
         ];
         let on = running
             .into_iter()
             .filter(|(_, on)| *on)
             .map(|(s, _)| s)
             .collect();
-        shadows::record_started(&events, event_ingest::host(), on).await;
+        let native = slices
+            .modes()
+            .into_iter()
+            .filter(|(_, m)| *m == quark_core::SliceMode::Native)
+            .map(|(s, _)| s)
+            .collect();
+        shadows::record_started(&events, event_ingest::host(), on, native).await;
     }
     // After the start is recorded, so the judge knows the shadow is watching.
     let wake_task = coordinator_task.is_some().then(|| {
