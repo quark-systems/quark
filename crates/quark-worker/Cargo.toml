@@ -1,0 +1,23 @@
+[package]
+name = "quark-worker"
+description = "The worker protocol: MCP tools, harness hook ingest and a status-file fallback, all recorded in the event log."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v8"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5.3", features = ["util"] }
