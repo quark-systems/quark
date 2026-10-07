@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OverviewDigest } from "../../api";
-import { summarize } from "./overview";
+import { summarize } from "./summary";
 
 const digest = (d: Partial<OverviewDigest>): OverviewDigest => ({
   since: 0, events: 0, spawned: 0, done: 0, pull_requests: 0, failed: 0, decisions_opened: 0, decisions_resolved: 0,
