@@ -747,6 +747,7 @@ test("overview: live status now, and what changed since you last looked", async 
   await expect(highlights.nth(1)).toContainText("Cancelled from the app");
   await highlights.nth(1).getByRole("link", { name: "Event stream" }).click();
   await expect(page).toHaveURL(/#\/t\//);
+  await expect(page.getByTestId("task-state")).toBeVisible();
 
   // The next visit starts where this one began.
   await page.goBack();
