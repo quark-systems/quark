@@ -484,6 +484,7 @@ impl EngineAdapter for FirstmateEngine {
         ws: &WorkspaceRef,
         agent: &AgentConfig,
         account_env: &[(String, String)],
+        resume: bool,
     ) -> Result<(), EngineError> {
         let op = WriteOp::SpawnSecondmate {
             id: ws.project_id.clone(),
@@ -491,6 +492,7 @@ impl EngineAdapter for FirstmateEngine {
             harness: engine_harness(&agent.harness).to_string(),
             model: agent.model.clone(),
             effort: agent.effort.clone(),
+            resume,
         };
         let out = self.write_env(command, op, account_env).await?;
         write::parse_spawned(&out).map_err(convert)?;

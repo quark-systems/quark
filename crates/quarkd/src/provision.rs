@@ -293,7 +293,7 @@ impl Provisioner {
             "Starting the coordinator",
             "start_coordinator",
             self.engine
-                .start_coordinator(&command, &ws, &agent, &account_env),
+                .start_coordinator(&command, &ws, &agent, &account_env, false),
         )
         .await?;
 

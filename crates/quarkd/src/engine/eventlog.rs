@@ -216,6 +216,7 @@ impl EngineAdapter for EventLogEngine {
         _: &WorkspaceRef,
         _: &AgentConfig,
         _: &[(String, String)],
+        _: bool,
     ) -> Result<(), EngineError> {
         Self::refuse("start_coordinator")
     }

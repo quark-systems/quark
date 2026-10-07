@@ -255,9 +255,10 @@ impl EngineAdapter for Watched {
         ws: &WorkspaceRef,
         agent: &AgentConfig,
         account_env: &[(String, String)],
+        resume: bool,
     ) -> Result<(), EngineError> {
         self.inner
-            .start_coordinator(command, ws, agent, account_env)
+            .start_coordinator(command, ws, agent, account_env, resume)
             .await
     }
     fn watch_dirs(&self, _ws: &WorkspaceRef) -> Vec<PathBuf> {

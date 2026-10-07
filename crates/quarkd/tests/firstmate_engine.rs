@@ -551,6 +551,7 @@ async fn provisioning_runs_project_add_seed_and_spawn() {
             pool: None,
         },
         &[],
+        false,
     )
     .await
     .unwrap();
@@ -686,6 +687,7 @@ async fn engine_scripts_run_on_the_daemons_tmux_server() {
             pool: Some("max".into()),
         },
         &[("CLAUDE_CONFIG_DIR".into(), "/accounts/claude-work".into())],
+        false,
     )
     .await
     .unwrap();
@@ -746,6 +748,7 @@ async fn engine_scripts_run_on_the_daemons_tmux_server() {
                     pool: None,
                 },
                 &[(env.0.into(), env.1.into())],
+                false,
             )
             .await
             .unwrap_err();

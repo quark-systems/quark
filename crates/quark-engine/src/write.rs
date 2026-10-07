@@ -137,13 +137,17 @@ pub enum WriteOp {
         scope: String,
     },
     /// Launch a seeded secondmate's agent:
-    /// `fm-spawn.sh <id> <home> --harness <h> [--model <m>] [--effort <e>] --secondmate`.
+    /// `fm-spawn.sh <id> <home> --harness <h> [--model <m>] [--effort <e>] --secondmate [--continue]`.
+    /// With `resume`, a secondmate whose agent is gone comes back in its
+    /// latest conversation (`--continue`, from the quark-systems firstmate
+    /// fork); the script refuses it on a first spawn.
     SpawnSecondmate {
         id: String,
         home: PathBuf,
         harness: String,
         model: Option<String>,
         effort: Option<String>,
+        resume: bool,
     },
     /// Merge a task's pull request through the engine's guarded merge, which
     /// re-reads it live and refuses unless it is green and mergeable:
@@ -403,6 +407,7 @@ impl WriteOp {
                 harness,
                 model,
                 effort,
+                resume,
             } => {
                 let home = check_home(home).map_err(invalid)?;
                 check_token("harness", harness).map_err(invalid)?;
@@ -416,6 +421,9 @@ impl WriteOp {
                     argv.extend(["--effort".into(), e.clone()]);
                 }
                 argv.push("--secondmate".into());
+                if *resume {
+                    argv.push("--continue".into());
+                }
                 Ok(argv)
             }
             WriteOp::PrMerge {
@@ -1051,6 +1059,7 @@ mod tests {
             harness: "codex".into(),
             model: Some("gpt-5.6".into()),
             effort: Some("high".into()),
+            resume: false,
         };
         assert_eq!(
             op.argv().unwrap(),
@@ -1072,8 +1081,28 @@ mod tests {
             harness: "-x".into(),
             model: None,
             effort: None,
+            resume: false,
         };
         assert!(bad.argv().is_err());
+        let resumed = WriteOp::SpawnSecondmate {
+            id: "prj_1".into(),
+            home: "/q/workspaces/prj_1".into(),
+            harness: "claude".into(),
+            model: None,
+            effort: None,
+            resume: true,
+        };
+        assert_eq!(
+            resumed.argv().unwrap(),
+            vec![
+                "prj_1",
+                "/q/workspaces/prj_1",
+                "--harness",
+                "claude",
+                "--secondmate",
+                "--continue"
+            ]
+        );
     }
 
     #[test]

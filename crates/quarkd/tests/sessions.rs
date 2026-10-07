@@ -435,3 +435,80 @@ async fn projector_maps_coordinators_from_the_command_center() {
     sessions.detach_all();
     server.kill().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovery_restarts_a_lost_server_and_resumes_missing_coordinators() {
+    use quark_systems::AgentConfig;
+    use quarkd::accounts::{Accounts, StubQuota};
+    use quarkd::engine::StubWrite;
+    use quarkd::harness::HarnessRegistry;
+    use quarkd::recovery::CoordinatorRecovery;
+
+    if !tmux_installed() {
+        eprintln!("tmux is not installed; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let project = store
+        .create_project(CreateProject {
+            name: "p".into(),
+            goal: None,
+            workspace_path: Some(dir.path().join("ws").display().to_string()),
+            agent_config: Some(AgentConfig {
+                harness: "claude-code".into(),
+                model: None,
+                effort: None,
+                pool: None,
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    let engine = Arc::new(StubEngine::new());
+    let accounts = Arc::new(Accounts::new(
+        store.clone(),
+        Arc::new(HarnessRegistry::builtin()),
+        Arc::new(StubQuota::new()),
+        &[],
+    ));
+    let sessions = Sessions::new("tmux", dir.path().join("run"), store.clone()).unwrap();
+    let server = sessions.server().unwrap().clone();
+    let target = sessions.start_window(&shell("fm-coord")).await.unwrap();
+    engine.set_coordinators(HashMap::from([(project.id.clone(), target)]));
+    let recovery = CoordinatorRecovery::new(
+        store.clone(),
+        engine.clone(),
+        accounts,
+        sessions.clone(),
+        dir.path().join("command"),
+    );
+    let starts = || {
+        engine
+            .writes()
+            .into_iter()
+            .filter_map(|w| match w {
+                StubWrite::StartCoordinator {
+                    project_id, resume, ..
+                } => Some((project_id, resume)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // A listed window is left alone.
+    recovery.pass().await;
+    assert!(starts().is_empty());
+
+    // The server dies with the coordinator: it starts again, and the
+    // coordinator is relaunched into its conversation, once.
+    server.kill().await;
+    assert!(!server.is_running().await);
+    recovery.pass().await;
+    assert!(server.is_running().await);
+    assert_eq!(starts(), vec![(project.id.clone(), true)]);
+    recovery.pass().await;
+    assert_eq!(starts().len(), 1, "retried within the retry window");
+
+    sessions.detach_all();
+    server.kill().await;
+}

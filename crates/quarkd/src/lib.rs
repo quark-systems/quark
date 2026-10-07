@@ -35,6 +35,7 @@ pub mod pr_center;
 pub mod project_repo;
 pub mod projector;
 pub mod provision;
+pub mod recovery;
 pub mod sessions;
 pub mod settings;
 pub mod shadows;
@@ -176,6 +177,19 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         (None, None)
     };
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
+    // Coordinators come back after the tmux server is lost or a reboot.
+    let recovery_task = firstmate.then(|| {
+        tokio::spawn(
+            recovery::CoordinatorRecovery::new(
+                store.clone(),
+                engine.clone(),
+                accounts.clone(),
+                sessions.clone(),
+                layout.command_workspace(),
+            )
+            .run(recovery::INTERVAL),
+        )
+    });
     let native = if native::enabled() {
         match native::NativeSupervision::start(&config, Arc::new(events.clone())).await {
             Ok(n) => Some(n),
@@ -315,6 +329,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     projector_task.abort();
+    if let Some(t) = recovery_task {
+        t.abort();
+    }
     ingest_task.abort();
     if let Some(t) = triggers_task {
         t.abort();
