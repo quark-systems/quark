@@ -151,7 +151,12 @@ async fn hosts_view_and_project_slice() {
     assert_eq!(workloads[0].worktree.as_deref(), Some(wt.as_path()));
 
     // The pool report lists the task's worktree, and only records changes.
-    let mut pools = PoolReporter::new(view, log.clone(), "mac".into());
+    let mut pools = PoolReporter::new(
+        view,
+        log.clone(),
+        "mac".into(),
+        Arc::new(quark_worktree::TreehouseCli::new()),
+    );
     pools.report_once().await.unwrap();
     pools.report_once().await.unwrap();
     let reports = f

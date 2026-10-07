@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use quark_core::worktree::{Holder, SlotState, WorktreeProvider};
 use quark_core::{EventLog, HostId, NewEvent, ProjectId, Result, TaskId};
 use quark_hosts::{Workload, Workloads};
-use quark_worktree::TreehouseProvider;
+use quark_worktree::{Pool, TreehouseProvider};
 
 use crate::engine::{EngineAdapter, WorkspaceRef};
 use crate::hosts::{PoolReport, PoolSlot, WORKTREES};
@@ -206,15 +206,23 @@ pub struct PoolReporter {
     view: EngineView,
     log: Arc<dyn EventLog>,
     host: HostId,
+    /// Treehouse, or treehouse shadowed by the native pool.
+    pool: Arc<dyn Pool>,
     last: Option<PoolReport>,
 }
 
 impl PoolReporter {
-    pub fn new(view: EngineView, log: Arc<dyn EventLog>, host: HostId) -> Self {
+    pub fn new(
+        view: EngineView,
+        log: Arc<dyn EventLog>,
+        host: HostId,
+        pool: Arc<dyn Pool>,
+    ) -> Self {
         Self {
             view,
             log,
             host,
+            pool,
             last: None,
         }
     }
@@ -235,7 +243,7 @@ impl PoolReporter {
     pub async fn report_once(&mut self) -> Result<()> {
         let workspaces = self.view.workspaces().await;
         let placed = self.view.placed(&workspaces).await;
-        let report = read_pools(&workspaces, &placed).await;
+        let report = read_pools(&self.pool, &workspaces, &placed).await;
         if self.last.as_ref() == Some(&report) {
             return Ok(());
         }
@@ -269,7 +277,11 @@ fn clones(root: &Path) -> Vec<PathBuf> {
 
 /// Every pool slot of every workspace's clones, plus task worktrees no pool
 /// reported, as in use by their task.
-async fn read_pools(workspaces: &[WorkspaceRef], placed: &[Placed]) -> PoolReport {
+async fn read_pools(
+    pool: &Arc<dyn Pool>,
+    workspaces: &[WorkspaceRef],
+    placed: &[Placed],
+) -> PoolReport {
     let mut slots = Vec::new();
     let mut errors = BTreeSet::new();
     for ws in workspaces {
@@ -277,7 +289,7 @@ async fn read_pools(workspaces: &[WorkspaceRef], placed: &[Placed]) -> PoolRepor
         if repos.is_empty() {
             continue;
         }
-        let provider = TreehouseProvider::treehouse();
+        let provider = TreehouseProvider::new(pool.clone());
         for r in &repos {
             provider.add_repo(r);
         }
