@@ -460,9 +460,58 @@ impl Limited {
     }
 }
 
+/// The branch checked out in the working tree at `path`, read from its git
+/// files without running git. `None` when it is not a git working tree or
+/// its HEAD is detached.
+pub fn current_branch(path: &Path) -> Option<String> {
+    let dot_git = path.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else {
+        // A linked worktree: `.git` is a file naming its git directory.
+        let text = std::fs::read_to_string(&dot_git).ok()?;
+        let dir = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        if dir.is_absolute() {
+            dir
+        } else {
+            path.join(dir)
+        }
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    head.trim()
+        .strip_prefix("ref: refs/heads/")
+        .filter(|b| !b.is_empty())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_branch_of_a_checkout_and_of_a_linked_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
+        std::fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            main.join(".git/worktrees/wt/HEAD"),
+            "ref: refs/heads/claude/fix-42\n",
+        )
+        .unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(
+            wt.join(".git"),
+            format!("gitdir: {}\n", main.join(".git/worktrees/wt").display()),
+        )
+        .unwrap();
+        assert_eq!(current_branch(&main).as_deref(), Some("main"));
+        assert_eq!(current_branch(&wt).as_deref(), Some("claude/fix-42"));
+        std::fs::write(main.join(".git/HEAD"), "0123abcd\n").unwrap();
+        assert_eq!(current_branch(&main), None);
+        assert_eq!(current_branch(dir.path()), None);
+    }
 
     #[test]
     fn name_status_with_renames() {

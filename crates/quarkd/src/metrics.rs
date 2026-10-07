@@ -6,6 +6,9 @@
 //! A task is finished when its latest `working`, `needs-decision`,
 //! `blocked`, `done` or `failed` line is `done` or `failed`; a later
 //! `resolved` or `paused` line does not reopen it.
+//!
+//! Tokens and spend come from `usage.turn` events ([`crate::usage`]), each
+//! placed in time by when its turn started.
 
 use std::collections::BTreeMap;
 
@@ -15,7 +18,8 @@ use quark_engine::meta::SpawnMeta;
 use quark_eventlog::firstmate::{kinds, StatusPayload};
 use quark_systems::{
     AccountFailover, CoordinatorMetrics, CoordinatorTurns, DayCount, Failovers, GateMetrics,
-    Interventions, LeadTime, ProjectMetrics, Throughput, UnavailableMetric,
+    Interventions, LeadTime, ModelSpend, ProjectMetrics, SpendMetrics, Throughput, TokenSpend,
+    UnavailableMetric,
 };
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
@@ -116,6 +120,7 @@ pub fn compute(
         }
     }
 
+    let mut done_tasks: Vec<&TaskId> = Vec::new();
     let mut per_day: Vec<DayCount> = (0..days)
         .map(|i| DayCount {
             date: (first_day + Duration::days(i64::from(i))).to_string(),
@@ -126,7 +131,7 @@ pub fn compute(
     let mut throughput = Throughput::default();
     let mut lead = Vec::new();
     let mut first_time_green = 0;
-    for story in tasks.values() {
+    for (task, story) in &tasks {
         let Some((verb, at)) = &story.last else {
             continue;
         };
@@ -136,6 +141,7 @@ pub fn compute(
         let day = (at.date() - first_day).whole_days() as usize;
         match verb.as_str() {
             "done" => {
+                done_tasks.push(task);
                 throughput.done += 1;
                 if let Some(d) = per_day.get_mut(day) {
                     d.done += 1;
@@ -169,13 +175,31 @@ pub fn compute(
         }
     }
 
-    let coordinator = coordinator(events, in_window);
-    let mut unavailable = vec![UnavailableMetric {
-        metric: "spend".into(),
-        reason:
-            "Workers' token use and cost are not recorded yet; quota per account is shown instead."
-                .into(),
-    }];
+    let mut coordinator = coordinator(events, in_window);
+    let spend = spend(events, in_window, &done_tasks);
+    // firstmate's coordinator transcript is read for the baseline only when
+    // it runs Claude Code; its turns' tokens are known for any harness.
+    if coordinator.baseline.turns == 0 && spend.coordinator.turns > 0 {
+        let c = &spend.coordinator;
+        let per = |n: f64| (coordinator.tasks > 0).then(|| n / f64::from(coordinator.tasks));
+        coordinator.baseline = CoordinatorTurns {
+            turns: c.turns,
+            ack_turns: 0,
+            input_tokens: c.input_tokens,
+            output_tokens: c.output_tokens,
+            cache_read_tokens: c.cache_read_tokens,
+            turns_per_task: per(f64::from(c.turns)),
+            tokens_per_task: per((c.input_tokens + c.output_tokens) as f64),
+            ack_share: None,
+        };
+    }
+    let mut unavailable = Vec::new();
+    if spend.workers.turns == 0 && spend.coordinator.turns == 0 {
+        unavailable.push(UnavailableMetric {
+            metric: "spend".into(),
+            reason: "No worker or coordinator turn with token counts is in the event log for this window yet. They are read from the agents' Claude Code, Codex and Pi session logs.".into(),
+        });
+    }
     if coordinator.baseline.turns == 0 && coordinator.native.turns == 0 {
         unavailable.push(UnavailableMetric {
             metric: "coordinator_tokens".into(),
@@ -203,7 +227,101 @@ pub fn compute(
         failovers: fo,
         accounts: Vec::new(),
         coordinator,
+        spend,
         unavailable,
+    }
+}
+
+/// When a `usage.turn` happened: when its turn started, else when it was
+/// read.
+fn turn_time(e: &Event, turn: &crate::usage::UsageTurn) -> OffsetDateTime {
+    turn.turn
+        .at
+        .as_deref()
+        .and_then(|a| OffsetDateTime::parse(a, &Rfc3339).ok())
+        .unwrap_or(e.ts)
+}
+
+#[derive(Default)]
+struct Tally {
+    spend: TokenSpend,
+}
+
+impl Tally {
+    fn add(&mut self, u: &quark_transcript::ModelUsage) {
+        self.spend.input_tokens += u.input;
+        self.spend.output_tokens += u.output;
+        self.spend.cache_read_tokens += u.cache_read;
+        match crate::spend::cost(u) {
+            Some(c) => *self.spend.usd.get_or_insert(0.0) += c,
+            None => self.spend.unpriced_tokens += u.input + u.output,
+        }
+    }
+}
+
+/// Tokens and spend of the turns in the window, and the lifetime worker
+/// spend of `done` tasks.
+fn spend(
+    events: &[Event],
+    in_window: impl Fn(OffsetDateTime) -> bool,
+    done: &[&TaskId],
+) -> SpendMetrics {
+    use crate::usage::{Agent, UsageTurn, KIND};
+    let mut workers = Tally::default();
+    let mut coordinator = Tally::default();
+    let mut models: BTreeMap<String, ModelSpend> = BTreeMap::new();
+    let mut per_task: BTreeMap<&TaskId, f64> = BTreeMap::new();
+    for e in events.iter().filter(|e| e.kind.as_str() == KIND) {
+        let Ok(t) = e.decode::<UsageTurn>() else {
+            continue;
+        };
+        if let (Agent::Worker, Some(task)) = (t.agent, &e.task) {
+            let cost: f64 = t.turn.models.iter().filter_map(crate::spend::cost).sum();
+            *per_task.entry(task).or_default() += cost;
+        }
+        if !in_window(turn_time(e, &t)) {
+            continue;
+        }
+        let tally = match t.agent {
+            Agent::Worker => &mut workers,
+            Agent::Coordinator => &mut coordinator,
+        };
+        if !t.turn.continued {
+            tally.spend.turns += 1;
+        }
+        for u in &t.turn.models {
+            tally.add(u);
+            let m = models.entry(u.model.clone()).or_insert_with(|| ModelSpend {
+                model: u.model.clone(),
+                ..Default::default()
+            });
+            m.input_tokens += u.input;
+            m.output_tokens += u.output;
+            if let Some(c) = crate::spend::cost(u) {
+                *m.usd.get_or_insert(0.0) += c;
+            }
+        }
+    }
+    let mut by_model: Vec<ModelSpend> = models.into_values().collect();
+    by_model.sort_by(|a, b| {
+        b.usd
+            .unwrap_or(0.0)
+            .total_cmp(&a.usd.unwrap_or(0.0))
+            .then(b.output_tokens.cmp(&a.output_tokens))
+    });
+    let read: Vec<f64> = done
+        .iter()
+        .filter_map(|t| per_task.get(t))
+        .copied()
+        .collect();
+    let priced: Vec<f64> = read.iter().copied().filter(|c| *c > 0.0).collect();
+    SpendMetrics {
+        workers: workers.spend,
+        coordinator: coordinator.spend,
+        by_model,
+        done_tasks: read.len() as u32,
+        usd_per_done_task: (!priced.is_empty())
+            .then(|| read.iter().sum::<f64>() / read.len() as f64),
     }
 }
 
@@ -356,6 +474,81 @@ mod tests {
         assert_eq!(m.lead_time.median_s, None);
         assert_eq!(m.interventions.per_finished_task, None);
         assert_eq!(m.unavailable.len(), 2);
+    }
+
+    #[test]
+    fn spend_comes_from_usage_turns_by_when_they_started() {
+        let mut log = Log(Vec::new());
+        let usage = |agent: &str, id: &str, at: &str, model: &str, continued: bool| {
+            serde_json::json!({"agent": agent, "harness": "claude", "id": id, "at": at,
+                "continued": continued, "models": [{"model": model, "input": 1_000_000,
+                "output": 100_000, "cache_read": 0, "cache_write": 0, "calls": 1}]})
+        };
+        log.spawn(datetime!(2026-09-01 09:00 UTC), "a");
+        // Before the window, but its spend counts toward the task's cost.
+        log.push(
+            datetime!(2026-10-07 09:00 UTC),
+            "a",
+            crate::usage::KIND,
+            usage(
+                "worker",
+                "w0",
+                "2026-09-01T09:00:00Z",
+                "claude-sonnet-5-5",
+                false,
+            ),
+        );
+        log.push(
+            datetime!(2026-10-07 09:00 UTC),
+            "a",
+            crate::usage::KIND,
+            usage(
+                "worker",
+                "w1",
+                "2026-10-07T09:00:00Z",
+                "claude-sonnet-5-5",
+                false,
+            ),
+        );
+        log.push(
+            datetime!(2026-10-07 09:05 UTC),
+            "a",
+            crate::usage::KIND,
+            usage("worker", "w1", "2026-10-07T09:00:00Z", "mystery-1", true),
+        );
+        log.status(datetime!(2026-10-07 10:00 UTC), "a", "done");
+        let mut e = NewEvent::new(
+            HostId::from("h"),
+            ProjectId::from("p"),
+            None,
+            crate::usage::KIND,
+            usage(
+                "coordinator",
+                "c1",
+                "2026-10-07T08:00:00Z",
+                "claude-opus-5-5",
+                false,
+            ),
+        );
+        e.ts = datetime!(2026-10-07 08:00 UTC);
+        let seq = Seq(log.0.len() as u64 + 1);
+        log.0.push(e.with_seq(seq));
+
+        let m = compute("p", &log.0, &[], NOW, 7);
+        let s = &m.spend;
+        assert_eq!(s.workers.turns, 1);
+        assert_eq!(s.workers.input_tokens, 2_000_000);
+        // 1M in at 2 and 0.1M out at 10; the unknown model is not priced.
+        assert!((s.workers.usd.unwrap() - 3.0).abs() < 1e-9);
+        assert_eq!(s.workers.unpriced_tokens, 1_100_000);
+        assert!((s.coordinator.usd.unwrap() - 6.0).abs() < 1e-9);
+        assert_eq!(s.by_model[0].model, "claude-opus-5-5");
+        assert_eq!(s.done_tasks, 1);
+        assert!((s.usd_per_done_task.unwrap() - 6.0).abs() < 1e-9);
+        // No transcript baseline: the coordinator's turns stand in for it.
+        assert_eq!(m.coordinator.baseline.turns, 1);
+        assert_eq!(m.coordinator.baseline.ack_share, None);
+        assert!(m.unavailable.is_empty());
     }
 
     #[test]

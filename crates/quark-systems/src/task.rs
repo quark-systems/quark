@@ -96,6 +96,15 @@ pub struct Task {
     /// moved to, or why it could not move.
     #[serde(default)]
     pub failovers: Vec<AccountFailover>,
+    /// The model the worker runs: what its session log reports, else what
+    /// it was started with. Absent for the harness default before the log
+    /// says.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The git branch checked out in the task's working copy, while it
+    /// exists.
+    #[serde(default)]
+    pub branch: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

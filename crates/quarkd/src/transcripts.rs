@@ -92,49 +92,60 @@ impl TranscriptTap {
         Ok(batch.rate_limit)
     }
 
-    /// The configured roots plus every added account's config directory.
-    fn roots_with_accounts(&self) -> SessionRoots {
-        let mut roots = self.roots.clone();
-        let accounts = self.store.account_rows().unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "could not read accounts for session logs");
-            Vec::new()
-        });
-        for a in accounts {
-            let list = match SessionFormat::for_harness(crate::engine::firstmate::engine_harness(
-                &a.harness,
-            )) {
-                Some(SessionFormat::Claude) => &mut roots.claude,
-                Some(SessionFormat::Codex) => &mut roots.codex,
-                Some(SessionFormat::Pi) => &mut roots.pi,
-                None => continue,
-            };
-            let dir = PathBuf::from(a.config_dir);
-            if !list.contains(&dir) {
-                list.push(dir);
-            }
-        }
-        roots
-    }
-
     fn locate(&self, source: &TranscriptSource, cwd: &Path, formats: &[SessionFormat]) -> Located {
         if let Some((at, found)) = self.located.lock().unwrap().get(source) {
             if at.elapsed() < RELOCATE_AFTER {
                 return found.clone();
             }
         }
-        let roots = self.roots_with_accounts();
-        let found = formats
-            .iter()
-            .filter_map(|&f| locate(f, cwd, &roots).map(|p| (p, f)))
-            .max_by_key(|(p, _)| {
-                std::fs::metadata(p)
-                    .and_then(|m| m.modified())
-                    .unwrap_or(SystemTime::UNIX_EPOCH)
-            });
+        let roots = roots_with_accounts(&self.store, &self.roots);
+        let found = locate_any(cwd, formats, &roots);
         self.located
             .lock()
             .unwrap()
             .insert(source.clone(), (Instant::now(), found.clone()));
         found
     }
+}
+
+/// `roots` plus every added account's config directory, where an agent
+/// started under that account writes its session log.
+pub fn roots_with_accounts(store: &Store, roots: &SessionRoots) -> SessionRoots {
+    let mut roots = roots.clone();
+    let accounts = store.account_rows().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not read accounts for session logs");
+        Vec::new()
+    });
+    for a in accounts {
+        let list = match SessionFormat::for_harness(crate::engine::firstmate::engine_harness(
+            &a.harness,
+        )) {
+            Some(SessionFormat::Claude) => &mut roots.claude,
+            Some(SessionFormat::Codex) => &mut roots.codex,
+            Some(SessionFormat::Pi) => &mut roots.pi,
+            None => continue,
+        };
+        let dir = PathBuf::from(a.config_dir);
+        if !list.contains(&dir) {
+            list.push(dir);
+        }
+    }
+    roots
+}
+
+/// The most recently written session log for an agent working in `cwd`,
+/// among `formats`.
+pub fn locate_any(
+    cwd: &Path,
+    formats: &[SessionFormat],
+    roots: &SessionRoots,
+) -> Option<(PathBuf, SessionFormat)> {
+    formats
+        .iter()
+        .filter_map(|&f| locate(f, cwd, roots).map(|p| (p, f)))
+        .max_by_key(|(p, _)| {
+            std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        })
 }

@@ -22,6 +22,7 @@ mod pi;
 mod rate_limit;
 mod reader;
 mod tool;
+mod usage;
 
 pub use locate::{locate, SessionRoots};
 pub use quark_systems::{
@@ -30,6 +31,7 @@ pub use quark_systems::{
 pub use rate_limit::RateLimit;
 pub use reader::{read_from, ReadBatch, MAX_BATCH_BYTES};
 pub use tool::MAX_DIFF_LINES;
+pub use usage::{read_turns, ModelUsage, TurnUsage, UsageCursor};
 
 use serde_json::Value;
 

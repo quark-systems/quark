@@ -1133,6 +1133,7 @@ name = "quark-transcript"
 version = "0.0.1"
 dependencies = [
  "quark-systems",
+ "serde",
  "serde_json",
  "tempfile",
 ]

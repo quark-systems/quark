@@ -21,6 +21,22 @@ export interface CoordinatorTurns {
 }
 /** firstmate's coordinator (read from its transcript) beside the native one. */
 export interface CoordinatorMetrics { tasks: number; baseline: CoordinatorTurns; native: CoordinatorTurns; would_wake_turns: number }
+/** One kind of agent's tokens and cost. Cost is in US dollars at API list price, or the harness's own figure. */
+export interface TokenSpend {
+  turns: number; input_tokens: number; output_tokens: number; cache_read_tokens: number;
+  usd?: number | null;
+  /** Tokens of models with no known price, left out of `usd`. */
+  unpriced_tokens: number;
+}
+export interface ModelSpend { model: string; input_tokens: number; output_tokens: number; usd?: number | null }
+export interface SpendMetrics {
+  workers: TokenSpend; coordinator: TokenSpend;
+  /** Most expensive first. */
+  by_model: ModelSpend[];
+  done_tasks: number;
+  /** Lifetime worker spend per task done in the window. */
+  usd_per_done_task?: number | null;
+}
 export interface ProjectMetrics {
   project_id: string; days: number; from: string; to: string;
   /** The Project's first event in the log; numbers reach no further back. */
@@ -29,6 +45,8 @@ export interface ProjectMetrics {
   failovers: Failovers; accounts: AccountUse[]; unavailable: UnavailableMetric[];
   /** Absent from daemons older than the native coordinator. */
   coordinator?: CoordinatorMetrics;
+  /** Absent from daemons older than token capture. */
+  spend?: SpendMetrics;
 }
 
 export const metricsApi = {

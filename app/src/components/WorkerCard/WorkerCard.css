@@ -6,6 +6,11 @@
 .wcard .title { margin-bottom: 0; min-width: 0; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .wcard .note { margin: 0 0 7px 24px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .wcard .meta { padding-left: 24px; font-family: var(--sans); }
+.wcard-agent { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; margin: 0 0 7px 24px; font: 11px var(--sans); color: var(--fg-dim); }
+.wcard-model { white-space: nowrap; }
+.wcard-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; font-family: var(--mono); }
+.wcard-branch svg { flex: none; }
+.wcard-branch span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wcard-harness { color: var(--fg-dim); white-space: nowrap; }
 .wcard-diff { display: inline-flex; gap: 4px; font: 600 11px var(--sans); font-variant-numeric: tabular-nums; }
 .wcard-diff .adds { color: var(--diff-add-fg); font: inherit; }
