@@ -38,6 +38,11 @@ impl Config {
         self.home.join("quark.db")
     }
 
+    /// The native engine's event log, separate from the projection store.
+    pub fn events_path(&self) -> PathBuf {
+        self.home.join(quark_eventlog::FILE_NAME)
+    }
+
     /// Pinned engine checkout, `~/.quark/engine`.
     pub fn engine_root(&self) -> PathBuf {
         self.home.join("engine")

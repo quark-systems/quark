@@ -13,6 +13,7 @@ pub mod crew_dispatch;
 pub mod dispatch;
 pub mod dispatch_test;
 pub mod engine;
+pub mod event_ingest;
 pub mod failover;
 pub mod forge;
 pub mod gates;
@@ -101,6 +102,14 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_user_config(layout.user_config())
         .with_failover(Arc::new(failover));
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
+    let events_path = config.events_path();
+    let events = quark_eventlog::SqliteEventLog::open(&events_path)
+        .with_context(|| format!("opening {}", events_path.display()))?;
+    let ingest = event_ingest::EventIngest::new(
+        store.clone(),
+        quark_eventlog::FirstmateBridge::new(events, event_ingest::host()),
+    );
+    let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
 
     let app = api::router(AppState {
         store,
@@ -123,6 +132,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     projector_task.abort();
+    ingest_task.abort();
     pr_task.abort();
     quota_task.abort();
     // The tmux server keeps running; the next start reattaches.
