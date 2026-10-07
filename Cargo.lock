@@ -996,6 +996,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark-runtime"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "quark-sessions"
 version = "0.0.1"
 dependencies = [
@@ -1010,6 +1024,24 @@ dependencies = [
  "tokio",
  "tracing",
  "vt100",
+]
+
+[[package]]
+name = "quark-subcoordinator"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "quark-core",
+ "quark-eventlog",
+ "quark-harness",
+ "quark-runtime",
+ "quark-worker",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

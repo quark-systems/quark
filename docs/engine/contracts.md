@@ -39,7 +39,7 @@ Every state change is appended to the `EventLog` first; everything else is a rea
 | `WorkerProtocol`, `WorkerMessage` | `worker` | `report`, `ask`, `learned`, `done` (plus hook signals) over MCP, hooks or files; each lands as a `worker.message` event before `receive` returns | `quark-worker` |
 | `VerifyPipeline`, `MergeGuard` | `verify` | gate stages; `rebase_and_reverify`; `main_health`; `may_merge` refuses a stale head and, while main is red, anything but a change that turns it green; `may_dispatch` allows only one fix-main task while main is red | `quark-verify` |
 | `Isolation` | `isolation` | wraps a command for native, sandbox (Seatbelt, bubblewrap) or container mode, so it composes with any session backend | `quark-isolation` |
-| `Runtime`, `HostRegistry` | `host` | local, SSH, hosted and private-cloud hosts with identity, platform, capacity and health | `quark-hosts` |
+| `Runtime`, `HostRegistry` | `host` | local, SSH, hosted and private-cloud hosts with identity, platform, capacity and health | `quark-runtime` (local, SSH; see `sub-coordinators.md`), `quark-hosts` |
 | `Telemetry` | `telemetry` | one sample per call: CPU, memory, pressure, disk, Quark's own disk use, per-Project and per-task usage | `quark-hosts` |
 | `PersonaPack`, `PersonaSource` | `persona` | role labels, address, voice, vocabulary, UI labels and prompt fragments; global with per-Project override | `quark-persona` |
 | `SliceSwitch` | `slice` | per-slice `bash`, `shadow` or `native`, switched on strictly in order, with history and rollback | quarkd `engine/shadow.rs` |

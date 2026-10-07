@@ -1,0 +1,25 @@
+[package]
+name = "quark-subcoordinator"
+description = "Sub-coordinators for the native Quark engine (slice 7): persistent coordinator homes on this machine or an SSH host, seeded, launched, supervised, steered and handed work, with every change in the event log."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+quark-core.workspace = true
+quark-harness.workspace = true
+quark-runtime.workspace = true
+quark-worker.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+quark-eventlog.workspace = true
+tempfile = "3"
