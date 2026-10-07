@@ -21,6 +21,7 @@ pub mod harness;
 pub mod memory;
 pub mod metrics;
 pub mod native;
+pub mod native_triggers;
 pub mod pr_center;
 pub mod project_repo;
 pub mod projector;
@@ -123,6 +124,17 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host()),
     );
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
+    let triggers_task = if native_triggers::enabled() {
+        match native_triggers::ShadowTriggers::open(store.clone(), Arc::new(events.clone())).await {
+            Ok(t) => Some(tokio::spawn(t.run(config.refresh_interval))),
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "slice 7 shadow not started");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let mut app = api::router(AppState {
         store,
@@ -150,6 +162,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .await?;
     projector_task.abort();
     ingest_task.abort();
+    if let Some(t) = triggers_task {
+        t.abort();
+    }
     pr_task.abort();
     quota_task.abort();
     if let Some(n) = native {
