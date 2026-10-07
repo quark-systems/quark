@@ -6568,6 +6568,38 @@
           "automatic"
         ]
       },
+      "ModelSpend": {
+        "type": "object",
+        "description": "One model's tokens and cost.",
+        "required": [
+          "model",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "description": "As the harness reported it; empty when it did not say."
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "NewInboxNote": {
         "type": "object",
         "description": "A note for the coordinator.",
@@ -7063,6 +7095,10 @@
           },
           "project_id": {
             "type": "string"
+          },
+          "spend": {
+            "$ref": "#/components/schemas/SpendMetrics",
+            "description": "Tokens and their cost, from every worker and coordinator turn in\nthe window."
           },
           "throughput": {
             "$ref": "#/components/schemas/Throughput"
@@ -8032,6 +8068,45 @@
           }
         }
       },
+      "SpendMetrics": {
+        "type": "object",
+        "description": "Token use and spend over the window, read from the agents' session\nlogs. Cost is at each provider's API list price, or the harness's own\nfigure where it records one; under a subscription it is what the same\nwork would cost through the API.",
+        "required": [
+          "workers",
+          "coordinator",
+          "by_model",
+          "done_tasks"
+        ],
+        "properties": {
+          "by_model": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelSpend"
+            },
+            "description": "Every model used, most expensive first."
+          },
+          "coordinator": {
+            "$ref": "#/components/schemas/TokenSpend"
+          },
+          "done_tasks": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks done in the window whose workers' turns were read.",
+            "minimum": 0
+          },
+          "usd_per_done_task": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Their workers' spend over their whole life, per task; absent when\nnone was priced."
+          },
+          "workers": {
+            "$ref": "#/components/schemas/TokenSpend"
+          }
+        }
+      },
       "StatusCounts": {
         "type": "object",
         "description": "Tasks per [`PulseState`], each task once. Like the live list, done and\nfailed only count tasks that finished in the last day.",
@@ -8102,6 +8177,13 @@
             ],
             "description": "The account the task's worker was started under (an `Account.id`),\nwhen the harness has accounts."
           },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The git branch checked out in the task's working copy, while it\nexists."
+          },
           "created_at": {
             "type": "string"
           },
@@ -8130,6 +8212,13 @@
                 "type": "null"
               }
             ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model the worker runs: what its session log reports, else what\nit was started with. Absent for the harness default before the log\nsays."
           },
           "project_id": {
             "type": "string"
@@ -8562,6 +8651,54 @@
               "$ref": "#/components/schemas/DayCount"
             },
             "description": "One entry per UTC day of the window, oldest first."
+          }
+        }
+      },
+      "TokenSpend": {
+        "type": "object",
+        "description": "One kind of agent's tokens and cost.",
+        "required": [
+          "turns",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "unpriced_tokens"
+        ],
+        "properties": {
+          "cache_read_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Including prompt cache reads and writes.",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "turns": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "unpriced_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tokens of models with no known price, left out of `usd`.",
+            "minimum": 0
+          },
+          "usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Cost of the priced tokens, US dollars; absent when none were priced."
           }
         }
       },

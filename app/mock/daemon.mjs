@@ -100,7 +100,7 @@ function addTask(projectId, t, { silent = false } = {}) {
     kind: t.kind ?? "ship", state_note: t.state_note ?? null, harness: t.harness ?? "claude-code",
     pull_request_url: t.pull_request_url ?? null, created_at: t.created_at ?? now(), updated_at: t.updated_at ?? now(),
     account_id: t.account_id ?? (ACCOUNT_ENV[t.harness ?? "claude-code"] ? `default-${t.harness ?? "claude-code"}` : null),
-    failovers: t.failovers ?? [],
+    failovers: t.failovers ?? [], model: t.model ?? null, branch: t.branch ?? null,
   };
   tasks.set(task.id, task);
   transcripts.set(task.id, []);
@@ -248,10 +248,24 @@ function metricsOf(proj, days) {
       const a = accounts.get(id);
       return a ? [{ account_id: id, harness: a.harness, label: a.label, tasks: n, quota: a.quota }] : [];
     }),
-    unavailable: [
-      { metric: "spend", reason: "Workers' token use and cost are not recorded yet; quota per account is shown instead." },
-      { metric: "coordinator_tokens", reason: "The coordinator's token use is not recorded in the event log yet." },
-    ],
+    coordinator: {
+      tasks: mine.length,
+      baseline: { turns: 14, ack_turns: 0, input_tokens: 1_840_000, output_tokens: 26_000, cache_read_tokens: 1_610_000,
+        turns_per_task: mine.length ? 14 / mine.length : null, tokens_per_task: mine.length ? 1_866_000 / mine.length : null, ack_share: null },
+      native: { turns: 0, ack_turns: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
+      would_wake_turns: 0,
+    },
+    spend: {
+      workers: { turns: 62, input_tokens: 9_400_000, output_tokens: 310_000, cache_read_tokens: 8_200_000, usd: 18.42, unpriced_tokens: 0 },
+      coordinator: { turns: 14, input_tokens: 1_840_000, output_tokens: 26_000, cache_read_tokens: 1_610_000, usd: 2.31, unpriced_tokens: 0 },
+      by_model: [
+        { model: "claude-opus-5-5", input_tokens: 6_100_000, output_tokens: 190_000, usd: 14.6 },
+        { model: "claude-sonnet-5-5", input_tokens: 3_300_000, output_tokens: 120_000, usd: 3.82 },
+        { model: "gpt-5-codex", input_tokens: 1_840_000, output_tokens: 26_000, usd: 2.31 },
+      ],
+      done_tasks: done, usd_per_done_task: done ? 4.75 : null,
+    },
+    unavailable: [],
   };
 }
 function settingsOf(proj) {
@@ -558,8 +572,8 @@ function seed() {
   });
 
   const T = (p, title, state, extra = {}) => addTask(p.id, { title, state, ...extra }, { silent: true });
-  const a = T(quark, "Event stream: resync slow clients from the store", "running", { diff: DIFFS[0], harness: "claude-code", updated_at: minutesAgo(1) });
-  const b = T(quark, "Terminal sessions over tmux control mode", "running", { diff: DIFFS[1], harness: "codex", updated_at: minutesAgo(4) });
+  const a = T(quark, "Event stream: resync slow clients from the store", "running", { diff: DIFFS[0], harness: "claude-code", model: "claude-sonnet-5-5", branch: "claude/event-stream-resync", updated_at: minutesAgo(1) });
+  const b = T(quark, "Terminal sessions over tmux control mode", "running", { diff: DIFFS[1], harness: "codex", model: "gpt-5-codex", branch: "codex/tmux-control-mode", updated_at: minutesAgo(4) });
   T(quark, "Decision records carry who answered", "needs_decision", { diff: DIFFS[2], harness: "cursor", state_note: "Asked: keep answer history per decision?", updated_at: minutesAgo(12) });
   T(quark, "Harness registry trait", "queued", { updated_at: minutesAgo(20) });
   T(quark, "OpenAPI check in CI", "in_review", { harness: "gemini", pull_request_url: "https://github.com/quark-systems/quark/pull/2", updated_at: minutesAgo(40) });

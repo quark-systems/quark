@@ -332,6 +332,10 @@ async fn each_spawn_records_why_this_agent() {
         e.payload["candidates"][1]["reason"],
         "0% remaining at all_models"
     );
+    // The model the worker was started with is on its task.
+    let changed = next_event(&mut live).await;
+    assert_eq!(changed.event_type, EventType::TaskStateChanged);
+    assert_eq!(changed.payload["task"]["model"], "sonnet");
 
     // The same spawn is recorded once, and the resolution ran once.
     h.projector.refresh_all().await.unwrap();

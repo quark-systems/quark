@@ -1,9 +1,9 @@
 // Project dashboard, Metrics tab: how the Project's work has gone over a window of days, computed by
 // the daemon from the event log. Throughput per day, lead time, how often work got through on its
-// own, interventions, failovers, the quota of the accounts its tasks ran under and the coordinator's
-// turns and tokens.
+// own, interventions, failovers, the quota of the accounts its tasks ran under, what the agents'
+// tokens cost and the coordinator's turns and tokens.
 import React, { useEffect, useState } from "react";
-import { api, CoordinatorMetrics, CoordinatorTurns, DayCount, NotAvailable, ProjectMetrics } from "../../api";
+import { api, CoordinatorMetrics, CoordinatorTurns, DayCount, NotAvailable, ProjectMetrics, SpendMetrics, TokenSpend } from "../../api";
 import { href } from "../../nav";
 import { useStore } from "../../store";
 import { errText } from "../../util";
@@ -69,6 +69,12 @@ export function Metrics({ project: pid }: { project: string }) {
               sub={`${plural(m.interventions.decisions, "decision")}, ${plural(m.interventions.blockers, "blocker")}` +
                 (m.interventions.per_finished_task != null ? `; ${m.interventions.per_finished_task.toFixed(1)} per finished task` : "")} testId="metrics-interventions" />
             <Tile label="Relaunches" value={String(m.interventions.relaunches)} sub="workers started again" testId="metrics-relaunches" />
+            {m.spend && hasSpend(m.spend) && (
+              <Tile label="Spend" value={usd(total(m.spend).usd)}
+                sub={m.spend.usd_per_done_task != null
+                  ? `${usd(m.spend.usd_per_done_task)} per done task`
+                  : `${tokens(total(m.spend).input_tokens + total(m.spend).output_tokens)} tokens`} testId="metrics-spend" />
+            )}
             <Tile label="Failovers" value={String(m.failovers.relaunched + m.failovers.no_healthy_account + m.failovers.relaunch_failed)}
               sub={`${m.failovers.relaunched} moved accounts, ${m.failovers.no_healthy_account + m.failovers.relaunch_failed} needed a decision`} testId="metrics-failovers" />
           </div>
@@ -77,6 +83,8 @@ export function Metrics({ project: pid }: { project: string }) {
             <h2>Finished per day</h2>
             <Throughput days={m.throughput.per_day} />
           </section>
+
+          {m.spend && hasSpend(m.spend) && <Spend s={m.spend} />}
 
           <section className="met-section" data-testid="metrics-accounts">
             <h2>Accounts and quota</h2>
@@ -144,6 +152,61 @@ function Coordinator({ c }: { c: CoordinatorMetrics }) {
       </table>
     </section>
   );
+}
+
+export function hasSpend(s: SpendMetrics) { return s.workers.turns + s.coordinator.turns > 0; }
+
+function total(s: SpendMetrics): TokenSpend {
+  const a = s.workers, b = s.coordinator;
+  return {
+    turns: a.turns + b.turns, input_tokens: a.input_tokens + b.input_tokens, output_tokens: a.output_tokens + b.output_tokens,
+    cache_read_tokens: a.cache_read_tokens + b.cache_read_tokens,
+    usd: a.usd == null && b.usd == null ? null : (a.usd ?? 0) + (b.usd ?? 0),
+    unpriced_tokens: a.unpriced_tokens + b.unpriced_tokens,
+  };
+}
+
+/** Tokens and cost of worker and coordinator turns, and per model. */
+function Spend({ s }: { s: SpendMetrics }) {
+  const all = total(s);
+  const row = (name: string, t: TokenSpend, testId: string) => (
+    <tr data-testid={testId}>
+      <td>{name}</td><td>{t.turns}</td><td>{tokens(t.input_tokens)}</td><td>{tokens(t.cache_read_tokens)}</td><td>{tokens(t.output_tokens)}</td><td>{usd(t.usd)}</td>
+    </tr>
+  );
+  return (
+    <section className="met-section" data-testid="metrics-spend-detail">
+      <h2>Tokens and spend</h2>
+      <p className="faint">
+        Read from the agents' session logs. Cost is at API list price (or the harness's own figure), so work under a
+        subscription shows what it would cost through the API.
+        {all.unpriced_tokens > 0 && <> {tokens(all.unpriced_tokens)} tokens are from models with no known price and are not in the cost.</>}
+        {s.usd_per_done_task != null && <> Tasks done in this window cost {usd(s.usd_per_done_task)} each in worker turns, over {plural(s.done_tasks, "task")}.</>}
+      </p>
+      <table className="met-table">
+        <thead><tr><th>Agent</th><th>Turns</th><th>Input</th><th>Of it cached</th><th>Output</th><th>Cost</th></tr></thead>
+        <tbody>
+          {row("Workers", s.workers, "metrics-spend-workers")}
+          {row("Coordinator", s.coordinator, "metrics-spend-coordinator")}
+        </tbody>
+      </table>
+      {s.by_model.length > 0 && (
+        <table className="met-table" data-testid="metrics-spend-models">
+          <thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Cost</th></tr></thead>
+          <tbody>{s.by_model.map((m) => (
+            <tr key={m.model}><td className="mono">{m.model || "unknown"}</td><td>{tokens(m.input_tokens)}</td><td>{tokens(m.output_tokens)}</td><td>{usd(m.usd)}</td></tr>
+          ))}</tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+/** US dollars: cents under $100, whole dollars above. */
+export function usd(n?: number | null): string {
+  if (n == null) return "–";
+  if (n > 0 && n < 0.01) return "<$0.01";
+  return n < 100 ? `$${n.toFixed(2)}` : `$${Math.round(n).toLocaleString("en-US")}`;
 }
 
 function num(n?: number | null) { return n == null ? "–" : n.toFixed(1); }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dur, hasTurns, tokens } from "./Metrics";
+import { dur, hasTurns, tokens, usd } from "./Metrics";
 
 describe("dur", () => {
   it("reads durations at the right scale", () => {
@@ -27,5 +27,15 @@ describe("hasTurns", () => {
   it("hides the coordinator section until a coordinator turn is known", () => {
     expect(hasTurns({ tasks: 3, baseline: none, native: none, would_wake_turns: 0 })).toBe(false);
     expect(hasTurns({ tasks: 3, baseline: { ...none, turns: 2 }, native: none, would_wake_turns: 0 })).toBe(true);
+  });
+});
+
+describe("usd", () => {
+  it("reads dollars at a useful precision", () => {
+    expect(usd(null)).toBe("–");
+    expect(usd(0)).toBe("$0.00");
+    expect(usd(0.004)).toBe("<$0.01");
+    expect(usd(18.416)).toBe("$18.42");
+    expect(usd(1234.5)).toBe("$1,235");
   });
 });

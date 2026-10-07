@@ -494,6 +494,8 @@ impl Store {
                                 .as_deref()
                                 .and_then(|h| accounts::inherited_account(tx, project_id, h)),
                             failovers: Vec::new(),
+                            model: None,
+                            branch: None,
                             created_at: now.clone(),
                             updated_at: now,
                         };
@@ -583,6 +585,95 @@ impl Store {
                 }
             }
             Ok(())
+        })
+    }
+
+    /// Records the model a task's worker was started with (`None` for the
+    /// harness default) and the branch its working copy has out, emitting
+    /// `task.state_changed` when the task's model or branch changed.
+    pub fn set_task_agent(
+        &self,
+        project_id: &str,
+        engine_id: &str,
+        model: Option<&str>,
+        branch: Option<&str>,
+    ) -> Result<()> {
+        self.update_task_agent(
+            project_id,
+            engine_id,
+            "UPDATE tasks SET model = ?3, branch = ?4
+             WHERE project_id = ?1 AND engine_id = ?2
+               AND (model IS NOT ?3 OR branch IS NOT ?4)",
+            params![project_id, engine_id, model, branch],
+        )
+    }
+
+    /// Records the model a task's session log last reported.
+    pub fn set_task_model_seen(
+        &self,
+        project_id: &str,
+        engine_id: &str,
+        model: &str,
+    ) -> Result<()> {
+        self.update_task_agent(
+            project_id,
+            engine_id,
+            "UPDATE tasks SET model_seen = ?3
+             WHERE project_id = ?1 AND engine_id = ?2 AND model_seen IS NOT ?3",
+            params![project_id, engine_id, model],
+        )
+    }
+
+    fn update_task_agent(
+        &self,
+        project_id: &str,
+        engine_id: &str,
+        sql: &str,
+        args: &[&dyn rusqlite::ToSql],
+    ) -> Result<()> {
+        self.write(|tx, events| {
+            let read = |tx: &rusqlite::Transaction| {
+                tx.query_row(
+                    &format!("{TASK_SELECT} WHERE project_id = ?1 AND engine_id = ?2"),
+                    params![project_id, engine_id],
+                    task_from_row,
+                )
+                .optional()
+            };
+            let Some(before) = read(tx)? else {
+                return Ok(());
+            };
+            if tx.execute(sql, args)? == 0 {
+                return Ok(());
+            }
+            let Some(task) = read(tx)? else {
+                return Ok(());
+            };
+            // Not a move of the task's own, so `updated_at` stays.
+            if task.model == before.model && task.branch == before.branch {
+                return Ok(());
+            }
+            append_event(
+                tx,
+                events,
+                Some(project_id),
+                EventType::TaskStateChanged,
+                serde_json::json!({ "task": task, "previous_state": before.state }),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Each of a Project's tasks that ran a worker: engine id, harness and
+    /// working copy (while it exists), for reading its session log.
+    pub fn task_agents(&self, project_id: &str) -> Result<Vec<(String, String, Option<String>)>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT engine_id, harness, worktree_path FROM tasks
+                 WHERE project_id = ?1 AND harness IS NOT NULL ORDER BY engine_id",
+            )?;
+            let rows = stmt.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
     }
 
@@ -1374,9 +1465,11 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
 }
 
 const TASK_COLUMNS: &str = "id, project_id, title, kind, state, state_note, harness, \
-                            pull_request_url, created_at, updated_at, account_id, failovers";
+                            pull_request_url, created_at, updated_at, account_id, failovers, \
+                            COALESCE(model_seen, model), branch";
 const TASK_SELECT: &str = "SELECT id, project_id, title, kind, state, state_note, harness, \
-                           pull_request_url, created_at, updated_at, account_id, failovers FROM tasks";
+                           pull_request_url, created_at, updated_at, account_id, failovers, \
+                           COALESCE(model_seen, model), branch FROM tasks";
 
 fn task_from_row(r: &Row) -> rusqlite::Result<Task> {
     task_from_row_at(r, 0)
@@ -1400,6 +1493,8 @@ fn task_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Task> {
         account_id: r.get(i + 10)?,
         // Written only by this daemon; an unreadable value reads as none.
         failovers: serde_json::from_str(&r.get::<_, String>(i + 11)?).unwrap_or_default(),
+        model: r.get(i + 12)?,
+        branch: r.get(i + 13)?,
     })
 }
 

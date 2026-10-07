@@ -39,8 +39,10 @@ pub mod recovery;
 pub mod sessions;
 pub mod settings;
 pub mod shadows;
+pub mod spend;
 pub mod store;
 pub mod transcripts;
+pub mod usage;
 pub mod verify_shadow;
 pub mod worker_shadow;
 pub mod worktree;
@@ -214,6 +216,15 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     };
     let ingest = event_ingest::EventIngest::new(store.clone(), bridge);
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
+    let usage_task = tokio::spawn(
+        usage::UsageIngest::new(
+            store.clone(),
+            events.clone(),
+            event_ingest::host(),
+            quark_transcript::SessionRoots::from_env(),
+        )
+        .run(config.refresh_interval),
+    );
     let (triggers, triggers_task) = if native_triggers::enabled() {
         match native_triggers::ShadowTriggers::open(store.clone(), Arc::new(events.clone())).await {
             Ok(t) => (
@@ -344,6 +355,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         t.abort();
     }
     ingest_task.abort();
+    usage_task.abort();
     if let Some(t) = triggers_task {
         t.abort();
     }

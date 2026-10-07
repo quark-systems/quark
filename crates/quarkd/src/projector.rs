@@ -170,7 +170,8 @@ impl Projector {
                     .await;
             log_apply(ws, "snapshot", res);
             self.sync_sessions(ws, terminals).await;
-            self.record_dispatches(ws, &tasks).await;
+            let models = self.record_dispatches(ws, &tasks).await;
+            self.sync_agents(ws, &tasks, models).await;
         }
         self.tap_transcripts(ws, tasks).await;
 
@@ -298,15 +299,21 @@ impl Projector {
     /// Records each worker spawn not yet recorded: a task's first spawn with
     /// the engine's dispatch resolution of its brief, when the spawn is fresh,
     /// and each later relaunch as such. One adapter-call record covers the
-    /// pass and carries the first failure.
-    async fn record_dispatches(&self, ws: &WorkspaceRef, tasks: &[EngineTask]) {
+    /// pass and carries the first failure. Returns the model each spawned
+    /// task's worker was started with.
+    async fn record_dispatches(
+        &self,
+        ws: &WorkspaceRef,
+        tasks: &[EngineTask],
+    ) -> HashMap<String, Option<String>> {
+        let mut models = HashMap::new();
         let spawned: Vec<String> = tasks
             .iter()
             .filter(|t| t.harness.is_some())
             .map(|t| t.id.clone())
             .collect();
         if spawned.is_empty() {
-            return;
+            return models;
         }
         let store = self.store.clone();
         let project_id = ws.project_id.clone();
@@ -321,7 +328,7 @@ impl Projector {
             Ok(Ok(k)) => k,
             res => {
                 log_apply(ws, "dispatch_record", res.map(|r| r.map(|_| ())));
-                return;
+                return models;
             }
         };
 
@@ -339,6 +346,7 @@ impl Projector {
                     continue;
                 }
             };
+            models.insert(engine_id.clone(), spawn.model.clone());
             let seen = recorded.get(task_id).map(Vec::as_slice).unwrap_or_default();
             if seen.contains(&spawn.generation) {
                 continue;
@@ -383,6 +391,37 @@ impl Projector {
         }
         self.record(ws, "dispatch_record", started, first_err.as_ref())
             .await;
+        models
+    }
+
+    /// Records each task's configured model (from `models`) and the branch
+    /// its working copy has out. A task whose spawn could not be read keeps
+    /// the model it had.
+    async fn sync_agents(
+        &self,
+        ws: &WorkspaceRef,
+        tasks: &[EngineTask],
+        models: HashMap<String, Option<String>>,
+    ) {
+        let store = self.store.clone();
+        let project_id = ws.project_id.clone();
+        let tasks: Vec<(String, Option<PathBuf>)> = tasks
+            .iter()
+            .filter(|t| models.contains_key(&t.id))
+            .map(|t| (t.id.clone(), t.worktree.clone()))
+            .collect();
+        let res = tokio::task::spawn_blocking(move || {
+            for (id, worktree) in tasks {
+                let branch = worktree
+                    .as_deref()
+                    .and_then(crate::worktree::current_branch);
+                let model = models.get(&id).cloned().flatten();
+                store.set_task_agent(&project_id, &id, model.as_deref(), branch.as_deref())?;
+            }
+            Ok::<_, crate::store::StoreError>(())
+        })
+        .await;
+        log_apply(ws, "task_agents", res);
     }
 
     /// Projects new coordinator and worker session-log entries. A log that

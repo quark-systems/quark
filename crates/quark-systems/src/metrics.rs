@@ -35,6 +35,10 @@ pub struct ProjectMetrics {
     /// transcript, beside the native coordinator's.
     #[serde(default)]
     pub coordinator: CoordinatorMetrics,
+    /// Tokens and their cost, from every worker and coordinator turn in
+    /// the window.
+    #[serde(default)]
+    pub spend: SpendMetrics,
     /// Metrics the daemon cannot compute yet, and why.
     pub unavailable: Vec<UnavailableMetric>,
 }
@@ -160,6 +164,47 @@ pub struct CoordinatorTurns {
     pub tokens_per_task: Option<f64>,
     /// 0 to 1.
     pub ack_share: Option<f64>,
+}
+
+/// Token use and spend over the window, read from the agents' session
+/// logs. Cost is at each provider's API list price, or the harness's own
+/// figure where it records one; under a subscription it is what the same
+/// work would cost through the API.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpendMetrics {
+    pub workers: TokenSpend,
+    pub coordinator: TokenSpend,
+    /// Every model used, most expensive first.
+    pub by_model: Vec<ModelSpend>,
+    /// Tasks done in the window whose workers' turns were read.
+    pub done_tasks: u32,
+    /// Their workers' spend over their whole life, per task; absent when
+    /// none was priced.
+    pub usd_per_done_task: Option<f64>,
+}
+
+/// One kind of agent's tokens and cost.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TokenSpend {
+    pub turns: u32,
+    /// Including prompt cache reads and writes.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    /// Cost of the priced tokens, US dollars; absent when none were priced.
+    pub usd: Option<f64>,
+    /// Tokens of models with no known price, left out of `usd`.
+    pub unpriced_tokens: u64,
+}
+
+/// One model's tokens and cost.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ModelSpend {
+    /// As the harness reported it; empty when it did not say.
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub usd: Option<f64>,
 }
 
 /// A metric the dashboard shows as not measured yet.

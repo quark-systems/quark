@@ -14,6 +14,10 @@ export interface Task {
   account_id?: string | null;
   /** Rate limits the worker hit, oldest first, and where it moved (quark#26). */
   failovers?: AccountFailover[];
+  /** The model the worker runs: what its session log reports, else what it was started with. */
+  model?: string | null;
+  /** The git branch checked out in the task's working copy, while it exists. */
+  branch?: string | null;
 }
 
 export type FailoverOutcome = "relaunched" | "no_healthy_account" | "relaunch_failed";

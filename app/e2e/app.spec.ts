@@ -76,6 +76,9 @@ test("worker cards show the harness, its mark and how much the worker changed", 
   const card = page.getByTestId("task-card").filter({ hasText: "Event stream" });
   await expect(card.getByRole("img", { name: "Claude Code" })).toBeVisible();
   await expect(card.getByTestId("card-diff")).toHaveText(/^\+\d+−\d+$/);
+  // The model it runs and the branch it works on.
+  await expect(card.getByTestId("card-model")).toHaveText("sonnet-5-5");
+  await expect(card.getByTestId("card-branch")).toHaveText("claude/event-stream-resync");
   // An alias resolves to the harness's mark; a harness without a published mark gets a monogram.
   await expect(page.getByTestId("task-card").filter({ hasText: "Decision records" }).getByRole("img", { name: "Cursor Agent" })).toBeVisible();
   await expect(page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).getByRole("img", { name: "Codex" })).toHaveText("Cx");
@@ -657,7 +660,11 @@ test("metrics: the dashboard's Metrics tab shows how the work went and changes i
   await expect(page.getByTestId("metrics-finished")).toContainText(/done, \d+ failed/);
   await expect(page.getByTestId("metrics-lead")).toBeVisible();
   await expect(page.getByTestId("metrics-day")).toHaveCount(7);
-  await expect(page.getByTestId("metrics-unavailable")).toContainText("Coordinator token efficiency");
+  await expect(page.getByTestId("metrics-spend")).toContainText("$20.73");
+  await expect(page.getByTestId("metrics-spend-workers")).toContainText("$18.42");
+  await expect(page.getByTestId("metrics-spend-models")).toContainText("claude-opus-5-5");
+  await expect(page.getByTestId("metrics-coordinator-baseline")).toContainText("14");
+  await expect(page.getByTestId("metrics-unavailable")).toHaveCount(0);
 
   await page.getByTestId("metrics-days-30").click();
   await expect(page.getByTestId("metrics-coverage")).toContainText("Last 30 days");

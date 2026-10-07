@@ -38,6 +38,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     migration!("0011_accounts"),
     migration!("0012_dispatch_records"),
     migration!("0013_task_failovers"),
+    migration!("0014_task_agent"),
 ];
 
 /// The schema version a fully migrated database has.

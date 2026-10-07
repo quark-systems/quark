@@ -81,6 +81,13 @@ The requirement is that the coordinator spends near zero turns acknowledging sta
 - **firstmate:** `baseline::read_turns` cuts the coordinator's Claude Code transcript into turns at each prompt that is not a tool result, sums each model call's usage once, and calls a turn started by a supervision notification an acknowledgement when it edited no file and ran none of firstmate's acting scripts (spawn, send, control, teardown, merge, hold, brief, backlog changes). This is a heuristic; the native side is exact. Codex and Pi coordinators are not read yet.
 
 The Project dashboard's Metrics tab shows both (`ProjectMetrics.coordinator`).
+When there is no Claude Code baseline (a Codex or Pi coordinator), the turns and tokens come from `usage.turn` events instead, without the acknowledgement split.
+
+## Token use and spend
+
+quarkd's `usage` module mirrors every coordinator and worker turn's token use into the event log as `usage.turn` events, from Claude Code, Codex and Pi session logs (`quark_transcript::read_turns`).
+A log quiet for two minutes has its open turn counted, so a worker's last turn lands before its working copy is cleaned up.
+The Metrics tab prices them at read time (`quarkd::spend`, API list prices, or Pi's own cost), so a price fix applies to past turns.
 
 ## Shadow mode
 
