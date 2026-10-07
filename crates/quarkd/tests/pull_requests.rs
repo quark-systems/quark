@@ -539,3 +539,34 @@ async fn gate_evidence_and_artifacts() {
     let (_, one) = call(&h.app, "GET", &format!("/v1/pull-requests/{id}"), None).await;
     assert_eq!(one["evidence"]["stale"], true);
 }
+
+#[tokio::test]
+async fn a_merged_pull_request_moves_its_task_to_done_live() {
+    let h = harness().await;
+    let mut rx = h.store.subscribe();
+    let mut merged = forge_pr(PullRequestState::Merged, CheckStatus::Success);
+    merged.merged_at = Some("2026-10-02T17:00:00Z".into());
+    h.forge.set(URL, merged);
+    h.center.refresh().await;
+
+    let task = &h.store.list_tasks(&h.project_id).unwrap()[0];
+    assert_eq!(task.state, TaskState::Done);
+    let mut changed = None;
+    while let Ok(event) = rx.try_recv() {
+        if event.event_type == EventType::TaskStateChanged {
+            changed = Some(event);
+        }
+    }
+    let changed = changed.expect("the board is told the task moved");
+    assert_eq!(changed.payload["task"]["state"], "done");
+    assert_eq!(changed.payload["previous_state"], "in_review");
+
+    // The engine cleans the task up; the board keeps it done.
+    h.store
+        .apply_snapshot(&h.project_id, &FleetSnapshot { tasks: vec![] })
+        .unwrap();
+    assert_eq!(
+        h.store.list_tasks(&h.project_id).unwrap()[0].state,
+        TaskState::Done
+    );
+}
