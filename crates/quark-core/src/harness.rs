@@ -103,9 +103,10 @@ impl Default for Models {
     }
 }
 
-/// Launch command. `{model}`, `{effort}`, `{prompt_file}` and `{cwd}` are
-/// substituted; an argument whose placeholder has no value is dropped along
-/// with the flag in `optional`.
+/// Launch command. `{model}`, `{effort}`, `{prompt}`, `{prompt_file}` and
+/// `{cwd}` are substituted anywhere inside an argument; an argument whose
+/// placeholder has no value is dropped. `optional` flags go just before the
+/// first argument carrying `{prompt}` or `{prompt_file}`, else at the end.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Launch {
@@ -116,7 +117,9 @@ pub struct Launch {
     /// when the placeholder has a value.
     #[serde(default)]
     pub optional: Vec<Vec<String>>,
-    /// How the brief reaches the agent: `argv`, `stdin`, `file` or `paste`.
+    /// How the brief reaches the agent: `argv` (through `{prompt}` or
+    /// `{prompt_file}`), `stdin`, or `paste` (typed into the composer once
+    /// the agent is ready).
     #[serde(default = "default_prompt_via")]
     pub prompt_via: String,
 }
@@ -244,6 +247,18 @@ impl HarnessManifest {
         }
         if self.launch.argv.is_empty() {
             return bad("launch.argv is empty".into());
+        }
+        if !matches!(self.launch.prompt_via.as_str(), "argv" | "stdin" | "paste") {
+            return bad(format!("launch.prompt_via {:?}", self.launch.prompt_via));
+        }
+        if self.launch.prompt_via == "argv"
+            && !self
+                .launch
+                .argv
+                .iter()
+                .any(|a| a.contains("{prompt}") || a.contains("{prompt_file}"))
+        {
+            return bad("launch.prompt_via is argv but no argument has {prompt}".into());
         }
         if !matches!(
             self.models.selection.as_str(),
