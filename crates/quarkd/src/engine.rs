@@ -50,6 +50,11 @@ pub struct FleetSnapshot {
     pub tasks: Vec<EngineTask>,
 }
 
+/// The state note firstmate's `fm-fleet-snapshot.sh` gives a task whose files
+/// changed (a cleanup, a respawn) while the snapshot was reading them. It
+/// says nothing about the task, so it is never a state to record.
+pub const TRANSIENT_SNAPSHOT_NOTE: &str = "task generation changed during snapshot";
+
 /// A task as the engine reports it, already mapped to neutral names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EngineTask {
@@ -73,6 +78,16 @@ pub struct EngineTask {
     /// the session log by this directory.
     #[serde(default)]
     pub worktree: Option<PathBuf>,
+}
+
+impl EngineTask {
+    /// Whether the engine failed to read this task rather than reporting it:
+    /// the result of a snapshot that raced a change to the task. The next
+    /// refresh reads it again.
+    pub fn is_transient(&self) -> bool {
+        self.state == TaskState::Unknown
+            && self.state_note.as_deref() == Some(TRANSIENT_SNAPSHOT_NOTE)
+    }
 }
 
 /// Which agent a task's current worker was started with.

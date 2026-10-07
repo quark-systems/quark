@@ -14,7 +14,10 @@ use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use super::{append_event, new_id, Result, Store, StoreError, TaskTarget};
+use super::{
+    append_event, finish_task, new_id, task_from_row, Result, Store, StoreError, TaskTarget,
+    TASK_SELECT,
+};
 use crate::forge::{ForgePr, PrRef};
 use crate::now_rfc3339;
 
@@ -244,6 +247,24 @@ impl Store {
             }
 
             let new = get_pr(tx, id)?;
+            // A merge finishes the task that opened the pull request. The
+            // snapshot projection does the same for merges it sees later.
+            if new.state == PullRequestState::Merged {
+                if let Some(task_id) = &new.task_id {
+                    let task = tx
+                        .query_row(
+                            &format!("{TASK_SELECT} WHERE id = ?1"),
+                            [task_id],
+                            task_from_row,
+                        )
+                        .optional()?;
+                    if let Some(task) =
+                        task.filter(|t| t.pull_request_url.as_ref() == Some(&new.url))
+                    {
+                        finish_task(tx, events, &task)?;
+                    }
+                }
+            }
             if !same_apart_from_sync_time(&old, &new) {
                 append_event(
                     tx,
@@ -663,6 +684,166 @@ mod tests {
         store.apply_forge_pr(&id, &merged).unwrap();
         assert!(store.get_pull_request(&id).unwrap().sync_error.is_none());
         assert!(store.ensure_pull_requests().unwrap().is_empty());
+    }
+
+    fn merged_pr() -> ForgePr {
+        ForgePr {
+            state: PullRequestState::Merged,
+            merged_at: Some("2026-10-03T00:00:00Z".into()),
+            closed_at: Some("2026-10-03T00:00:00Z".into()),
+            ..forge_pr(CheckStatus::Success)
+        }
+    }
+
+    fn pr_task(store: &Store, project_id: &str) -> quark_systems::Task {
+        let tasks = store.list_tasks(project_id).unwrap();
+        assert_eq!(tasks.len(), 1);
+        tasks.into_iter().next().unwrap()
+    }
+
+    fn in_review_snapshot() -> FleetSnapshot {
+        let et = EngineTask {
+            id: "ship-pr-center".into(),
+            title: "PR center".into(),
+            kind: None,
+            state: TaskState::InReview,
+            state_note: Some(format!("PR {URL}")),
+            state_source: None,
+            harness: None,
+            pull_request_url: Some(URL.into()),
+            terminal: None,
+            worktree: None,
+        };
+        FleetSnapshot { tasks: vec![et] }
+    }
+
+    fn state_events(store: &Store, after: i64) -> Vec<quark_systems::Event> {
+        store
+            .events_after(after, 100)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.event_type == EventType::TaskStateChanged)
+            .collect()
+    }
+
+    #[test]
+    fn a_merge_noticed_while_the_engine_task_exists_finishes_the_task() {
+        let (store, project_id) = store_with_pr();
+        let id = store.ensure_pull_requests().unwrap()[0].id.clone();
+        let before = store.last_seq().unwrap();
+        store.apply_forge_pr(&id, &merged_pr()).unwrap();
+        let task = pr_task(&store, &project_id);
+        assert_eq!(task.state, TaskState::Done);
+        let events = state_events(&store, before);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["task"]["state"], "done");
+        assert_eq!(events[0].payload["previous_state"], "in_review");
+
+        // The engine still reports the finished task as in review until it
+        // cleans the task up; that must not move the task back or repeat the
+        // event on every refresh.
+        let after = store.last_seq().unwrap();
+        store
+            .apply_snapshot(&project_id, &in_review_snapshot())
+            .unwrap();
+        store
+            .apply_snapshot(&project_id, &in_review_snapshot())
+            .unwrap();
+        assert_eq!(pr_task(&store, &project_id).state, TaskState::Done);
+        assert!(state_events(&store, after).is_empty());
+    }
+
+    #[test]
+    fn an_engine_task_that_disappears_after_its_merge_is_done() {
+        let (store, project_id) = store_with_pr();
+        let id = store.ensure_pull_requests().unwrap()[0].id.clone();
+        store.apply_forge_pr(&id, &merged_pr()).unwrap();
+        // The engine cleaned the task up: it is gone from the snapshot.
+        store
+            .apply_snapshot(&project_id, &FleetSnapshot { tasks: vec![] })
+            .unwrap();
+        assert_eq!(pr_task(&store, &project_id).state, TaskState::Done);
+    }
+
+    #[test]
+    fn records_left_in_review_by_a_merge_correct_on_the_next_snapshot() {
+        let (store, project_id) = store_with_pr();
+        let id = store.ensure_pull_requests().unwrap()[0].id.clone();
+        store.apply_forge_pr(&id, &merged_pr()).unwrap();
+        // The state the app showed before this fix: merged PR, task still in
+        // review with the worker's last status line, and never revisited.
+        store
+            .write(|tx, _| {
+                tx.execute(
+                    "UPDATE tasks SET state = 'in_review', state_note = ?1",
+                    [format!("PR {URL}")],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(pr_task(&store, &project_id).state, TaskState::InReview);
+        let before = store.last_seq().unwrap();
+        store
+            .apply_snapshot(&project_id, &FleetSnapshot { tasks: vec![] })
+            .unwrap();
+        assert_eq!(pr_task(&store, &project_id).state, TaskState::Done);
+        let events = state_events(&store, before);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["previous_state"], "in_review");
+    }
+
+    #[test]
+    fn a_task_that_disappears_without_a_merged_pr_keeps_its_state() {
+        let (store, project_id) = store_with_pr();
+        let id = store.ensure_pull_requests().unwrap()[0].id.clone();
+        store
+            .apply_forge_pr(&id, &forge_pr(CheckStatus::Success))
+            .unwrap();
+        store
+            .apply_snapshot(&project_id, &FleetSnapshot { tasks: vec![] })
+            .unwrap();
+        assert_eq!(pr_task(&store, &project_id).state, TaskState::InReview);
+    }
+
+    #[test]
+    fn a_transient_snapshot_result_keeps_the_last_known_state() {
+        let (store, project_id) = store_with_pr();
+        let mut snap = in_review_snapshot();
+        snap.tasks[0].state = TaskState::Unknown;
+        snap.tasks[0].state_note = Some(crate::engine::TRANSIENT_SNAPSHOT_NOTE.into());
+        let before = store.last_seq().unwrap();
+        store.apply_snapshot(&project_id, &snap).unwrap();
+        let task = pr_task(&store, &project_id);
+        assert_eq!(task.state, TaskState::InReview);
+        assert_eq!(task.state_note, None);
+        assert!(state_events(&store, before).is_empty());
+
+        // The next refresh reads the task's real state.
+        store
+            .apply_snapshot(&project_id, &in_review_snapshot())
+            .unwrap();
+        assert_eq!(
+            pr_task(&store, &project_id).state_note,
+            Some(format!("PR {URL}"))
+        );
+    }
+
+    #[test]
+    fn a_transient_result_for_a_merged_task_is_done_not_unknown() {
+        let (store, project_id) = store_with_pr();
+        let id = store.ensure_pull_requests().unwrap()[0].id.clone();
+        store.apply_forge_pr(&id, &merged_pr()).unwrap();
+        store
+            .write(|tx, _| {
+                tx.execute("UPDATE tasks SET state = 'unknown'", [])?;
+                Ok(())
+            })
+            .unwrap();
+        let mut snap = in_review_snapshot();
+        snap.tasks[0].state = TaskState::Unknown;
+        snap.tasks[0].state_note = Some(crate::engine::TRANSIENT_SNAPSHOT_NOTE.into());
+        store.apply_snapshot(&project_id, &snap).unwrap();
+        assert_eq!(pr_task(&store, &project_id).state, TaskState::Done);
     }
 
     #[test]

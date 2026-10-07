@@ -5,7 +5,7 @@
 //! events it produces commit in one transaction, and events are published to
 //! live subscribers only after that commit, in `seq` order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -472,7 +472,20 @@ impl Store {
                 }
             }
 
+            // A task whose pull request merged is done, whatever the engine
+            // still reports for it; this and `apply_forge_pr` are the only
+            // places that move a task there.
+            let merged = merged_pull_requests(tx, project_id)?;
+            let mut read: HashSet<&str> = HashSet::new();
             for et in &snapshot.tasks {
+                // The engine could not read this task just now. Keep what is
+                // recorded, or record nothing for a task not yet known, and
+                // read it again next refresh. The sweep below still finishes
+                // a merged one.
+                if et.is_transient() {
+                    continue;
+                }
+                read.insert(&et.id);
                 let now = now_rfc3339();
                 let worktree = et
                     .worktree
@@ -529,10 +542,19 @@ impl Store {
                         )?;
                     }
                     Some(old) => {
+                        let (state, state_note) = if et
+                            .pull_request_url
+                            .as_ref()
+                            .is_some_and(|u| merged.contains(u))
+                        {
+                            merged_state(old)
+                        } else {
+                            (et.state, et.state_note.clone())
+                        };
                         let changed = old.title != et.title
                             || old.kind != et.kind
-                            || old.state != et.state
-                            || old.state_note != et.state_note
+                            || old.state != state
+                            || old.state_note != state_note
                             || old.harness != et.harness
                             || old.pull_request_url != et.pull_request_url;
                         // The worktree is not part of the API's task, so a
@@ -549,8 +571,8 @@ impl Store {
                         let task = Task {
                             title: et.title.clone(),
                             kind: et.kind,
-                            state: et.state,
-                            state_note: et.state_note.clone(),
+                            state,
+                            state_note,
                             harness: et.harness.clone(),
                             pull_request_url: et.pull_request_url.clone(),
                             updated_at: now,
@@ -582,6 +604,13 @@ impl Store {
                             }),
                         )?;
                     }
+                }
+            }
+            // Tasks the snapshot no longer lists (the engine cleaned them up
+            // after their merge) or could not read just now.
+            for (engine_id, old) in &existing {
+                if !read.contains(engine_id.as_str()) {
+                    finish_if_merged(tx, events, &merged, old)?;
                 }
             }
             Ok(())
@@ -1360,6 +1389,74 @@ impl Store {
             Ok(())
         })
     }
+}
+
+/// URLs of the Project's pull requests that merged.
+fn merged_pull_requests(tx: &Transaction, project_id: &str) -> Result<HashSet<String>> {
+    let mut stmt =
+        tx.prepare("SELECT url FROM pull_requests WHERE project_id = ?1 AND state = 'merged'")?;
+    let rows = stmt.query_map([project_id], |r| r.get(0))?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
+/// The state and note a task has once its pull request merged. A task that
+/// is already done keeps its note, so an engine that keeps reporting the
+/// finished task changes nothing.
+fn merged_state(old: &Task) -> (TaskState, Option<String>) {
+    match old.state {
+        TaskState::Done => (TaskState::Done, old.state_note.clone()),
+        _ => (TaskState::Done, Some(MERGED_NOTE.to_string())),
+    }
+}
+
+const MERGED_NOTE: &str = "Pull request merged";
+
+/// Moves `task` to done when its pull request is among `merged`.
+fn finish_if_merged(
+    tx: &Transaction,
+    events: &mut Vec<Event>,
+    merged: &HashSet<String>,
+    task: &Task,
+) -> Result<()> {
+    if task
+        .pull_request_url
+        .as_ref()
+        .is_some_and(|u| merged.contains(u))
+    {
+        finish_task(tx, events, task)?;
+    }
+    Ok(())
+}
+
+/// Moves a task whose pull request merged to done and emits
+/// `task.state_changed`; a task already done is left alone.
+fn finish_task(tx: &Transaction, events: &mut Vec<Event>, old: &Task) -> Result<()> {
+    if old.state == TaskState::Done {
+        return Ok(());
+    }
+    let (state, state_note) = merged_state(old);
+    let task = Task {
+        state,
+        state_note,
+        updated_at: now_rfc3339(),
+        ..old.clone()
+    };
+    tx.execute(
+        "UPDATE tasks SET state = ?2, state_note = ?3, updated_at = ?4 WHERE id = ?1",
+        params![
+            task.id,
+            task.state.as_str(),
+            task.state_note,
+            task.updated_at
+        ],
+    )?;
+    append_event(
+        tx,
+        events,
+        Some(&task.project_id),
+        EventType::TaskStateChanged,
+        serde_json::json!({ "task": task, "previous_state": old.state }),
+    )
 }
 
 fn append_event(
