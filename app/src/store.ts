@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import {
   Account, AccountQuotaChanged, api, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Project, PullRequest,
-  ReviewUpdated, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
+  ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
 } from "./api";
 
 export interface AppState {
@@ -14,6 +14,8 @@ export interface AppState {
   projects: Record<string, Project>;
   tasks: Record<string, Task>;
   decisions: Record<string, Decision>;
+  /** Standing rules by id, revoked ones included, so the log can show what each decision was decided under. */
+  rules: Record<string, StandingRule>;
   /** Memory proposals across Projects by id, in every state. */
   memoryProposals: Record<string, MemoryProposal>;
   /** Coordinator transcripts by coordinator id (= Project id). Absent until loaded. */
@@ -47,7 +49,7 @@ export interface AppState {
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
-  projects: {}, tasks: {}, decisions: {}, memoryProposals: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
+  projects: {}, tasks: {}, decisions: {}, rules: {}, memoryProposals: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
   pullRequests: {}, prsAvailable: null, prActivity: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
   beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null,
@@ -80,7 +82,11 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
     }
     case "decision.opened":
     case "decision.answered":
+    case "decision.acted":
       return { ...s, decisions: { ...s.decisions, [p.id]: p as Decision } };
+    case "rule.updated":
+      if (typeof p?.id !== "string") return s;
+      return { ...s, rules: { ...s.rules, [p.id]: p as StandingRule } };
     case "memory.proposed":
     case "memory.accepted":
     case "memory.rejected":
@@ -221,9 +227,10 @@ export function handleEvent(e: DaemonEvent) {
 
 // ---- loading ----
 export async function refreshSnapshots() {
-  const [projects, decisions] = await Promise.all([
+  const [projects, decisions, rules] = await Promise.all([
     api.projects(),
     api.decisions().catch(() => [] as Decision[]),
+    api.rules(true).catch(() => [] as StandingRule[]),
   ]);
   const [lists, proposed] = await Promise.all([
     Promise.all(projects.map((p) => api.tasks(p.id).catch(() => [] as Task[]))),
@@ -237,6 +244,7 @@ export async function refreshSnapshots() {
     projects: Object.fromEntries(projects.map((p) => [p.id, p])),
     tasks,
     decisions: Object.fromEntries(decisions.map((d) => [d.id, d])),
+    rules: Object.fromEntries(rules.map((r) => [r.id, r])),
     memoryProposals,
     error: null,
   });
@@ -294,6 +302,11 @@ export async function loadDispatch(taskId: string): Promise<"ok" | "unavailable"
 /** Records a decision the daemon returned, e.g. from answering it; the event may arrive before or after. */
 export function upsertDecision(d: Decision) {
   set({ decisions: { ...state.decisions, [d.id]: d } });
+}
+
+/** Records a rule the daemon returned, e.g. from revoking it. */
+export function upsertRule(r: StandingRule) {
+  set({ rules: { ...state.rules, [r.id]: r } });
 }
 
 /** Records a memory proposal the daemon returned from accepting or rejecting it. */

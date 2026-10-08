@@ -220,6 +220,7 @@ button { font: inherit; color: inherit; }
 .pill.red { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .pill.yellow { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
 .pill.blue { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.pill.needs-you { color: var(--tone-needs-you); background: color-mix(in srgb, var(--tone-needs-you) 14%, transparent); }
 .pill.accent { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .mono { font-family: var(--mono); }
 .dim { color: var(--fg-dim); }

@@ -8,6 +8,7 @@ export const ROUTES = {
   projects: "", // the Projects list
   new: "new", // create a Project
   project: "p/:id", // board and coordinator chat
+  decisions: "p/:project/decisions/:id?", // the Project's decision log, optionally with one decision selected
   memory: "p/:project/memory/:id?", // the Project's memory, optionally with one proposal or entry selected
   issues: "p/:project/issues/:id?", // the Project's Beads issues, optionally with one selected
   dispatch: "p/:project/dispatch", // the Project's dispatch rules: edit, save, test

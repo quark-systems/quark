@@ -783,12 +783,41 @@ function seed() {
     state: "open", brief: {}, answer: null, answered_by: null, answered_at: null, answered_via: null, answer_why: null,
     outcome: null, acted_at: null, rule_id: null, made_rule_id: null, ...extra,
   });
+  const asker = [...tasks.values()].find((t) => t.state === "needs_decision").id;
   D("d-1", quark, "Keep the full answer history per decision, or only the latest answer?", {
-    task_id: [...tasks.values()].find((t) => t.state === "needs_decision").id, opened_at: minutesAgo(12),
+    task_id: asker, opened_at: minutesAgo(12), brief: {
+      context: "Decision records now carry who answered. Keeping every answer makes the log longer but shows when a call changed.",
+      options: [
+        { label: "Full history", consequence: "Every answer stays in the log, newest on top." },
+        { label: "Only the latest answer", consequence: "A new answer replaces the old one." },
+      ],
+      recommended: "Full history", recommended_why: "A call that changed is worth seeing later.", asked_by: asker, blocks: [asker],
+    },
   });
-  D("d-2", site, "Launch the new design behind a flag, or replace the old site directly?", { opened_at: minutesAgo(6) });
+  D("d-2", site, "Launch the new design behind a flag, or replace the old site directly?", {
+    opened_at: minutesAgo(6), brief: {
+      context: "The new grid passes every page check. A flag lets you compare both designs with real visitors for a week.",
+      options: [
+        { label: "Behind a flag", consequence: "Both designs ship; half the visitors see the new one." },
+        { label: "Replace directly", consequence: "The old site is gone today; rolling back means a revert." },
+      ],
+      recommended: "Behind a flag", recommended_why: "Comparing costs a week and switching back is one setting.",
+      asked_by: "coordinator", blocks: ["https://github.com/acme/site/pull/7"],
+      evidence: [{ label: "Page checks, 14 of 14 green", url: "https://github.com/acme/site/actions" }],
+    },
+  });
   D("d-3", quark, "Use SQLite WAL mode for the projection store?", {
-    opened_at: minutesAgo(200), state: "answered", answer: "Yes, WAL with a busy timeout.", answered_by: "matt", answered_at: minutesAgo(180),
+    opened_at: minutesAgo(200), state: "acted", answer: "Yes, WAL with a busy timeout.", answered_by: "matt", answered_at: minutesAgo(180),
+    answered_via: "app", answer_why: "Readers must never block the event writer.", outcome: "Every store opens in WAL mode with a 5s busy timeout.",
+    acted_at: minutesAgo(170), made_rule_id: "rule-1",
+    brief: { context: "The projection store is read by the API while the engine writes events.", asked_by: "coordinator" },
+  });
+  rules.set("rule-1", { id: "rule-1", project_id: quark.id, kind: "answer", text: "New SQLite stores use WAL mode with a busy timeout.",
+    decision_id: "d-3", created_by: "matt", created_at: minutesAgo(180), revoked_at: null, revoked_by: null });
+  D("d-4", quark, "Use WAL mode for the memory index store?", {
+    opened_at: minutesAgo(30), state: "acted", answer: "Yes, WAL with a busy timeout.", answered_by: "coordinator", answered_at: minutesAgo(30),
+    answered_via: "rule", outcome: "The memory index opens in WAL mode.", acted_at: minutesAgo(29), rule_id: "rule-1",
+    brief: { asked_by: "coordinator" },
   });
 
 
