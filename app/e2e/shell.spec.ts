@@ -129,7 +129,7 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   await expect(since).toContainText("Needs you");
   await expect(since).toContainText("Open PRs");
 
-  // Work is the board; Decisions lists the project's decisions; Issues waits for Beads.
+  // Work is the board; Decisions lists the project's decisions; Issues lists its Beads issues.
   await tabs.getByRole("link", { name: "Work" }).click();
   await expect(page).toHaveURL(/#\/p\/quark\/work$/);
   await expect(page.getByTestId("col-running")).toBeVisible();
@@ -137,7 +137,7 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   await expect(page).toHaveURL(/#\/p\/quark\/decisions$/);
   await expect(page.getByTestId("decision-log-row").first()).toBeVisible();
   await tabs.getByRole("link", { name: "Issues" }).click();
-  await expect(page.getByTestId("issues-unavailable")).toBeVisible();
+  await expect(page.getByTestId("beads-strip")).toBeVisible();
 
   // Settings is one page; Dispatch and Automation are its sections, and their old links open there.
   await page.getByTestId("nav-settings").click();
