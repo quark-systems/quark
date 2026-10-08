@@ -56,6 +56,7 @@ function RecordView({ r, latest, projectId }: { r: DispatchRecord; latest: boole
   const st = STATUS[r.resolution.status] ?? { label: r.resolution.status, cls: "" };
   const body = (
     <>
+      <span className="why-chosen">{[r.chosen.harness, r.chosen.model, r.chosen.effort && `${r.chosen.effort} effort`].filter(Boolean).join(" · ")}</span>
       <p className="why-summary" data-testid="why-summary">{r.summary}</p>
       <dl className="why-facts">
         <dt>Agent</dt>

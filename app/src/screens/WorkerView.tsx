@@ -1,6 +1,6 @@
 // J4: one worker in one view. Its transcript and a box to message it in the middle; the work
 // pane on the right with its live terminal, changed files with their diff, its PR and why this
-// agent; cancel and relaunch in the header.
+// agent; cancel and relaunch in the header, and the coordinator dock under the conversation.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
@@ -14,6 +14,7 @@ import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
 import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 import { useLabels } from "../persona";
+import { Dock } from "../shell/Dock";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
@@ -34,38 +35,38 @@ export function WorkerView({ id }: { id: string }) {
   const st = stateMeta(task.state);
 
   return (
-    <>
-      <div className="header">
-        <a className="crumb" href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
-        <span className="faint">/</span>
-        <h1 className="ellipsis" title={task.title}>{task.title}</h1>
-        <span className="pill" style={{ color: st.color }} data-testid="task-state">{st.label}</span>
-        {task.harness && <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}</span>}
-        {task.pull_request_url && <a className="pill green" href={task.pull_request_url} target="_blank" rel="noreferrer">pull request</a>}
-        <span className="spacer" />
-        <Controls taskId={id} active={isActive(task.state)} />
-      </div>
-      {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
-      <div className="screen worker">
-        <section className="worker-center">
-          <TranscriptPanel taskId={id} />
-          <SteerBox taskId={id} />
-        </section>
-        <aside className="worker-pane" aria-label="Work">
-          <div className="tabs" role="tablist">
-            <button role="tab" aria-selected={tab === "terminal"} className={tab === "terminal" ? "on" : ""} onClick={() => setTab("terminal")}>Terminal</button>
-            <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
-            {(pr || task.pull_request_url) && <button role="tab" aria-selected={tab === "pr"} className={tab === "pr" ? "on" : ""} onClick={() => setTab("pr")}>PR</button>}
-            <button role="tab" aria-selected={tab === "why"} className={tab === "why" ? "on" : ""} onClick={() => setTab("why")}>Why this agent</button>
-          </div>
-          {/* The terminal stays mounted so its emulator keeps its screen while another tab shows. */}
-          <div className="tab-body" hidden={tab !== "terminal"}><TerminalPanel taskId={id} taskState={task.state} /></div>
-          {tab === "changes" && <div className="tab-body"><ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} /></div>}
-          {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
-          {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
-        </aside>
-      </div>
-    </>
+    <div className="screen worker">
+      <section className="worker-center">
+        <div className="header">
+          <a className="crumb" href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
+          <span className="faint">/</span>
+          <h1 className="ellipsis" title={task.title}>{task.title}</h1>
+          <span className="pill" style={{ color: st.color }} data-testid="task-state">{st.label}</span>
+          {task.harness && <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}</span>}
+          {task.pull_request_url && <a className="pill green" href={task.pull_request_url} target="_blank" rel="noreferrer">pull request</a>}
+          <span className="spacer" />
+          <Controls taskId={id} active={isActive(task.state)} />
+        </div>
+        {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
+        <TranscriptPanel taskId={id} />
+        <SteerBox taskId={id} />
+        {/* The dock sits under the worker's own conversation; the work pane runs the full height. */}
+        <Dock />
+      </section>
+      <aside className="worker-pane" aria-label="Work">
+        <div className="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === "terminal"} className={tab === "terminal" ? "on" : ""} onClick={() => setTab("terminal")}>Terminal</button>
+          <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
+          {(pr || task.pull_request_url) && <button role="tab" aria-selected={tab === "pr"} className={tab === "pr" ? "on" : ""} onClick={() => setTab("pr")}>PR</button>}
+          <button role="tab" aria-selected={tab === "why"} className={tab === "why" ? "on" : ""} onClick={() => setTab("why")}>Why this agent</button>
+        </div>
+        {/* The terminal stays mounted so its emulator keeps its screen while another tab shows. */}
+        <div className="tab-body" hidden={tab !== "terminal"}><TerminalPanel taskId={id} taskState={task.state} /></div>
+        {tab === "changes" && <div className="tab-body"><ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} /></div>}
+        {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
+        {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
+      </aside>
+    </div>
   );
 }
 

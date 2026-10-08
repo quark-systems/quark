@@ -142,7 +142,7 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   // Settings is one page; Dispatch and Automation are its sections, and their old links open there.
   await page.getByTestId("nav-settings").click();
   const sections = page.getByRole("navigation", { name: "Settings" });
-  await expect(sections.getByRole("link")).toHaveText(["General", "Dispatch", "Automation"]);
+  await expect(sections.getByRole("link")).toHaveText([/Back to Conversation$/, "General", "Dispatch", "Automation"]);
   await open(page, "#/p/quark/dispatch");
   await expect(page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: "Dispatch" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("nav-settings")).toHaveAttribute("aria-current", "page");
@@ -165,6 +165,8 @@ test("worker view: transcript in the middle, Terminal, Changes, PR and Why this 
   // The center is the conversation with the worker; the work pane opens on its terminal.
   await expect(page.locator(".worker-center").getByTestId("transcript")).toBeVisible();
   await expect(page.locator(".worker-center").getByLabel("Message the worker")).toBeVisible();
+  // The dock sits under the worker's conversation, not under the work pane.
+  await expect(page.locator(".worker-center").getByTestId("dock")).toBeVisible();
   const pane = page.getByRole("complementary", { name: "Work" });
   await expect(pane.getByRole("tab")).toHaveText(["Terminal", "Changes", "PR", "Why this agent"]);
   await expect(pane.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");

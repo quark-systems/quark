@@ -35,3 +35,4 @@ Preconditions: `$Q launch --daemon mock` (demo data has open decisions, a red PR
 - A real daemon reads with the `nautical` persona by default, so the dock is labelled "Message the first mate".
 - The dock sends to the coordinator of the project on screen; on app pages (Accounts, Hosts, All projects) it uses the last project opened, with a Project picker when there are several.
 - The terminal stays mounted while another work-pane tab shows, and keeps its size until it is shown again.
+- Changes to the shell are checked against the mock (https://claude.ai/artifact/JbC7CRmGAAtRtdBT9k3M3D) side by side: screenshot the app in dark mode at 1440×900 next to each mock board it builds. Tab contents that predate the shell (Overview, Work, Metrics, the Dispatch editor) keep their own layout.

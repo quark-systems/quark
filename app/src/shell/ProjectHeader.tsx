@@ -73,22 +73,28 @@ const SECTIONS = [
 export function SettingsSections({ project, current }: { project: string; current: (typeof SECTIONS)[number]["name"] }) {
   return (
     <nav className="settings-sections" aria-label="Settings">
+      <a className="settings-back" href={href({ name: "project", id: project })}><span aria-hidden="true">‹ </span>Back to Conversation</a>
+      <span className="settings-title">Settings</span>
       {SECTIONS.map((s) => (
-        <a key={s.name} href={href({ name: s.name, project })} className={"ph-tab" + (s.name === current ? " on" : "")}
+        <a key={s.name} href={href({ name: s.name, project })} className={"settings-section" + (s.name === current ? " on" : "")}
           aria-current={s.name === current ? "page" : undefined} data-testid={`nav-${s.name === "settings" ? "general" : s.name}`}>{s.label}</a>
       ))}
     </nav>
   );
 }
 
-/** A project screen under its header; Settings sections also get the section bar. */
+/** A project screen under its header; Settings is a page with its sections listed on the left. */
 export function ProjectFrame({ route, project, children }: { route: Route; project: string; children: React.ReactNode }) {
   const tab = tabOf(route)!;
   return (
     <>
       <ProjectHeader project={project} current={tab} />
-      {tab === "settings" && <SettingsSections project={project} current={route.name as "settings" | "dispatch" | "automation"} />}
-      {children}
+      {tab === "settings" ? (
+        <div className="settings-page">
+          <SettingsSections project={project} current={route.name as "settings" | "dispatch" | "automation"} />
+          <div className="settings-body">{children}</div>
+        </div>
+      ) : children}
     </>
   );
 }

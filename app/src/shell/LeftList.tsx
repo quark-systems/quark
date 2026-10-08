@@ -15,6 +15,7 @@ export function LeftList({ mod }: { mod: string }) {
   const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
   const groups = useMemo(() => leftListGroups(projects, tasks, decisions), [projects, tasks, decisions]);
+  const openPrs = useStore((s) => Object.values(s.pullRequests).filter((p) => p.state === "open" || p.state === "draft").length);
 
   return (
     <nav className="left-list sidebar" aria-label="Projects">
@@ -29,6 +30,7 @@ export function LeftList({ mod }: { mod: string }) {
       <NextAttention mod={mod} />
       <div className="ll-top">
         <Row href={href({ name: "projects" })} current={route.name === "projects" || route.name === "prs" || (route.name === "inbox" && !route.id)} title="All projects"
+          trail={openPrs ? <span className="ll-trail" data-testid="ll-open-prs">{openPrs} PR{openPrs === 1 ? "" : "s"}</span> : undefined}
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>} />
       </div>
       <div className="ll-projects">

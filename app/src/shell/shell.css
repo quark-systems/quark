@@ -40,13 +40,27 @@
 .project-header { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 16px; min-height: 52px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--background); }
 .ph-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ph-title { font: 600 15px var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ph-tabs, .settings-sections { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; }
+.ph-tabs { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; }
 .ph-tab, .ph-settings { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius-m); text-decoration: none; font: 13px var(--sans); color: var(--fg-dim); }
 .ph-tab:hover, .ph-settings:hover { background: var(--selection-subtle); color: var(--fg); }
 .ph-tab.on { background: var(--selection-strong); color: var(--fg); }
 .ph-settings { border: 1px solid var(--line-2); background: var(--surface-2); font-size: 12px; }
 .ph-settings.on { border-color: var(--accent); color: var(--fg); }
-.settings-sections { flex: none; padding: 6px 16px; border-bottom: 1px solid var(--line); }
+/* Settings: one page, its sections listed down the left. */
+.settings-page { flex: 1; min-height: 0; display: flex; }
+.settings-sections { flex: none; width: 200px; display: flex; flex-direction: column; gap: 2px; padding: 16px 10px; border-right: 1px solid var(--line); background: var(--surface-1); overflow-y: auto; }
+.settings-back { padding: 0 10px 12px; font-size: 12px; color: var(--fg-dim); text-decoration: none; }
+.settings-back:hover { color: var(--fg); }
+.settings-title { padding: 0 10px 8px; font: 600 15px var(--sans); }
+.settings-section { display: block; padding: 8px 10px; border-radius: var(--radius-m); text-decoration: none; color: var(--fg-dim); }
+.settings-section:hover { background: var(--selection-subtle); color: var(--fg); }
+.settings-section.on { background: var(--selection-strong); color: var(--fg); }
+.settings-body { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+@media (max-width: 720px) {
+  .settings-page { flex-direction: column; }
+  .settings-sections { width: auto; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--line); padding: 6px 10px; }
+  .settings-back, .settings-title { display: none; }
+}
 
 /* The Conversation tab: the coordinator in the middle, "since you looked" on the right. */
 .conversation { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); }
@@ -93,3 +107,11 @@
 .home-more { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .home-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
 .home-cards .pc-name { display: flex; align-items: center; gap: 8px; }
+
+/* The worker view's work pane: tabs styled like the project tabs, a full-height column beside the conversation. */
+.worker-pane .tabs { height: 52px; box-sizing: border-box; align-items: center; padding: 0 10px; background: var(--surface-1); }
+.worker-pane .tabs button { height: 32px; padding: 0 12px; border-bottom: none; border-radius: var(--radius-m); font: 13px var(--sans); }
+.worker-pane .tabs button:hover { background: var(--selection-subtle); color: var(--fg); }
+.worker-pane .tabs button.on { background: var(--selection-strong); }
+.worker-center > .header { height: 52px; }
+.ll-trail { font-size: 12px; color: var(--fg-faint); }
