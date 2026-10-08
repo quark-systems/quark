@@ -21,6 +21,7 @@ export * from "./automation";
 export * from "./overview";
 export * from "./personas";
 export * from "./hosts";
+export * from "./beads";
 
 import { projectsApi } from "./projects";
 import { tasksApi } from "./tasks";
@@ -38,6 +39,7 @@ import { automationApi } from "./automation";
 import { overviewApi } from "./overview";
 import { personasApi } from "./personas";
 import { hostsApi } from "./hosts";
+import { beadsApi } from "./beads";
 
 export const api = {
   ...projectsApi,
@@ -56,4 +58,5 @@ export const api = {
   ...overviewApi,
   ...personasApi,
   ...hostsApi,
+  ...beadsApi,
 };

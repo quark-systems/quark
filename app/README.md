@@ -14,9 +14,11 @@ The same frontend runs in a plain browser.
 - **Worker view** (J4): live terminal with input, a box to message the worker, cancel and relaunch, and tabs for the transcript and the changed files with their diff.
 - **Decisions** (J5): every open decision across Projects, oldest first, with an answer box; the answered list shows who answered and when.
   Keys: `j`/`k` move, `r` or `Enter` answers, `Ctrl/Cmd+Enter` sends, `o`/`a` switch between open and answered, `t` opens the task that asked.
-- **Memory** (J8): per Project, the learnings finished tasks proposed, with their evidence, accepted (edited or not) or rejected from the keyboard; accepted entries with the commit that added each, and promotion to the user-level memory every Project's coordinator reads.
+- **Memory** (J8): per Project, the learnings finished tasks proposed, with their evidence, accepted (edited or not) for this Project, all your Projects or anyone in the repo, rejected, or turned into an issue; what this Project keeps (its Beads memories, or `memory/` files with the commit that added each and promotion to user-level memory), your own memory, and the Project's decisions.
+- **Issues**: per Project, its Beads issues, mirrored both ways with GitHub Issues, by Ready, In progress, Blocked and Closed, each with what it waits for and what waits for it; a worker starts on one once nothing it waits for is open. New issue drafts issues with the coordinator in a side chat, created only when accepted.
+  Keys: `j`/`k` move, `n` opens New issue, `Esc` closes it.
 - **Dispatch** (J9): per Project, the dispatch rules in order (name, when, ordered candidates), the default and `default_select`, each candidate checked with its harness as it is edited; saving commits `dispatch.yaml` to the Project repo, and the test pane shows the rule a task description matches and each candidate's pass or fail reason, for the saved rules or for the edit in progress.
-  Keys: `j`/`k` move, `p`/`a` switch between proposed and accepted, `e` or `Enter` edits, `Ctrl/Cmd+Enter` accepts, `x` twice rejects, `u` promotes, `c` shows the commit, `t` opens the task.
+  Keys: `j`/`k` move, `p`/`a` switch between to review and this project, `e` or `Enter` edits, `Ctrl/Cmd+Enter` accepts, `x` twice rejects (or forgets a Beads memory), `u` promotes, `c` shows the commit, `t` opens the task.
 
 `Ctrl/Cmd+K` opens a palette that jumps to any Project, task or open decision.
 It also switches the theme (dark, light, or match the system).

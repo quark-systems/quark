@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
     AcceptMemoryProposal, ErrorBody, MemoryCommit, MemoryEntry, MemoryProposal,
-    MemoryProposalState, PromoteMemoryEntry, RejectMemoryProposal, UserMemoryEntry,
+    MemoryProposalState, MemoryScope, PromoteMemoryEntry, RejectMemoryProposal, UserMemoryEntry,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -153,13 +153,7 @@ pub async fn accept(
         let p = project_id.clone();
         db(&state, move |s| s.get_project(&p)).await?
     };
-    let (Some(bare), Some(root)) = (project.project_repo_path, project.workspace_path) else {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "no_project_repo",
-            "the Project has no Project repo to keep memory in",
-        ));
-    };
+    let scope = input.scope.unwrap_or_default();
 
     let mut entry = MemoryEntry {
         id: String::new(),
@@ -173,42 +167,77 @@ pub async fn accept(
         accepted_by: Some(who.clone()),
         proposal_id: Some(proposal.id.clone()),
         commit: None,
+        beads_key: None,
     };
-    let body = memory::render(&entry);
-    let message = format!("Remember: {}", headline(&entry.text));
-    let (date, text) = (proposal.proposed_at.clone(), entry.text.clone());
-    let checkout = PathBuf::from(&root).join("project");
-    let committed = tokio::task::spawn_blocking(move || {
-        project_repo::commit_new_file(
-            std::path::Path::new(&bare),
-            &checkout,
-            |taken| {
-                let name = memory::file_name(&date, &text, |n| {
-                    taken(&format!("{}/{n}", memory::MEMORY_DIR))
-                });
-                format!("{}/{name}", memory::MEMORY_DIR)
-            },
-            &body,
-            &message,
-        )
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (path, commit) = committed.map_err(|e| {
-        tracing::warn!(project = %project_id, error = %e, "committing a memory entry failed");
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "project_repo_failed",
-            e.to_string(),
-        )
-    })?;
-    entry.id = std::path::Path::new(&path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_string();
-    entry.path = path;
-    entry.commit = Some(commit);
+    let root = project.workspace_path.clone().map(PathBuf::from);
+    let mut shared = None;
+    if scope == MemoryScope::User {
+        // Named after the proposal, so accepting cannot copy it twice.
+        entry.id = proposal.id.clone();
+        let dir = state.layout.user_memory();
+        let (copy, name, by) = (entry.clone(), project.name.clone(), who.clone());
+        let _one = PROMOTING.lock().await;
+        let (promoted, written) = tokio::task::spawn_blocking(move || {
+            memory::promote(&dir, &copy, &name, &crate::now_rfc3339(), &by)
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "user_memory_failed", e))?;
+        entry.id = promoted.id.clone();
+        entry.path = promoted.path.clone();
+        shared = written.then_some(promoted);
+    } else if super::beads::ready(&state, &project_id).await {
+        let key = state
+            .beads
+            .remember(&state.store, &state.layout.home, &project_id, &entry.text)
+            .await?;
+        entry.id = key.clone();
+        entry.path = format!("beads:{key}");
+        entry.beads_key = Some(key);
+    } else {
+        let (Some(bare), Some(root)) = (project.project_repo_path.clone(), root.clone()) else {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "no_project_repo",
+                "the Project has no Project repo to keep memory in",
+            ));
+        };
+        let body = memory::render(&entry);
+        let message = format!("Remember: {}", headline(&entry.text));
+        let (date, text) = (proposal.proposed_at.clone(), entry.text.clone());
+        let checkout = root.join("project");
+        let committed = tokio::task::spawn_blocking(move || {
+            project_repo::commit_new_file(
+                std::path::Path::new(&bare),
+                &checkout,
+                |taken| {
+                    let name = memory::file_name(&date, &text, |n| {
+                        taken(&format!("{}/{n}", memory::MEMORY_DIR))
+                    });
+                    format!("{}/{name}", memory::MEMORY_DIR)
+                },
+                &body,
+                &message,
+            )
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (path, commit) = committed.map_err(|e| {
+            tracing::warn!(project = %project_id, error = %e, "committing a memory entry failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "project_repo_failed",
+                e.to_string(),
+            )
+        })?;
+        entry.id = std::path::Path::new(&path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        entry.path = path;
+        entry.commit = Some(commit);
+    }
 
     let accepted = {
         let (p, i, e) = (project_id.clone(), id, entry.clone());
@@ -219,7 +248,13 @@ pub async fn accept(
                 _ => e,
             })?
     };
-    tell_coordinator(&state, project_id, PathBuf::from(root), &entry);
+    match (shared, root) {
+        (Some(promoted), _) => tell_coordinators(&state, &promoted),
+        (None, Some(root)) if scope != MemoryScope::User => {
+            tell_coordinator(&state, project_id, root, &entry, scope == MemoryScope::Repo)
+        }
+        _ => {}
+    }
     Ok(Json(accepted))
 }
 
@@ -235,14 +270,35 @@ fn headline(text: &str) -> String {
 
 /// Tells the coordinator about a new entry, so it reads it on its next turn
 /// even though its session started before the entry existed. In the
-/// background: the commit is what counts, and a coordinator without a live
-/// session reads `memory/` when it next starts.
-fn tell_coordinator(state: &AppState, project_id: String, root: PathBuf, entry: &MemoryEntry) {
-    let text = format!(
-        "Project memory: a new entry was accepted and committed to the Project repo at project/{}. \
-         Read it and apply it from your next plan on:\n\n{}",
-        entry.path, entry.text
-    );
+/// background: the entry is what counts, and a coordinator without a live
+/// session reads `memory/` (or gets the Beads memories from `bd prime`) when
+/// it next starts. With `for_repo`, it is also asked for a pull request that
+/// adds the learning to `AGENTS.md`.
+fn tell_coordinator(
+    state: &AppState,
+    project_id: String,
+    root: PathBuf,
+    entry: &MemoryEntry,
+    for_repo: bool,
+) {
+    let mut text = match &entry.beads_key {
+        Some(key) => format!(
+            "Project memory: a new memory was added to the Project's Beads as `{key}` \
+             (`bd recall {key}`). Apply it from your next plan on:\n\n{}",
+            entry.text
+        ),
+        None => format!(
+            "Project memory: a new entry was accepted and committed to the Project repo at project/{}. \
+             Read it and apply it from your next plan on:\n\n{}",
+            entry.path, entry.text
+        ),
+    };
+    if for_repo {
+        text.push_str(
+            "\n\nThe user wants anyone who works in the repo to know this too: \
+             start a worker to add it to the AGENTS.md of the repo it is about, in a pull request.",
+        );
+    }
     let chat = state.chat.clone();
     tokio::spawn(async move {
         let ws = WorkspaceRef { project_id, root };

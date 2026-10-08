@@ -6,6 +6,7 @@
 
 pub mod accounts;
 pub mod api;
+pub mod beads;
 pub mod chat;
 pub mod classifier;
 pub mod config;
@@ -331,6 +332,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         )
     });
 
+    let beads = Arc::new(beads::Beads::new(
+        std::env::var_os("QUARK_BD").map(Into::into),
+        format!("http://{}", config.listen),
+    ));
+    beads.watch_all(store.clone(), layout.home.clone());
+
     let mut app = api::router(AppState {
         store,
         engine,
@@ -345,6 +352,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         forge,
         events,
         triggers,
+        beads,
     });
     if let Some(n) = &native {
         app = app.nest(native::WORKER_PREFIX, n.worker_router());

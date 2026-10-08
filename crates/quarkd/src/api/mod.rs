@@ -2,6 +2,7 @@
 
 mod accounts;
 mod automation;
+mod beads;
 mod dashboard;
 mod decisions;
 mod dispatch;
@@ -56,6 +57,8 @@ pub struct AppState {
     /// Inbox, trigger rules and away policy (slice 7); `None` when that
     /// engine is off.
     pub triggers: Option<Arc<quark_triggers::Engine>>,
+    /// Each Project's Beads database: issues, decision beads and memories.
+    pub beads: Arc<crate::beads::Beads>,
 }
 
 /// One API module: its routes and its part of the OpenAPI document.
@@ -126,6 +129,10 @@ const MODULES: &[Module] = &[
     Module {
         router: events::router,
         openapi: <events::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: beads::router,
+        openapi: <beads::Api as OpenApi>::openapi,
     },
     Module {
         router: shadows::router,

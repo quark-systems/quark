@@ -75,6 +75,13 @@ export function Palette({ onClose }: { onClose: () => void }) {
                 </Command.Item>
               ))}
             </Command.Group>
+            <Command.Group heading="Issues">
+              {Object.values(projects).map((p) => (
+                <Command.Item key={p.id} value={`issues beads bugs ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "issues", project: p.id }))}>
+                  <span className="ellipsis">Issues: {p.name}</span>
+                </Command.Item>
+              ))}
+            </Command.Group>
             <Command.Group heading="Dispatch">
               {Object.values(projects).map((p) => (
                 <Command.Item key={p.id} value={`dispatch rules agents ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "dispatch", project: p.id }))}>

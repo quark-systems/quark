@@ -255,6 +255,7 @@ async fn harness_routes() {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         triggers: None,
+        beads: Default::default(),
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: quarkd::provision::Layout::new(dir.path().join("quark-home")),
         harnesses,

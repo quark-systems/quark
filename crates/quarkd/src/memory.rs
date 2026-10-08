@@ -211,6 +211,7 @@ pub fn parse(project_id: &str, path: &str, body: &str) -> MemoryEntry {
         accepted_by: None,
         proposal_id: None,
         commit: None,
+        beads_key: None,
     };
     let Some((front, text)) = split_front(body) else {
         return entry;
@@ -353,6 +354,7 @@ pub fn render_user(e: &UserMemoryEntry) -> String {
         accepted_by: None,
         proposal_id: None,
         commit: None,
+        beads_key: None,
     });
     for (key, value) in [
         ("project", &e.project_id),
@@ -574,6 +576,7 @@ mod tests {
             accepted_by: Some("matt".into()),
             proposal_id: Some("mpr_1".into()),
             commit: None,
+            beads_key: None,
         };
         let body = render(&e);
         assert!(

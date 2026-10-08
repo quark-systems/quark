@@ -22,6 +22,7 @@ use tokio::sync::broadcast;
 use crate::now_rfc3339;
 
 mod accounts;
+mod beads;
 mod decisions;
 mod failover;
 mod memory;

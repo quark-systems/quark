@@ -777,6 +777,274 @@
         }
       }
     },
+    "/v1/issue-drafts/{id}": {
+      "put": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "The coordinator's drafts for an open draft, replacing earlier ones.",
+        "operationId": "write_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteIssueDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft is closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/issue-drafts/{id}/messages": {
+      "post": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Add a message to an open draft (\"make the first one P0\"); the\ncoordinator revises its drafts.",
+        "operationId": "refine_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft is closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/issue-drafts/{id}:accept": {
+      "post": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Create the drafted beads, as edited, in one Beads transaction.",
+        "description": "The draft closes with the new ids by draft key. With `start_worker`, the\ncoordinator is asked to start a worker on the first one.",
+        "operationId": "accept_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptIssueDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_beads`, or the draft is closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`beads_failed`: nothing was created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/issue-drafts/{id}:discard": {
+      "post": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Close a draft without creating anything.",
+        "operationId": "discard_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueDraft"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft is closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/memory": {
       "get": {
         "tags": [
@@ -1167,6 +1435,253 @@
         }
       }
     },
+    "/v1/projects/{id}/beads": {
+      "get": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "The Project's Beads database.",
+        "operationId": "get_beads",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeadsStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/beads/memories": {
+      "get": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "The Project's Beads memories, which `bd prime` gives every agent.",
+        "operationId": "list_memories",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BeadsMemory"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_beads`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/beads/memories/{key}": {
+      "delete": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Forget one of the Project's Beads memories.",
+        "operationId": "forget_memory",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Memory key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_beads`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/beads:setup": {
+      "post": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Create the Project's Beads database in server mode.",
+        "description": "When the Project's first repo tracks a `.beads` that syncs to a Dolt\nremote, the database is cloned from it, so existing issues carry over.\nReturns at once with `setting_up`; progress and the outcome arrive as\n`beads.status` events. A Project that already has one gets its status.",
+        "operationId": "setup_beads",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeadsStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/beads:sync": {
+      "post": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Sync the Project's beads with GitHub Issues now, both ways.",
+        "description": "Pulls every issue, then pushes every bead except decision beads. Uses\n`GITHUB_TOKEN`, else the token `gh` is signed in with. The outcome is\nkept as `last_sync`, failed or not.",
+        "operationId": "sync_beads",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Synced, or `last_sync` says why not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeadsStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The Project's first repo is not on GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_beads`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/dispatch": {
       "get": {
         "tags": [
@@ -1473,6 +1988,236 @@
           },
           "503": {
             "description": "The automation engine is off (`automation_off`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/issue-drafts": {
+      "get": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "The Project's open New issue drafts, oldest first.",
+        "operationId": "list_drafts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IssueDraft"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Start a New issue draft with the user's description of the work.",
+        "description": "The message goes to the Project's coordinator, which drafts beads and\nsends them back with `PUT /v1/issue-drafts/{id}`; they arrive as\n`issue_draft.updated` events. Nothing is created in Beads until the draft\nis accepted. When the coordinator cannot be reached the draft says so.",
+        "operationId": "start_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/issues": {
+      "get": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "The Project's issues: open ones first, then by priority, newest first.",
+        "operationId": "list_issues",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Default `all`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ready",
+                "in_progress",
+                "blocked",
+                "closed",
+                "open",
+                "all"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Issue"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_beads`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/issues/{issue_id}": {
+      "get": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "One issue with what blocks it, what it blocks, its links and comments.",
+        "operationId": "get_issue",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "issue_id",
+            "in": "path",
+            "description": "Bead id, e.g. `qk-44`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_beads`",
             "content": {
               "application/json": {
                 "schema": {
@@ -3783,6 +4528,26 @@
   },
   "components": {
     "schemas": {
+      "AcceptIssueDraft": {
+        "type": "object",
+        "description": "Create the drafted beads.",
+        "properties": {
+          "issues": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DraftIssue"
+            },
+            "description": "The drafts as edited; the stored ones when absent."
+          },
+          "start_worker": {
+            "type": "boolean",
+            "description": "Ask the coordinator to start a worker on the first created issue."
+          }
+        }
+      },
       "AcceptMemoryProposal": {
         "type": "object",
         "description": "Accept a memory proposal, optionally edited.",
@@ -3793,6 +4558,17 @@
               "null"
             ],
             "description": "Who is accepting: one line of at most 128 bytes. Absent or null means\nthe daemon's own user (`$USER`)."
+          },
+          "scope": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemoryScope",
+                "description": "Who should know; `project` when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "text": {
             "type": [
@@ -4262,6 +5038,151 @@
             "format": "int32",
             "description": "Items waiting for the next digest.",
             "minimum": 0
+          }
+        }
+      },
+      "BeadsChanged": {
+        "type": "object",
+        "description": "A `beads.changed` event: something in the database changed, from Quark,\nan agent or a sync. Clients read the issues again.",
+        "required": [
+          "project_id",
+          "op"
+        ],
+        "properties": {
+          "issue_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The bead it touched, when the change names one."
+          },
+          "op": {
+            "type": "string",
+            "description": "Beads' journal operation (`create`, `update`, `close`, `dep_add`...),\nor `sync`, `memory` and `setup` for changes Quark made itself."
+          },
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BeadsMemory": {
+        "type": "object",
+        "description": "One of the Project's Beads memories (`bd remember`), injected into every\nagent session by `bd prime`.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accepted_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemoryEvidence",
+                "description": "Where it came from, when it was accepted from a proposal in Quark."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemorySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "BeadsState": {
+        "type": "string",
+        "description": "Where a Project's Beads database stands.",
+        "enum": [
+          "missing",
+          "setting_up",
+          "ready",
+          "failed",
+          "unavailable"
+        ]
+      },
+      "BeadsStatus": {
+        "type": "object",
+        "description": "A Project's Beads database. Also the payload of `beads.status` events.",
+        "required": [
+          "project_id",
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is unavailable or failed, or what setup is doing now."
+          },
+          "dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory holding the database's `.beads`."
+          },
+          "github_repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`owner/repo` mirrored both ways with GitHub Issues."
+          },
+          "last_sync": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GithubSync"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Issue id prefix, as in `qk-44`."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "remote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Dolt remote the database syncs with, when it has one."
+          },
+          "state": {
+            "$ref": "#/components/schemas/BeadsState"
           }
         }
       },
@@ -5670,6 +6591,86 @@
           }
         }
       },
+      "DraftIssue": {
+        "type": "object",
+        "description": "A bead the coordinator drafted; nothing exists in Beads until the draft\nis accepted.",
+        "required": [
+          "key",
+          "title"
+        ],
+        "properties": {
+          "blocked_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Other drafts' keys or existing issue ids this one waits for."
+          },
+          "description": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string",
+            "description": "Draft-local key (`1`, `2`)."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "DraftMessage": {
+        "type": "object",
+        "description": "One turn of the New issue side chat.",
+        "required": [
+          "role",
+          "text",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/DraftRole"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "DraftRole": {
+        "type": "string",
+        "enum": [
+          "user",
+          "coordinator"
+        ]
+      },
+      "DraftText": {
+        "type": "object",
+        "description": "Start a draft, or add a message to one.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
       "Effort": {
         "type": "string",
         "description": "Reasoning effort, shared across harnesses. Each harness accepts a subset.",
@@ -5763,7 +6764,10 @@
           "account.quota_changed",
           "memory.proposed",
           "memory.accepted",
-          "memory.rejected"
+          "memory.rejected",
+          "beads.status",
+          "beads.changed",
+          "issue_draft.updated"
         ]
       },
       "Evidence": {
@@ -6092,6 +7096,28 @@
           "failed",
           "skipped"
         ]
+      },
+      "GithubSync": {
+        "type": "object",
+        "description": "The last two-way sync with GitHub Issues.",
+        "required": [
+          "at",
+          "ok",
+          "message"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When it finished (RFC 3339 UTC)."
+          },
+          "message": {
+            "type": "string",
+            "description": "What happened, or why it failed."
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
       },
       "HarnessAuth": {
         "type": "object",
@@ -6699,6 +7725,281 @@
           }
         }
       },
+      "Issue": {
+        "type": "object",
+        "description": "One bead.",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "priority",
+          "issue_type",
+          "created_at",
+          "updated_at",
+          "ready",
+          "blocked"
+        ],
+        "properties": {
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocked": {
+            "type": "boolean",
+            "description": "Something it waits for is still open."
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Issues this one waits for (`blocks` dependencies), closed ones included."
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "external_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The GitHub issue it mirrors, when synced."
+          },
+          "id": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string",
+            "description": "bug, feature, task, epic, chore, decision... or a custom type."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0 (highest) to 4.",
+            "minimum": 0
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Open and nothing it waits for is still open."
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "IssueComment": {
+        "type": "object",
+        "required": [
+          "author",
+          "text",
+          "created_at"
+        ],
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "IssueDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Issue"
+          },
+          {
+            "type": "object",
+            "required": [
+              "blocked_by_issues",
+              "blocks_issues",
+              "related_issues",
+              "comments"
+            ],
+            "properties": {
+              "acceptance_criteria": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocked_by_issues": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/IssueRef"
+                }
+              },
+              "blocks_issues": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/IssueRef"
+                },
+                "description": "Issues waiting for this one."
+              },
+              "comments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/IssueComment"
+                }
+              },
+              "design": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "related_issues": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RelatedIssue"
+                }
+              }
+            }
+          }
+        ],
+        "description": "One bead with everything linked to it."
+      },
+      "IssueDraft": {
+        "type": "object",
+        "description": "The New issue side chat: what was said and the beads drafted so far.\nAlso the payload of `issue_draft.updated` events.",
+        "required": [
+          "id",
+          "project_id",
+          "state",
+          "messages",
+          "issues",
+          "waiting",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created": {
+            "type": "object",
+            "description": "Issue ids created on accept, by draft key.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftIssue"
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftMessage"
+            }
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Existing issues judged related but separate."
+          },
+          "state": {
+            "$ref": "#/components/schemas/IssueDraftState"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "waiting": {
+            "type": "boolean",
+            "description": "A message went to the coordinator and its drafts have not come back."
+          }
+        }
+      },
+      "IssueDraftState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "accepted",
+          "discarded"
+        ]
+      },
+      "IssueRef": {
+        "type": "object",
+        "description": "An issue linked to another, with enough to label the link.",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "issue_type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Beads' status: `open`, `in_progress`, `blocked`, `deferred`, `closed`..."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "LeadTime": {
         "type": "object",
         "description": "From a task's first spawn to its `done`, over tasks done in the window.",
@@ -6812,6 +8113,13 @@
               "string",
               "null"
             ]
+          },
+          "beads_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its key in the Project's Beads memories (`bd remember`), when it was\naccepted into Beads rather than committed to `memory/`."
           },
           "commit": {
             "type": [
@@ -6963,6 +8271,15 @@
           "proposed",
           "accepted",
           "rejected"
+        ]
+      },
+      "MemoryScope": {
+        "type": "string",
+        "description": "Who an accepted learning is for.",
+        "enum": [
+          "project",
+          "user",
+          "repo"
         ]
       },
       "MemorySource": {
@@ -8218,6 +9535,25 @@
             "description": "Who is rejecting, as for [`AcceptMemoryProposal::decided_by`]."
           }
         }
+      },
+      "RelatedIssue": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/IssueRef"
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A non-blocking link: `related`, `discovered-from`, `supersedes`,\n`parent-child`..."
       },
       "RelaunchTask": {
         "type": "object",
@@ -9903,6 +11239,34 @@
           },
           "state": {
             "$ref": "#/components/schemas/WorktreeSlotState"
+          }
+        }
+      },
+      "WriteIssueDraft": {
+        "type": "object",
+        "description": "The coordinator's drafts, replacing the previous ones.",
+        "required": [
+          "issues"
+        ],
+        "properties": {
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftIssue"
+            }
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reply": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to say in the side chat."
           }
         }
       }

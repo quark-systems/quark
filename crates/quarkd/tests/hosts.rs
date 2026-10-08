@@ -88,6 +88,7 @@ fn fixture() -> Fixture {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: log.clone(),
         triggers: None,
+        beads: Default::default(),
     });
     Fixture {
         _home: home,

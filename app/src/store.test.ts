@@ -104,3 +104,24 @@ describe("memory proposals", () => {
     expect(Object.keys(s.memoryProposals)).toEqual(["m1", "m2"]);
   });
 });
+
+describe("beads", () => {
+  it("keeps each Project's Beads status and counts its changes", () => {
+    let s = applyEvent(initialState, ev(1, "beads.status", { project_id: "p1", state: "setting_up", detail: "Creating the database" }));
+    s = applyEvent(s, ev(2, "beads.status", { project_id: "p1", state: "ready", github_repo: "o/r" }));
+    expect(s.beads.p1).toMatchObject({ state: "ready", github_repo: "o/r" });
+    s = applyEvent(s, ev(3, "beads.changed", { project_id: "p1", issue_id: "qk-1", op: "update" }));
+    s = applyEvent(s, ev(4, "beads.changed", { project_id: "p1", op: "sync" }));
+    expect(s.beadsActivity.p1).toBe(2);
+  });
+
+  it("keeps the newest version of a New issue draft", () => {
+    const draft = { id: "idr-1", project_id: "p1", state: "open", messages: [], issues: [], related: [], waiting: true, created: {},
+      created_at: "2026-10-02T10:00:00Z", updated_at: "2026-10-02T10:00:01Z" };
+    let s = applyEvent(initialState, ev(1, "issue_draft.updated", draft));
+    s = applyEvent(s, ev(2, "issue_draft.updated", { ...draft, waiting: false, updated_at: "2026-10-02T10:00:03Z" }));
+    expect(s.issueDrafts["idr-1"].waiting).toBe(false);
+    // An older version arriving late changes nothing.
+    expect(applyEvent(s, ev(3, "issue_draft.updated", { ...draft, updated_at: "2026-10-02T10:00:02Z" }))).toBe(s);
+  });
+});

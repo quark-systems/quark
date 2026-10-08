@@ -58,10 +58,19 @@ pub enum EventType {
     /// A proposal was rejected; payload is the [`MemoryProposal`](crate::MemoryProposal)(crate::MemoryProposal).
     #[serde(rename = "memory.rejected")]
     MemoryRejected,
+    /// A Project's Beads database changed state; payload is a [`BeadsStatus`](crate::BeadsStatus).
+    #[serde(rename = "beads.status")]
+    BeadsStatus,
+    /// Beads data changed; payload is a [`BeadsChanged`](crate::BeadsChanged).
+    #[serde(rename = "beads.changed")]
+    BeadsChanged,
+    /// A New issue draft changed; payload is the [`IssueDraft`](crate::IssueDraft).
+    #[serde(rename = "issue_draft.updated")]
+    IssueDraftUpdated,
 }
 
 impl EventType {
-    pub const ALL: [EventType; 19] = [
+    pub const ALL: [EventType; 22] = [
         EventType::ProjectUpdated,
         EventType::TaskCreated,
         EventType::TaskStateChanged,
@@ -81,6 +90,9 @@ impl EventType {
         EventType::MemoryProposed,
         EventType::MemoryAccepted,
         EventType::MemoryRejected,
+        EventType::BeadsStatus,
+        EventType::BeadsChanged,
+        EventType::IssueDraftUpdated,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -104,6 +116,9 @@ impl EventType {
             EventType::MemoryProposed => "memory.proposed",
             EventType::MemoryAccepted => "memory.accepted",
             EventType::MemoryRejected => "memory.rejected",
+            EventType::BeadsStatus => "beads.status",
+            EventType::BeadsChanged => "beads.changed",
+            EventType::IssueDraftUpdated => "issue_draft.updated",
         }
     }
 
