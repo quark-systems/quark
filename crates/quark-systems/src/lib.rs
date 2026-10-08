@@ -10,6 +10,7 @@
 
 mod account;
 mod automation;
+mod beads;
 mod decision;
 mod dispatch;
 mod event;
@@ -30,6 +31,7 @@ mod transcript;
 
 pub use account::*;
 pub use automation::*;
+pub use beads::*;
 pub use decision::*;
 pub use dispatch::*;
 pub use event::*;

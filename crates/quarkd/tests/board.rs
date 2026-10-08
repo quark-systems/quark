@@ -100,6 +100,7 @@ fn setup(workspace: &Path) -> Setup {
             forge: Arc::new(quarkd::forge::StubForge::new()),
             events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
             triggers: None,
+            beads: Default::default(),
         }),
         _home: home,
         projector: Projector::new(store.clone(), engine.clone())

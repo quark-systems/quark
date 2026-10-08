@@ -2,8 +2,8 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  Account, AccountQuotaChanged, api, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, MemoryProposal, NotAvailable, Project, PullRequest, ReviewUpdated, Task, TerminalOutput, TranscriptEntry,
-  TranscriptItem, wsUrl,
+  Account, AccountQuotaChanged, api, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Project, PullRequest,
+  ReviewUpdated, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
 } from "./api";
 
 export interface AppState {
@@ -35,6 +35,14 @@ export interface AppState {
   accountOrder: string[];
   /** Whether the daemon serves accounts; null until the first load answers. */
   accountsAvailable: boolean | null;
+  /** Each Project's Beads database, by Project id. Absent until loaded. */
+  beads: Record<string, BeadsStatus>;
+  /** Count of `beads.changed` events per Project, so views can refetch its issues and memories. */
+  beadsActivity: Record<string, number>;
+  /** New issue side chats by draft id, in every state. */
+  issueDrafts: Record<string, IssueDraft>;
+  /** Text to start a New issue side chat with when the Issues tab opens ("Turn into an issue" on Memory). */
+  issueSeed: { project_id: string; text: string } | null;
 }
 
 export const initialState: AppState = {
@@ -42,6 +50,7 @@ export const initialState: AppState = {
   projects: {}, tasks: {}, decisions: {}, memoryProposals: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
   pullRequests: {}, prsAvailable: null, prActivity: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
+  beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null,
 };
 
 function upsertById<T extends { id: string | number }>(list: T[] | undefined, item: T): T[] {
@@ -130,6 +139,19 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
       if (!cur || !q.quota) return s; // not loaded yet; the next load includes it
       return { ...s, accounts: { ...s.accounts, [cur.id]: { ...cur, quota: q.quota } } };
     }
+    case "beads.status":
+      if (typeof p?.project_id !== "string") return s;
+      return { ...s, beads: { ...s.beads, [p.project_id]: p as BeadsStatus } };
+    case "beads.changed": {
+      const pid = (p?.project_id ?? e.project_id) as string | undefined;
+      if (!pid) return s;
+      return { ...s, beadsActivity: { ...s.beadsActivity, [pid]: (s.beadsActivity[pid] ?? 0) + 1 } };
+    }
+    case "issue_draft.updated":
+      if (typeof p?.id !== "string") return s;
+      // A reply to the request that changed it may have recorded a newer one already.
+      if ((s.issueDrafts[p.id]?.updated_at ?? "") > p.updated_at) return s;
+      return { ...s, issueDrafts: { ...s.issueDrafts, [p.id]: p as IssueDraft } };
     default:
       return s;
   }
@@ -314,6 +336,39 @@ export async function loadAccounts(refresh = false): Promise<"ok" | "unavailable
 
 export function setAccounts(list: Account[]) {
   set({ accounts: Object.fromEntries(list.map((a) => [a.id, a])), accountOrder: list.map((a) => a.id), accountsAvailable: true });
+}
+
+/** Loads a Project's Beads status; `beads.status` events keep it current. */
+export async function loadBeads(pid: string): Promise<"ok" | "unavailable"> {
+  try {
+    setBeads(await api.beads(pid));
+    return "ok";
+  } catch (e) {
+    if (e instanceof NotAvailable) return "unavailable";
+    throw e;
+  }
+}
+
+/** Records a Beads status the daemon returned, e.g. from setting it up or syncing. */
+export function setBeads(b: BeadsStatus) {
+  set({ beads: { ...state.beads, [b.project_id]: b } });
+}
+
+/** Loads a Project's New issue side chats; `issue_draft.updated` events keep them current. */
+export async function loadIssueDrafts(pid: string) {
+  const list = await api.issueDrafts(pid);
+  set({ issueDrafts: { ...state.issueDrafts, ...Object.fromEntries(list.map((d) => [d.id, d])) } });
+}
+
+/** Records a draft the daemon returned; the event may arrive before or after, so the newer one wins. */
+export function upsertIssueDraft(d: IssueDraft) {
+  const cur = state.issueDrafts[d.id];
+  if (cur && cur.updated_at > d.updated_at) return;
+  set({ issueDrafts: { ...state.issueDrafts, [d.id]: d } });
+}
+
+export function setIssueSeed(seed: AppState["issueSeed"]) {
+  set({ issueSeed: seed });
 }
 
 export function addProject(p: Project) {

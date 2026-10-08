@@ -9,6 +9,7 @@ export const ROUTES = {
   new: "new", // create a Project
   project: "p/:id", // board and coordinator chat
   memory: "p/:project/memory/:id?", // the Project's memory, optionally with one proposal or entry selected
+  issues: "p/:project/issues/:id?", // the Project's Beads issues, optionally with one selected
   dispatch: "p/:project/dispatch", // the Project's dispatch rules: edit, save, test
   overview: "p/:project/overview", // the Project dashboard's Overview tab: live status and what changed since you last looked
   settings: "p/:project/settings", // the Project dashboard's Settings tab: every per-Project switch

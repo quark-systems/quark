@@ -11,6 +11,8 @@ export interface MemoryEntry {
   id: string; project_id: string; path: string; text: string; evidence: MemoryEvidence;
   source?: MemorySource | null; date?: string | null; accepted_at?: string | null; accepted_by?: string | null;
   proposal_id?: string | null; commit?: string | null;
+  /** Its key in the Project's Beads memories (`bd remember`), when it was accepted into Beads. */
+  beads_key?: string | null;
 }
 export interface MemoryProposal {
   id: string; project_id: string; text: string; evidence: MemoryEvidence; source: MemorySource;
@@ -18,7 +20,10 @@ export interface MemoryProposal {
   /** Set once accepted. */
   entry?: MemoryEntry | null;
 }
-export interface AcceptMemoryProposal { text?: string | null; decided_by?: string | null }
+/** Who should know: this Project (its Beads memories, or `memory/` without Beads), all of the user's
+ * Projects (user-level memory), or anyone working in the repo (also asks the coordinator for a PR to AGENTS.md). */
+export type MemoryScope = "project" | "user" | "repo";
+export interface AcceptMemoryProposal { text?: string | null; decided_by?: string | null; scope?: MemoryScope | null }
 export interface RejectMemoryProposal { decided_by?: string | null }
 /** A Project repo commit that touched `memory/`, with its diff there. */
 export interface MemoryCommit { commit: string; subject: string; author?: string | null; date?: string | null; patch: string }

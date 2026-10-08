@@ -549,6 +549,194 @@ function addMemoryEntry(e) {
   return entry;
 }
 
+// ---------------------------------------------------------------- beads
+
+// One Beads database per Project (app/src/api/beads.ts): its status, issues, memories and the New
+// issue side chats. The mock plays `bd` and the coordinator: drafts come back after a short delay.
+const beadsStatus = new Map(); // project id -> BeadsStatus
+const beadsIssues = new Map(); // project id -> Map(issue id -> stored issue: Issue fields minus the computed ones, plus `related`, `comments`)
+const beadsMemories = new Map(); // project id -> BeadsMemory[]
+const issueDrafts = new Map(); // draft id -> IssueDraft
+
+function beadsOf(pid) {
+  if (!beadsStatus.has(pid)) {
+    beadsStatus.set(pid, { project_id: pid, state: "missing", detail: null, dir: null, prefix: null, remote: null, github_repo: null, last_sync: null });
+  }
+  return beadsStatus.get(pid);
+}
+const issuesOf = (pid) => beadsIssues.get(pid) ?? new Map();
+const ghRepo = (proj) => {
+  const m = /github\.com[/:]([^/]+\/[^/.]+)/.exec(proj.repos[0]?.url ?? "");
+  return m ? m[1] : null;
+};
+
+function addIssue(pid, i) {
+  if (!beadsIssues.has(pid)) beadsIssues.set(pid, new Map());
+  const issue = {
+    description: "", status: "open", priority: 2, issue_type: "task", labels: [], assignee: null, owner: null, created_by: "matt",
+    created_at: now(), updated_at: now(), closed_at: null, external_ref: null, blocked_by: [], related: [], comments: [],
+    notes: null, design: null, acceptance_criteria: null, ...i,
+  };
+  beadsIssues.get(pid).set(issue.id, issue);
+  return issue;
+}
+/** The issue as the API shows it: `ready` and `blocked` from what it waits for. */
+function issueView(pid, i) {
+  const all = issuesOf(pid);
+  const blocked = i.status !== "closed" && i.blocked_by.some((b) => all.get(b) && all.get(b).status !== "closed");
+  const { related, comments, notes, design, acceptance_criteria, ...rest } = i;
+  return { ...rest, blocked, ready: i.status === "open" && !blocked };
+}
+const refOf = (i) => ({ id: i.id, title: i.title, status: i.status, issue_type: i.issue_type });
+function issueDetail(pid, i) {
+  const all = issuesOf(pid);
+  return {
+    ...issueView(pid, i), notes: i.notes, design: i.design, acceptance_criteria: i.acceptance_criteria, comments: i.comments,
+    blocked_by_issues: i.blocked_by.map((b) => all.get(b)).filter(Boolean).map(refOf),
+    blocks_issues: [...all.values()].filter((x) => x.blocked_by.includes(i.id)).map(refOf),
+    related_issues: i.related.map((r) => all.get(r.id) && { ...refOf(all.get(r.id)), kind: r.kind }).filter(Boolean),
+  };
+}
+function nextIssueId(pid) {
+  const prefix = beadsOf(pid).prefix ?? "bd";
+  const n = Math.max(0, ...[...issuesOf(pid).keys()].map((k) => Number(/-(\d+)$/.exec(k)?.[1] ?? 0)));
+  return `${prefix}-${n + 1}`;
+}
+const beadsChanged = (pid, op, issue_id = null) => emit("beads.changed", { project_id: pid, issue_id, op }, pid);
+
+function setupBeads(proj) {
+  const b = beadsOf(proj.id);
+  const steps = ["Installing the Dolt server", "Creating the database", "Importing GitHub Issues"];
+  Object.assign(b, { state: "setting_up", detail: steps[0] });
+  emit("beads.status", { ...b }, proj.id);
+  steps.slice(1).forEach((detail, i) => setTimeout(() => {
+    Object.assign(b, { detail });
+    emit("beads.status", { ...b }, proj.id);
+  }, (QUIET ? 60 : 900) * (i + 1)));
+  setTimeout(() => {
+    const repo = ghRepo(proj);
+    Object.assign(b, {
+      state: "ready", detail: null, dir: `/home/mock/.quark/projects/${proj.id}/projects/${proj.repos[0]?.name ?? proj.id}`,
+      prefix: (proj.repos[0]?.name ?? proj.id).slice(0, 2), remote: proj.repos[0]?.url ?? null, github_repo: repo,
+      last_sync: repo ? { at: now(), ok: true, pulled: 0, pushed: 0, message: "nothing to sync" } : null,
+    });
+    emit("beads.status", { ...b }, proj.id);
+  }, (QUIET ? 60 : 900) * steps.length);
+}
+
+// The coordinator's side of the New issue chat, played naively: one or two drafts from the first
+// message, and simple edits ("make the first one P0 and label both attention") from later ones.
+const WORDS_SKIP = new Set(["when", "after", "that", "this", "with", "into", "until", "should", "there", "their", "about", "already", "would", "could"]);
+const wordsOf = (s) => new Set((s.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !WORDS_SKIP.has(w)));
+function titleOf(sentence) {
+  let t = sentence.replace(/^(when|if|so|and|but|also)\s+/i, "").split(/[,;:]/)[0].replace(/[.!?]+$/, "").trim();
+  if (t.length > 64) t = t.slice(0, 64).replace(/\s+\S*$/, "") + "…";
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function relatedTo(pid, text) {
+  const said = wordsOf(text);
+  return [...issuesOf(pid).values()].filter((i) => i.status !== "closed" && i.issue_type !== "decision" && [...wordsOf(i.title)].some((w) => said.has(w)))
+    .slice(0, 2).map((i) => i.id);
+}
+function firstDrafts(pid, text) {
+  // The demo's own example reads as the mock design drew it.
+  if (/\bred\b/i.test(text) && /phone/i.test(text)) {
+    return {
+      reply: "I read this as two pieces of work, the second depending on the first. I checked: nothing open covers it, and qk-41 is related but separate.",
+      related: issuesOf(pid).has("qk-41") ? ["qk-41"] : [],
+      issues: [
+        { key: "1", title: "A PR that goes red asks for attention again", issue_type: "bug", priority: 1, labels: [], blocked_by: [],
+          description: "When CI fails on a PR the user has already seen, set its worker's attention flag again so it re-enters Needs you, oldest first." },
+        { key: "2", title: "Push a phone notification when a PR goes red", issue_type: "feature", priority: 2, labels: [], blocked_by: ["1"],
+          description: "Follows the project's away policy. Depends on the attention change above." },
+      ],
+    };
+  }
+  const sentences = text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  const type = /\b(red|broken|fails?|bug|crash|wrong|doesn't|don't|can't)\b/i.test(text) ? "bug" : "feature";
+  const related = relatedTo(pid, text);
+  const checked = related.length ? `${related.join(" and ")} ${related.length === 1 ? "is" : "are"} related but separate.` : "nothing open covers it.";
+  if (sentences.length < 2) {
+    return { reply: `I read this as one piece of work. I checked: ${checked}`, related,
+      issues: [{ key: "1", title: titleOf(text), issue_type: type, priority: 2, labels: [], blocked_by: [], description: text }] };
+  }
+  return {
+    reply: `I read this as two pieces of work, the second depending on the first. I checked: ${checked}`, related,
+    issues: [
+      { key: "1", title: titleOf(sentences[0]), issue_type: type, priority: 1, labels: [], blocked_by: [], description: sentences[0] },
+      { key: "2", title: titleOf(sentences.slice(1).join(" ")), issue_type: "feature", priority: 2, labels: [], blocked_by: ["1"], description: sentences.slice(1).join(" ") },
+    ],
+  };
+}
+function refineDrafts(drafts, text) {
+  const pick = (w) => (/^(both|all|them|each)$/i.test(w) ? drafts : /^(first|1)$/i.test(w) ? drafts.slice(0, 1) : /^(second|2)$/i.test(w) ? drafts.slice(1, 2)
+    : /^(last)$/i.test(w) ? drafts.slice(-1) : []);
+  const done = [];
+  for (const m of text.matchAll(/\b(first|second|last|both|all|1|2)\b(?:\s+one)?\s+(?:to\s+|as\s+)?P([0-4])\b/gi)) {
+    for (const d of pick(m[1])) d.priority = Number(m[2]);
+    done.push(`${m[1].toLowerCase()} is P${m[2]}`);
+  }
+  for (const m of text.matchAll(/\blabel\s+(?:(?:the\s+)?(first|second|last|both|all|them|each)(?:\s+one)?\s+)?(?:as\s+|with\s+)?["']?([\w-]+)/gi)) {
+    for (const d of pick(m[1] ?? "all")) if (!d.labels.includes(m[2])) d.labels.push(m[2]);
+    done.push(`labelled ${m[2]}`);
+  }
+  for (const m of text.matchAll(/\bmake\s+(?:the\s+)?(first|second|last|both)\s+(?:one\s+)?an?\s+(bug|feature|task|chore|spike)\b/gi)) {
+    for (const d of pick(m[1])) d.issue_type = m[2].toLowerCase();
+    done.push(`${m[1].toLowerCase()} is a ${m[2].toLowerCase()}`);
+  }
+  if (!done.length) {
+    const last = drafts.at(-1);
+    if (last) last.description = `${last.description}\n\n${text}`.trim();
+    return "Added that to the last draft.";
+  }
+  return `Done: ${done.join(", ")}.`;
+}
+/** PUT /v1/issue-drafts/{id}: the coordinator's drafts replace the previous ones, with its reply. */
+function writeDraft(draft, { reply = null, issues, related = [] }) {
+  if (reply?.trim()) draft.messages.push({ role: "coordinator", text: reply.trim(), at: now() });
+  Object.assign(draft, { issues, related, waiting: false, updated_at: now() });
+  emit("issue_draft.updated", structuredClone(draft), draft.project_id);
+}
+function draftMessage(draft, text) {
+  draft.messages.push({ role: "user", text, at: now() });
+  draft.waiting = true;
+  draft.updated_at = now();
+  emit("issue_draft.updated", structuredClone(draft), draft.project_id);
+  const first = !draft.issues.length;
+  setTimeout(() => {
+    if (draft.state !== "open") return;
+    if (first) {
+      writeDraft(draft, firstDrafts(draft.project_id, text));
+    } else {
+      const issues = structuredClone(draft.issues);
+      writeDraft(draft, { reply: refineDrafts(issues, text), issues, related: draft.related });
+    }
+  }, QUIET ? 150 : 1200);
+}
+function acceptDraft(draft, b) {
+  const pid = draft.project_id;
+  const list = Array.isArray(b.issues) && b.issues.length ? b.issues : draft.issues;
+  const created = {};
+  for (const d of list) created[d.key] = addIssue(pid, { id: nextIssueId(pid), title: d.title }).id;
+  const repo = beadsOf(pid).github_repo;
+  let gh = 70 + issuesOf(pid).size;
+  for (const d of list) {
+    const i = issuesOf(pid).get(created[d.key]);
+    Object.assign(i, {
+      description: d.description, priority: d.priority, issue_type: d.issue_type, labels: [...d.labels], created_by: "coordinator",
+      blocked_by: d.blocked_by.map((x) => created[x] ?? x),
+      related: draft.related.map((id) => ({ id, kind: "relates-to" })), external_ref: repo ? `https://github.com/${repo}/issues/${gh++}` : null,
+      comments: [{ author: "coordinator", text: "Drafted in the New issue chat.", created_at: now() }],
+    });
+  }
+  Object.assign(draft, { state: "accepted", created, issues: list, waiting: false, updated_at: now() });
+  emit("issue_draft.updated", structuredClone(draft), pid);
+  beadsChanged(pid, "create", created[list[0]?.key] ?? null);
+  if (b.start_worker && list[0]) {
+    setTimeout(() => chat(pid, "assistant", `Starting a worker on ${created[list[0].key]}: ${list[0].title}.`), QUIET ? 50 : 700);
+  }
+}
+
 // ---------------------------------------------------------------- seed
 
 function seed() {
@@ -740,6 +928,54 @@ function seed() {
   chat(quark.id, "tool_call", JSON.stringify({ command: hold }), { ts: minutesAgo(34), tool_name: "Bash", tool_call_id: "k3", tool: { kind: "shell", title: `Run ${hold}`, command: hold } });
   chat(quark.id, "tool_result", "held", { ts: minutesAgo(34), tool_call_id: "k3" });
   chat(quark.id, "assistant", "Dispatched two workers:\n\n- **Event stream**: resync slow clients from the store (Claude Code)\n- **Terminal sessions** over tmux control mode (Codex)\n\nThe decision-records task is waiting on a question for you.", { ts: minutesAgo(34) });
+
+  // The website has no Beads database yet, so its memory is files under memory/ in its repo.
+  MP("mp-3", site, null, "The marketing site's images go through the CDN's resize endpoint; never commit originals over 500 KB.", {
+    source: "coordinator", proposed_at: minutesAgo(50),
+    evidence: { task_id: null, task_title: "Hero image audit", pull_request_url: "https://github.com/quark-systems/website/pull/14", files: ["public/images/"] },
+  });
+  addMemoryEntry({
+    id: "2026-09-28-the-design-tokens-live-in-tokens-css", project_id: site.id,
+    text: "The design tokens live in tokens.css; components never use raw hex.", source: "worker", date: minutesAgo(9000), accepted_at: minutesAgo(8900),
+    accepted_by: "matt", evidence: { task_id: null, task_title: "Move buttons to the new tokens", pull_request_url: null, files: ["src/styles/tokens.css"] },
+  });
+  beadsOf(site.id);
+
+  // Quark's Beads database (app/src/api/beads.ts), mirrored with GitHub Issues.
+  Object.assign(beadsOf(quark.id), {
+    state: "ready", dir: "/home/mock/.quark/projects/quark/projects/quark", prefix: "qk", remote: "https://github.com/quark-systems/quark.git",
+    github_repo: "quark-systems/quark", last_sync: { at: minutesAgo(1), ok: true, pulled: 2, pushed: 1, message: "pulled 2, pushed 1" },
+  });
+  const gh = (n) => `https://github.com/quark-systems/quark/issues/${n}`;
+  const I = (id, title, extra = {}) => addIssue(quark.id, { id, title, external_ref: gh(Number(id.replace(/\D/g, "")) + 17), created_by: "coordinator", ...extra });
+  I("qk-30", "Event stream resyncs slow clients from the store", { issue_type: "bug", priority: 1, status: "closed", created_at: minutesAgo(9000), closed_at: minutesAgo(600), updated_at: minutesAgo(600) });
+  I("qk-33", "OpenAPI check in CI", { issue_type: "task", priority: 2, status: "closed", created_at: minutesAgo(8000), closed_at: minutesAgo(300), updated_at: minutesAgo(300) });
+  I("qk-35", "Keep decision records in docs/adr?", { issue_type: "decision", priority: 2, status: "closed", external_ref: null, created_at: minutesAgo(7000), closed_at: minutesAgo(2000), updated_at: minutesAgo(2000),
+    description: "Answered: docs/adr, one file per decision, so the history is in git." });
+  I("qk-37", "Serve the web build on the tailnet", { issue_type: "feature", priority: 2, created_at: minutesAgo(5000),
+    description: "Let the phone open the app over Tailscale: quarkd serves the web build and accepts the tailnet origin." });
+  I("qk-39", "Transcript search", { issue_type: "feature", priority: 2, status: "in_progress", assignee: "transcript-search", created_at: minutesAgo(4000),
+    description: "Search every worker and coordinator transcript in a Project, with the turn each hit is in." });
+  I("qk-41", "Next-attention shortcut in the app", { issue_type: "feature", priority: 1, labels: ["attention"], created_at: minutesAgo(3000),
+    description: "One key that jumps to the oldest thing that needs you: a decision, a red PR or a stopped worker. From the AgentsInTheCloud analysis." });
+  I("qk-42", "Treehouse real-binary test", { issue_type: "task", priority: 3, labels: ["needs-mac"], created_by: "matt", created_at: minutesAgo(2900),
+    description: "Run the slice tests against the real treehouse binary. Needs a Mac." });
+  I("qk-d14", "Switch slice 2 to native?", { issue_type: "decision", priority: 1, external_ref: null, created_at: minutesAgo(30),
+    description: "Slice 2 has run in shadow for seven days with no differences. Switch it to native, or keep comparing?" });
+  I("qk-43", "Slice 2 switch PR", { issue_type: "task", priority: 1, status: "in_progress", assignee: "slice-2-switch", created_at: minutesAgo(28),
+    description: "Flip slice 2 to native behind the decision, with the shadow comparison kept for a day." });
+  I("qk-44", "Start the slice 3 shadow window", { issue_type: "feature", priority: 1, blocked_by: ["qk-d14", "qk-43"], created_at: minutesAgo(2200),
+    description: "Turn on shadow comparison for slice 3 (sessions) and start the 7-day window.", related: [{ id: "qk-30", kind: "discovered-from" }],
+    comments: [{ author: "coordinator", text: "Filed from the parallel tracks plan.", created_at: minutesAgo(2200) }, { author: "coordinator", text: "Linked to decision qk-d14.", created_at: minutesAgo(4) }] });
+  I("qk-45", "Start the slice 4 shadow window", { issue_type: "feature", priority: 2, blocked_by: ["qk-44"], created_at: minutesAgo(2100),
+    description: "Shadow comparison for slice 4 (worktrees), after slice 3's window." });
+  I("qk-46", "Glossary and copy rules for the app", { issue_type: "chore", priority: 2, created_by: "attention-model", created_at: minutesAgo(60),
+    description: "One page of the words the app uses and the ones it avoids, so every screen reads the same." });
+  beadsMemories.set(quark.id, [
+    { key: "one-task-one-pr", value: "One task, one PR against main; never stack PRs.", evidence: null, source: "coordinator", accepted_at: minutesAgo(880), accepted_by: "matt" },
+    { key: "e2e-serially-on-ci", value: "Run the app's e2e suite serially on CI; the demo daemon is shared between tests.", source: "worker", accepted_at: minutesAgo(400), accepted_by: "matt",
+      evidence: { task_id: null, task_title: "Flaky e2e on CI", pull_request_url: "https://github.com/quark-systems/quark/pull/94", files: ["app/playwright.config.ts"] } },
+  ]);
 }
 
 // ---------------------------------------------------------------- background activity
@@ -1144,14 +1380,39 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, mp);
     }
     if (b.text !== undefined && b.text !== null && !String(b.text).trim()) return invalid(res, "text must not be empty");
+    const scope = b.scope ?? "project";
+    if (!["project", "user", "repo"].includes(scope)) return invalid(res, "scope is project, user or repo");
     const text = b.text?.trim() || mp.text;
     const slug = text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join("-").slice(0, 48) || "entry";
     const id = `${mp.proposed_at.slice(0, 10)}-${slug}`;
-    const entry = addMemoryEntry({
-      id, project_id: mp.project_id, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
-      accepted_at: now(), accepted_by: by, proposal_id: mp.id,
-    });
-    Object.assign(mp, { text, state: "accepted", decided_at: entry.accepted_at, decided_by: by, entry });
+    const proj = projects.get(mp.project_id);
+    let entry = null;
+    if (scope === "user") {
+      // All of the user's Projects: user-level memory, named after the proposal like quarkd does.
+      const path = `/home/mock/.quark/memory/${mp.id}.md`;
+      userMemory.push({
+        id: mp.id, path, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
+        project_id: proj.id, project_name: proj.name, entry_id: mp.id, commit: null, promoted_at: now(), promoted_by: by,
+      });
+      entry = { id: mp.id, project_id: mp.project_id, path, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
+        accepted_at: now(), accepted_by: by, proposal_id: mp.id, commit: null, beads_key: null };
+    } else if (beadsOf(mp.project_id).state === "ready") {
+      // With Beads, the Project's memory is a Beads memory (`bd remember`).
+      const key = slug.slice(0, 40);
+      const list = (beadsMemories.get(mp.project_id) ?? []).filter((x) => x.key !== key);
+      beadsMemories.set(mp.project_id, [...list, { key, value: text, evidence: mp.evidence, source: mp.source, accepted_at: now(), accepted_by: by }]);
+      entry = { id: key, project_id: mp.project_id, path: `beads:${key}`, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
+        accepted_at: now(), accepted_by: by, proposal_id: mp.id, commit: null, beads_key: key };
+      beadsChanged(mp.project_id, "remember");
+    } else {
+      entry = addMemoryEntry({
+        id, project_id: mp.project_id, text, evidence: mp.evidence, source: mp.source, date: mp.proposed_at,
+        accepted_at: now(), accepted_by: by, proposal_id: mp.id,
+      });
+    }
+    // Anyone working in the repo: the coordinator also opens a PR adding it to AGENTS.md.
+    if (scope === "repo") setTimeout(() => chat(mp.project_id, "assistant", `I'll open a PR adding this to AGENTS.md: ${text}`), QUIET ? 50 : 700);
+    Object.assign(mp, { text, state: "accepted", decided_at: now(), decided_by: by, entry });
     emit("memory.accepted", { ...mp }, mp.project_id);
     return send(res, 200, mp);
   }
@@ -1181,6 +1442,88 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, promoted);
   }
   if (p === "/v1/memory" && req.method === "GET") return send(res, 200, userMemory);
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/beads(:setup|:sync)?$/))) {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const b = beadsOf(proj.id);
+    if (!r[2] && req.method === "GET") return send(res, 200, b);
+    if (r[2] === ":setup" && req.method === "POST") {
+      if (b.state === "ready" || b.state === "setting_up") return send(res, 200, b);
+      setupBeads(proj);
+      return send(res, 200, { ...b });
+    }
+    if (r[2] === ":sync" && req.method === "POST") {
+      if (b.state !== "ready") return send(res, 409, { error: { code: "beads_not_ready", message: `Beads is ${b.state}` } });
+      if (!b.github_repo) return send(res, 409, { error: { code: "no_github_repo", message: "this database does not mirror a GitHub repository" } });
+      b.last_sync = { at: now(), ok: true, pulled: 0, pushed: 0, message: "nothing to sync" };
+      emit("beads.status", { ...b }, proj.id);
+      return send(res, 200, b);
+    }
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/(issues|issues\/[^/]+|issue-drafts|beads\/memories|beads\/memories\/[^/]+)$/))) {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const pid = proj.id, rest = r[2];
+    if (beadsOf(pid).state !== "ready") return send(res, 409, { error: { code: "beads_not_ready", message: `Beads is ${beadsOf(pid).state}` } });
+    if (rest === "issues" && req.method === "GET") {
+      const f = url.searchParams.get("filter") ?? "all";
+      const list = [...issuesOf(pid).values()].map((i) => issueView(pid, i)).filter((i) => f === "all" ? true : f === "ready" ? i.ready
+        : f === "blocked" ? i.blocked : f === "open" ? i.status !== "closed" : i.status === f);
+      return send(res, 200, list);
+    }
+    if (rest.startsWith("issues/") && req.method === "GET") {
+      const i = issuesOf(pid).get(decodeURIComponent(rest.slice(7)));
+      if (!i) return send(res, 404, { error: { code: "not_found", message: "no such issue" } });
+      return send(res, 200, issueDetail(pid, i));
+    }
+    if (rest === "issue-drafts" && req.method === "GET") return send(res, 200, [...issueDrafts.values()].filter((d) => d.project_id === pid));
+    if (rest === "issue-drafts" && req.method === "POST") {
+      const b = await readJson(req);
+      if (!b?.text?.trim()) return invalid(res, "text is required");
+      const d = { id: nextId("idr"), project_id: pid, state: "open", messages: [], issues: [], related: [], waiting: false, created: {}, created_at: now(), updated_at: now() };
+      issueDrafts.set(d.id, d);
+      draftMessage(d, b.text.trim());
+      return send(res, 201, d);
+    }
+    if (rest === "beads/memories" && req.method === "GET") return send(res, 200, beadsMemories.get(pid) ?? []);
+    if (rest.startsWith("beads/memories/") && req.method === "DELETE") {
+      const key = decodeURIComponent(rest.slice(15)), list = beadsMemories.get(pid) ?? [];
+      if (!list.some((x) => x.key === key)) return send(res, 404, { error: { code: "not_found", message: `no memory ${key}` } });
+      beadsMemories.set(pid, list.filter((x) => x.key !== key));
+      beadsChanged(pid, "forget");
+      return send(res, 204);
+    }
+  }
+  if ((r = m(/^\/v1\/issue-drafts\/([^/:]+)$/)) && req.method === "PUT") {
+    const d = issueDrafts.get(decodeURIComponent(r[1]));
+    if (!d) return send(res, 404, { error: { code: "not_found", message: "no such draft" } });
+    if (d.state !== "open") return send(res, 409, { error: { code: "draft_closed", message: `the draft is ${d.state}` } });
+    const b = await readJson(req);
+    if (!Array.isArray(b?.issues) || b.issues.some((x) => !x?.key || !x?.title?.trim())) return invalid(res, "issues need a key and a title");
+    writeDraft(d, { reply: b.reply ?? null, related: b.related ?? [],
+      issues: b.issues.map((x) => ({ issue_type: "task", priority: 2, labels: [], description: "", blocked_by: [], ...x })) });
+    return send(res, 200, d);
+  }
+  if ((r = m(/^\/v1\/issue-drafts\/([^/:]+)(\/messages|:accept|:discard)$/)) && req.method === "POST") {
+    const d = issueDrafts.get(decodeURIComponent(r[1]));
+    if (!d) return send(res, 404, { error: { code: "not_found", message: "no such draft" } });
+    if (d.state !== "open") return send(res, 409, { error: { code: "draft_closed", message: `the draft is ${d.state}` } });
+    const b = (await readJson(req)) ?? {};
+    if (r[2] === "/messages") {
+      if (!b.text?.trim()) return invalid(res, "text is required");
+      draftMessage(d, b.text.trim());
+      return send(res, 200, d);
+    }
+    if (r[2] === ":discard") {
+      Object.assign(d, { state: "discarded", waiting: false, updated_at: now() });
+      emit("issue_draft.updated", structuredClone(d), d.project_id);
+      return send(res, 200, d);
+    }
+    if (d.waiting) return send(res, 409, { error: { code: "draft_waiting", message: "the coordinator is still drafting" } });
+    if (!(b.issues?.length || d.issues.length)) return invalid(res, "nothing to create");
+    acceptDraft(d, b);
+    return send(res, 200, d);
+  }
   if (p === "/v1/personas" && req.method === "GET") return send(res, 200, { default: defaultPersona, packs: PERSONAS, errors: [] });
   if (p === "/v1/personas/default" && req.method === "PUT") {
     const b = (await readJson(req)) ?? {};

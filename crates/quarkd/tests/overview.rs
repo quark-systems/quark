@@ -61,6 +61,7 @@ async fn overview_reports_live_status_and_what_changed_since() {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: log.clone(),
         triggers: None,
+        beads: Default::default(),
     });
     // t1 is a task the daemon knows, so the Overview names and links it.
     store

@@ -416,21 +416,31 @@ test("memory: review proposals from the keyboard, browse entries with their comm
   await expect(rows).toHaveCount(0);
   await expect(page.getByTestId("memory-list")).toContainText("Nothing to review");
 
-  // Accepted entries are browsable, newest first, each with the commit that added it.
+  // With Beads, what this Project keeps is a Beads memory: the accepted learning is one, newest first.
   await page.keyboard.press("a");
-  await expect(rows).toHaveCount(2);
+  await expect(page.getByRole("button", { name: /^This project/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(rows).toHaveCount(3);
   await expect(rows.first()).toContainText("Regenerate api/openapi.json whenever a route or shape changes.");
   await expect(rows.first()).toContainText("accepted by matt");
-  await expect(rows.nth(1)).toContainText("One task, one PR against main");
-  await expect(detail).toContainText("memory/");
+  await expect(detail).toContainText("Beads memory");
   await expect(detail.getByRole("link", { name: "OpenAPI check in CI" })).toBeVisible();
+  await expect(page.getByTestId("memory-list")).toContainText("Accepted memory is a Beads record in the repo.");
+
+  // Without Beads, a Project keeps files under memory/: each with the commit that added it.
+  await open(page, "#/p/website/memory");
+  await expect(page.getByRole("button", { name: /^To review/ })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("a");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("The design tokens live in tokens.css");
+  await expect(rows.first()).toContainText("accepted by matt");
+  await expect(detail).toContainText("memory/");
   const commit = detail.getByTestId("memory-commit");
   await expect(commit).toHaveText(/^[0-9a-f]{10}$/);
   await page.keyboard.press("c");
   const view = page.getByTestId("memory-commit-view");
-  await expect(view).toContainText("Remember: Regenerate api/openapi.json");
+  await expect(view).toContainText("Remember: The design tokens live in tokens.css");
   await expect(view.getByTestId("diff-file")).toContainText("accepted_by: \"matt\"");
-  await expect(view.getByTestId("diff-file")).toContainText("Regenerate api/openapi.json whenever a route or shape changes.");
+  await expect(view.getByTestId("diff-file")).toContainText("components never use raw hex.");
 
   // u promotes the entry to user-level memory.
   const shared = page.getByTestId("memory-shared");
@@ -439,22 +449,24 @@ test("memory: review proposals from the keyboard, browse entries with their comm
   await expect(shared).toContainText("Every Project's coordinator reads this entry.");
   await expect(shared).toContainText("promoted by matt");
   await expect(rows.first()).toContainText("user-level");
-  await expect(rows.nth(1)).not.toContainText("user-level");
 
   // The daemon holds what the screen shows.
   const state = await page.evaluate(async () => {
     const get = async (path: string) => (await fetch("http://127.0.0.1:7392" + path)).json();
-    return { shared: await get("/v1/memory"), proposals: await get("/v1/projects/quark/memory/proposals") };
+    return {
+      shared: await get("/v1/memory"), proposals: await get("/v1/projects/quark/memory/proposals"),
+      beads: await get("/v1/projects/quark/beads/memories"),
+    };
   });
   expect(state.shared).toHaveLength(1);
   expect(state.shared[0]).toMatchObject({
-    text: "Regenerate api/openapi.json whenever a route or shape changes.", project_id: "quark", project_name: "Quark MVP", promoted_by: "matt",
+    text: "The design tokens live in tokens.css; components never use raw hex.", project_id: "website", project_name: "Website refresh", promoted_by: "matt",
   });
   expect(state.proposals.map((m: any) => [m.id, m.state, m.decided_by])).toEqual([["mp-1", "accepted", "matt"], ["mp-2", "rejected", "matt"]]);
+  expect(state.beads.find((m: any) => m.value.startsWith("Regenerate"))).toMatchObject({ accepted_by: "matt", source: "worker" });
 
   // Nothing is left to review on the board.
-  await page.locator(".header .crumb").click();
-  await expect(page).toHaveURL(/#\/p\/quark$/);
+  await open(page, "#/p/quark");
   await expect(page.getByTestId("nav-memory")).toBeVisible();
   await expect(page.getByTestId("memory-count")).toHaveCount(0);
 });
@@ -820,4 +832,161 @@ test("hosts: every host's health, telemetry, Projects and worktrees, and a Proje
   await expect(page.getByTestId("overview-hosts").getByTestId("project-host")).toContainText("of the host");
   await page.getByTestId("dash-tab-metrics").click();
   await expect(page.getByTestId("metrics-hosts").getByTestId("project-host-memory").locator("svg")).toBeVisible();
+});
+
+test("issues: filter, see what an issue waits for, and start a worker once nothing does", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await page.getByTestId("nav-issues").click();
+  await expect(page).toHaveURL(/#\/p\/quark\/issues$/);
+  await expect(page.getByTestId("beads-strip")).toContainText("Beads in quark-systems/quark · mirrored both ways with GitHub Issues · last sync");
+
+  // Ready work first, highest priority first; j moves the selection.
+  const chips = page.getByRole("group", { name: "Filter issues" });
+  const rows = page.getByTestId("issue-row");
+  await expect(chips.getByRole("button", { name: "Ready 4" })).toHaveAttribute("aria-pressed", "true");
+  await expect(rows).toHaveCount(4);
+  await expect(rows.first()).toContainText("qk-41");
+  await expect(rows.first()).toContainText("feature · ready · GitHub #58");
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await page.keyboard.press("j");
+  await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-37$/);
+
+  // Blocked issues name what they wait for; the detail lists each blocker, an open decision as waiting on you.
+  await chips.getByRole("button", { name: "Blocked 2" }).click();
+  await expect(chips.getByRole("button", { name: "Blocked 2" })).toHaveAttribute("aria-pressed", "true");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("blocked by qk-d14, qk-43 · GitHub #61");
+  await rows.first().click();
+  await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-44$/);
+  const detail = page.getByTestId("issue-detail");
+  await expect(detail.getByRole("heading", { name: "Start the slice 3 shadow window" })).toBeVisible();
+  await expect(detail.getByRole("link", { name: "#61" })).toHaveAttribute("href", "https://github.com/quark-systems/quark/issues/61");
+  const blockers = detail.getByRole("region", { name: "Blocked by" }).getByTestId("issue-link");
+  await expect(blockers).toHaveCount(2);
+  await expect(blockers.first()).toContainText("qk-d14 · Switch slice 2 to native?");
+  await expect(blockers.first()).toContainText("waiting on you");
+  await expect(blockers.nth(1)).toContainText("qk-43 · Slice 2 switch PR");
+  await expect(blockers.nth(1)).toContainText("in progress");
+  await expect(detail).toContainText("Unblocks qk-45 (Start the slice 4 shadow window).");
+  await expect(detail.getByTestId("start-worker")).toBeDisabled();
+  await expect(detail.getByTestId("start-worker")).toHaveText("Start a worker · waits for qk-d14, qk-43");
+
+  // A blocker opens in place, even a decision, which is under no filter.
+  await blockers.first().click();
+  await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-d14$/);
+  await expect(detail.getByRole("heading", { name: "Switch slice 2 to native?" })).toBeVisible();
+
+  // Ready work starts a worker through the coordinator, whose chat opens beside the issue.
+  await chips.getByRole("button", { name: /^Ready/ }).click();
+  await rows.first().click();
+  await expect(detail.getByRole("heading", { name: "Next-attention shortcut in the app" })).toBeVisible();
+  await detail.getByTestId("start-worker").click();
+  await expect(detail.getByTestId("start-worker")).toHaveText("Sent to the coordinator");
+  await detail.getByRole("button", { name: "Ask the coordinator" }).click();
+  const chat = page.getByTestId("coordinator-chat");
+  await expect(chat.getByLabel("Message the coordinator")).toBeFocused();
+  await expect(chat).toContainText("Start a worker on qk-41: Next-attention shortcut in the app");
+});
+
+test("issues: draft new issues with the coordinator, refine them, and create them", async ({ page }) => {
+  await open(page, "#/p/quark/issues");
+  await expect(page.getByTestId("issue-row").first()).toBeVisible();
+  await page.keyboard.press("n");
+  const drawer = page.getByRole("dialog", { name: "New issue" });
+  await expect(drawer).toContainText("Nothing is created until you accept");
+  const input = drawer.getByLabel("Refine the issues");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveAttribute("placeholder", "Refine: split, merge, change priority, add detail…");
+
+  // The first message opens a draft; the coordinator's drafts arrive in its reply.
+  await input.fill("When a worker's PR goes red after I've already looked at it, I don't find out until I open the PR center. It should come back into Needs you, and on my phone too.");
+  await input.press("Enter");
+  const drafts = drawer.getByTestId("draft-issue");
+  await expect(drawer.getByTestId("draft-waiting")).toBeVisible();
+  await expect(drafts).toHaveCount(2);
+  await expect(drawer.getByTestId("draft-waiting")).toHaveCount(0);
+  await expect(drawer).toContainText("I read this as two pieces of work");
+  await expect(drafts.first()).toContainText("new · 1");
+  await expect(drafts.first()).toContainText("A PR that goes red asks for attention again");
+  await expect(drafts.first()).toContainText("mirrors to GitHub");
+  await expect(drawer.getByLabel("Priority of new 1")).toHaveValue("1");
+  await expect(drafts.nth(1)).toContainText("blocked by new · 1");
+  await expect(drawer).toContainText("Related, not merged in: qk-41 Next-attention shortcut in the app.");
+
+  // Later messages refine the drafts in place.
+  await input.fill("Make the first one P0 and label both attention.");
+  await input.press("Enter");
+  await expect(drawer.getByLabel("Priority of new 1")).toHaveValue("0");
+  await expect(drafts.nth(1)).toContainText("attention");
+  await expect(drawer.getByRole("button", { name: "Create 2 issues" })).toBeEnabled();
+
+  // Closing keeps the draft: it comes back with the drawer.
+  await drawer.getByRole("button", { name: "Close" }).click();
+  await expect(drawer).toHaveCount(0);
+  await page.getByRole("button", { name: "New issue" }).click();
+  await expect(drafts).toHaveCount(2);
+  await expect(drawer.getByLabel("Priority of new 1")).toHaveValue("0");
+
+  // A title is edited in place, then both are created and the first is selected.
+  await drafts.nth(1).getByRole("button", { name: "Push a phone notification when a PR goes red" }).click();
+  await drawer.getByLabel("Title of new 2").fill("Phone notification when a PR goes red");
+  await drawer.getByLabel("Title of new 2").press("Enter");
+  await expect(drafts.nth(1)).toContainText("Phone notification when a PR goes red");
+  await drawer.getByRole("button", { name: "Create 2 issues" }).click();
+  await expect(drawer).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-47$/);
+  const detail = page.getByTestId("issue-detail");
+  await expect(detail.getByRole("heading", { name: "A PR that goes red asks for attention again" })).toBeVisible();
+  await expect(detail).toContainText("bug · P0");
+  await expect(page.getByTestId("issue-row").first()).toContainText("qk-47");
+  await expect(page.getByTestId("issue-row").first()).toHaveAttribute("aria-current", "true");
+
+  // The daemon created both, the second waiting for the first, as edited.
+  const second = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/issues/qk-48")).json());
+  expect(second).toMatchObject({ title: "Phone notification when a PR goes red", blocked_by: ["qk-47"], labels: ["attention"], blocked: true });
+});
+
+test("memory: keep a learning for all projects, and browse this project's Beads memories and decisions", async ({ page }) => {
+  // Without Beads, "This project" means memory/ in the Project repo.
+  await open(page, "#/p/website/memory");
+  const detail = page.getByTestId("memory-detail");
+  const rows = page.getByTestId("memory-row");
+  await expect(detail).toContainText("The marketing site's images go through the CDN's resize endpoint");
+  await expect(detail).toContainText("Proposed · learning");
+  const scope = detail.getByRole("group", { name: "Who should know" });
+  await expect(scope).toContainText("This project · memory/ in the Project repo");
+  await expect(scope.getByLabel(/This project/)).toBeChecked();
+  await scope.getByLabel(/All my projects/).check();
+  await detail.getByRole("button", { name: "Accept", exact: true }).click();
+  await expect(page.getByTestId("memory-list")).toContainText("Nothing to review");
+
+  await page.getByRole("button", { name: /^All projects/ }).click();
+  const kept = rows.filter({ hasText: "The marketing site's images" });
+  await expect(kept).toContainText("from Website refresh");
+  const state = await page.evaluate(async () => {
+    const get = async (path: string) => (await fetch("http://127.0.0.1:7392" + path)).json();
+    return { shared: await get("/v1/memory"), entries: await get("/v1/projects/website/memory"), proposals: await get("/v1/projects/website/memory/proposals") };
+  });
+  expect(state.shared.find((u: any) => u.text.startsWith("The marketing site's images"))).toMatchObject({ project_id: "website" });
+  expect(state.entries).toHaveLength(1);
+  expect(state.proposals.find((m: any) => m.id === "mp-3")).toMatchObject({ state: "accepted" });
+
+  // With Beads, this project's memory is its Beads memories, each forgotten by pressing twice.
+  await open(page, "#/p/quark/memory");
+  await page.getByRole("button", { name: /^This project/ }).click();
+  const one = rows.filter({ hasText: "One task, one PR against main" });
+  await expect(one).toContainText("one-task-one-pr");
+  await expect(page.getByTestId("memory-list")).toContainText("Accepted memory is a Beads record in the repo.");
+  await one.click();
+  await expect(detail).toContainText("Beads memory");
+  await detail.getByTestId("memory-forget").click();
+  await expect(detail.getByTestId("memory-forget")).toHaveText("Forget? Press again");
+  await detail.getByTestId("memory-forget").click();
+  await expect(one).toHaveCount(0);
+
+  // Decisions are read-only here and open in the Issues tab.
+  await page.getByRole("button", { name: /^Decisions/ }).click();
+  await rows.filter({ hasText: "Switch slice 2 to native?" }).click();
+  await detail.getByRole("link", { name: "Open in Issues" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-d14$/);
 });

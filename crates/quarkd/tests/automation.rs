@@ -76,6 +76,7 @@ async fn rig(with_triggers: bool) -> Rig {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events,
         triggers: with_triggers.then(|| shadow.engine()),
+        beads: Default::default(),
     });
     let project = store
         .create_project(CreateProject {

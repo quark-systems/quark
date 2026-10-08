@@ -37,6 +37,7 @@ fn app(home: &std::path::Path) -> Router {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         triggers: None,
+        beads: Default::default(),
     })
 }
 

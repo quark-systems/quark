@@ -50,6 +50,7 @@ export function ProjectBoard({ id }: { id: string }) {
         {project.goal && <span className="crumb ellipsis" title={project.goal}>{project.goal}</span>}
         <span className="spacer" />
         <a className="btn" href={href({ name: "overview", project: id })} data-testid="nav-overview" title="What is happening now, and what changed since you last looked">Overview</a>
+        <a className="btn" href={href({ name: "issues", project: id })} data-testid="nav-issues" title="The project's issues, in Beads and GitHub Issues">Issues</a>
         <a className="btn" href={href({ name: "memory", project: id })} data-testid="nav-memory" title="Review what finished tasks learned">
           {l.ui("memory", "Memory")}{toReview > 0 && <span className="pill accent" data-testid="memory-count">{toReview}</span>}
         </a>

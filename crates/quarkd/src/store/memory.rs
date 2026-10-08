@@ -469,6 +469,7 @@ mod tests {
             accepted_by: Some("matt".into()),
             proposal_id: Some(a.clone()),
             commit: Some("abc".into()),
+            beads_key: None,
         };
         let accepted = store
             .accept_memory_proposal(&project, a, "matt", entry.clone())

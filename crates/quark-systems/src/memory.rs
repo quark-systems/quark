@@ -56,6 +56,10 @@ pub struct MemoryEntry {
     pub proposal_id: Option<String>,
     /// The Project repo commit that added it, when known.
     pub commit: Option<String>,
+    /// Its key in the Project's Beads memories (`bd remember`), when it was
+    /// accepted into Beads rather than committed to `memory/`.
+    #[serde(default)]
+    pub beads_key: Option<String>,
 }
 
 /// A learning from a finished task, waiting for review before it becomes
@@ -87,6 +91,24 @@ pub struct AcceptMemoryProposal {
     /// the daemon's own user (`$USER`).
     #[serde(default)]
     pub decided_by: Option<String>,
+    /// Who should know; `project` when absent.
+    #[serde(default)]
+    pub scope: Option<MemoryScope>,
+}
+
+/// Who an accepted learning is for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScope {
+    /// This Project: its Beads memories, or `memory/` in the Project repo
+    /// while it has no Beads database.
+    #[default]
+    Project,
+    /// Every Project of this user: user-level memory.
+    User,
+    /// Anyone working in the repo: kept as Project memory, and the
+    /// coordinator is asked for a pull request adding it to `AGENTS.md`.
+    Repo,
 }
 
 /// Reject a memory proposal.
