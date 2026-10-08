@@ -14,7 +14,7 @@ A user opens a task from the board and sees the worker's live terminal (the engi
 ## How to get to it (user POV)
 
 - Click a task card on the Project board (`#/p/<project>`), which opens `#/t/<task>`.
-- Press `Ctrl+K` and type part of the task title.
+- Press `Ctrl+P` and type part of the task title.
 - From a decision, choose the link to the task that asked (or press `t`).
 
 ## Driving it with quark-verify

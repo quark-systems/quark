@@ -13,7 +13,7 @@ A user sees every open decision across Projects, oldest first, answers one from 
 ## How to get to it (user POV)
 
 - Choose `Decisions` in the sidebar (route `#/inbox`); its badge is the open count.
-- Press `Ctrl+K` and type part of the question.
+- Press `Ctrl+P` and type part of the question.
 - From the Project board, a task waiting on a decision.
 
 ## Driving it with quark-verify

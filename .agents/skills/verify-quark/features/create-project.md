@@ -13,7 +13,7 @@ A user creates a Project from the app with a name, a goal, one or more repositor
 ## How to get to it (user POV)
 
 - Choose `New project` in the sidebar (route `#/new`).
-- Press `Ctrl+K` and pick `New project` from the palette.
+- Press `Ctrl+P` and pick `New project` from the palette.
 - From the Projects screen when there are none yet.
 
 ## Driving it with quark-verify

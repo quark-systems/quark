@@ -78,7 +78,7 @@ $Q browser screenshot --path <feature>/<step>.png
 
 Stable handles, in order of preference: ARIA roles and names, labels (`Repository 1`, `Harness`, `Effort`, `Delivery`, `Message the coordinator`, `Message the worker`, `Answer`, `Answering as`, `Terminal input`), and test ids (`connection`, `provision-bar`, `coordinator-chat`, `col-<state>`, `task-card`, `task-state`, `terminal`, `transcript`, `inbox-count`, `decision-row`, `decision-detail`, `decision-answer`).
 `browser terminal` reads `window.__quark.terminalText`, the read-only hook the e2e specs use because the WebGL renderer draws no DOM rows; never use page scripts to set state.
-Keyboard shortcuts are part of the product (`app/README.md`): `Ctrl+K` palette; in Decisions `j`/`k`, `r`, `Ctrl+Enter`, `o`/`a`, `t`.
+Keyboard shortcuts are part of the product (`app/README.md`): `Ctrl+P` palette, `Ctrl+K` coordinator dock, `Ctrl+J` next attention; in Decisions `j`/`k`, `r`, `Ctrl+Enter`, `o`/`a`, `t`.
 
 quarkd directly:
 

@@ -6,7 +6,7 @@ const open = (page: import("@playwright/test").Page, hash: string) => page.goto(
 test("catalogue: every shared part with when to use it, searchable, reached from the palette", async ({ page }) => {
   await open(page, "#/");
   await expect(page.getByTestId("connection")).toContainText("connected");
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   await page.getByPlaceholder(/Jump to/).fill("component catalogue");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#\/catalogue$/);
@@ -56,4 +56,64 @@ test("left list: each project's coordinator on top with what waits on you, its w
   await coord.click();
   await expect(page).toHaveURL(/#\/p\/quark$/);
   await expect(coord).toHaveAttribute("aria-current", "page");
+});
+
+test("next attention: one button and Ctrl+J walk what waits on you, oldest first", async ({ page }) => {
+  await open(page, "#/accounts");
+  const next = page.getByTestId("next-attention");
+  await expect(next).toContainText("Next:");
+  // What waits, read back from the daemon: open decisions, red open PRs, failed or blocked workers not asking one.
+  const waiting = await page.evaluate(async () => {
+    const get = async (p: string) => (await fetch("http://127.0.0.1:7392" + p)).json();
+    const ds = (await get("/v1/decisions")).filter((d: any) => d.state === "open");
+    const prs = (await get("/v1/pull-requests")).filter((p: any) => (p.state === "open" || p.state === "draft") && p.checks_state === "failing");
+    const asked = new Set(ds.map((d: any) => d.task_id));
+    let workers = 0;
+    for (const id of ["quark", "website"]) workers += (await get(`/v1/projects/${id}/tasks`)).filter((t: any) => (t.state === "failed" || t.state === "blocked") && !asked.has(t.id)).length;
+    return ds.length + prs.length + workers;
+  });
+  expect(waiting).toBeGreaterThanOrEqual(2); // at least the failed changelog worker and the red tmux PR
+  await expect(next.getByLabel(/waiting$/)).toHaveText(String(waiting));
+
+  const seen: string[] = [];
+  for (let i = 0; i < waiting; i++) {
+    if (i === 0) await next.click(); else await page.keyboard.press("Control+j");
+    await expect.poll(() => new URL(page.url()).hash).not.toBe(seen[seen.length - 1] ?? "#/accounts");
+    await expect(page).toHaveURL(/#\/(inbox|pr|t)\/[^/]+$/);
+    seen.push(new URL(page.url()).hash);
+  }
+  // Every item once, then back to the oldest.
+  expect(new Set(seen).size).toBe(waiting);
+  await page.keyboard.press("Control+j");
+  await expect(page).toHaveURL(new RegExp(seen[0].replace(/[/#]/g, "\\$&") + "$"));
+  expect(seen.some((h) => h.startsWith("#/pr/"))).toBe(true);
+  expect(seen.some((h) => h.startsWith("#/t/"))).toBe(true);
+});
+
+test("dock: Ctrl+K from a worker asks its project's coordinator about that worker", async ({ page }) => {
+  await open(page, "#/p/quark");
+  await expect(page.getByTestId("coordinator-chat")).toBeVisible();
+  // The coordinator's own conversation has no dock; Ctrl+K goes to its message box.
+  await expect(page.getByTestId("dock")).toHaveCount(0);
+  await page.keyboard.press("Control+k");
+  await expect(page.getByTestId("coordinator-chat").getByRole("textbox")).toBeFocused();
+
+  await page.getByRole("navigation", { name: "Projects" }).getByTestId("ll-worker").filter({ hasText: "Terminal sessions over tmux" }).click();
+  const dock = page.getByTestId("dock");
+  await expect(dock.getByTestId("dock-about")).toHaveText("about Terminal sessions over tmux control mode");
+  await page.keyboard.press("Control+k");
+  const box = dock.getByRole("textbox", { name: "Message the coordinator" });
+  await expect(box).toBeFocused();
+  await box.fill("Is control mode lossy under load?");
+  await box.press("Enter");
+  await expect(dock.getByTestId("dock-note")).toContainText("Sent to the coordinator of Quark MVP");
+
+  // The coordinator records the message shortly after it is accepted.
+  await expect.poll(async () => JSON.stringify(await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/coordinators/quark/messages")).json())))
+    .toContain('About \\"Terminal sessions over tmux control mode\\" (#/t/');
+  await expect.poll(async () => JSON.stringify(await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/coordinators/quark/messages")).json())))
+    .toContain("Is control mode lossy under load?");
+
+  await dock.getByRole("link", { name: "See the conversation" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark$/);
 });

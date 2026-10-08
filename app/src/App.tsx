@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { daemonUrl, setDaemonUrl } from "./api";
 import { RouteView } from "./routes";
 import { start, useStore } from "./store";
 import { LeftList } from "./shell/LeftList";
+import { Dock } from "./shell/Dock";
+import { goNextAttention, useAttention } from "./shell/NextAttention";
+import { useRoute } from "./nav";
 import { Palette } from "./Palette";
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
@@ -10,14 +13,28 @@ export const MOD = isMac ? "⌘" : "Ctrl+";
 
 export function App() {
   const [palette, setPalette] = useState(false);
+  const route = useRoute();
+  const queue = useAttention();
+  const dock = useRef<HTMLInputElement>(null);
+  // The coordinator's own conversation (the project route) has its message box; every other screen has the dock.
+  const hasDock = route.name !== "project";
+  const latest = useRef({ queue, route });
+  latest.current = { queue, route };
 
   useEffect(() => {
+    // Capture phase, so shortcuts work even when a terminal has focus.
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && !e.shiftKey && e.key.toLowerCase() === "k") {
-        // Capture phase, so the palette opens even when a terminal has focus.
+      if (!mod || e.shiftKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "p") { e.preventDefault(); e.stopPropagation(); setPalette((p) => !p); }
+      else if (k === "k") {
+        e.preventDefault(); e.stopPropagation(); setPalette(false);
+        const box = dock.current ?? document.querySelector<HTMLTextAreaElement>('[data-testid="coordinator-chat"] textarea');
+        box?.focus();
+      } else if (k === "j") {
         e.preventDefault(); e.stopPropagation();
-        setPalette((p) => !p);
+        goNextAttention(latest.current.queue, latest.current.route);
       }
     };
     window.addEventListener("keydown", onKey, true);
@@ -26,9 +43,10 @@ export function App() {
 
   return (
     <div className="app">
-      <LeftList />
+      <LeftList mod={MOD} />
       <main className="main">
         <RouteView />
+        {hasDock && <Dock ref={dock} mod={MOD} />}
       </main>
       <StatusBar />
       {palette && <Palette onClose={() => setPalette(false)} />}

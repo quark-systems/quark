@@ -175,7 +175,7 @@ test("a queued task explains that it has no terminal or changes yet", async ({ p
 test("command palette jumps to a task", async ({ page }) => {
   await open(page, "#/");
   await expect(page.getByTestId("project-card").first()).toBeVisible();
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   // "task" narrows to tasks: the draft PR of the same name is listed too.
   await page.getByPlaceholder("Jump to a project, task, decision or pull request…").fill("task pricing page");
   await page.keyboard.press("Enter");
@@ -187,7 +187,7 @@ test("decisions inbox: answer from the keyboard, then see who answered", async (
   await expect(page.getByTestId("inbox-count")).toHaveText("2");
 
   // The palette jumps straight to a decision.
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   await page.getByPlaceholder("Jump to a project, task, decision or pull request…").fill("answer history");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#\/inbox\/d-1$/);
