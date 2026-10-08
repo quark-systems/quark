@@ -1,0 +1,48 @@
+/* Shared shell parts (src/ui). Colors and sizes come from the tokens in styles.css. */
+.ui-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; background: var(--tone-idle); }
+.ui-dot.busy { background: var(--tone-busy); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-busy) 25%, transparent); }
+.ui-dot.needs-you { background: var(--tone-needs-you); }
+.ui-dot.ready { background: var(--tone-ready); }
+.ui-dot.failed { background: var(--tone-failed); }
+.ui-dot.parked { background: var(--tone-parked); }
+
+.ui-count { flex: none; font: 600 11px var(--sans); line-height: 16px; padding: 0 7px; border-radius: 999px; background: var(--selection-strong); color: var(--fg-dim); }
+.ui-count.needs-you { background: var(--tone-needs-you); color: var(--on-tone); }
+.ui-count.accent { background: var(--accent); color: var(--on-tone); }
+
+.ui-section-label { display: flex; align-items: center; gap: 6px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--fg-faint); }
+.ui-section-label > span:first-child { flex: 1; min-width: 0; }
+
+.ui-kbd { font: 11px var(--mono); color: var(--fg-dim); border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 5px; background: none; }
+
+.ui-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--row-height); padding: 6px 10px; box-sizing: border-box; border: 1px solid transparent; border-radius: var(--radius-m);
+  background: none; color: var(--fg); text-decoration: none; text-align: left; cursor: pointer; font: 13px var(--sans); }
+.ui-row:hover { background: var(--selection-subtle); }
+.ui-row.current { background: var(--selection-strong); }
+.ui-row.indent { padding-left: 20px; }
+.ui-row.dim { opacity: .55; }
+.ui-row-lead { flex: none; display: inline-flex; align-items: center; }
+.ui-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ui-row-title, .ui-row-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ui-row-title { font-weight: 500; }
+.ui-row-sub { font-size: 12px; color: var(--fg-faint); }
+.ui-row:focus-visible, .ui-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.ui-btn { height: 32px; padding: 0 12px; border-radius: var(--radius-m); font: 13px var(--sans); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.ui-btn.primary { border: none; background: var(--accent); color: var(--on-tone); font-weight: 600; }
+.ui-btn.secondary { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--fg); }
+.ui-btn.quiet { border: none; background: none; color: var(--fg-dim); }
+.ui-btn.quiet:hover, .ui-btn.secondary:hover { background: var(--selection); }
+.ui-btn:disabled { opacity: .45; cursor: default; }
+
+.ui-coord-mark { flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 600 11px var(--sans);
+  color: var(--tone-needs-you); background: color-mix(in srgb, var(--tone-needs-you) 16%, var(--background)); border: 1px solid color-mix(in srgb, var(--tone-needs-you) 45%, transparent); }
+
+/* The catalogue page. */
+.catalogue { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; padding: 16px; max-width: 1200px; }
+.cat-entry { border: 1px solid var(--line); border-radius: var(--radius-l); background: var(--surface-1); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.cat-entry h2 { margin: 0; font-size: 14px; }
+.cat-entry p { margin: 0; line-height: 1.5; }
+.cat-example { margin-top: 8px; padding: 14px; border-radius: var(--radius-m); background: var(--background); border: 1px solid var(--line); }
+.cat-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.cat-search { height: 28px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--fg); border-radius: var(--radius-s); padding: 0 8px; font: inherit; }
