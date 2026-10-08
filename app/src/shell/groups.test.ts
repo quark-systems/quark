@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { leftListGroups, swatchFor } from "./leftList";
+import { leftListGroups, swatchFor } from "./groups";
 
 const p = (id: string, name: string) => ({ id, name, created_at: "", updated_at: "" });
 const t = (id: string, project_id: string, state: any, updated_at = "2026-10-08T00:00:00Z", state_note?: string) =>

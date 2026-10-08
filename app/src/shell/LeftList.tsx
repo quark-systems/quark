@@ -5,7 +5,7 @@ import { href, Route, useRoute } from "../nav";
 import { useStore } from "../store";
 import { CoordinatorMark, CountBadge, Row, StatusDot } from "../ui";
 import { useLabels } from "../persona";
-import { leftListGroups, ProjectGroup } from "./leftList";
+import { leftListGroups, ProjectGroup } from "./groups";
 import "./shell.css";
 
 export function LeftList({ top }: { top?: React.ReactNode }) {
