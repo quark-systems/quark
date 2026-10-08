@@ -27,7 +27,7 @@ test("creates a project and lands on its board", async ({ page }) => {
   await expect(page.getByTestId("coordinator-chat")).toContainText("Workspace ready with quark");
   await expect(page.locator(".header h1")).toHaveText("Parser rewrite");
   await expect(page.getByTestId("col-queued")).toBeVisible();
-  await expect(page.locator(".sidebar")).toContainText("Parser rewrite");
+  await expect(page.getByRole("navigation", { name: "Projects" })).toContainText("Parser rewrite");
 
   const created = await page.evaluate(async () => {
     const r = await fetch("http://127.0.0.1:7392/v1/projects");
