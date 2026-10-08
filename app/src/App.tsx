@@ -5,7 +5,7 @@ import { start, useStore } from "./store";
 import { LeftList } from "./shell/LeftList";
 import { Dock } from "./shell/Dock";
 import { goNextAttention, useAttention } from "./shell/NextAttention";
-import { useRoute } from "./nav";
+import { parseRoute, useRoute } from "./nav";
 import { Palette } from "./Palette";
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
@@ -18,8 +18,8 @@ export function App() {
   const dock = useRef<HTMLInputElement>(null);
   // The coordinator's own conversation (the project route) has its message box; every other screen has the dock.
   const hasDock = route.name !== "project";
-  const latest = useRef({ queue, route });
-  latest.current = { queue, route };
+  const latest = useRef({ queue });
+  latest.current = { queue };
 
   useEffect(() => {
     // Capture phase, so shortcuts work even when a terminal has focus.
@@ -34,7 +34,8 @@ export function App() {
         box?.focus();
       } else if (k === "j") {
         e.preventDefault(); e.stopPropagation();
-        goNextAttention(latest.current.queue, latest.current.route);
+        // Read the route from the URL: a key pressed right after navigating can beat the re-render.
+        goNextAttention(latest.current.queue, parseRoute(location.hash));
       }
     };
     window.addEventListener("keydown", onKey, true);
