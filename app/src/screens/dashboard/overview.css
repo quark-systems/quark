@@ -1,8 +1,4 @@
 /* Project dashboard, Overview tab, and the dashboard's tab strip. Colors come from the theme tokens in styles.css. */
-.dash-tabs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; }
-.dash-tab { padding: 3px 10px; border-radius: 5px; color: var(--fg-dim); text-decoration: none; font-size: 12px; }
-.dash-tab:hover { background: var(--selection-subtle); color: var(--fg); }
-.dash-tab.on { background: var(--selection-strong); color: var(--fg); }
 
 .ov-body { max-width: 900px; }
 .ov-head { display: flex; align-items: baseline; gap: 10px; width: 100%; }

@@ -9,7 +9,6 @@ import { ago, errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import { HarnessLogo } from "../../components/WorkerCard/HarnessLogo";
 import { ProjectHostSlice } from "../../components/hosts/ProjectHostSlice";
-import { DashboardTabs } from "./Tabs";
 import { lastSeen, PULSE, saveSeen, summarize } from "./summary";
 import "./settings.css";
 import "./overview.css";
@@ -66,12 +65,6 @@ export function Overview({ project: pid }: { project: string }) {
   const counts = o?.live.counts;
   return (
     <>
-      <div className="header">
-        <h1>Overview</h1>
-        <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
-        <span className="spacer" />
-        <DashboardTabs project={pid} current="overview" />
-      </div>
       <div className="screen settings overview">
         {unavailable && <Unavailable what="The Project overview" endpoint={`GET /v1/projects/${pid}/overview`} />}
         {loadErr && <div className="set-error" role="alert">{loadErr}</div>}

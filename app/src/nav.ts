@@ -5,17 +5,18 @@ import { useSyncExternalStore } from "react";
 // captures a value; a trailing `?` makes it optional. A new screen adds a line
 // here and one in `routes.tsx`.
 export const ROUTES = {
-  projects: "", // the Projects list
+  projects: "", // All projects: what needs you, open PRs, one card per project
   new: "new", // create a Project
-  project: "p/:id", // board and coordinator chat
-  decisions: "p/:project/decisions/:id?", // the Project's decision log, optionally with one decision selected
+  project: "p/:id", // the project's Conversation tab: its coordinator, and what changed since you looked
+  work: "p/:project/work", // the project's Work tab: one column per worker state
+  issues: "p/:project/issues/:id?", // the project's Issues tab: its Beads issues, optionally with one selected
+  decisions: "p/:project/decisions/:id?", // the project's Decisions tab: its decision log, optionally with one decision selected
   memory: "p/:project/memory/:id?", // the Project's memory, optionally with one proposal or entry selected
-  issues: "p/:project/issues/:id?", // the Project's Beads issues, optionally with one selected
-  dispatch: "p/:project/dispatch", // the Project's dispatch rules: edit, save, test
+  dispatch: "p/:project/dispatch", // Settings › Dispatch: the dispatch rules: edit, save, test
   overview: "p/:project/overview", // the Project dashboard's Overview tab: live status and what changed since you last looked
-  settings: "p/:project/settings", // the Project dashboard's Settings tab: every per-Project switch
+  settings: "p/:project/settings", // Settings › General: every per-Project switch
   metrics: "p/:project/metrics", // the Project dashboard's Metrics tab: how the work has gone
-  automation: "p/:project/automation", // the Project's inbox, trigger rules and away policy
+  automation: "p/:project/automation", // Settings › Automation: the inbox, trigger rules and away policy
   task: "t/:id", // worker view
   inbox: "inbox/:id?", // decisions inbox, optionally with one decision selected
   prs: "prs", // PR center

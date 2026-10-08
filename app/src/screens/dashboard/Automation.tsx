@@ -39,11 +39,6 @@ export function Automation({ project: pid }: { project: string }) {
   }
   return (
     <>
-      <div className="header">
-        <h1>Automation</h1>
-        <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
-        <span className="spacer" />
-      </div>
       <div className="screen settings">
         {unavailable && <Unavailable what="Automation" endpoint={`GET /v1/projects/${pid}/automation`} />}
         {loadErr && <div className="set-error" role="alert">{loadErr} <button className="btn" onClick={() => void load()}>Retry</button></div>}

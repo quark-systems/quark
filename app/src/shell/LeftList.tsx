@@ -14,10 +14,7 @@ export function LeftList({ mod }: { mod: string }) {
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
-  const prs = useStore((s) => s.pullRequests);
   const groups = useMemo(() => leftListGroups(projects, tasks, decisions), [projects, tasks, decisions]);
-  const openPrs = useMemo(() => Object.values(prs).filter((p) => p.state === "open").length, [prs]);
-  const openDecisions = useMemo(() => Object.values(decisions).filter((d) => d.state === "open").length, [decisions]);
 
   return (
     <nav className="left-list sidebar" aria-label="Projects">
@@ -31,14 +28,8 @@ export function LeftList({ mod }: { mod: string }) {
       </div>
       <NextAttention mod={mod} />
       <div className="ll-top">
-        <Row href={href({ name: "projects" })} current={route.name === "projects"} title="All projects"
+        <Row href={href({ name: "projects" })} current={route.name === "projects" || route.name === "prs" || (route.name === "inbox" && !route.id)} title="All projects"
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>} />
-        <Row href={href({ name: "inbox" })} current={route.name === "inbox"} testid="nav-inbox" title="Decisions"
-          lead={<StatusDot tone="needs-you" label="" />}
-          trail={openDecisions > 0 ? <span className="ui-count needs-you" data-testid="inbox-count">{openDecisions}</span> : undefined} />
-        <Row href={href({ name: "prs" })} current={route.name === "prs" || route.name === "pr"} testid="nav-prs" title="Pull requests"
-          lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M6 8.5v7a3 3 0 0 0 3 3h6.5" /></svg>}
-          trail={<span className="ll-meta">{openPrs}</span>} />
       </div>
       <div className="ll-projects">
         {groups.map((g) => <ProjectSection key={g.project.id} g={g} route={route} />)}

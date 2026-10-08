@@ -117,3 +117,42 @@ test("dock: Ctrl+K from a worker asks its project's coordinator about that worke
   await dock.getByRole("link", { name: "See the conversation" }).click();
   await expect(page).toHaveURL(/#\/p\/quark$/);
 });
+
+test("routes: project tabs, one Settings page, All projects home, and old links still open", async ({ page }) => {
+  // The project opens on its Conversation: the coordinator in the middle, what changed and what needs you beside it.
+  await open(page, "#/p/quark");
+  const tabs = page.getByRole("navigation", { name: "Project", exact: true });
+  await expect(tabs.getByRole("link")).toHaveText(["Conversation", "Overview", "Work", "Issues", /^Decisions/, /^Memory/, "Metrics"]);
+  await expect(tabs.getByRole("link", { name: "Conversation" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("coordinator-chat")).toBeVisible();
+  const since = page.getByRole("complementary", { name: "Since you looked" });
+  await expect(since).toContainText("Needs you");
+  await expect(since).toContainText("Open PRs");
+
+  // Work is the board; Decisions lists the project's decisions; Issues waits for Beads.
+  await tabs.getByRole("link", { name: "Work" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/work$/);
+  await expect(page.getByTestId("col-running")).toBeVisible();
+  await tabs.getByRole("link", { name: /^Decisions/ }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/decisions$/);
+  await expect(page.getByTestId("decision-log-row").first()).toBeVisible();
+  await tabs.getByRole("link", { name: "Issues" }).click();
+  await expect(page.getByTestId("issues-unavailable")).toBeVisible();
+
+  // Settings is one page; Dispatch and Automation are its sections, and their old links open there.
+  await page.getByTestId("nav-settings").click();
+  const sections = page.getByRole("navigation", { name: "Settings" });
+  await expect(sections.getByRole("link")).toHaveText(["General", "Dispatch", "Automation"]);
+  await open(page, "#/p/quark/dispatch");
+  await expect(page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: "Dispatch" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("nav-settings")).toHaveAttribute("aria-current", "page");
+
+  // All projects folds in the decisions inbox and the PR center.
+  await page.getByRole("navigation", { name: "Projects" }).getByRole("link", { name: "All projects" }).click();
+  await expect(page.getByRole("region", { name: "Needs you" }).getByTestId("home-needs").first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Open PRs" })).toContainText("Terminal sessions over tmux control mode");
+  await page.getByTestId("home-filter-pr").click();
+  await expect(page.getByTestId("home-needs")).toHaveText(Array(await page.getByTestId("home-needs").count()).fill(/Check failed/));
+  await page.getByTestId("nav-prs").click();
+  await expect(page).toHaveURL(/#\/prs$/);
+});

@@ -8,7 +8,6 @@ import { useStore } from "../../store";
 import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import { StandingApproval } from "../../components/StandingApproval";
-import { DashboardTabs } from "./Tabs";
 import { PersonaPicker } from "../../components/PersonaPicker";
 import "./settings.css";
 import "./overview.css";
@@ -50,12 +49,6 @@ export function Settings({ project: pid }: { project: string }) {
   const agent = s?.agent_config ?? project.agent_config;
   return (
     <>
-      <div className="header">
-        <h1>Settings</h1>
-        <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
-        <span className="spacer" />
-        <DashboardTabs project={pid} current="settings" />
-      </div>
       <div className="screen settings">
         {unavailable && <Unavailable what="Project settings" endpoint={`GET /v1/projects/${pid}/settings`} />}
         {loadErr && <div className="set-error" role="alert">{loadErr} <button className="btn" onClick={() => void load()}>Retry</button></div>}

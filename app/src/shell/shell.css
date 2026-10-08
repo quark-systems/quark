@@ -35,3 +35,61 @@
 .dock-open { height: 30px; font-size: 12px; }
 .dock-note { padding: 6px 4px 0; font-size: 12px; color: var(--fg-dim); }
 .dock-note.bad { color: var(--red); }
+
+/* The project header and its tabs. */
+.project-header { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 16px; min-height: 52px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--background); }
+.ph-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ph-title { font: 600 15px var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-tabs, .settings-sections { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; }
+.ph-tab, .ph-settings { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius-m); text-decoration: none; font: 13px var(--sans); color: var(--fg-dim); }
+.ph-tab:hover, .ph-settings:hover { background: var(--selection-subtle); color: var(--fg); }
+.ph-tab.on { background: var(--selection-strong); color: var(--fg); }
+.ph-settings { border: 1px solid var(--line-2); background: var(--surface-2); font-size: 12px; }
+.ph-settings.on { border-color: var(--accent); color: var(--fg); }
+.settings-sections { flex: none; padding: 6px 16px; border-bottom: 1px solid var(--line); }
+
+/* The Conversation tab: the coordinator in the middle, "since you looked" on the right. */
+.conversation { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); }
+.conversation .side-chat { border-left: none; background: var(--background); }
+.conversation .side-chat .chat-log, .conversation .side-chat .composer { width: 100%; max-width: 820px; margin: 0 auto; }
+.since { min-height: 0; overflow-y: auto; border-left: 1px solid var(--line); background: var(--surface-1); padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+.since section { display: flex; flex-direction: column; gap: 6px; }
+.since-summary, .since-none { margin: 0; line-height: 1.5; color: var(--fg-dim); }
+.since-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-m); border: 1px solid var(--line); background: var(--surface-2); text-decoration: none; color: var(--fg); }
+.since-item:hover { background: var(--selection); }
+.since-item.needs { border-color: color-mix(in srgb, var(--tone-needs-you) 40%, transparent); background: color-mix(in srgb, var(--tone-needs-you) 8%, var(--background)); }
+.since-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.since-kind { flex: none; max-width: 40%; font-size: 12px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1100px) { .conversation { grid-template-columns: minmax(0, 1fr); } .since { display: none; } }
+
+/* The Decisions tab (a plain log until workstream B's decision records land). */
+.dlog { max-width: 960px; padding: 20px 24px; display: flex; flex-direction: column; gap: 10px; }
+.dlog-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius-l); overflow: hidden; margin-bottom: 12px; }
+.dlog-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--fg); }
+.dlog-row:last-child { border-bottom: none; }
+.dlog-row:hover { background: var(--selection-subtle); }
+.dlog-q { flex: 1; min-width: 0; }
+.dlog-meta { flex: none; max-width: 45%; font-size: 12px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* All projects, the home. */
+.home { max-width: 1040px; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 24px; }
+.home-section { display: flex; flex-direction: column; gap: 10px; }
+.home-filters { display: flex; flex-wrap: wrap; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.home-chip { height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-2); background: none; color: var(--fg-dim); font: 12px var(--sans); cursor: pointer; }
+.home-chip.on { background: var(--selection-strong); color: var(--fg); }
+.home-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius-l); overflow: hidden; }
+.home-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--fg); }
+.home-row:last-child { border-bottom: none; }
+.home-row:hover { background: var(--selection-subtle); }
+.home-kind { width: 96px; flex: none; font-size: 12px; }
+.home-kind.needs-you { color: var(--tone-needs-you); }
+.home-kind.failed { color: var(--tone-failed); }
+.home-num { width: 44px; flex: none; font-size: 12px; color: var(--fg-faint); }
+.home-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-meta { flex: none; font-size: 12px; color: var(--fg-faint); }
+.home-checks { flex: none; font-size: 12px; color: var(--fg-dim); }
+.home-checks.failing { color: var(--tone-failed); }
+.home-checks.passing { color: var(--tone-ready); }
+.home-more { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.home-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.home-cards .pc-name { display: flex; align-items: center; gap: 8px; }

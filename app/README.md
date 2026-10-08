@@ -8,9 +8,9 @@ The same frontend runs in a plain browser.
 
 ## Screens
 
-- **Projects**: every Project with its active and needs-decision counts.
+- **All projects** (home): what needs you across projects, oldest first, open PRs, and one card per project.
 - **New project** (J2): name, goal, repositories, default agent (harness, model, effort) and dispatch preset.
-- **Project board** (J3): one column per task state, updated live from the event stream, beside the coordinator chat.
+- **Project** (J3): tabs Conversation (the coordinator, with what changed since you looked), Overview, Work (one column per worker state, updated live from the event stream), Issues, Decisions, Memory and Metrics; Settings is one page with General, Dispatch and Automation sections.
 - **Worker view** (J4): live terminal with input, a box to message the worker, cancel and relaunch, and tabs for the transcript and the changed files with their diff.
 - **Decisions** (J5): every open decision across Projects, oldest first, with an answer box; the answered list shows who answered and when.
   Keys: `j`/`k` move, `r` or `Enter` answers, `Ctrl/Cmd+Enter` sends, `o`/`a` switch between open and answered, `t` opens the task that asked.

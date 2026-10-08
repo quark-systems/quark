@@ -69,10 +69,6 @@ export function Decisions({ project: pid, id }: { project: string; id?: string }
   const byId = decisions;
   return (
     <>
-      <div className="header">
-        <h1>Decisions</h1>
-        <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
-      </div>
       <div className="screen dl">
         <section className="dl-list" aria-label="Decisions">
           <div className="dl-filters">
