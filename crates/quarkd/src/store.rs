@@ -11,9 +11,10 @@ use std::sync::Mutex;
 
 use crate::engine::{FleetSnapshot, Hold, StatusEntry};
 use quark_systems::{
-    AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset,
-    DispatchRecord, DispatchTrigger, Event, EventType, Project, ProjectStatus, RepoSource, Task,
-    TaskEvent, TaskKind, TaskState, TranscriptEntry, TranscriptItem, UpdateProject,
+    AgentConfig, CreateProject, Decision, DecisionBrief, DecisionState, DeliveryPolicy,
+    DispatchPreset, DispatchRecord, DispatchTrigger, Event, EventType, Project, ProjectStatus,
+    RepoSource, Task, TaskEvent, TaskKind, TaskState, TranscriptEntry, TranscriptItem,
+    UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -21,6 +22,7 @@ use tokio::sync::broadcast;
 use crate::now_rfc3339;
 
 mod accounts;
+mod decisions;
 mod failover;
 mod memory;
 mod migrations;
@@ -82,6 +84,13 @@ impl TranscriptSource {
             TranscriptSource::Task { task_id } => format!("task:{task_id}"),
         }
     }
+}
+
+/// The answerer's reason and channel, for [`Store::answer_decision_with`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnswerNote {
+    pub why: Option<String>,
+    pub via: Option<String>,
 }
 
 /// Engine coordinates of a decision, from [`Store::decision_target`].
@@ -948,12 +957,26 @@ impl Store {
     // Decisions
 
     pub fn list_decisions(&self, state: Option<DecisionState>) -> Result<Vec<Decision>> {
+        self.list_project_decisions(None, state)
+    }
+
+    /// Decisions in one Project (every Project when `None`), oldest first.
+    pub fn list_project_decisions(
+        &self,
+        project_id: Option<&str>,
+        state: Option<DecisionState>,
+    ) -> Result<Vec<Decision>> {
         self.read(|c| {
             let sql = format!(
-                "{DECISION_SELECT} WHERE (?1 IS NULL OR state = ?1) ORDER BY opened_at, id"
+                "{DECISION_SELECT} WHERE (?1 IS NULL OR state = ?1)
+                   AND (?2 IS NULL OR project_id = ?2)
+                 ORDER BY opened_at, id"
             );
             let mut stmt = c.prepare(&sql)?;
-            let rows = stmt.query_map([state.map(decision_state_str)], decision_from_row)?;
+            let rows = stmt.query_map(
+                params![state.map(decision_state_str), project_id],
+                decision_from_row,
+            )?;
             Ok(rows.collect::<std::result::Result<_, _>>()?)
         })
     }
@@ -997,6 +1020,17 @@ impl Store {
     /// Records an answer the engine has accepted, emitting
     /// `decision.answered`. Conflicts when the decision already has an answer.
     pub fn answer_decision(&self, id: &str, answer: &str, answered_by: &str) -> Result<Decision> {
+        self.answer_decision_with(id, answer, answered_by, &AnswerNote::default())
+    }
+
+    /// [`Self::answer_decision`] with the answerer's reason and channel.
+    pub fn answer_decision_with(
+        &self,
+        id: &str,
+        answer: &str,
+        answered_by: &str,
+        note: &AnswerNote,
+    ) -> Result<Decision> {
         self.write(|tx, events| {
             let old = tx
                 .query_row(
@@ -1020,6 +1054,8 @@ impl Store {
                 answer: Some(answer.to_string()),
                 answered_by: Some(answered_by.to_string()),
                 answered_at: Some(now_rfc3339()),
+                answered_via: note.via.clone(),
+                answer_why: note.why.clone(),
                 ..old
             };
             mark_answered(tx, events, &decision)?;
@@ -1054,9 +1090,24 @@ impl Store {
                         decision_from_row,
                     )
                     .optional()?;
+                let brief = api_task_ids(tx, project_id, hold.brief.clone().normalized())?;
                 match existing {
                     Some(old) if old.state == DecisionState::Open => {
-                        if hold.answer.is_some() {
+                        if hold.answer.is_none() && !brief.is_empty() && brief != old.brief {
+                            // The asker added or changed its brief.
+                            let decision = Decision { brief, ..old };
+                            tx.execute(
+                                "UPDATE decisions SET brief = ?2 WHERE id = ?1",
+                                params![decision.id, serde_json::to_string(&decision.brief)?],
+                            )?;
+                            append_event(
+                                tx,
+                                events,
+                                Some(project_id),
+                                EventType::DecisionOpened,
+                                serde_json::to_value(&decision)?,
+                            )?;
+                        } else if hold.answer.is_some() {
                             let decision = Decision {
                                 state: DecisionState::Answered,
                                 answer: hold.answer.clone(),
@@ -1075,11 +1126,10 @@ impl Store {
             }
 
             let open: Vec<(String, Decision)> = {
-                let mut stmt = tx.prepare(
-                    "SELECT engine_id, id, project_id, task_id, question, state, answer,
-                         answered_by, opened_at, answered_at
-                     FROM decisions WHERE project_id = ?1 AND state = 'open'",
-                )?;
+                let mut stmt = tx.prepare(&format!(
+                    "SELECT engine_id, {DECISION_COLUMNS}
+                     FROM decisions WHERE project_id = ?1 AND state = 'open'"
+                ))?;
                 let rows = stmt.query_map([project_id], |r| {
                     Ok((r.get(0)?, decision_from_row_at(r, 1)?))
                 })?;
@@ -1595,14 +1645,20 @@ fn task_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Task> {
     })
 }
 
-const DECISION_SELECT: &str = "SELECT id, project_id, task_id, question, state, answer, \
-                               answered_by, opened_at, answered_at FROM decisions";
+/// The columns [`decision_from_row_at`] reads, in order.
+macro_rules! decision_columns {
+    () => {
+        "id, project_id, task_id, question, state, answer, answered_by, opened_at, \
+         answered_at, number, brief, answered_via, answer_why, outcome, acted_at, rule_id, \
+         made_rule_id"
+    };
+}
+
+const DECISION_COLUMNS: &str = decision_columns!();
+const DECISION_SELECT: &str = concat!("SELECT ", decision_columns!(), " FROM decisions");
 
 fn decision_state_str(s: DecisionState) -> &'static str {
-    match s {
-        DecisionState::Open => "open",
-        DecisionState::Answered => "answered",
-    }
+    s.as_str()
 }
 
 fn decision_from_row(r: &Row) -> rusqlite::Result<Decision> {
@@ -1616,14 +1672,20 @@ fn decision_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Decision> {
         project_id: r.get(i + 1)?,
         task_id: r.get(i + 2)?,
         question: r.get(i + 3)?,
-        state: match r.get::<_, String>(i + 4)?.as_str() {
-            "answered" => DecisionState::Answered,
-            _ => DecisionState::Open,
-        },
+        state: DecisionState::parse(&r.get::<_, String>(i + 4)?),
         answer: r.get(i + 5)?,
         answered_by: r.get(i + 6)?,
         opened_at: r.get(i + 7)?,
         answered_at: r.get(i + 8)?,
+        number: r.get(i + 9)?,
+        // Written only by this daemon; an unreadable brief reads as empty.
+        brief: serde_json::from_str(&r.get::<_, String>(i + 10)?).unwrap_or_default(),
+        answered_via: r.get(i + 11)?,
+        answer_why: r.get(i + 12)?,
+        outcome: r.get(i + 13)?,
+        acted_at: r.get(i + 14)?,
+        rule_id: r.get(i + 15)?,
+        made_rule_id: r.get(i + 16)?,
     })
 }
 
@@ -1660,7 +1722,7 @@ fn open_decision(
     };
     let now = now_rfc3339();
     let answered = hold.answer.is_some();
-    let decision = Decision {
+    let mut decision = Decision {
         id: new_id("dec"),
         project_id: project_id.to_string(),
         task_id,
@@ -1670,12 +1732,14 @@ fn open_decision(
         } else {
             DecisionState::Open
         },
+        brief: api_task_ids(tx, project_id, hold.brief.clone().normalized())?,
         answer: hold.answer.clone(),
         answered_by: hold.answered_by.clone(),
         opened_at: now.clone(),
         answered_at: answered.then(|| now.clone()),
+        ..Default::default()
     };
-    insert_decision(tx, &hold.id, &decision)?;
+    insert_decision(tx, &hold.id, &mut decision)?;
     append_event(
         tx,
         events,
@@ -1695,17 +1759,49 @@ fn open_decision(
     Ok(())
 }
 
+/// `brief` with each engine task id in `asked_by` and `blocks` replaced by
+/// the API id of that task in the Project, so clients can link it.
+fn api_task_ids(
+    tx: &Transaction,
+    project_id: &str,
+    mut brief: DecisionBrief,
+) -> Result<DecisionBrief> {
+    let lookup = |engine_id: &str| -> Result<Option<String>> {
+        Ok(tx
+            .query_row(
+                "SELECT id FROM tasks WHERE project_id = ?1 AND engine_id = ?2",
+                params![project_id, engine_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    };
+    if let Some(who) = &brief.asked_by {
+        if let Some(id) = lookup(who)? {
+            brief.asked_by = Some(id);
+        }
+    }
+    for b in &mut brief.blocks {
+        if let Some(id) = lookup(b)? {
+            *b = id;
+        }
+    }
+    Ok(brief)
+}
+
 /// Stores `decision`'s answer fields and emits `decision.answered`.
 fn mark_answered(tx: &Transaction, events: &mut Vec<Event>, decision: &Decision) -> Result<()> {
     tx.execute(
-        "UPDATE decisions SET state = ?2, answer = ?3, answered_by = ?4, answered_at = ?5
+        "UPDATE decisions SET state = ?2, answer = ?3, answered_by = ?4, answered_at = ?5,
+             answered_via = ?6, answer_why = ?7
          WHERE id = ?1",
         params![
             decision.id,
             decision_state_str(decision.state),
             decision.answer,
             decision.answered_by,
-            decision.answered_at
+            decision.answered_at,
+            decision.answered_via,
+            decision.answer_why
         ],
     )?;
     append_event(
@@ -1718,22 +1814,37 @@ fn mark_answered(tx: &Transaction, events: &mut Vec<Event>, decision: &Decision)
     Ok(())
 }
 
-fn insert_decision(tx: &Transaction, engine_id: &str, d: &Decision) -> Result<()> {
+/// Inserts `d` under the Project's next number, which it sets on `d`.
+fn insert_decision(tx: &Transaction, engine_id: &str, d: &mut Decision) -> Result<()> {
+    d.number = tx.query_row(
+        "SELECT COALESCE(MAX(number), 0) + 1 FROM decisions WHERE project_id = ?1",
+        [&d.project_id],
+        |r| r.get(0),
+    )?;
     tx.execute(
-        "INSERT INTO decisions (id, project_id, engine_id, task_id, question, state, answer,
-             answered_by, opened_at, answered_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        &format!(
+            "INSERT INTO decisions (engine_id, {DECISION_COLUMNS})
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"
+        ),
         params![
+            engine_id,
             d.id,
             d.project_id,
-            engine_id,
             d.task_id,
             d.question,
             decision_state_str(d.state),
             d.answer,
             d.answered_by,
             d.opened_at,
-            d.answered_at
+            d.answered_at,
+            d.number,
+            serde_json::to_string(&d.brief)?,
+            d.answered_via,
+            d.answer_why,
+            d.outcome,
+            d.acted_at,
+            d.rule_id,
+            d.made_rule_id
         ],
     )?;
     Ok(())
@@ -1878,6 +1989,7 @@ mod tests {
             question: "merge?".into(),
             answer: None,
             answered_by: None,
+            brief: crate::engine::firstmate::worker_brief("a"),
         };
         store
             .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
@@ -1885,6 +1997,9 @@ mod tests {
         let open = store.list_decisions(Some(DecisionState::Open)).unwrap();
         assert_eq!(open.len(), 1);
         assert!(open[0].task_id.is_some());
+        // The brief names the task by its API id.
+        assert_eq!(open[0].brief.asked_by, open[0].task_id);
+        assert_eq!(open[0].brief.blocks, vec![open[0].task_id.clone().unwrap()]);
 
         hold.answer = Some("yes".into());
         hold.answered_by = Some("user_1".into());
@@ -1931,6 +2046,7 @@ mod tests {
             question: "which way?".into(),
             answer: None,
             answered_by: None,
+            brief: Default::default(),
         }
     }
 

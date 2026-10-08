@@ -3,15 +3,15 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    AgentRole, AnswerDecision, CoordinatorMessage, CoordinatorMessageAccepted, CreateProject,
-    Decision, DecisionState, DispatchRecord, ErrorBody, Health, Project, ProjectStatus,
-    RelaunchTask, SendTaskMessage, Task, TaskChanges, TaskDiff, TaskEvent, TranscriptItem,
-    UpdateProject,
+    ActOnDecision, AgentRole, AnswerDecision, CoordinatorMessage, CoordinatorMessageAccepted,
+    CreateProject, Decision, DecisionState, DispatchRecord, ErrorBody, Health, Project,
+    ProjectStatus, RelaunchTask, SendTaskMessage, Task, TaskChanges, TaskDiff, TaskEvent,
+    TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
 use crate::chat::{self, ChatError, Delivery};
-use crate::store::TranscriptSource;
+use crate::store::{AnswerNote, TranscriptSource};
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -613,9 +613,12 @@ fn worktree_error(e: WorktreeError) -> ApiError {
 pub struct DecisionQuery {
     /// Only decisions in this state.
     pub state: Option<DecisionState>,
+    /// Only this Project's decisions.
+    pub project_id: Option<String>,
 }
 
-/// The decisions inbox across all Projects.
+/// The decision log: open, answered and acted-on decisions, oldest first,
+/// across all Projects or one.
 #[utoipa::path(
     get,
     path = "/v1/decisions",
@@ -627,7 +630,12 @@ pub async fn list_decisions(
     State(state): State<AppState>,
     Query(q): Query<DecisionQuery>,
 ) -> Result<Json<Vec<Decision>>, ApiError> {
-    Ok(Json(db(&state, move |s| s.list_decisions(q.state)).await?))
+    Ok(Json(
+        db(&state, move |s| {
+            s.list_project_decisions(q.project_id.as_deref(), q.state)
+        })
+        .await?,
+    ))
 }
 
 /// Dispatches `POST /v1/decisions/{id}:<action>`.
@@ -640,7 +648,7 @@ pub async fn decision_action(
         return Err(ApiError::new(
             StatusCode::METHOD_NOT_ALLOWED,
             "method_not_allowed",
-            "use POST /v1/decisions/{id}:answer",
+            "use POST /v1/decisions/{id}:answer or :act",
         ));
     };
     match action {
@@ -648,6 +656,11 @@ pub async fn decision_action(
             let input = serde_json::from_slice(&body)
                 .map_err(|e| ApiError::invalid(format!("invalid answer body: {e}")))?;
             answer_decision(state, Path(id.to_string()), Json(input)).await
+        }
+        "act" => {
+            let input = serde_json::from_slice(&body)
+                .map_err(|e| ApiError::invalid(format!("invalid act body: {e}")))?;
+            act_on_decision(state, Path(id.to_string()), Json(input)).await
         }
         _ => Err(ApiError::not_found()),
     }
@@ -659,9 +672,11 @@ pub(super) const MAX_ANSWERED_BY_BYTES: usize = 128;
 /// Answer an open decision.
 ///
 /// The engine records the answer with who gave it, which unblocks the task
-/// that asked. A decision the daemon opened about a rate limit relaunches
-/// the task's worker instead, with the answer as its note. The answered decision is returned and also arrives as a
-/// `decision.answered` event.
+/// that asked; a `why` goes with the answer as its reason. A decision the
+/// daemon opened about a rate limit relaunches the task's worker instead,
+/// with the answer as its note. The answered decision is returned and also
+/// arrives as a `decision.answered` event. With `make_rule`, the answer also
+/// becomes a standing rule (`rule.updated`).
 #[utoipa::path(
     post,
     path = "/v1/decisions/{id}:answer",
@@ -696,6 +711,24 @@ pub async fn answer_decision(
             "answered_by must be one line of at most 128 bytes",
         ));
     }
+    let why = trimmed(input.why.as_deref());
+    let rule = trimmed(input.make_rule.as_deref());
+    let via = trimmed(input.via.as_deref()).unwrap_or_else(|| "app".into());
+    if !ANSWER_CHANNELS.contains(&via.as_str()) {
+        return Err(ApiError::invalid("via must be app, phone or chat"));
+    }
+    if why.as_ref().is_some_and(|w| w.len() > MAX_WHY_BYTES)
+        || rule.as_ref().is_some_and(|r| r.len() > MAX_WHY_BYTES)
+    {
+        return Err(ApiError::invalid(
+            "why and make_rule must be at most 2048 bytes",
+        ));
+    }
+    // The asker reads the reason with the answer.
+    let engine_answer = match &why {
+        Some(w) => format!("{}\n\nWhy: {w}", input.answer.trim_end()),
+        None => input.answer.clone(),
+    };
     let target = {
         let id = id.clone();
         db(&state, move |s| s.decision_target(&id)).await?
@@ -727,16 +760,27 @@ pub async fn answer_decision(
             state.accounts.clone(),
             state.harnesses.clone(),
         )
-        .resume(&ws, &decision, &input.answer)
+        .resume(&ws, &decision, &engine_answer)
         .await?;
     } else {
         state
             .engine
-            .answer(&ws, &target.engine_id, &input.answer, &answered_by)
+            .answer(&ws, &target.engine_id, &engine_answer, &answered_by)
             .await?;
     }
+    let note = AnswerNote {
+        why,
+        via: Some(via),
+    };
     let decision = db(&state, move |s| {
-        s.answer_decision(&id, &input.answer, &answered_by)
+        let d = s.answer_decision_with(&id, &input.answer, &answered_by, &note)?;
+        match rule {
+            Some(text) => {
+                s.make_rule(&d.id, &text, &answered_by)?;
+                s.get_decision(&d.id)
+            }
+            None => Ok(d),
+        }
     })
     .await
     .map_err(|e| match e.code() {
@@ -744,6 +788,53 @@ pub async fn answer_decision(
         _ => e,
     })?;
     Ok(Json(decision))
+}
+
+/// Where an answer can come from.
+const ANSWER_CHANNELS: &[&str] = &["app", "phone", "chat"];
+
+/// Longest `why`, `make_rule` or `outcome` accepted, in bytes.
+pub(super) const MAX_WHY_BYTES: usize = 2048;
+
+/// `s` trimmed, or `None` when blank.
+pub(super) fn trimmed(s: Option<&str>) -> Option<String> {
+    s.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Record what was done with an answer.
+///
+/// The asker (a coordinator, or a client acting for one) says what
+/// happened next; the decision moves to `acted` and also arrives as a
+/// `decision.acted` event. Recording again replaces the outcome.
+#[utoipa::path(
+    post,
+    path = "/v1/decisions/{id}:act",
+    tag = "decisions",
+    params(("id" = String, Path, description = "Decision id")),
+    request_body = ActOnDecision,
+    responses(
+        (status = 200, body = Decision, description = "The outcome is recorded"),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody, description = "`conflict`: the decision has no answer yet")
+    )
+)]
+pub async fn act_on_decision(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<ActOnDecision>,
+) -> Result<Json<Decision>, ApiError> {
+    let Some(outcome) = trimmed(Some(&input.outcome)) else {
+        return Err(ApiError::invalid("outcome is empty"));
+    };
+    if outcome.len() > MAX_WHY_BYTES {
+        return Err(ApiError::invalid("outcome must be at most 2048 bytes"));
+    }
+    Ok(Json(
+        db(&state, move |s| s.act_on_decision(&id, &outcome)).await?,
+    ))
 }
 
 fn already_answered() -> ApiError {
@@ -927,6 +1018,7 @@ pub async fn send_coordinator_message(
         get_task_diff,
         list_decisions,
         answer_decision,
+        act_on_decision,
         task_transcript,
         coordinator_messages,
         send_coordinator_message
@@ -972,8 +1064,11 @@ pub(super) fn router() -> axum::Router<AppState> {
         .route("/v1/tasks/{id}/changes", get(get_task_changes))
         .route("/v1/tasks/{id}/diff", get(get_task_diff))
         .route("/v1/decisions", get(list_decisions))
-        // POST serves the custom method `/v1/decisions/{id}:answer`.
-        .route("/v1/decisions/{id}", post(decision_action))
+        // POST serves the custom methods `/v1/decisions/{id}:answer` and `:act`.
+        .route(
+            "/v1/decisions/{id}",
+            get(super::decisions::get_decision).post(decision_action),
+        )
         .route(
             "/v1/coordinators/{id}/messages",
             get(coordinator_messages).post(send_coordinator_message),

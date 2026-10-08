@@ -426,6 +426,7 @@ async fn a_rate_limited_claude_worker_moves_through_its_pool_then_opens_a_decisi
         question: "REST or gRPC?".into(),
         answer: None,
         answered_by: None,
+        brief: Default::default(),
     }]);
     s.projector.refresh_all().await.unwrap();
     s.engine.set_holds(Vec::new());

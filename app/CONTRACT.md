@@ -29,6 +29,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Project settings | `GET/PATCH /v1/projects/{id}/settings` (`ProjectSettings`, `UpdateProjectSettings`) | D1 Dashboard: Settings |
 | Project metrics | `GET /v1/projects/{id}/metrics?days=` (`ProjectMetrics`) | D3 Dashboard: Metrics |
 | Project overview | `GET /v1/projects/{id}/overview?since=` (`ProjectOverview`) | D2 Dashboard: Overview |
+| Decision log | `Decision.number`, `brief` (`DecisionBrief`: `context`, `options` with `consequence`, `recommended`, `recommended_why`, `asked_by`, `blocks`, `evidence`), `answered_via`, `answer_why`, `outcome`, `acted_at`, `rule_id`, `made_rule_id`, state `acted`; `GET /v1/decisions?project_id=`, `GET /v1/decisions/{id}`, `POST /v1/decisions/{id}:answer` with optional `why`, `via`, `make_rule`, `POST /v1/decisions/{id}:act`; `GET /v1/rules[?project_id=&include_revoked=]`, `POST /v1/rules/{id}:revoke`, `POST /v1/rules/{id}/decisions`; `decision.acted`, `rule.updated` events | UI shell B (decisions) |
 
 ## How the app uses them
 

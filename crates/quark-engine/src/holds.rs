@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::snapshot::{BacklogState, FleetSnapshot, HoldBucket};
 
 /// A backlog task held for the captain.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptainHold {
     pub task_id: String,
     pub title: Option<String>,
@@ -26,6 +26,8 @@ pub struct CaptainHold {
     pub actionable: bool,
     pub age_days: Option<i64>,
     pub unresolved_blocker_ids: Vec<String>,
+    /// The asker's options and recommendation, as firstmate recorded them.
+    pub brief: Option<serde_json::Value>,
 }
 
 /// A keyed decision a worker opened in its status log and has not resolved.
@@ -38,7 +40,7 @@ pub struct OpenDecision {
     pub summary: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Decisions {
     pub holds: Vec<CaptainHold>,
     pub open: Vec<OpenDecision>,
@@ -71,6 +73,7 @@ pub fn decisions(snapshot: &FleetSnapshot) -> Decisions {
                 actionable: r.captain_actionable,
                 age_days: r.hold_age_days,
                 unresolved_blocker_ids: r.unresolved_blocker_ids.clone(),
+                brief: r.decision_brief.clone(),
             })
         })
         .collect();

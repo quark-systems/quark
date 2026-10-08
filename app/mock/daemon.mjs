@@ -36,6 +36,8 @@ const nextId = (p) => `${p}-${(++idn).toString(36)}${Math.random().toString(36).
 const projects = new Map();
 const tasks = new Map();
 const decisions = new Map();
+const rules = new Map();
+const withApplied = (rule) => ({ applied: [...decisions.values()].filter((d) => d.rule_id === rule.id).length, ...rule });
 const chats = new Map(); // project id -> ChatMessage[]
 const transcripts = new Map(); // task id -> TranscriptEntry[]
 const terms = new Map(); // task id -> { cols, rows, screen: string, line: string }
@@ -589,7 +591,9 @@ function seed() {
   }
 
   const D = (id, p, question, extra = {}) => decisions.set(id, {
-    id, project_id: p.id, task_id: null, question, state: "open", answer: null, answered_by: null, answered_at: null, ...extra,
+    id, number: [...decisions.values()].filter((d) => d.project_id === p.id).length + 1, project_id: p.id, task_id: null, question,
+    state: "open", brief: {}, answer: null, answered_by: null, answered_at: null, answered_via: null, answer_why: null,
+    outcome: null, acted_at: null, rule_id: null, made_rule_id: null, ...extra,
   });
   D("d-1", quark, "Keep the full answer history per decision, or only the latest answer?", {
     task_id: [...tasks.values()].find((t) => t.state === "needs_decision").id, opened_at: minutesAgo(12),
@@ -1063,7 +1067,37 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === "/v1/decisions" && req.method === "GET") {
     const st = url.searchParams.get("state");
-    return send(res, 200, [...decisions.values()].filter((d) => !st || d.state === st));
+    const pid = url.searchParams.get("project_id");
+    return send(res, 200, [...decisions.values()].filter((d) => (!st || d.state === st) && (!pid || d.project_id === pid)));
+  }
+  if ((r = m(/^\/v1\/decisions\/([^/:]+)$/)) && req.method === "GET") {
+    const d = decisions.get(decodeURIComponent(r[1]));
+    return d ? send(res, 200, d) : notFound(res);
+  }
+  if (p === "/v1/rules" && req.method === "GET") {
+    const all = url.searchParams.get("include_revoked") === "true";
+    const pid = url.searchParams.get("project_id");
+    const merge = [...projects.values()].filter((x) => x.standing_approval).map((x) => ({
+      id: `merge-approval:${x.id}`, project_id: x.id, kind: "merge_approval", text: "Merge green pull requests without asking.",
+      decision_id: null, created_by: null, created_at: null, revoked_at: null, revoked_by: null, applied: 0,
+    }));
+    return send(res, 200, [...rules.values(), ...merge].map(withApplied)
+      .filter((x) => (all || !x.revoked_at) && (!pid || x.project_id === pid)));
+  }
+  if ((r = m(/^\/v1\/rules\/([^/]+):revoke$/)) && req.method === "POST") {
+    const id = decodeURIComponent(r[1]);
+    if (id.startsWith("merge-approval:")) {
+      const proj = projects.get(id.slice("merge-approval:".length));
+      if (!proj?.standing_approval) return notFound(res);
+      proj.standing_approval = false;
+      emit("project.updated", { ...proj }, proj.id);
+      return send(res, 200, { id, project_id: proj.id, kind: "merge_approval", text: "Merge green pull requests without asking.", revoked_at: now(), revoked_by: "mock-user", applied: 0 });
+    }
+    const rule = rules.get(id);
+    if (!rule) return notFound(res);
+    if (!rule.revoked_at) Object.assign(rule, { revoked_at: now(), revoked_by: "mock-user" });
+    emit("rule.updated", withApplied(rule), rule.project_id);
+    return send(res, 200, withApplied(rule));
   }
   if ((r = m(/^\/v1\/decisions\/([^/:]+):answer$/)) && req.method === "POST") {
     const d = decisions.get(decodeURIComponent(r[1]));
@@ -1072,7 +1106,17 @@ const server = http.createServer(async (req, res) => {
     const b = await readJson(req);
     const answer = typeof b?.answer === "string" ? b.answer.trim() : "";
     if (!answer) return invalid(res, "answer is required");
-    Object.assign(d, { state: "answered", answer, answered_by: b.answered_by?.trim() || "mock-user", answered_at: now() });
+    const via = b.via ?? "app";
+    if (!["app", "phone", "chat"].includes(via)) return invalid(res, "via must be app, phone or chat");
+    Object.assign(d, { state: "answered", answer, answered_by: b.answered_by?.trim() || "mock-user", answered_at: now(),
+      answered_via: via, answer_why: b.why?.trim() || null });
+    if (b.make_rule?.trim()) {
+      const rule = { id: `rule-${rules.size + 1}`, project_id: d.project_id, kind: "answer", text: b.make_rule.trim(), decision_id: d.id,
+        created_by: d.answered_by, created_at: now(), revoked_at: null, revoked_by: null };
+      rules.set(rule.id, rule);
+      d.made_rule_id = rule.id;
+      emit("rule.updated", withApplied(rule), d.project_id);
+    }
     emit("decision.answered", { ...d }, d.project_id);
     const task = d.task_id && tasks.get(d.task_id);
     if (task && task.state === "needs_decision") setState(task, "running", `Answered: ${answer.slice(0, 60)}`);

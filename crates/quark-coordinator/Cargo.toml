@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 quark-core.workspace = true
+quark-systems.workspace = true
 quark-persona.workspace = true
 quark-triggers.workspace = true
 async-trait.workspace = true

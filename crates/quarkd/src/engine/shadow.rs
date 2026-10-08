@@ -876,6 +876,7 @@ mod tests {
             question: question.into(),
             answer: None,
             answered_by: None,
+            brief: Default::default(),
         }
     }
 
@@ -1015,6 +1016,7 @@ mod tests {
                 question: "merge?".into(),
                 answer: None,
                 answered_by: None,
+                brief: Default::default(),
             },
         ]);
         r.native
