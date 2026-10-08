@@ -49,4 +49,4 @@ This table links each feature to the journey tests that script it and the modes 
 | [Project settings](settings.md) | D1 | "settings: every Project switch in one place ..." | mock, real+stub | real: a Project with a Project repo |
 | [Project metrics](metrics.md) | D3 | "metrics: the dashboard's Metrics tab ..." | mock, real+stub | real: firstmate state files in the Project workspace |
 | [Project overview](overview.md) | D2 | "overview: live status now, and what changed since you last looked" | mock; real+stub (status lines written by hand); real+firstmate | none |
-| [App shell](shell.md) | A1-A5 | `e2e/shell.spec.ts`: "catalogue: ...", "left list: ...", "next attention: ...", "dock: ...", "routes: ..." | mock, real+stub | none |
+| [App shell](shell.md) | A1-A6 | `e2e/shell.spec.ts`: "catalogue: ...", "left list: ...", "next attention: ...", "dock: ...", "routes: ...", "worker view: ..." | mock, real+stub | none |

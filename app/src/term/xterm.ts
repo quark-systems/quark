@@ -26,9 +26,11 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
   term.onBinary(cb.onData);
   term.onResize(({ cols, rows }) => cb.onResize(cols, rows));
   let kind = o.renderer === "dom" ? "xterm-dom" : "xterm-webgl";
+  let el: HTMLElement | undefined;
   return {
     get kind() { return kind; },
     async open(host) {
+      el = host;
       term.open(host);
       if (o.renderer !== "dom") {
         try {
@@ -43,7 +45,8 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
       term.reset();
       if (cols && rows && (cols !== term.cols || rows !== term.rows)) term.resize(cols, rows);
     },
-    fit() { try { fit.fit(); } catch { /* not laid out */ } },
+    // A hidden terminal (another work-pane tab is showing) keeps its size until it is shown again.
+    fit() { if (!el?.offsetWidth) return; try { fit.fit(); } catch { /* not laid out */ } },
     focus() { term.focus(); },
     text() {
       const b = term.buffer.active, lines: string[] = [];
