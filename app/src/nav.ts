@@ -20,6 +20,7 @@ export const ROUTES = {
   pr: "pr/:id", // one pull request: checks, reviews, diff
   accounts: "accounts", // harness accounts, pools and quota
   hosts: "hosts", // every host: health, telemetry, what runs there, worktree pools
+  catalogue: "catalogue", // the component catalogue: every shared UI part with when to use it
 } as const;
 
 type Param<S> = S extends `:${infer P}?` ? { [K in P]?: string } : S extends `:${infer P}` ? { [K in P]: string } : unknown;

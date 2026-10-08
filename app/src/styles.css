@@ -80,6 +80,22 @@
     "MesloLGS Nerd Font Mono", "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "CaskaydiaCove Nerd Font Mono",
     Consolas, "DejaVu Sans Mono", "Liberation Mono", "Noto Color Emoji", monospace;
 
+  /* The shell (src/ui, GLOSSARY.md): one color per state word, region sizes, radii and row height. */
+  --tone-busy: var(--blue);
+  --tone-needs-you: var(--violet);
+  --tone-ready: var(--green);
+  --tone-failed: var(--red);
+  --tone-parked: color-mix(in srgb, var(--content) 28%, var(--background));
+  --tone-idle: color-mix(in srgb, var(--content) 28%, var(--background));
+  /* Text on a filled accent or tone: dark on the dark theme's bright fills, white on the light theme's. */
+  --on-tone: hsl(220 47% 8%);
+  --left-list-width: 280px;
+  --work-pane-width: 440px;
+  --row-height: 44px;
+  --radius-s: 6px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+
   /* Short aliases the screens use. */
   --bg: var(--background);
   --bg-1: var(--surface-1);
@@ -117,6 +133,7 @@ html.theme-light {
   --blue: #2563eb;
   --cyan: #0e7490;
   --violet: #9333ea;
+  --on-tone: #fff;
   --diff-add-fg: #047857;
   --diff-del-fg: #be123c;
   --scrim: color-mix(in srgb, black 22%, transparent);

@@ -17,6 +17,7 @@ import { Settings } from "./screens/dashboard/Settings";
 import { Metrics } from "./screens/dashboard/Metrics";
 import { Automation } from "./screens/dashboard/Automation";
 import { Overview } from "./screens/dashboard/Overview";
+import { Catalogue } from "./screens/Catalogue";
 
 type Screens = { [N in Route["name"]]: (r: Extract<Route, { name: N }>) => React.ReactNode };
 
@@ -36,6 +37,7 @@ export const SCREENS: Screens = {
   pr: (r) => <PullRequestView key={r.id} id={r.id} />,
   accounts: () => <Accounts />,
   hosts: () => <Hosts />,
+  catalogue: () => <Catalogue />,
 };
 
 /** Renders the current route's screen. */
