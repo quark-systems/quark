@@ -11,9 +11,10 @@ use std::sync::Mutex;
 
 use crate::engine::{FleetSnapshot, Hold, StatusEntry};
 use quark_systems::{
-    AgentConfig, CreateProject, Decision, DecisionState, DeliveryPolicy, DispatchPreset,
-    DispatchRecord, DispatchTrigger, Event, EventType, Project, ProjectStatus, RepoSource, Task,
-    TaskEvent, TaskKind, TaskState, TranscriptEntry, TranscriptItem, UpdateProject,
+    AgentConfig, CreateProject, Decision, DecisionBrief, DecisionState, DeliveryPolicy,
+    DispatchPreset, DispatchRecord, DispatchTrigger, Event, EventType, Project, ProjectStatus,
+    RepoSource, Task, TaskEvent, TaskKind, TaskState, TranscriptEntry, TranscriptItem,
+    UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -1089,7 +1090,7 @@ impl Store {
                         decision_from_row,
                     )
                     .optional()?;
-                let brief = hold.brief.clone().normalized();
+                let brief = api_task_ids(tx, project_id, hold.brief.clone().normalized())?;
                 match existing {
                     Some(old) if old.state == DecisionState::Open => {
                         if hold.answer.is_none() && !brief.is_empty() && brief != old.brief {
@@ -1731,7 +1732,7 @@ fn open_decision(
         } else {
             DecisionState::Open
         },
-        brief: hold.brief.clone().normalized(),
+        brief: api_task_ids(tx, project_id, hold.brief.clone().normalized())?,
         answer: hold.answer.clone(),
         answered_by: hold.answered_by.clone(),
         opened_at: now.clone(),
@@ -1756,6 +1757,35 @@ fn open_decision(
         )?;
     }
     Ok(())
+}
+
+/// `brief` with each engine task id in `asked_by` and `blocks` replaced by
+/// the API id of that task in the Project, so clients can link it.
+fn api_task_ids(
+    tx: &Transaction,
+    project_id: &str,
+    mut brief: DecisionBrief,
+) -> Result<DecisionBrief> {
+    let lookup = |engine_id: &str| -> Result<Option<String>> {
+        Ok(tx
+            .query_row(
+                "SELECT id FROM tasks WHERE project_id = ?1 AND engine_id = ?2",
+                params![project_id, engine_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    };
+    if let Some(who) = &brief.asked_by {
+        if let Some(id) = lookup(who)? {
+            brief.asked_by = Some(id);
+        }
+    }
+    for b in &mut brief.blocks {
+        if let Some(id) = lookup(b)? {
+            *b = id;
+        }
+    }
+    Ok(brief)
 }
 
 /// Stores `decision`'s answer fields and emits `decision.answered`.
@@ -1959,7 +1989,7 @@ mod tests {
             question: "merge?".into(),
             answer: None,
             answered_by: None,
-            brief: Default::default(),
+            brief: crate::engine::firstmate::worker_brief("a"),
         };
         store
             .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
@@ -1967,6 +1997,9 @@ mod tests {
         let open = store.list_decisions(Some(DecisionState::Open)).unwrap();
         assert_eq!(open.len(), 1);
         assert!(open[0].task_id.is_some());
+        // The brief names the task by its API id.
+        assert_eq!(open[0].brief.asked_by, open[0].task_id);
+        assert_eq!(open[0].brief.blocks, vec![open[0].task_id.clone().unwrap()]);
 
         hold.answer = Some("yes".into());
         hold.answered_by = Some("user_1".into());
