@@ -6,7 +6,8 @@
 //! activity log, so the dispatch record can cite it.
 
 use quark_systems::{
-    AccountFailover, Decision, DecisionState, EventType, FailoverOutcome, Task, TaskEvent,
+    AccountFailover, Decision, DecisionBrief, DecisionState, EventType, FailoverOutcome, Task,
+    TaskEvent,
 };
 use rusqlite::{params, OptionalExtension, Transaction};
 
@@ -146,18 +147,21 @@ impl Store {
                 |r| r.get(0),
             )?;
             if !open {
-                let decision = Decision {
+                let mut decision = Decision {
                     id: new_id("dec"),
                     project_id: task.project_id.clone(),
                     task_id: Some(task.id.clone()),
                     question: question.to_string(),
                     state: DecisionState::Open,
-                    answer: None,
-                    answered_by: None,
+                    brief: DecisionBrief {
+                        asked_by: Some("quarkd".into()),
+                        blocks: vec![task.id.clone()],
+                        ..Default::default()
+                    },
                     opened_at: now_rfc3339(),
-                    answered_at: None,
+                    ..Default::default()
                 };
-                insert_decision(tx, &engine_id, &decision)?;
+                insert_decision(tx, &engine_id, &mut decision)?;
                 append_event(
                     tx,
                     events,

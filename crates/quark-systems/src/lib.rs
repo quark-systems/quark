@@ -10,6 +10,7 @@
 
 mod account;
 mod automation;
+mod decision;
 mod dispatch;
 mod event;
 mod harness;
@@ -29,6 +30,7 @@ mod transcript;
 
 pub use account::*;
 pub use automation::*;
+pub use decision::*;
 pub use dispatch::*;
 pub use event::*;
 pub use harness::*;

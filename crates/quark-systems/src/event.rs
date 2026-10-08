@@ -26,6 +26,12 @@ pub enum EventType {
     DecisionOpened,
     #[serde(rename = "decision.answered")]
     DecisionAnswered,
+    /// The asker recorded what it did with an answer; payload is the [`Decision`](crate::Decision).
+    #[serde(rename = "decision.acted")]
+    DecisionActed,
+    /// A standing rule was made or revoked; payload is the [`StandingRule`](crate::StandingRule).
+    #[serde(rename = "rule.updated")]
+    RuleUpdated,
     /// A pull request appeared or changed; payload is a [`PullRequest`](crate::PullRequest)(crate::PullRequest).
     #[serde(rename = "pr.updated")]
     PrUpdated,
@@ -55,7 +61,7 @@ pub enum EventType {
 }
 
 impl EventType {
-    pub const ALL: [EventType; 17] = [
+    pub const ALL: [EventType; 19] = [
         EventType::ProjectUpdated,
         EventType::TaskCreated,
         EventType::TaskStateChanged,
@@ -65,6 +71,8 @@ impl EventType {
         EventType::WorkerOutput,
         EventType::DecisionOpened,
         EventType::DecisionAnswered,
+        EventType::DecisionActed,
+        EventType::RuleUpdated,
         EventType::PrUpdated,
         EventType::CheckUpdated,
         EventType::ReviewUpdated,
@@ -86,6 +94,8 @@ impl EventType {
             EventType::WorkerOutput => "worker.output",
             EventType::DecisionOpened => "decision.opened",
             EventType::DecisionAnswered => "decision.answered",
+            EventType::DecisionActed => "decision.acted",
+            EventType::RuleUpdated => "rule.updated",
             EventType::PrUpdated => "pr.updated",
             EventType::CheckUpdated => "check.updated",
             EventType::ReviewUpdated => "review.updated",

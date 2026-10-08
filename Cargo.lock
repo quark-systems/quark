@@ -935,6 +935,7 @@ dependencies = [
  "quark-core",
  "quark-eventlog",
  "quark-persona",
+ "quark-systems",
  "quark-triggers",
  "serde",
  "serde_json",

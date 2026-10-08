@@ -98,6 +98,10 @@ pub struct BacklogRecord {
     pub hold_age_days: Option<i64>,
     #[serde(default)]
     pub captain_actionable: bool,
+    /// The asker's options and recommendation for a captain hold, as
+    /// recorded with `fm-captain-hold.sh hold --brief-file`.
+    #[serde(default)]
+    pub decision_brief: Option<serde_json::Value>,
     #[serde(default)]
     pub blocked_by_ids: Vec<String>,
     #[serde(default)]

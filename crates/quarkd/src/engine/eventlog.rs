@@ -161,6 +161,7 @@ impl EngineAdapter for EventLogEngine {
                     question: d.note.clone(),
                     answer: None,
                     answered_by: None,
+                    brief: super::firstmate::worker_brief(&t.task.to_string()),
                 })
             })
             .collect())

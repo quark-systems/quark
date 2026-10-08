@@ -9,9 +9,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use quark_engine::gates;
 use quark_systems::{
-    AgentConfig, ArtifactKind, DeliveryPolicy, DispatchCandidate, DispatchChoice, DispatchRule,
-    DispatchStatus, Evidence, EvidenceArtifact, Gate, GateCase, GateKind, GateState, MergeMethod,
-    TaskKind, TaskState,
+    AgentConfig, ArtifactKind, DecisionBrief, DeliveryPolicy, DispatchCandidate, DispatchChoice,
+    DispatchRule, DispatchStatus, Evidence, EvidenceArtifact, Gate, GateCase, GateKind, GateState,
+    MergeMethod, TaskKind, TaskState,
 };
 
 use quark_engine::dispatch::Resolution;
@@ -826,6 +826,7 @@ pub fn neutral_holds(s: &FmSnapshot) -> Vec<Hold> {
         },
         answer: None,
         answered_by: None,
+        brief: hold_brief(h.brief.as_ref()),
     });
     let open = d.open.iter().map(|o| Hold {
         id: format!("{}:{}", o.task_id, o.key),
@@ -833,8 +834,29 @@ pub fn neutral_holds(s: &FmSnapshot) -> Vec<Hold> {
         question: o.summary.clone().unwrap_or_else(|| o.verb.clone()),
         answer: None,
         answered_by: None,
+        brief: worker_brief(&o.task_id),
     });
     held.chain(open).collect()
+}
+
+/// A captain hold's brief as firstmate recorded it; its coordinator asked
+/// unless the brief names someone else. An unreadable brief reads as empty.
+fn hold_brief(raw: Option<&serde_json::Value>) -> DecisionBrief {
+    let mut brief: DecisionBrief = raw
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    brief.asked_by.get_or_insert_with(|| "coordinator".into());
+    brief
+}
+
+/// The brief for a worker's keyed decision: the worker asked, and the
+/// answer unblocks its task. The event log builds the same one.
+pub fn worker_brief(task_id: &str) -> DecisionBrief {
+    DecisionBrief {
+        asked_by: Some(task_id.to_string()),
+        blocks: vec![task_id.to_string()],
+        ..Default::default()
+    }
 }
 
 /// Secondmate window targets by secondmate id, which is the Project id for
@@ -907,5 +929,47 @@ fn convert(e: Error) -> EngineError {
             EngineError::Parse(e.to_string())
         }
         e => EngineError::Command(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Firstmate's coordinator (a captain hold's brief file) and the native
+    /// coordinator (`ask_user`) produce the same decision record.
+    #[test]
+    fn hold_briefs_match_native_ask_user() {
+        let brief = serde_json::json!({
+            "context": "Shadow agreed for 7 days.",
+            "options": [{"label": "Switch now", "consequence": "Merges #95"}, "Wait a week"],
+            "recommended": "Switch now",
+            "recommended_why": "No disagreements.",
+            "blocks": ["https://github.com/quark-systems/quark/pull/95"],
+            "evidence": [{"label": "Shadow report", "url": "https://example.test/r"}]
+        });
+        let mut call = brief.clone();
+        call["key"] = "switch-2".into();
+        call["question"] = "Switch slice 2?".into();
+        let native = quark_coordinator::ToolCall::parse("ask_user", &call)
+            .unwrap()
+            .brief()
+            .unwrap();
+        let firstmate = hold_brief(Some(&brief)).normalized();
+        assert_eq!(firstmate, native);
+        assert_eq!(firstmate.asked_by.as_deref(), Some("coordinator"));
+        assert_eq!(firstmate.options.len(), 2);
+    }
+
+    #[test]
+    fn an_unreadable_hold_brief_reads_as_asked_by_the_coordinator() {
+        let b = hold_brief(Some(&serde_json::json!({"options": 3})));
+        assert_eq!(
+            b,
+            DecisionBrief {
+                asked_by: Some("coordinator".into()),
+                ..Default::default()
+            }
+        );
     }
 }

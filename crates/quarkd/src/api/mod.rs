@@ -3,6 +3,7 @@
 mod accounts;
 mod automation;
 mod dashboard;
+mod decisions;
 mod dispatch;
 mod error;
 mod events;
@@ -73,6 +74,10 @@ const MODULES: &[Module] = &[
     Module {
         router: dispatch::router,
         openapi: <dispatch::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: decisions::router,
+        openapi: <decisions::Api as OpenApi>::openapi,
     },
     Module {
         router: memory::router,

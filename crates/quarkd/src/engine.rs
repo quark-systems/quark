@@ -147,7 +147,7 @@ pub struct StatusTail {
 }
 
 /// A question the engine is holding for a person.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Hold {
     /// Stable for the life of the question, and what
     /// [`EngineAdapter::answer`] takes. A question asked again after an
@@ -158,6 +158,9 @@ pub struct Hold {
     /// `Some` once the hold has been answered.
     pub answer: Option<String>,
     pub answered_by: Option<String>,
+    /// Context, options and recommendation the asker attached.
+    #[serde(default)]
+    pub brief: quark_systems::DecisionBrief,
 }
 
 /// Neutral lifecycle actions on a task's agent.

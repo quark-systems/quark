@@ -181,6 +181,7 @@ async fn projects_tasks_decisions_and_event_replay() {
         question: "Ship behind a flag?".into(),
         answer: None,
         answered_by: None,
+        brief: Default::default(),
     }]);
     h.projector.refresh_all().await.unwrap();
     // Nothing changed upstream: a second refresh emits nothing.
@@ -506,6 +507,7 @@ async fn answering_a_decision_reaches_the_engine_and_records_who() {
         question: "Ship behind a flag?".into(),
         answer: None,
         answered_by: None,
+        brief: Default::default(),
     }]);
     h.projector.refresh_all().await.unwrap();
     let (_, open) = call(&h.app, "GET", "/v1/decisions?state=open", None).await;
@@ -598,6 +600,7 @@ async fn answering_a_decision_reaches_the_engine_and_records_who() {
         question: "Which wording?".into(),
         answer: None,
         answered_by: None,
+        brief: Default::default(),
     }]);
     h.projector.refresh_all().await.unwrap();
     let (_, open) = call(&h.app, "GET", "/v1/decisions?state=open", None).await;
@@ -611,6 +614,138 @@ async fn answering_a_decision_reaches_the_engine_and_records_who() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(!d["answered_by"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn decision_log_briefs_why_outcomes_and_rules() {
+    let h = harness().await;
+    project_with_task(&h, Some("/tmp/quark-ws")).await;
+    h.engine.set_holds(vec![Hold {
+        id: "switch-2".into(),
+        task_id: None,
+        question: "Switch slice 2 to native?".into(),
+        brief: serde_json::from_value(json!({
+            "context": "Shadow agreed for 7 days.",
+            "options": [{"label": "Switch now", "consequence": "Merges #95"}, "Wait a week"],
+            "recommended": "Switch now",
+            "recommended_why": "No disagreements.",
+            "asked_by": "coordinator",
+            "blocks": ["https://github.com/quark-systems/quark/pull/95"]
+        }))
+        .unwrap(),
+        ..Default::default()
+    }]);
+    h.projector.refresh_all().await.unwrap();
+    let (_, projects) = call(&h.app, "GET", "/v1/projects", None).await;
+    let pid = projects[0]["id"].as_str().unwrap().to_string();
+    let (_, open) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/decisions?state=open&project_id={pid}"),
+        None,
+    )
+    .await;
+    let d = &open[0];
+    let did = d["id"].as_str().unwrap().to_string();
+    assert_eq!(d["number"], 1);
+    assert_eq!(d["brief"]["options"][0]["consequence"], "Merges #95");
+    assert_eq!(d["brief"]["options"][1]["label"], "Wait a week");
+    assert_eq!(d["brief"]["recommended"], "Switch now");
+    let (_, other) = call(&h.app, "GET", "/v1/decisions?project_id=nope", None).await;
+    assert!(other.as_array().unwrap().is_empty());
+
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{did}:act"),
+        Some(json!({"outcome": "Merged #95"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{did}:answer"),
+        Some(json!({"answer": "Switch now", "via": "fax"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, d) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{did}:answer"),
+        Some(json!({
+            "answer": "Switch now",
+            "answered_by": "matt",
+            "why": "212 of 212 agreed.",
+            "via": "phone",
+            "make_rule": "Switch a slice when shadow agrees for 7 days."
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(d["answer_why"], "212 of 212 agreed.");
+    assert_eq!(d["answered_via"], "phone");
+    let rule_id = d["made_rule_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        h.engine.writes(),
+        vec![StubWrite::Answer {
+            hold_id: "switch-2".into(),
+            answer: "Switch now\n\nWhy: 212 of 212 agreed.".into(),
+            answered_by: "matt".into(),
+        }]
+    );
+
+    let (status, d) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{did}:act"),
+        Some(json!({"outcome": "Merged #95"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(d["state"], "acted");
+    let (status, got) = call(&h.app, "GET", &format!("/v1/decisions/{did}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got["outcome"], "Merged #95");
+
+    let (status, logged) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/rules/{rule_id}/decisions"),
+        Some(json!({
+            "question": "Switch slice 3?",
+            "answer": "Switched",
+            "decided_by": "coordinator",
+            "outcome": "Merged #97"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(logged["number"], 2);
+    assert_eq!(logged["rule_id"], rule_id.as_str());
+    assert_eq!(logged["answered_via"], "rule");
+
+    let (_, rules) = call(&h.app, "GET", &format!("/v1/rules?project_id={pid}"), None).await;
+    assert_eq!(rules.as_array().unwrap().len(), 1);
+    assert_eq!(rules[0]["applied"], 1);
+    assert_eq!(rules[0]["kind"], "answer");
+    let (status, r) = call(&h.app, "POST", &format!("/v1/rules/{rule_id}:revoke"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(r["revoked_at"].is_string());
+    let (_, rules) = call(&h.app, "GET", "/v1/rules", None).await;
+    assert!(rules.as_array().unwrap().is_empty());
+    let (_, rules) = call(&h.app, "GET", "/v1/rules?include_revoked=true", None).await;
+    assert_eq!(rules.as_array().unwrap().len(), 1);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/rules/{rule_id}/decisions"),
+        Some(json!({"question": "q", "answer": "a", "decided_by": "coordinator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }
 
 #[tokio::test]

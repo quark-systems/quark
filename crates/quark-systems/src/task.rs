@@ -116,18 +116,6 @@ pub struct SendTaskMessage {
     pub text: String,
 }
 
-/// An answer to an open decision.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct AnswerDecision {
-    /// The answer, as the worker or coordinator will read it.
-    pub answer: String,
-    /// Who is answering: one line of at most 128 bytes. Stored with the
-    /// decision and recorded with the engine's own record of the answer.
-    /// Absent or null means the daemon's own user (`$USER`).
-    #[serde(default)]
-    pub answered_by: Option<String>,
-}
-
 /// Replace a task's worker in the same worktree. Absent fields keep the
 /// worker's current harness, model and effort.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -213,27 +201,6 @@ pub struct TaskDiff {
     pub patch: String,
     /// True when `patch` was cut at the size limit.
     pub truncated: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum DecisionState {
-    Open,
-    Answered,
-}
-
-/// A question held for a person.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct Decision {
-    pub id: String,
-    pub project_id: String,
-    pub task_id: Option<String>,
-    pub question: String,
-    pub state: DecisionState,
-    pub answer: Option<String>,
-    pub answered_by: Option<String>,
-    pub opened_at: String,
-    pub answered_at: Option<String>,
 }
 
 #[cfg(test)]

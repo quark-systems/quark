@@ -12,6 +12,7 @@
 
 use async_trait::async_trait;
 use quark_core::{CoreError, ProjectId, Result, TaskId};
+use quark_systems::{DecisionBrief, DecisionOption, EvidenceLink};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -63,14 +64,25 @@ pub enum ToolCall {
     },
     /// Stop a task. Its worktree and any unlanded work are kept.
     Cancel { task: TaskId, reason: String },
-    /// Raise a decision only the user can make.
+    /// Raise a decision only the user can make. Everything but `key` and
+    /// `question` is the decision's brief ([`ToolCall::brief`]), the same
+    /// record firstmate's coordinator attaches to a captain hold.
     AskUser {
         key: String,
         question: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+        /// Labels, or `{label, consequence}` objects.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        options: Vec<String>,
+        options: Vec<DecisionOption>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recommended: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recommended_why: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blocks: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        evidence: Vec<EvidenceLink>,
     },
     /// Tell the user an outcome.
     TellUser { text: String },
@@ -105,6 +117,35 @@ impl ToolCall {
         !matches!(
             self,
             ToolCall::Fleet {} | ToolCall::Task { .. } | ToolCall::LoadSkill { .. }
+        )
+    }
+
+    /// The decision brief an `ask_user` call carries, asked by the
+    /// coordinator; `None` for every other call.
+    pub fn brief(&self) -> Option<DecisionBrief> {
+        let ToolCall::AskUser {
+            context,
+            options,
+            recommended,
+            recommended_why,
+            blocks,
+            evidence,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        Some(
+            DecisionBrief {
+                context: context.clone(),
+                options: options.clone(),
+                recommended: recommended.clone(),
+                recommended_why: recommended_why.clone(),
+                asked_by: Some("coordinator".into()),
+                blocks: blocks.clone(),
+                evidence: evidence.clone(),
+            }
+            .normalized(),
         )
     }
 
@@ -265,13 +306,34 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "ask_user",
-            description: "Raise a decision only the user can make: a design choice, anything destructive, irreversible or security-sensitive, a credential. Ask once with options and your recommendation.",
+            description: "Raise a decision only the user can make: a design choice, anything destructive, irreversible or security-sensitive, a credential. Ask once with context, options (each with its consequence), your recommendation and why, and what the answer unblocks.",
             input_schema: object(
                 json!({
                     "key": text("Stable key; asking again with it updates the same decision."),
                     "question": text("The question, standing alone."),
-                    "options": {"type": "array", "items": {"type": "string"}},
-                    "recommended": text("The option you recommend.")
+                    "context": text("What the user needs to know to answer, in a few sentences."),
+                    "options": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": text("The option, in one or two words."),
+                                "consequence": text("What happens when it is picked.")
+                            },
+                            "required": ["label"]
+                        }
+                    },
+                    "recommended": text("The label of the option you recommend."),
+                    "recommended_why": text("Why you recommend it."),
+                    "blocks": {"type": "array", "items": text("A pull request URL or task id waiting on the answer.")},
+                    "evidence": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"label": text("What it shows."), "url": text("Where it is.")},
+                            "required": ["label"]
+                        }
+                    }
                 }),
                 &["key", "question"],
             ),
@@ -345,7 +407,9 @@ mod tests {
             }
             "relaunch" => json!({"task": "t1", "note": "n"}),
             "cancel" => json!({"task": "t1", "reason": "r"}),
-            "ask_user" => json!({"key": "k", "question": "q", "options": ["a", "b"]}),
+            "ask_user" => {
+                json!({"key": "k", "question": "q", "options": ["a", {"label": "b", "consequence": "c"}]})
+            }
             "tell_user" => json!({"text": "x"}),
             "remember" => json!({"fact": "f"}),
             "ack_message" => json!({"channel": "inbox", "id": "1"}),

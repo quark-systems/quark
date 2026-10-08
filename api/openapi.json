@@ -395,7 +395,7 @@
         "tags": [
           "decisions"
         ],
-        "summary": "The decisions inbox across all Projects.",
+        "summary": "The decision log: open, answered and acted-on decisions, oldest first,\nacross all Projects or one.",
         "operationId": "list_decisions",
         "parameters": [
           {
@@ -405,6 +405,15 @@
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/DecisionState"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Only this Project's decisions.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -424,13 +433,124 @@
         }
       }
     },
+    "/v1/decisions/{id}": {
+      "get": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "One decision.",
+        "operationId": "get_decision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Decision id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decision"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/decisions/{id}:act": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Record what was done with an answer.",
+        "description": "The asker (a coordinator, or a client acting for one) says what\nhappened next; the decision moves to `acted` and also arrives as a\n`decision.acted` event. Recording again replaces the outcome.",
+        "operationId": "act_on_decision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Decision id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActOnDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome is recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decision"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: the decision has no answer yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/decisions/{id}:answer": {
       "post": {
         "tags": [
           "decisions"
         ],
         "summary": "Answer an open decision.",
-        "description": "The engine records the answer with who gave it, which unblocks the task\nthat asked. A decision the daemon opened about a rate limit relaunches\nthe task's worker instead, with the answer as its note. The answered decision is returned and also arrives as a\n`decision.answered` event.",
+        "description": "The engine records the answer with who gave it, which unblocks the task\nthat asked; a `why` goes with the answer as its reason. A decision the\ndaemon opened about a rate limit relaunches the task's worker instead,\nwith the answer as its note. The answered decision is returned and also\narrives as a `decision.answered` event. With `make_rule`, the answer also\nbecomes a standing rule (`rule.updated`).",
         "operationId": "answer_decision",
         "parameters": [
           {
@@ -2719,6 +2839,180 @@
         }
       }
     },
+    "/v1/rules": {
+      "get": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Standing rules: those made from answers, oldest first, then each\nProject's standing approval while it is on.",
+        "operationId": "list_rules",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Only this Project's rules.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_revoked",
+            "in": "query",
+            "description": "Include revoked rules.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StandingRule"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/rules/{id}/decisions": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Log a decision an agent made under a standing rule.",
+        "description": "The decision is recorded as answered by the agent through the rule (and\nacted on when `outcome` is given), so the log shows it as decided under\nthe rule. It arrives as `decision.opened` and `decision.answered` (and\n`decision.acted`) events, and the rule's count as `rule.updated`.",
+        "operationId": "record_rule_decision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordRuleDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decision"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: the rule was revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/rules/{id}:revoke": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Revoke a standing rule.",
+        "description": "The rule decides nothing from now on; its decisions stay in the log.\nRevoking a Project's standing approval rule turns standing approval off.\nThe rule also arrives as a `rule.updated` event.",
+        "operationId": "revoke_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandingRule"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`workspace_missing`: standing approval needs the Project's workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/shadows": {
       "get": {
         "tags": [
@@ -3724,6 +4018,18 @@
           }
         }
       },
+      "ActOnDecision": {
+        "type": "object",
+        "description": "What the asker did with an answer.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string"
+          }
+        }
+      },
       "AgentConfig": {
         "type": "object",
         "description": "A harness with its model and effort.",
@@ -3810,6 +4116,27 @@
               "null"
             ],
             "description": "Who is answering: one line of at most 128 bytes. Stored with the\ndecision and recorded with the engine's own record of the answer.\nAbsent or null means the daemon's own user (`$USER`)."
+          },
+          "make_rule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Turn the answer into a standing rule with this text, so matching\ncases are decided without asking."
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the answer was given: `app` (the default), `phone` or `chat`."
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, for the log. Sent to the asker with the answer."
           }
         }
       },
@@ -4339,20 +4666,34 @@
       },
       "Decision": {
         "type": "object",
-        "description": "A question held for a person.",
+        "description": "A question held for a person, and everything that followed it.",
         "required": [
           "id",
+          "number",
           "project_id",
           "question",
           "state",
           "opened_at"
         ],
         "properties": {
+          "acted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "answer": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "answer_why": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The answerer's reason, kept for the log."
           },
           "answered_at": {
             "type": [
@@ -4366,17 +4707,54 @@
               "null"
             ]
           },
+          "answered_via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the answer came from: `app`, `phone`, `chat`, or `rule` for an\nagent deciding under a standing rule."
+          },
+          "brief": {
+            "$ref": "#/components/schemas/DecisionBrief",
+            "description": "Context, options and recommendation from whoever asked."
+          },
           "id": {
             "type": "string"
           },
+          "made_rule_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The standing rule this answer created."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Per-Project number, shown as `D-<number>`."
+          },
           "opened_at": {
             "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the asker did with the answer."
           },
           "project_id": {
             "type": "string"
           },
           "question": {
             "type": "string"
+          },
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The standing rule an agent decided this under."
           },
           "state": {
             "$ref": "#/components/schemas/DecisionState"
@@ -4389,11 +4767,84 @@
           }
         }
       },
+      "DecisionBrief": {
+        "type": "object",
+        "description": "What the asker attaches to a question so a person can answer it in one\nlook. Every engine produces this same shape: firstmate's coordinator\nthrough its hold record, the native coordinator through `ask_user`.",
+        "properties": {
+          "asked_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asked: `coordinator`, a worker's task id, or a gate's name."
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What waits on the answer: pull request URLs, task or issue ids."
+          },
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Background a person needs to answer."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceLink"
+            }
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionOption"
+            }
+          },
+          "recommended": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The label of the option the asker recommends."
+          },
+          "recommended_why": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the asker recommends it."
+          }
+        }
+      },
+      "DecisionOption": {
+        "type": "object",
+        "description": "One answer the asker offers, and what picking it leads to.",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "consequence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What happens when this option is picked."
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
       "DecisionState": {
         "type": "string",
         "enum": [
           "open",
-          "answered"
+          "answered",
+          "acted"
         ]
       },
       "DeliveryPolicy": {
@@ -5303,6 +5754,8 @@
           "worker.output",
           "decision.opened",
           "decision.answered",
+          "decision.acted",
+          "rule.updated",
           "pr.updated",
           "check.updated",
           "review.updated",
@@ -5392,6 +5845,24 @@
           "url": {
             "type": "string",
             "description": "`/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}`."
+          }
+        }
+      },
+      "EvidenceLink": {
+        "type": "object",
+        "description": "A link to something that informs a decision.",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -7694,6 +8165,47 @@
           }
         }
       },
+      "RecordRuleDecision": {
+        "type": "object",
+        "description": "A decision an agent made itself under a standing rule, for the log.",
+        "required": [
+          "question",
+          "answer",
+          "decided_by"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "brief": {
+            "$ref": "#/components/schemas/DecisionBrief"
+          },
+          "decided_by": {
+            "type": "string",
+            "description": "The agent that decided: `coordinator` or a worker's task id."
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it did, when already done."
+          },
+          "question": {
+            "type": "string"
+          },
+          "rule_id": {
+            "type": "string",
+            "description": "The rule; taken from the request path, so a body may omit it."
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "RejectMemoryProposal": {
         "type": "object",
         "description": "Reject a memory proposal.",
@@ -7849,6 +8361,13 @@
             ]
           }
         }
+      },
+      "RuleKind": {
+        "type": "string",
+        "enum": [
+          "answer",
+          "merge_approval"
+        ]
       },
       "SendTaskMessage": {
         "type": "object",
@@ -8119,6 +8638,69 @@
           },
           "workers": {
             "$ref": "#/components/schemas/TokenSpend"
+          }
+        }
+      },
+      "StandingRule": {
+        "type": "object",
+        "description": "A standing rule: matching cases are decided without asking, and each one\nis logged as decided under the rule.",
+        "required": [
+          "id",
+          "project_id",
+          "kind",
+          "text",
+          "applied"
+        ],
+        "properties": {
+          "applied": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many decisions were logged under it."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The decision whose answer made it."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RuleKind"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set once revoked; a revoked rule decides nothing."
+          },
+          "revoked_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "What the rule allows, in the answerer's words."
           }
         }
       },
