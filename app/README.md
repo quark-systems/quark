@@ -18,8 +18,14 @@ The same frontend runs in a plain browser.
 - **Dispatch** (J9): per Project, the dispatch rules in order (name, when, ordered candidates), the default and `default_select`, each candidate checked with its harness as it is edited; saving commits `dispatch.yaml` to the Project repo, and the test pane shows the rule a task description matches and each candidate's pass or fail reason, for the saved rules or for the edit in progress.
   Keys: `j`/`k` move, `p`/`a` switch between proposed and accepted, `e` or `Enter` edits, `Ctrl/Cmd+Enter` accepts, `x` twice rejects, `u` promotes, `c` shows the commit, `t` opens the task.
 
-`Ctrl/Cmd+K` opens a palette that jumps to any Project, task or open decision.
-It also switches the theme (dark, light, or match the system).
+The left list shows every project with its coordinator pinned on top and its workers under it; Next attention at its top walks everything that waits on you (open decisions, red PRs, stuck workers), oldest first.
+Every screen but the coordinator's own conversation has a coordinator dock at the bottom that sends what you type with what you are looking at as context.
+
+- `Ctrl/Cmd+K` focuses the dock (the coordinator's message box on its own conversation).
+- `Ctrl/Cmd+J` opens the next thing that needs you.
+- `Ctrl/Cmd+P` opens a palette that jumps to any project, task, decision or PR, and switches the theme (dark, light, or match the system).
+
+Words follow [`GLOSSARY.md`](GLOSSARY.md); shared parts are listed in the component catalogue (`#/catalogue`).
 
 ## Run
 

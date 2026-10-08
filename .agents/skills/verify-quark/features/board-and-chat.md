@@ -9,13 +9,13 @@ A user opens a Project and sees one column per task state, updated live from the
 - `chat-send` sends a message to the coordinator and shows it pending until the coordinator answers.
 - `chat-actions` shows the workers the coordinator started and the questions it asked as cards (`coordinator-action`) that stay visible when its work folds; a question links to the inbox.
 - `chat-scroll` stays put while the reader is scrolled up and offers a `New activity` button when entries arrive.
-- `board-palette` jumps to a task with `Ctrl+K`.
+- `board-palette` jumps to a task with `Ctrl+P`.
 
 ## How to get to it (user POV)
 
 - Click a Project in the sidebar or on the Projects screen (route `#/p/<project>`).
 - Land on it after creating a Project.
-- Press `Ctrl+K` and type the Project name.
+- Press `Ctrl+P` and type the Project name.
 
 ## Driving it with quark-verify
 

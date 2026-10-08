@@ -6,9 +6,10 @@ import { useStore } from "../store";
 import { CoordinatorMark, CountBadge, Row, StatusDot } from "../ui";
 import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup } from "./groups";
+import { NextAttention } from "./NextAttention";
 import "./shell.css";
 
-export function LeftList({ top }: { top?: React.ReactNode }) {
+export function LeftList({ mod }: { mod: string }) {
   const route = useRoute();
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
@@ -28,7 +29,7 @@ export function LeftList({ top }: { top?: React.ReactNode }) {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
         </a>
       </div>
-      {top}
+      <NextAttention mod={mod} />
       <div className="ll-top">
         <Row href={href({ name: "projects" })} current={route.name === "projects"} title="All projects"
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>} />
