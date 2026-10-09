@@ -33,8 +33,8 @@ const SAMPLE: Decision = {
 function OptionCardsExample() {
   const [v, setV] = useState<"single" | "light">("single");
   return <OptionCards name="cat-preset" value={v} onChange={setV} options={[
-    { value: "single", label: "Single", description: "Every task uses the default agent." },
-    { value: "light", label: "Light for trivial work", description: "Trivial edits run at low effort." },
+    { value: "single", label: "Same for every worker", description: "Every worker runs the agent above." },
+    { value: "light", label: "Low effort for small edits", description: "Renames and typo fixes run at low effort." },
   ]} />;
 }
 

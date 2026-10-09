@@ -20,8 +20,8 @@ export const FALLBACK_HARNESSES: HarnessInfo[] = [
 }));
 
 export const PRESETS: { id: DispatchPreset; label: string; description: string }[] = [
-  { id: "single", label: "Single", description: "Every task uses the default agent." },
-  { id: "light_trivial", label: "Light for trivial work", description: "Trivial mechanical edits run at low effort; everything else uses the default agent." },
+  { id: "single", label: "Same for every worker", description: "Every worker runs the agent above, at the effort above." },
+  { id: "light_trivial", label: "Low effort for small edits", description: "Renames, typo fixes and one-line changes run at low effort, which is faster and cheaper. Everything else runs as above." },
 ];
 
 const REPO_RE = /^(https?:\/\/\S+|ssh:\/\/\S+|git@\S+:\S+|\/\S+|[\w.-]+\/[\w.-]+)$/;
@@ -164,7 +164,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
             <div><Button onClick={() => setRepos([...repos, ""])}>Add repository</Button></div>
           </Field>
 
-          <Field group label="Default agent" hint={agentHints.filter(Boolean)} error={agentErrors.filter(Boolean)}>
+          <Field group label="Agent" hint={["Runs the coordinator, and every worker unless a dispatch rule says otherwise.", ...agentHints].filter(Boolean)} error={agentErrors.filter(Boolean)}>
             <ControlRow>
               <Select value={harness} onChange={(e) => setHarness(e.target.value)} aria-label="Harness" disabled={!harnesses}>
                 {!harnesses && <option>Loading…</option>}
@@ -192,7 +192,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
             </ControlRow>
           </Field>
 
-          <Field group label="Dispatch preset">
+          <Field group label="Workers" hint="You can add your own rules later in Settings, under Dispatch.">
             <OptionCards name="preset" value={preset} onChange={setPreset}
               options={PRESETS.map((p) => ({ value: p.id, label: p.label, description: p.description }))} />
           </Field>
