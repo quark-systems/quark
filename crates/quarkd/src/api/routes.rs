@@ -713,10 +713,6 @@ pub async fn answer_decision(
     }
     let why = trimmed(input.why.as_deref());
     let rule = trimmed(input.make_rule.as_deref());
-    let via = trimmed(input.via.as_deref()).unwrap_or_else(|| "app".into());
-    if !ANSWER_CHANNELS.contains(&via.as_str()) {
-        return Err(ApiError::invalid("via must be app, phone or chat"));
-    }
     if why.as_ref().is_some_and(|w| w.len() > MAX_WHY_BYTES)
         || rule.as_ref().is_some_and(|r| r.len() > MAX_WHY_BYTES)
     {
@@ -724,6 +720,31 @@ pub async fn answer_decision(
             "why and make_rule must be at most 2048 bytes",
         ));
     }
+    let via = trimmed(input.via.as_deref()).unwrap_or_else(|| "app".into());
+    if !ANSWER_CHANNELS.contains(&via.as_str()) {
+        return Err(ApiError::invalid("via must be app, phone or chat"));
+    }
+    answer(&state, id, input, via).await.map(Json)
+}
+
+/// Answers an open decision through the engine and records it, from any
+/// channel; `answer_decision` checks the request and the Beads mirror
+/// answers with `via` "beads".
+pub(crate) async fn answer(
+    state: &AppState,
+    id: String,
+    input: AnswerDecision,
+    via: String,
+) -> Result<Decision, ApiError> {
+    if input.answer.trim().is_empty() {
+        return Err(ApiError::invalid("answer is empty"));
+    }
+    let answered_by = match input.answered_by.as_deref().map(str::trim) {
+        Some(user) if !user.is_empty() => user.to_string(),
+        _ => daemon_user(),
+    };
+    let why = trimmed(input.why.as_deref());
+    let rule = trimmed(input.make_rule.as_deref());
     // The asker reads the reason with the answer.
     let engine_answer = match &why {
         Some(w) => format!("{}\n\nWhy: {w}", input.answer.trim_end()),
@@ -731,7 +752,7 @@ pub async fn answer_decision(
     };
     let target = {
         let id = id.clone();
-        db(&state, move |s| s.decision_target(&id)).await?
+        db(state, move |s| s.decision_target(&id)).await?
     };
     if !target.open {
         return Err(already_answered());
@@ -752,7 +773,7 @@ pub async fn answer_decision(
         // relaunches the worker instead of going to the engine.
         let decision = {
             let id = id.clone();
-            db(&state, move |s| s.get_decision(&id)).await?
+            db(state, move |s| s.get_decision(&id)).await?
         };
         Failover::new(
             state.store.clone(),
@@ -772,7 +793,7 @@ pub async fn answer_decision(
         why,
         via: Some(via),
     };
-    let decision = db(&state, move |s| {
+    let decision = db(state, move |s| {
         let d = s.answer_decision_with(&id, &input.answer, &answered_by, &note)?;
         match rule {
             Some(text) => {
@@ -787,7 +808,7 @@ pub async fn answer_decision(
         "conflict" => already_answered(),
         _ => e,
     })?;
-    Ok(Json(decision))
+    Ok(decision)
 }
 
 /// Where an answer can come from.

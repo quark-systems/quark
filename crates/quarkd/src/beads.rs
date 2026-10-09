@@ -39,6 +39,9 @@ use tokio::task::JoinHandle;
 
 use crate::store::Store;
 
+mod decisions;
+pub use decisions::{answer_note, rule_memory, DecisionBead};
+
 /// Quark's notes about a database, next to its `.beads`.
 const SIDECAR: &str = "quark-beads.json";
 
@@ -644,6 +647,11 @@ fn publish(store: &Store, status: &BeadsStatus) {
     if let Err(e) = store.emit(Some(&status.project_id), EventType::BeadsStatus, payload) {
         tracing::warn!(error = %e, "recording a beads.status event failed");
     }
+}
+
+/// Tells the app the Project's memories changed.
+pub fn memories_changed(store: &Store, project_id: &str) {
+    changed(store, project_id, None, "memory");
 }
 
 fn changed(store: &Store, project_id: &str, issue_id: Option<String>, op: &str) {

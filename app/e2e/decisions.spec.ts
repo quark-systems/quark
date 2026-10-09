@@ -40,6 +40,17 @@ test("decision log: answer with a reason and a standing rule, then revoke the ru
   await page.getByTestId("decisions-filter-rules").click();
   await expect(page.getByTestId("decision-log-row")).toHaveCount(1);
   await expect(page.getByTestId("decision-log-row")).toContainText("standing rule");
+
+  // Changing the rule rewords it in place.
+  await entry.getByRole("button", { name: "Change the rule" }).click();
+  const words = entry.getByLabel("The rule, in new words");
+  await expect(words).toHaveValue("Ship redesigns directly when page checks are green.");
+  await words.fill("Ship redesigns directly when page checks and a design review are green.");
+  await entry.getByRole("button", { name: "Save the rule" }).click();
+  await expect(words).toHaveCount(0);
+  await expect(entry).toContainText("Ship redesigns directly when page checks and a design review are green.");
+  await expect(entry).toContainText("changed by mock-user");
+
   await entry.getByRole("button", { name: "Revoke the rule" }).click();
   await expect(card.getByText("Rule revoked")).toBeVisible();
   await expect(entry.getByRole("button", { name: "Revoke the rule" })).toHaveCount(0);
@@ -59,4 +70,13 @@ test("decision log: a decision an agent made under a rule links back to the rule
   await expect(page.getByTestId("decision-answer")).toContainText("Readers must never block the event writer.");
   await expect(page.getByTestId("decision-tags")).toContainText("applied 1 time");
   await expect(page.getByTestId("decision-answer")).toContainText("Use WAL mode for the memory index store?");
+});
+
+test("decision log: a decision shows the Beads record that mirrors it", async ({ page }) => {
+  await open(page, "#/p/quark/decisions/d-3");
+  await expect(page.getByTestId("decision-tags")).toContainText("Beads qk-12 · applied 1 time");
+  const entry = page.getByTestId("decision-answer");
+  await expect(entry).toContainText("Where it lives");
+  await expect(entry.getByRole("link", { name: "qk-12" })).toHaveAttribute("href", "#/p/quark/issues/qk-12");
+  await expect(entry.getByRole("button", { name: "Change the rule" })).toBeVisible();
 });

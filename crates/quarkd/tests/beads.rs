@@ -1,7 +1,8 @@
 //! Beads as the Project's issues and memory: setting up the Project's
 //! database, the New issue side chat (the coordinator drafts, the user
-//! accepts, the beads appear with their links), and accepting a learning
-//! into the Project's Beads memories.
+//! accepts, the beads appear with their links), accepting a learning
+//! into the Project's Beads memories, and decisions as `decision` beads
+//! with gates, answered on either side.
 //!
 //! The journey drives the real `bd` (and `dolt`, which server mode runs).
 //! Where they are not installed it checks only what needs neither and says
@@ -18,7 +19,7 @@ use quark_systems::{TaskKind, TaskState};
 use quarkd::api::{self, AppState};
 use quarkd::beads::Beads;
 use quarkd::chat::RecordingInput;
-use quarkd::engine::{EngineTask, FleetSnapshot, StatusEntry, StubEngine};
+use quarkd::engine::{EngineTask, FleetSnapshot, Hold, StatusEntry, StubEngine, StubWrite};
 use quarkd::harness::{HarnessRegistry, HostEnv};
 use quarkd::projector::Projector;
 use quarkd::provision::Layout;
@@ -29,6 +30,7 @@ use tower::ServiceExt;
 struct Harness {
     home: tempfile::TempDir,
     app: Router,
+    state: AppState,
     store: Arc<Store>,
     engine: Arc<StubEngine>,
     chat: Arc<RecordingInput>,
@@ -75,7 +77,7 @@ fn harness() -> Harness {
         quarkd::harness::builtin(),
         HostEnv::default(),
     ));
-    let app = api::router(AppState {
+    let state = AppState {
         store: store.clone(),
         engine: engine.clone(),
         harnesses: harnesses.clone(),
@@ -95,10 +97,11 @@ fn harness() -> Harness {
             Some(bd().into()),
             "http://127.0.0.1:7380".into(),
         )),
-    });
+    };
     Harness {
         home,
-        app,
+        app: api::router(state.clone()),
+        state,
         projector: Projector::new(store.clone(), engine.clone())
             .with_session_roots(Default::default()),
         store,
@@ -533,4 +536,218 @@ async fn an_accepted_learning_becomes_a_beads_memory_or_user_memory() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = call(&h.app, "DELETE", &forget, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `bd --json` in the Project's database.
+fn bd_json(h: &Harness, pid: &str, args: &[&str]) -> Value {
+    let out = std::process::Command::new(bd())
+        .args(args)
+        .arg("--json")
+        .current_dir(quarkd::beads::dir_of(h.home.path(), pid))
+        .env("BD_NON_INTERACTIVE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "bd {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+fn bead(h: &Harness, pid: &str, id: &str) -> Value {
+    let v = bd_json(h, pid, &["show", id]);
+    v.as_array().map_or(v.clone(), |a| a[0].clone())
+}
+
+fn hold(id: &str, question: &str) -> Hold {
+    Hold {
+        id: id.into(),
+        task_id: None,
+        question: question.into(),
+        answer: None,
+        answered_by: None,
+        brief: serde_json::from_value(json!({
+            "context": "The new log page is ready.",
+            "options": [{"label": "Behind a flag", "consequence": "Nobody sees it yet"}, "Ship it"],
+            "recommended": "Behind a flag"
+        }))
+        .unwrap(),
+    }
+}
+
+async fn decision(h: &Harness, id: &str) -> Value {
+    let (status, d) = call(&h.app, "GET", &format!("/v1/decisions/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK, "{d}");
+    d
+}
+
+#[tokio::test]
+async fn decisions_are_beads_with_gates_and_either_side_answers() {
+    if !installed() {
+        eprintln!("skipped: bd and dolt are not both installed");
+        return;
+    }
+    let h = harness();
+    let pid = ready_project(&h).await;
+    // Before the database exists there is nothing to mirror into.
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    set_up(&h, &pid).await;
+
+    h.engine.set_holds(vec![
+        hold("flag", "Ship the log page behind a flag?"),
+        hold("copy", "Which wording for the empty state?"),
+    ]);
+    h.projector.refresh_all().await.unwrap();
+    let (_, open) = call(&h.app, "GET", "/v1/decisions?state=open", None).await;
+    let id_of = |q: &str| {
+        open.as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["question"] == q)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (flag, copy) = (
+        id_of("Ship the log page behind a flag?"),
+        id_of("Which wording for the empty state?"),
+    );
+
+    // Each open decision becomes a decision bead blocked by a human gate.
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let flag_bead = decision(&h, &flag).await["bead_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let copy_bead = decision(&h, &copy).await["bead_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = bead(&h, &pid, &flag_bead);
+    assert_eq!(b["issue_type"], "decision");
+    assert_eq!(b["status"], "open");
+    assert_eq!(b["external_ref"], format!("quark:{flag}"));
+    assert!(
+        b["description"]
+            .as_str()
+            .unwrap()
+            .contains("**Behind a flag** (recommended)"),
+        "{b}"
+    );
+    let gate = b["metadata"]["gate"].as_str().unwrap().to_string();
+    assert_eq!(bead(&h, &pid, &gate)["status"], "open");
+    // A second pass changes nothing.
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let decisions = bd_json(
+        &h,
+        &pid,
+        &["list", "--all", "--type", "decision", "--limit", "0"],
+    );
+    assert_eq!(decisions.as_array().unwrap().len(), 2);
+
+    // Answered in Quark: the gate resolves and the bead closes with the
+    // answer; the rule it made becomes a memory agents see.
+    let (status, d) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{flag}:answer"),
+        Some(json!({"answer": "Behind a flag", "answered_by": "matt", "make_rule": "New pages ship behind a flag"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{d}");
+    let rule = d["made_rule_id"].as_str().unwrap().to_string();
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let b = bead(&h, &pid, &flag_bead);
+    assert_eq!(b["status"], "closed");
+    assert_eq!(b["close_reason"], "Behind a flag");
+    assert!(
+        b["labels"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("standing-rule")),
+        "{b}"
+    );
+    assert_eq!(bead(&h, &pid, &gate)["status"], "closed");
+    let key = format!("quark-rule-{rule}");
+    let memories = bd_json(&h, &pid, &["memories"]);
+    assert!(
+        memories[&key]
+            .as_str()
+            .unwrap()
+            .ends_with("New pages ship behind a flag"),
+        "{memories}"
+    );
+
+    // Answered in Beads by resolving the gate: Quark records the answer,
+    // the asker gets it, and the bead closes.
+    let gate = bead(&h, &pid, &copy_bead)["metadata"]["gate"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let out = std::process::Command::new(bd())
+        .args(["gate", "resolve", &gate, "--reason", "Nothing here yet"])
+        .current_dir(quarkd::beads::dir_of(h.home.path(), &pid))
+        .env("BD_NON_INTERACTIVE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let d = decision(&h, &copy).await;
+    assert_eq!(d["state"], "answered");
+    assert_eq!(d["answer"], "Nothing here yet");
+    assert_eq!(d["answered_via"], "beads");
+    assert!(h.engine.writes().iter().any(|w| matches!(w,
+        StubWrite::Answer { hold_id, answer, .. } if hold_id == "copy" && answer == "Nothing here yet")));
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let b = bead(&h, &pid, &copy_bead);
+    assert_eq!(b["status"], "closed");
+    assert_eq!(b["close_reason"], "Nothing here yet");
+
+    // What the asker did is noted once.
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/decisions/{flag}:act"),
+        Some(json!({"outcome": "Merged #101"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let notes = bead(&h, &pid, &flag_bead)["notes"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        notes.matches("What happened: Merged #101").count(),
+        1,
+        "{notes}"
+    );
+
+    // Changing the rule rewrites its memory; revoking forgets it.
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/rules/{rule}:change"),
+        Some(json!({"text": "New pages ship behind a flag for a week"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let memories = bd_json(&h, &pid, &["memories"]);
+    assert!(
+        memories[&key].as_str().unwrap().ends_with("for a week"),
+        "{memories}"
+    );
+    let (status, _) = call(&h.app, "POST", &format!("/v1/rules/{rule}:revoke"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    api::reconcile_decision_beads(&h.state, &pid).await.unwrap();
+    let memories = bd_json(&h, &pid, &["memories"]);
+    assert!(memories.get(&key).is_none(), "{memories}");
 }

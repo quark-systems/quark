@@ -7,6 +7,7 @@ import { href } from "../nav";
 import { upsertDecision, upsertRule, useStore } from "../store";
 import { ago, errText, savedUser } from "../util";
 import {
+  answeredVia,
   askedBy, blockLabels, decidedByAgent, decisionLabel, joinAnd, LIFECYCLE, lifecycleStep, ruleDraft, usesOf,
 } from "../decisions";
 import { Button } from ".";
@@ -248,15 +249,19 @@ function AnswerForm({ d, send, answerBox, ...status }: {
   );
 }
 
-/** The line over a logged decision's question: its number, what kind of call it was, how often its rule applied. */
+/** The line over a logged decision's question: its number, what kind of call it was, its bead, how often its rule applied. */
 function LogTags({ d }: { d: Decision }) {
   const rule = useStore((s) => (d.made_rule_id ? s.rules[d.made_rule_id] : undefined));
+  const meta = [
+    d.bead_id && `Beads ${d.bead_id}`,
+    rule && `applied ${rule.applied} ${rule.applied === 1 ? "time" : "times"}`,
+  ].filter(Boolean).join(" · ");
   return (
     <div className="dc-tags" data-testid="decision-tags">
       <span className="dc-num">{decisionLabel(d)}</span>
       {rule && <span className={"dc-badge " + (rule.revoked_at ? "revoked" : "rule")}>{rule.revoked_at ? "Rule revoked" : "Standing rule"}</span>}
       {decidedByAgent(d) && <span className="dc-badge agent">Decided by an agent</span>}
-      {rule && <span className="dc-meta">applied {rule.applied} {rule.applied === 1 ? "time" : "times"}</span>}
+      {meta && <span className="dc-meta">{meta}</span>}
     </div>
   );
 }
@@ -270,12 +275,22 @@ function LogEntry({ d }: { d: Decision }) {
   const underFrom = under?.decision_id ? all[under.decision_id] : undefined;
   const uses = usesOf(d, Object.values(all));
   const [err, setErr] = useState<string | null>(null);
+  // The rule's new words while it is being changed.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const revoke = async () => {
     if (!rule) return;
     setErr(null);
-    try { upsertRule(await api.revokeRule(rule.id)); } catch (e) { setErr(errText(e)); }
+    try { upsertRule(await api.revokeRule(rule.id)); setDraft(null); } catch (e) { setErr(errText(e)); }
   };
-  const via = d.answered_via === "rule" ? "under a standing rule" : d.answered_via ? `in the ${d.answered_via === "app" ? "app" : d.answered_via}` : null;
+  const change = async () => {
+    if (!rule || !draft?.trim() || busy) return;
+    setErr(null); setBusy(true);
+    try { upsertRule(await api.changeRule(rule.id, draft.trim())); setDraft(null); }
+    catch (e) { setErr(errText(e)); }
+    finally { setBusy(false); }
+  };
+  const via = answeredVia(d.answered_via);
   return (
     <div className="dc-log" data-testid="decision-answer">
       <dl className="dc-dl">
@@ -287,7 +302,11 @@ function LogEntry({ d }: { d: Decision }) {
         {under && <><dt>Under rule</dt><dd>{underFrom
           ? <a href={href({ name: "decisions", project: underFrom.project_id, id: underFrom.id })}>{decisionLabel(underFrom)}</a>
           : under.text}</dd></>}
-        {rule && <><dt>The rule</dt><dd>{rule.text}</dd></>}
+        {rule && <><dt>The rule</dt><dd>{rule.text}{rule.changed_at && <span className="faint">{" "}· changed{rule.changed_by && <> by {rule.changed_by}</>} {ago(rule.changed_at)}</span>}</dd></>}
+        {d.bead_id && <><dt>Where it lives</dt><dd>
+          Beads record <a href={href({ name: "issues", project: d.project_id, id: d.bead_id })}>{d.bead_id}</a> in the Project's database,
+          so every agent sees it with the Project's issues{rule && !rule.revoked_at && ", and the rule as a memory"}.
+        </dd></>}
       </dl>
       {uses.length > 0 && (
         <div className="dc-uses">
@@ -299,8 +318,21 @@ function LogEntry({ d }: { d: Decision }) {
           ))}
         </div>
       )}
+      {rule && !rule.revoked_at && draft !== null && (
+        <form className="dc-field" onSubmit={(e) => { e.preventDefault(); void change(); }}>
+          <label htmlFor={`change-${rule.id}`}>The rule, in new words</label>
+          <input id={`change-${rule.id}`} value={draft} autoFocus onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") setDraft(null); }} />
+          <span className="faint small-text">Agents decide by the new words from now on. Decisions already made under it keep theirs.</span>
+          <div className="dc-send">
+            <Button kind="primary" type="submit" disabled={busy || !draft.trim() || draft.trim() === rule.text}>{busy ? "Saving…" : "Save the rule"}</Button>
+            <Button onClick={() => setDraft(null)}>Cancel</Button>
+          </div>
+        </form>
+      )}
       {rule && !rule.revoked_at && (
         <div className="dc-send">
+          {draft === null && <Button onClick={() => setDraft(rule.text)}>Change the rule</Button>}
           <Button onClick={() => void revoke()} className="danger">Revoke the rule</Button>
           {err && <span className="bad small-text" role="alert">{err}</span>}
         </div>

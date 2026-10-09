@@ -781,11 +781,11 @@ function seed() {
   const D = (id, p, question, extra = {}) => decisions.set(id, {
     id, number: [...decisions.values()].filter((d) => d.project_id === p.id).length + 1, project_id: p.id, task_id: null, question,
     state: "open", brief: {}, answer: null, answered_by: null, answered_at: null, answered_via: null, answer_why: null,
-    outcome: null, acted_at: null, rule_id: null, made_rule_id: null, ...extra,
+    outcome: null, acted_at: null, rule_id: null, made_rule_id: null, bead_id: null, ...extra,
   });
   const asker = [...tasks.values()].find((t) => t.state === "needs_decision").id;
   D("d-1", quark, "Keep the full answer history per decision, or only the latest answer?", {
-    task_id: asker, opened_at: minutesAgo(12), brief: {
+    task_id: asker, opened_at: minutesAgo(12), bead_id: "qk-29", brief: {
       context: "Decision records now carry who answered. Keeping every answer makes the log longer but shows when a call changed.",
       options: [
         { label: "Full history", consequence: "Every answer stays in the log, newest on top." },
@@ -809,14 +809,14 @@ function seed() {
   D("d-3", quark, "Use SQLite WAL mode for the projection store?", {
     opened_at: minutesAgo(200), state: "acted", answer: "Yes, WAL with a busy timeout.", answered_by: "matt", answered_at: minutesAgo(180),
     answered_via: "app", answer_why: "Readers must never block the event writer.", outcome: "Every store opens in WAL mode with a 5s busy timeout.",
-    acted_at: minutesAgo(170), made_rule_id: "rule-1",
+    acted_at: minutesAgo(170), made_rule_id: "rule-1", bead_id: "qk-12",
     brief: { context: "The projection store is read by the API while the engine writes events.", asked_by: "coordinator" },
   });
   rules.set("rule-1", { id: "rule-1", project_id: quark.id, kind: "answer", text: "New SQLite stores use WAL mode with a busy timeout.",
-    decision_id: "d-3", created_by: "matt", created_at: minutesAgo(180), revoked_at: null, revoked_by: null });
+    decision_id: "d-3", created_by: "matt", created_at: minutesAgo(180), revoked_at: null, revoked_by: null, changed_at: null, changed_by: null });
   D("d-4", quark, "Use WAL mode for the memory index store?", {
     opened_at: minutesAgo(30), state: "acted", answer: "Yes, WAL with a busy timeout.", answered_by: "coordinator", answered_at: minutesAgo(30),
-    answered_via: "rule", outcome: "The memory index opens in WAL mode.", acted_at: minutesAgo(29), rule_id: "rule-1",
+    answered_via: "rule", outcome: "The memory index opens in WAL mode.", acted_at: minutesAgo(29), rule_id: "rule-1", bead_id: "qk-31",
     brief: { asked_by: "coordinator" },
   });
 
@@ -1361,6 +1361,19 @@ const server = http.createServer(async (req, res) => {
     const rule = rules.get(id);
     if (!rule) return notFound(res);
     if (!rule.revoked_at) Object.assign(rule, { revoked_at: now(), revoked_by: "mock-user" });
+    emit("rule.updated", withApplied(rule), rule.project_id);
+    return send(res, 200, withApplied(rule));
+  }
+  if ((r = m(/^\/v1\/rules\/([^/]+):change$/)) && req.method === "POST") {
+    const id = decodeURIComponent(r[1]);
+    if (id.startsWith("merge-approval:")) return send(res, 409, { error: { code: "conflict", message: "standing approval can be revoked but not reworded" } });
+    const rule = rules.get(id);
+    if (!rule) return notFound(res);
+    if (rule.revoked_at) return send(res, 409, { error: { code: "conflict", message: "the rule is revoked" } });
+    const b = await readJson(req);
+    const text = typeof b?.text === "string" ? b.text.trim() : "";
+    if (!text) return invalid(res, "text is empty");
+    if (text !== rule.text) Object.assign(rule, { text, changed_at: now(), changed_by: "mock-user" });
     emit("rule.updated", withApplied(rule), rule.project_id);
     return send(res, 200, withApplied(rule));
   }

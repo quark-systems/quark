@@ -338,7 +338,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     ));
     beads.watch_all(store.clone(), layout.home.clone());
 
-    let mut app = api::router(AppState {
+    let state = AppState {
         store,
         engine,
         harnesses,
@@ -353,7 +353,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         events,
         triggers,
         beads,
-    });
+    };
+    let decision_beads_task = api::spawn_decision_beads(state.clone());
+    let mut app = api::router(state);
     if let Some(n) = &native {
         app = app.nest(native::WORKER_PREFIX, n.worker_router());
     }
@@ -370,6 +372,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     }
     ingest_task.abort();
     usage_task.abort();
+    decision_beads_task.abort();
     if let Some(t) = triggers_task {
         t.abort();
     }

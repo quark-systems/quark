@@ -1,5 +1,5 @@
 //! The decision log's reads and standing rules: one decision by id, the
-//! rules answers made, revoking a rule, and logging a decision an agent made
+//! rules answers made, changing or revoking a rule, and logging a decision an agent made
 //! under one.
 //!
 //! A Project's standing approval to merge green pull requests is listed as
@@ -10,12 +10,15 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use quark_systems::{
-    Decision, ErrorBody, Project, RecordRuleDecision, RuleKind, StandingRule, UpdateProject,
+    ChangeRule, Decision, ErrorBody, Project, RecordRuleDecision, RuleKind, StandingRule,
+    UpdateProject,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
 
-use super::routes::{daemon_user, set_standing_approval, trimmed, MAX_WHY_BYTES};
+use super::routes::{
+    daemon_user, set_standing_approval, trimmed, MAX_ANSWERED_BY_BYTES, MAX_WHY_BYTES,
+};
 use super::{db, ApiError, AppState};
 
 /// The rule id standing approval is listed under.
@@ -89,16 +92,69 @@ pub async fn list_rules(
     ))
 }
 
-/// Dispatches `POST /v1/rules/{id}:revoke`.
+/// Dispatches `POST /v1/rules/{id}:revoke` and `:change`.
 pub async fn rule_action(
     state: State<AppState>,
     Path(target): Path<String>,
-    _body: Bytes,
+    body: Bytes,
 ) -> Result<Json<StandingRule>, ApiError> {
     match target.rsplit_once(':') {
         Some((id, "revoke")) => revoke_rule(state, Path(id.to_string())).await,
+        Some((id, "change")) => {
+            let input = serde_json::from_slice(&body)
+                .map_err(|e| ApiError::invalid(format!("invalid change body: {e}")))?;
+            change_rule(state, Path(id.to_string()), Json(input)).await
+        }
         _ => Err(ApiError::not_found()),
     }
+}
+
+/// Change what a standing rule says.
+///
+/// Decisions already made under it keep the wording they were made under;
+/// agents decide by the new text from now on. The rule arrives as a
+/// `rule.updated` event. A Project's standing approval rule cannot be
+/// reworded, only revoked.
+#[utoipa::path(
+    post,
+    path = "/v1/rules/{id}:change",
+    tag = "decisions",
+    params(("id" = String, Path, description = "Rule id")),
+    request_body = ChangeRule,
+    responses(
+        (status = 200, body = StandingRule),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody, description = "The rule is revoked, or is the Project's standing approval")
+    )
+)]
+pub async fn change_rule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<ChangeRule>,
+) -> Result<Json<StandingRule>, ApiError> {
+    if id.starts_with(MERGE_APPROVAL_PREFIX) {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "conflict",
+            "standing approval can be revoked but not reworded",
+        ));
+    }
+    let Some(text) = trimmed(Some(&input.text)) else {
+        return Err(ApiError::invalid("text is empty"));
+    };
+    if text.len() > MAX_WHY_BYTES {
+        return Err(ApiError::invalid("text must be at most 2048 bytes"));
+    }
+    let by = trimmed(input.changed_by.as_deref()).unwrap_or_else(daemon_user);
+    if by.len() > MAX_ANSWERED_BY_BYTES || by.chars().any(char::is_control) {
+        return Err(ApiError::invalid(
+            "changed_by must be one line of at most 128 bytes",
+        ));
+    }
+    Ok(Json(
+        db(&state, move |s| s.change_rule(&id, &text, &by)).await?,
+    ))
 }
 
 /// Revoke a standing rule.
@@ -203,9 +259,16 @@ pub async fn record_rule_decision(
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
 #[openapi(
-    paths(get_decision, list_rules, revoke_rule, record_rule_decision),
+    paths(
+        get_decision,
+        list_rules,
+        change_rule,
+        revoke_rule,
+        record_rule_decision
+    ),
     components(schemas(
         quark_systems::RuleKind,
+        quark_systems::ChangeRule,
         quark_systems::DecisionBrief,
         quark_systems::DecisionOption,
         quark_systems::EvidenceLink,
