@@ -958,6 +958,22 @@ function seed() {
   chat(quark.id, "tool_result", "held", { ts: minutesAgo(34), tool_call_id: "k3" });
   chat(quark.id, "assistant", "Dispatched two workers:\n\n- **Event stream**: resync slow clients from the store (Claude Code)\n- **Terminal sessions** over tmux control mode (Codex)\n\nThe decision-records task is waiting on a question for you.", { ts: minutesAgo(34) });
 
+  // Engine plumbing as a real coordinator session records it: watcher wakes arrive through
+  // Claude Code's Stop hook as XML, and the last command never got a result because the
+  // session stopped. The chat shows them as quiet event rows and the agent as idle.
+  const wake = (line) => `<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command "Stop": firstmate watcher wake - one supervision event needs a handling turn now.\n${line}\nRun bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command.\n\n</system-reminder>`;
+  const fm = (id, command, at, result) => {
+    chat(quark.id, "tool_call", JSON.stringify({ command }), { ts: minutesAgo(at), tool_name: "Bash", tool_call_id: id, tool: { kind: "shell", title: `Run ${command}`, command } });
+    if (result !== undefined) chat(quark.id, "tool_result", result, { ts: minutesAgo(at), tool_call_id: id });
+  };
+  const H = "H=$HOME/.quark/workspaces/quark; export FM_HOME=$H; $H/bin";
+  chat(quark.id, "user", wake("heartbeat"), { ts: minutesAgo(33) });
+  fm("k4", `${H}/fm-wake-drain.sh`, 33, "heartbeat\nWAKE_ACK_REQUIRED: bin/fm-wake-drain.sh --ack-through 7 --generation 2");
+  fm("k5", `${H}/fm-wake-drain.sh --ack-through 7 --generation 2`, 33, "acknowledged through 7");
+  chat(quark.id, "assistant", "Both workers are on track; nothing needs you.", { ts: minutesAgo(33) });
+  chat(quark.id, "user", wake("stale: quark:terminals"), { ts: minutesAgo(32) });
+  fm("k6", `${H}/fm-wake-drain.sh`, 32);
+
   // The website has no Beads database yet, so its memory is files under memory/ in its repo.
   MP("mp-3", site, null, "The marketing site's images go through the CDN's resize endpoint; never commit originals over 500 KB.", {
     source: "coordinator", proposed_at: minutesAgo(50),

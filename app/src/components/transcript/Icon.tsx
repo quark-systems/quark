@@ -11,6 +11,8 @@ const PATHS: Record<string, string> = {
   other: "M8 5.5v5M5.5 8h5",
   thinking: "M8 2.5a4 4 0 0 1 2.5 7.1V11h-5V9.6A4 4 0 0 1 8 2.5zM6 13.5h4",
   decision: "M8 2a6 6 0 1 1 0 12A6 6 0 0 1 8 2zM6.3 6.3a1.8 1.8 0 1 1 2.4 1.7c-.5.2-.7.6-.7 1.1v.4M8 11.5h.01",
+  event: "M4.5 11h7l-1-1.5V7a2.5 2.5 0 0 0-5 0v2.5zM7 13.2a1.2 1.2 0 0 0 2 0",
+  warning: "M8 2.5l6 11H2zM8 6.5v3.5M8 12h.01",
   check: "M3.5 8.5l3 3 6-7",
   cross: "M4.5 4.5l7 7M11.5 4.5l-7 7",
   copy: "M5.5 5.5h7v8h-7zM3.5 10.5v-8h7",

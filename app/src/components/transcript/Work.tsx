@@ -8,14 +8,15 @@ import { actionTitle, coordinatorAction, CoordinatorAction } from "./actions";
 import { rise, useTranscript } from "./context";
 import { DiffCard } from "./DiffCard";
 import { Icon } from "./Icon";
-import { Step, stepKind, stepTitle, summarize, TurnPart } from "./turns";
+import { Activity, Step, stepKind, stepTitle, summarize, TurnPart } from "./turns";
 
 type WorkPart = Extract<TurnPart, { kind: "work" }>;
 
-export function Work({ part, live }: { part: WorkPart; live: boolean }) {
+/** `activity` is set on the turn's last part while the agent is still on it. */
+export function Work({ part, activity }: { part: WorkPart; activity: Activity | null }) {
   const [open, setOpen] = useState(false);
   const failed = part.steps.filter((s) => s.status === "error").length;
-  if (live) {
+  if (activity) {
     // While the agent works, earlier steps fold behind one line and the latest stays in view.
     const earlier = part.steps.slice(0, -1);
     const latest = part.steps[part.steps.length - 1];
@@ -29,7 +30,7 @@ export function Work({ part, live }: { part: WorkPart; live: boolean }) {
             </>
           )
         )}
-        {latest && <StepRow step={latest} live />}
+        {latest && <StepRow step={latest} live={activity} />}
       </div>
     );
   }
@@ -59,22 +60,25 @@ function Previews({ steps }: { steps: Step[] }) {
   );
 }
 
-function StepRow({ step, live }: { step: Step; live?: boolean }) {
+function StepRow({ step, live }: { step: Step; live?: Activity }) {
   const [open, setOpen] = useState(false);
   const { actions, freshAfter } = useTranscript();
   const kind = stepKind(step);
   const tool = step.call?.tool;
   const action = actions ? coordinatorAction(step) : null;
   const detail = step.thinking?.text ?? [tool?.command ?? (tool ? null : step.call?.text), step.result?.text].filter(Boolean).join("\n\n");
-  const running = step.status === "running";
+  // Only a step the agent is on spins; a call whose result never came is just left open.
+  const running = step.status === "running" && live === "working";
   return (
     <div className={"tx-step" + (step.status === "error" ? " error" : "") + rise(step.key, freshAfter)}>
       <button className="tx-step-row" aria-expanded={open} onClick={() => setOpen(!open)} disabled={!detail}>
         <Icon kind={kind} />
-        <span className={"tx-step-title" + (live && running ? " shimmer" : "")}>{stepTitle(step)}</span>
+        <span className={"tx-step-title" + (running ? " shimmer" : "")}>{stepTitle(step)}</span>
         {tool?.additions !== undefined && <span className="adds">+{tool.additions}</span>}
         {tool?.deletions !== undefined && tool.deletions > 0 && <span className="dels">−{tool.deletions}</span>}
-        <span className="tx-step-status">{running ? <span className="spinner" aria-label="running" /> : step.status === "error" ? <Icon kind="cross" /> : null}</span>
+        <span className="tx-step-status">{running ? <span className="spinner" aria-label="running" />
+          : step.status === "running" && live === "listening" ? <span className="tx-listen" aria-label="listening" />
+          : step.status === "error" ? <Icon kind="cross" /> : null}</span>
       </button>
       {action ? <ActionCard id={step.key} action={action} /> : tool?.diff?.length ? <DiffCard tool={tool} /> : null}
       {open && detail && <pre className="tx-detail">{detail}{step.result?.truncated ? "\n…" : ""}</pre>}

@@ -3,6 +3,7 @@
 // result), then what it wrote back. The turn layout follows MonoCode's agent
 // transcript (https://github.com/hardbeat920/monocode, MIT).
 import type { ToolKind, TranscriptItem } from "../../api";
+import { EngineEvent, engineCommandTitle, engineEvent, isListening } from "./events";
 
 export type StepStatus = "running" | "ok" | "error";
 
@@ -25,6 +26,8 @@ export interface Turn {
   key: number;
   /** The user entry that opened the turn; absent for entries before the first prompt. */
   prompt?: TranscriptItem;
+  /** Set when the engine, not a person, wrote the prompt: a watcher wake, a background notice. */
+  event?: EngineEvent;
   parts: TurnPart[];
   /** Epoch ms of the first and last entry, when the harness recorded times. */
   startedAt?: number;
@@ -49,7 +52,9 @@ export function groupTurns(items: TranscriptItem[]): Turn[] {
 
   for (const item of items) {
     if (item.role === "user") {
-      open(item);
+      const t = open(item);
+      const event = engineEvent(item.text);
+      if (event) t.event = event;
     } else {
       const t = cur ?? open(undefined, item.id);
       if (item.role === "assistant") t.parts.push({ kind: "text", item });
@@ -100,6 +105,8 @@ function attachResult(t: Turn, result: TranscriptItem) {
 /** A step's title: the daemon's summary, else the tool name and the first line of its input. */
 export function stepTitle(s: Step): string {
   if (s.thinking) return "Thinking";
+  const plain = engineCommandTitle(s);
+  if (plain) return plain;
   const call = s.call;
   if (call?.tool) return call.tool.title;
   const name = call?.tool_name ?? s.result?.tool_name ?? "tool";
@@ -121,6 +128,25 @@ const VERBS: [ToolKind, string, string][] = [
   ["web", "fetched", "page"],
   ["agent", "started", "agent"],
 ];
+
+/** No new entries for this long while a step runs: the agent is not working, whatever the log says. */
+export const QUIET_AFTER_MS = 30 * 60 * 1000;
+
+/**
+ * What a live turn's agent is doing: `working`; `listening` while its latest step only
+ * waits for project events; `quiet` when nothing was recorded for {@link QUIET_AFTER_MS},
+ * as when the harness stopped before writing a result. Null when the turn is finished.
+ */
+export type Activity = "working" | "listening" | "quiet";
+
+export function activity(t: Turn, now = Date.now()): Activity | null {
+  if (!t.live) return null;
+  const end = t.parts[t.parts.length - 1];
+  const step = end?.kind === "work" ? end.steps[end.steps.length - 1] : undefined;
+  if (step?.status === "running" && isListening(step)) return "listening";
+  if (t.endedAt !== undefined && now - t.endedAt >= QUIET_AFTER_MS) return "quiet";
+  return "working";
+}
 
 /** "Read 3 files, ran 2 commands" for a folded run of steps. */
 export function summarize(steps: Step[]): string {
@@ -169,7 +195,7 @@ export function breakLabel(at: number | undefined, prev: number | undefined, now
 /** A finished turn as Markdown, for copying: the prompt quoted, then the agent's answer. */
 export function turnMarkdown(t: Turn): string {
   const out: string[] = [];
-  if (t.prompt) out.push(t.prompt.text.split("\n").map((l) => `> ${l}`).join("\n"));
+  if (t.prompt && !t.event) out.push(t.prompt.text.split("\n").map((l) => `> ${l}`).join("\n"));
   for (const p of t.parts) if (p.kind === "text") out.push(p.item.text);
   return out.join("\n\n");
 }

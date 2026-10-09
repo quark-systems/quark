@@ -48,8 +48,21 @@
 .tx-action-link { align-self: flex-start; margin-top: 2px; font-size: 12px; color: var(--accent); text-decoration: none; }
 .tx-action-link:hover { text-decoration: underline; }
 
+/* engine events: a watcher wake or background notice, one quiet line instead of a bubble */
+.tx-event { display: flex; flex-direction: column; }
+.tx-event-row { align-self: flex-start; max-width: 100%; display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 2px 6px; margin-left: -6px; border-radius: 5px; color: var(--fg-faint); font: 12px var(--sans); cursor: pointer; }
+.tx-event-row:hover { background: var(--bg-2); color: var(--fg-dim); }
+.tx-event-row .tx-icon-chevron-right, .tx-event-row .tx-icon-chevron-down { opacity: 0; }
+.tx-event-row:hover .tx-icon-chevron-right, .tx-event-row[aria-expanded="true"] .tx-icon-chevron-down, .tx-event-row:focus-visible .tx-icon { opacity: 1; }
+.tx-event-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-event-warning .tx-event-row, .tx-event-warning .tx-icon { color: var(--yellow); }
+.tx-event .tx-detail { margin-left: 20px; }
+
 /* footer: how long the agent worked, copy */
 .tx-footer { display: flex; align-items: center; gap: 5px; min-height: 20px; font-size: 12px; color: var(--fg-faint); }
+.tx-footer.listening { gap: 7px; }
+.tx-listen { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); opacity: .8; animation: tx-listen 2.4s ease-in-out infinite; }
+@keyframes tx-listen { 50% { opacity: .35; } }
 .tx-copy { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 4px; border: 0; border-radius: 4px; background: none; color: var(--fg-faint); font: 11px var(--sans); cursor: pointer; opacity: 0; transition: opacity var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
 .tx-turn:hover .tx-copy, .tx-copy:focus-visible, .tx-copy:has(span) { opacity: 1; }
 .tx-copy:hover { color: var(--fg); background: var(--bg-2); }
@@ -70,6 +83,6 @@
 .spinner { width: 10px; height: 10px; border: 1.5px solid var(--line-2); border-top-color: var(--fg-dim); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .shimmer, .spinner, .tx-rise, .tx-jump { animation: none; }
+  .shimmer, .spinner, .tx-rise, .tx-jump, .tx-listen { animation: none; }
   .shimmer { color: var(--fg-dim); background: none; }
 }
