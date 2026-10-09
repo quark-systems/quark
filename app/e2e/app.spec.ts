@@ -743,9 +743,11 @@ test("overview: live status now, and what changed since you last looked", async 
   await page.getByTestId("nav-overview").click();
   await expect(page).toHaveURL(/#\/p\/quark\/overview$/);
 
-  // Live status: one tile per state and every task, open ones first.
-  await expect(page.getByTestId(/^overview-count-/)).toHaveCount(6);
-  await expect(page.getByTestId("overview-count-working").locator(".ov-n")).not.toHaveText("0");
+  // The goal and four numbers up top, then every task, open ones first.
+  await expect(page.getByTestId("overview-goal")).toBeVisible();
+  await expect(page.getByTestId(/^overview-card-/)).toHaveCount(4);
+  await expect(page.getByTestId("overview-card-workers").locator(".ov-card-value")).not.toHaveText("0");
+  await expect(page.getByTestId("overview-card-workers")).toContainText("working");
   const tasks = page.getByTestId("overview-task");
   await expect(tasks.first()).not.toHaveAttribute("data-state", /done|failed/);
   await expect(tasks.filter({ hasText: "Event stream" })).toHaveCount(1);

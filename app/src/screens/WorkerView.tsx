@@ -15,6 +15,7 @@ import { WhyThisAgent } from "../components/WhyThisAgent";
 import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 import { useLabels } from "../persona";
 import { Dock } from "../shell/Dock";
+import { StatusDot, taskTone, TONE_LABEL } from "../ui";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
@@ -37,14 +38,21 @@ export function WorkerView({ id }: { id: string }) {
   return (
     <div className="screen worker">
       <section className="worker-center">
-        <div className="header">
-          <a className="crumb" href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
-          <span className="faint">/</span>
-          <h1 className="ellipsis" title={task.title}>{task.title}</h1>
+        <div className="header worker-head">
+          <StatusDot tone={taskTone(task.state)} label={TONE_LABEL[taskTone(task.state)]} />
+          <div className="wh-text">
+            <h1 className="ellipsis" title={task.title}>{task.title}</h1>
+            <span className="wh-sub ellipsis">
+              <a href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
+              {task.branch && <> · branch <span className="mono">{task.branch}</span></>}
+              {" · "}started {ago(task.created_at)}
+            </span>
+          </div>
           <span className="pill" style={{ color: st.color }} data-testid="task-state">{st.label}</span>
-          {task.harness && <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}</span>}
+          {task.harness && (
+            <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}{task.model && <span className="faint"> · {task.model}</span>}</span>
+          )}
           {task.pull_request_url && <a className="pill green" href={task.pull_request_url} target="_blank" rel="noreferrer">pull request</a>}
-          <span className="spacer" />
           <Controls taskId={id} active={isActive(task.state)} />
         </div>
         {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
