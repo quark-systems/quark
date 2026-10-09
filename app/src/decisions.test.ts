@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Decision, StandingRule, Task } from "./api";
-import { askedBy, blockLabels, decisionLabel, joinAnd, lifecycleStep, logList, ruleDraft, rowSummary, rowTone, usesOf } from "./decisions";
+import { answeredVia, askedBy, blockLabels, decisionLabel, joinAnd, lifecycleStep, logList, ruleDraft, rowSummary, rowTone, usesOf } from "./decisions";
 
 const d = (id: string, over: Partial<Decision> = {}): Decision => ({
   id, project_id: "p1", question: `Q ${id}`, state: "open", opened_at: "2026-10-02T10:00:00Z", ...over,
@@ -25,6 +25,16 @@ describe("decision words", () => {
     expect(lifecycleStep(d("a"))).toBe(0);
     expect(lifecycleStep(d("a", { state: "answered" }))).toBe(1);
     expect(lifecycleStep(d("a", { state: "acted" }))).toBe(3);
+  });
+});
+
+describe("answeredVia", () => {
+  it("says where an answer came from", () => {
+    expect(answeredVia("app")).toBe("in the app");
+    expect(answeredVia("phone")).toBe("in the phone");
+    expect(answeredVia("beads")).toBe("in Beads");
+    expect(answeredVia("rule")).toBe("under a standing rule");
+    expect(answeredVia(null)).toBeNull();
   });
 });
 

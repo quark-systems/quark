@@ -103,3 +103,13 @@ export function ruleDraft(d: Decision, answer: string): string {
 function firstLine(s: string): string {
   return s.split("\n")[0].trim();
 }
+
+/** How the log says where an answer came from. */
+export function answeredVia(via?: string | null): string | null {
+  switch (via) {
+    case null: case undefined: case "": return null;
+    case "rule": return "under a standing rule";
+    case "beads": return "in Beads";
+    default: return `in the ${via}`;
+  }
+}

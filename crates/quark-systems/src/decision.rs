@@ -183,6 +183,10 @@ pub struct Decision {
     /// The standing rule this answer created.
     #[serde(default)]
     pub made_rule_id: Option<String>,
+    /// The `decision` bead that mirrors it in the Project's Beads database,
+    /// once there is one.
+    #[serde(default)]
+    pub bead_id: Option<String>,
 }
 
 /// An answer to an open decision.
@@ -199,6 +203,7 @@ pub struct AnswerDecision {
     #[serde(default)]
     pub why: Option<String>,
     /// Where the answer was given: `app` (the default), `phone` or `chat`.
+    /// Answers given in Beads are recorded as `beads`.
     #[serde(default)]
     pub via: Option<String>,
     /// Turn the answer into a standing rule with this text, so matching
@@ -258,8 +263,22 @@ pub struct StandingRule {
     /// Set once revoked; a revoked rule decides nothing.
     pub revoked_at: Option<String>,
     pub revoked_by: Option<String>,
+    /// When its text was last changed, and by whom.
+    #[serde(default)]
+    pub changed_at: Option<String>,
+    #[serde(default)]
+    pub changed_by: Option<String>,
     /// How many decisions were logged under it.
     pub applied: i64,
+}
+
+/// New words for a standing rule.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ChangeRule {
+    pub text: String,
+    /// Who is changing it; absent means the daemon's own user.
+    #[serde(default)]
+    pub changed_by: Option<String>,
 }
 
 #[cfg(test)]

@@ -3697,6 +3697,76 @@
         }
       }
     },
+    "/v1/rules/{id}:change": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Change what a standing rule says.",
+        "description": "Decisions already made under it keep the wording they were made under;\nagents decide by the new text from now on. The rule arrives as a\n`rule.updated` event. A Project's standing approval rule cannot be\nreworded, only revoked.",
+        "operationId": "change_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandingRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The rule is revoked, or is the Project's standing approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/rules/{id}:revoke": {
       "post": {
         "tags": [
@@ -4905,7 +4975,7 @@
               "string",
               "null"
             ],
-            "description": "Where the answer was given: `app` (the default), `phone` or `chat`."
+            "description": "Where the answer was given: `app` (the default), `phone` or `chat`.\nAnswers given in Beads are recorded as `beads`."
           },
           "why": {
             "type": [
@@ -5183,6 +5253,25 @@
           },
           "state": {
             "$ref": "#/components/schemas/BeadsState"
+          }
+        }
+      },
+      "ChangeRule": {
+        "type": "object",
+        "description": "New words for a standing rule.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "changed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is changing it; absent means the daemon's own user."
+          },
+          "text": {
+            "type": "string"
           }
         }
       },
@@ -5634,6 +5723,13 @@
               "null"
             ],
             "description": "Where the answer came from: `app`, `phone`, `chat`, or `rule` for an\nagent deciding under a standing rule."
+          },
+          "bead_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `decision` bead that mirrors it in the Project's Beads database,\nonce there is one."
           },
           "brief": {
             "$ref": "#/components/schemas/DecisionBrief",
@@ -9992,6 +10088,19 @@
             "type": "integer",
             "format": "int64",
             "description": "How many decisions were logged under it."
+          },
+          "changed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When its text was last changed, and by whom."
+          },
+          "changed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "created_at": {
             "type": [

@@ -29,7 +29,7 @@ export interface Decision {
   brief?: DecisionBrief;
   /** Who answered and when; null while open. */
   answered_by?: string | null; answered_at?: string | null;
-  /** `app`, `phone`, `chat`, or `rule` when an agent decided under a standing rule. */
+  /** `app`, `phone`, `chat`, `beads` when answered in the Project's Beads database, or `rule` when an agent decided under a standing rule. */
   answered_via?: string | null;
   answer_why?: string | null;
   /** What the asker did with the answer. */
@@ -38,6 +38,8 @@ export interface Decision {
   rule_id?: string | null;
   /** The rule this answer made. */
   made_rule_id?: string | null;
+  /** The `decision` bead that mirrors it in the Project's Beads database. */
+  bead_id?: string | null;
 }
 export interface AnswerDecision {
   answer: string; answered_by?: string | null;
@@ -52,6 +54,8 @@ export interface StandingRule {
   id: string; project_id: string; kind: RuleKind; text: string;
   decision_id?: string | null; created_by?: string | null; created_at?: string | null;
   revoked_at?: string | null; revoked_by?: string | null;
+  /** When its words last changed, and by whom. */
+  changed_at?: string | null; changed_by?: string | null;
   /** Decisions logged under it. */
   applied: number;
 }
@@ -65,4 +69,6 @@ export const decisionsApi = {
   /** Standing rules in force (with `includeRevoked`, revoked ones too), including each Project's standing approval. */
   rules: (includeRevoked = false) => req<StandingRule[]>("GET", `/v1/rules${includeRevoked ? "?include_revoked=true" : ""}`),
   revokeRule: (id: string) => req<StandingRule>("POST", `/v1/rules/${enc(id)}:revoke`),
+  /** New words for a rule; agents decide by them from now on. Not for standing approval, which can only be revoked. */
+  changeRule: (id: string, text: string) => req<StandingRule>("POST", `/v1/rules/${enc(id)}:change`, { text }),
 };

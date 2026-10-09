@@ -4,6 +4,7 @@ mod accounts;
 mod automation;
 mod beads;
 mod dashboard;
+mod decision_beads;
 mod decisions;
 mod dispatch;
 mod error;
@@ -35,6 +36,7 @@ use utoipa::OpenApi;
 
 use crate::store::Store;
 
+pub use decision_beads::{reconcile as reconcile_decision_beads, spawn as spawn_decision_beads};
 pub use error::ApiError;
 pub use openapi::ApiDoc;
 

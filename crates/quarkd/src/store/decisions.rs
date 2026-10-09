@@ -21,7 +21,7 @@ use crate::now_rfc3339;
 const RULE_DECISION_PREFIX: &str = "quark-rule:";
 
 const RULE_SELECT: &str = "SELECT r.id, r.project_id, r.text, r.decision_id, r.created_by,
-         r.created_at, r.revoked_at, r.revoked_by,
+         r.created_at, r.revoked_at, r.revoked_by, r.changed_at, r.changed_by,
          (SELECT COUNT(*) FROM decisions d WHERE d.rule_id = r.id)
      FROM standing_rules r";
 
@@ -36,7 +36,9 @@ fn rule_from_row(r: &Row) -> rusqlite::Result<StandingRule> {
         created_at: r.get(5)?,
         revoked_at: r.get(6)?,
         revoked_by: r.get(7)?,
-        applied: r.get(8)?,
+        changed_at: r.get(8)?,
+        changed_by: r.get(9)?,
+        applied: r.get(10)?,
     })
 }
 
@@ -188,6 +190,67 @@ impl Store {
                 serde_json::to_value(&rule)?,
             )?;
             Ok(rule)
+        })
+    }
+
+    /// Changes a rule's words, emitting `rule.updated`. Refused once revoked.
+    pub fn change_rule(&self, id: &str, text: &str, by: &str) -> Result<StandingRule> {
+        self.write(|tx, events| {
+            let rule = get_rule(tx, id)?;
+            if rule.revoked_at.is_some() {
+                return Err(StoreError::Conflict("the rule is revoked".into()));
+            }
+            if rule.text == text {
+                return Ok(rule);
+            }
+            tx.execute(
+                "UPDATE standing_rules SET text = ?2, changed_at = ?3, changed_by = ?4 WHERE id = ?1",
+                params![id, text, now_rfc3339(), by],
+            )?;
+            let rule = get_rule(tx, id)?;
+            append_event(
+                tx,
+                events,
+                Some(&rule.project_id),
+                EventType::RuleUpdated,
+                serde_json::to_value(&rule)?,
+            )?;
+            Ok(rule)
+        })
+    }
+
+    /// Records the `decision` bead that mirrors a decision, emitting the
+    /// decision again (`decision.opened` while open, else
+    /// `decision.answered`) so clients show it.
+    pub fn set_decision_bead(&self, id: &str, bead_id: &str) -> Result<Decision> {
+        self.write(|tx, events| {
+            let n = tx.execute(
+                "UPDATE decisions SET bead_id = ?2 WHERE id = ?1 AND bead_id IS NOT ?2",
+                params![id, bead_id],
+            )?;
+            let d = tx
+                .query_row(
+                    &format!("{DECISION_SELECT} WHERE id = ?1"),
+                    [id],
+                    decision_from_row,
+                )
+                .optional()?
+                .ok_or(StoreError::NotFound)?;
+            if n > 0 {
+                let kind = if d.state == DecisionState::Open {
+                    EventType::DecisionOpened
+                } else {
+                    EventType::DecisionAnswered
+                };
+                append_event(
+                    tx,
+                    events,
+                    Some(&d.project_id),
+                    kind,
+                    serde_json::to_value(&d)?,
+                )?;
+            }
+            Ok(d)
         })
     }
 
@@ -387,6 +450,19 @@ mod tests {
             DecisionState::Acted
         );
 
+        let changed = store
+            .change_rule(&rule.id, "switch after 7 days of agreement", "matt")
+            .unwrap();
+        assert_eq!(changed.text, "switch after 7 days of agreement");
+        assert_eq!(changed.changed_by.as_deref(), Some("matt"));
+        assert_eq!(changed.applied, 1);
+        // The same words again change nothing.
+        let seq = store.events_after(0, 1000).unwrap().len();
+        store
+            .change_rule(&rule.id, "switch after 7 days of agreement", "ann")
+            .unwrap();
+        assert_eq!(store.events_after(0, 1000).unwrap().len(), seq);
+
         let revoked = store.revoke_rule(&rule.id, "matt").unwrap();
         assert!(revoked.revoked_at.is_some());
         assert!(store.list_rules(Some(&p), false).unwrap().is_empty());
@@ -400,6 +476,30 @@ mod tests {
                 ..Default::default()
             }),
             Err(StoreError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.change_rule(&rule.id, "too late", "matt"),
+            Err(StoreError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn a_decision_records_its_bead_once() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store.apply_holds(&p, &[hold("a")], &now_rfc3339()).unwrap();
+        let d = &store.list_decisions(None).unwrap()[0];
+        assert_eq!(d.bead_id, None);
+        let seq = store.events_after(0, 1000).unwrap().len();
+        let with = store.set_decision_bead(&d.id, "qk-29").unwrap();
+        assert_eq!(with.bead_id.as_deref(), Some("qk-29"));
+        assert_eq!(store.get_decision(&d.id).unwrap(), with);
+        assert_eq!(store.events_after(0, 1000).unwrap().len(), seq + 1);
+        store.set_decision_bead(&d.id, "qk-29").unwrap();
+        assert_eq!(store.events_after(0, 1000).unwrap().len(), seq + 1);
+        assert!(matches!(
+            store.set_decision_bead("nope", "qk-1"),
+            Err(StoreError::NotFound)
         ));
     }
 }

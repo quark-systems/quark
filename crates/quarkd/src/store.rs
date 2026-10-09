@@ -1651,7 +1651,7 @@ macro_rules! decision_columns {
     () => {
         "id, project_id, task_id, question, state, answer, answered_by, opened_at, \
          answered_at, number, brief, answered_via, answer_why, outcome, acted_at, rule_id, \
-         made_rule_id"
+         made_rule_id, bead_id"
     };
 }
 
@@ -1687,6 +1687,7 @@ fn decision_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Decision> {
         acted_at: r.get(i + 14)?,
         rule_id: r.get(i + 15)?,
         made_rule_id: r.get(i + 16)?,
+        bead_id: r.get(i + 17)?,
     })
 }
 
@@ -1825,7 +1826,7 @@ fn insert_decision(tx: &Transaction, engine_id: &str, d: &mut Decision) -> Resul
     tx.execute(
         &format!(
             "INSERT INTO decisions (engine_id, {DECISION_COLUMNS})
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)"
         ),
         params![
             engine_id,
@@ -1845,7 +1846,8 @@ fn insert_decision(tx: &Transaction, engine_id: &str, d: &mut Decision) -> Resul
             d.outcome,
             d.acted_at,
             d.rule_id,
-            d.made_rule_id
+            d.made_rule_id,
+            d.bead_id
         ],
     )?;
     Ok(())

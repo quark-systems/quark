@@ -732,6 +732,36 @@ async fn decision_log_briefs_why_outcomes_and_rules() {
     assert_eq!(rules.as_array().unwrap().len(), 1);
     assert_eq!(rules[0]["applied"], 1);
     assert_eq!(rules[0]["kind"], "answer");
+
+    let (status, r) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/rules/{rule_id}:change"),
+        Some(json!({"text": "  Switch a slice once 7 days agree  ", "changed_by": "matt"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(r["text"], "Switch a slice once 7 days agree");
+    assert_eq!(r["changed_by"], "matt");
+    assert!(r["changed_at"].is_string());
+    assert_eq!(r["applied"], 1);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/rules/{rule_id}:change"),
+        Some(json!({"text": " "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/rules/merge-approval:{pid}:change"),
+        Some(json!({"text": "anything"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
     let (status, r) = call(&h.app, "POST", &format!("/v1/rules/{rule_id}:revoke"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(r["revoked_at"].is_string());
@@ -744,6 +774,14 @@ async fn decision_log_briefs_why_outcomes_and_rules() {
         "POST",
         &format!("/v1/rules/{rule_id}/decisions"),
         Some(json!({"question": "q", "answer": "a", "decided_by": "coordinator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/rules/{rule_id}:change"),
+        Some(json!({"text": "too late"})),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);

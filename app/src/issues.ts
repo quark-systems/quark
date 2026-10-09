@@ -12,6 +12,8 @@ export const CHIPS: { id: IssueChip; label: string }[] = [
 
 /** A decision waits on a person, not a worker, so it is never ready work. */
 export const isDecision = (i: { issue_type: string }) => i.issue_type === "decision";
+/** A gate holds a decision until a person answers it; it is never work either. */
+export const isGate = (i: { issue_type: string }) => i.issue_type === "gate";
 
 /** Whether `i` belongs under a chip. Closed issues are only under Closed. */
 export function inChip(i: Issue, chip: IssueChip): boolean {
@@ -19,7 +21,7 @@ export function inChip(i: Issue, chip: IssueChip): boolean {
   if (i.status === "closed") return false;
   if (chip === "in_progress") return i.status === "in_progress";
   if (chip === "blocked") return i.blocked;
-  return i.ready && i.status !== "in_progress" && !isDecision(i);
+  return i.ready && i.status !== "in_progress" && !isDecision(i) && !isGate(i);
 }
 
 /** Highest priority first, then the lower issue number, so the list reads like `bd ready`. */
