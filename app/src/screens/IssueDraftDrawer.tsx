@@ -4,7 +4,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, BeadsStatus, DraftIssue, Issue, IssueDraft } from "../api";
 import { loadIssueDrafts, upsertIssueDraft, useStore } from "../store";
-import { draftBlockers, openDraft, parseLabels } from "../issues";
+import { draftBlockers, openDraft, parseLabels, pushedTo } from "../issues";
 import { errText } from "../util";
 
 export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated }: {
@@ -82,7 +82,7 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
   let latest = -1;
   messages.forEach((m, n) => { if (m.role === "coordinator") latest = n; });
   const group = shown.length > 0 && (
-    <DraftGroup key="drafts" drafts={shown} mirrors={!!beads.github_repo} related={draft?.related ?? []} titles={titles} onEdit={edit} />
+    <DraftGroup key="drafts" drafts={shown} beads={beads} related={draft?.related ?? []} titles={titles} onEdit={edit} />
   );
   const n = shown.length;
   const waiting = !!draft?.waiting || (busy && !draft);
@@ -138,8 +138,8 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
 }
 
 /** The drafts as one bordered group, each editable in place, with what was judged related but kept apart. */
-function DraftGroup({ drafts, mirrors, related, titles, onEdit }: {
-  drafts: DraftIssue[]; mirrors: boolean; related: string[]; titles: Record<string, string>;
+function DraftGroup({ drafts, beads, related, titles, onEdit }: {
+  drafts: DraftIssue[]; beads: BeadsStatus; related: string[]; titles: Record<string, string>;
   onEdit: (key: string, patch: Partial<DraftIssue>) => void;
 }) {
   return (
@@ -147,6 +147,7 @@ function DraftGroup({ drafts, mirrors, related, titles, onEdit }: {
       <div className="draft-group">
         {drafts.map((d) => {
           const blockers = draftBlockers(d, drafts);
+          const pushed = pushedTo(beads, d.labels);
           return (
             <div key={d.key} className="draft-card" data-testid="draft-issue">
               <div className="draft-facts">
@@ -159,7 +160,7 @@ function DraftGroup({ drafts, mirrors, related, titles, onEdit }: {
                     {[0, 1, 2, 3, 4].map((p) => <option key={p} value={p}>P{p}</option>)}
                   </select>
                 </span>
-                {blockers.length ? <span className="violet">blocked by {blockers.join(", ")}</span> : mirrors && <span>mirrors to GitHub</span>}
+                {blockers.length ? <span className="violet">blocked by {blockers.join(", ")}</span> : pushed.length > 0 && <span>syncs to {pushed.join(", ")}</span>}
                 <Editable value={d.labels.join(", ")} label={`Labels of new ${d.key}`} placeholder="add labels"
                   className="draft-labels" onChange={(v) => onEdit(d.key, { labels: parseLabels(v) })} />
               </div>

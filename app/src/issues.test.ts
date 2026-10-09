@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { BeadsStatus, DraftIssue, Issue, IssueDraft } from "./api";
+import type { BeadsStatus, DraftIssue, Issue, IssueDraft, SyncRule } from "./api";
 import {
-  beadsWhere, chipCounts, chipList, draftBlockers, githubNumber, issueMeta, openDraft, parseLabels, refState, scopeChoices, startWorkerMessage,
+  beadsWhere, chipCounts, chipList, defaultLabel, draftBlockers, githubNumber, githubRepo, pushedTo, issueMeta, openDraft, parseLabels, refState, scopeChoices, startWorkerMessage,
 } from "./issues";
 
 const issue = (id: string, over: Partial<Issue> = {}): Issue => ({
@@ -82,14 +82,31 @@ describe("drafts", () => {
 });
 
 describe("where memory and issues live", () => {
-  const ready: BeadsStatus = { project_id: "p1", state: "ready", github_repo: "quark-systems/quark", dir: "/x" };
-  it("says where the Beads database is and whether it mirrors GitHub", () => {
-    expect(beadsWhere(ready)).toBe("Beads in quark-systems/quark · mirrored both ways with GitHub Issues");
-    expect(beadsWhere({ ...ready, github_repo: null })).toBe("Beads in /x");
+  const rule = (repository: string, extra: Partial<SyncRule> = {}): SyncRule =>
+    ({ id: repository, tracker: "github", repository, direction: "both", label: defaultLabel(repository), enabled: true, ...extra });
+  const ready: BeadsStatus = { project_id: "p1", state: "ready", dir: "/x", sync_rules: [] };
+  it("says the database is the project's and which trackers its rules sync with", () => {
+    expect(beadsWhere(ready)).toBe("Beads for this project · not synced with any tracker");
+    const two = { ...ready, sync_rules: [rule("o/a"), rule("o/b"), rule("o/c", { enabled: false })] };
+    expect(beadsWhere(two)).toBe("Beads for this project · synced with o/a and o/b");
+    expect(beadsWhere({ ...ready, sync_rules: [rule("o/a"), rule("o/b"), rule("o/c")] })).toBe("Beads for this project · synced with 3 trackers");
+  });
+  it("pushes a new issue only through a rule whose label it carries", () => {
+    const b = { ...ready, sync_rules: [rule("o/web"), rule("o/api", { direction: "pull" }), rule("o/off", { enabled: false })] };
+    expect(pushedTo(b, ["repo:web", "bug"])).toEqual(["o/web"]);
+    expect(pushedTo(b, ["repo:api"])).toEqual([]);
+    expect(pushedTo(b, ["repo:off"])).toEqual([]);
+    expect(pushedTo(ready, ["repo:web"])).toEqual([]);
+  });
+  it("suggests rules from GitHub clone URLs", () => {
+    expect(githubRepo("git@github.com:quark-systems/quark.git")).toBe("quark-systems/quark");
+    expect(githubRepo("https://github.com/o/r")).toBe("o/r");
+    expect(githubRepo("https://gitlab.com/o/r")).toBeNull();
+    expect(defaultLabel("o/web")).toBe("repo:web");
   });
   it("offers the Project's Beads, or memory/ without it", () => {
     expect(scopeChoices(ready).map((s) => `${s.scope}: ${s.hint}`)).toEqual([
-      "project: Beads in quark-systems/quark", "user: your own memory", "repo: opens a PR to AGENTS.md",
+      "project: this project's Beads", "user: your own memory", "repo: opens a PR to AGENTS.md",
     ]);
     expect(scopeChoices({ ...ready, state: "missing" })[0].hint).toBe("memory/ in the Project repo");
     expect(scopeChoices(undefined)[0].hint).toBe("memory/ in the Project repo");

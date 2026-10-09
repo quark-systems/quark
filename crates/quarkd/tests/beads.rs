@@ -69,6 +69,11 @@ fn installed() -> bool {
 }
 
 fn harness() -> Harness {
+    harness_with(true)
+}
+
+/// With `auto_setup` off, a new Project has no database until `:setup`.
+fn harness_with(auto_setup: bool) -> Harness {
     let store = Arc::new(Store::open_in_memory().unwrap());
     let engine = Arc::new(StubEngine::new());
     let chat = Arc::new(RecordingInput::new());
@@ -93,10 +98,14 @@ fn harness() -> Harness {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         triggers: None,
-        beads: Arc::new(Beads::new(
-            Some(bd().into()),
-            "http://127.0.0.1:7380".into(),
-        )),
+        beads: Arc::new({
+            let b = Beads::new(Some(bd().into()), "http://127.0.0.1:7380".into());
+            if auto_setup {
+                b.with_auto_setup()
+            } else {
+                b
+            }
+        }),
     };
     Harness {
         home,
@@ -153,17 +162,8 @@ async fn ready_project(h: &Harness) -> String {
     panic!("Project {id} still provisioning");
 }
 
-/// Sets up the Project's database and waits for it.
+/// Waits for the database the Project got when it was created.
 async fn set_up(h: &Harness, pid: &str) -> Value {
-    let (status, s) = call(
-        &h.app,
-        "POST",
-        &format!("/v1/projects/{pid}/beads:setup"),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{s}");
-    assert_eq!(s["state"], "setting_up");
     for _ in 0..600 {
         let (_, s) = call(&h.app, "GET", &format!("/v1/projects/{pid}/beads"), None).await;
         match s["state"].as_str() {
@@ -177,7 +177,7 @@ async fn set_up(h: &Harness, pid: &str) -> Value {
 
 #[tokio::test]
 async fn drafts_need_a_project_and_a_database() {
-    let h = harness();
+    let h = harness_with(false);
     let (status, _) = call(&h.app, "GET", "/v1/projects/nope/beads", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let pid = ready_project(&h).await;
@@ -255,7 +255,57 @@ async fn the_coordinator_drafts_and_accepting_creates_the_beads() {
     let pid = ready_project(&h).await;
     let s = set_up(&h, &pid).await;
     assert_eq!(s["prefix"], "quark");
-    assert_eq!(s["github_repo"], "quark-systems/quark");
+    let dir = h.home.path().join("beads").join(&pid).join(".beads");
+    assert_eq!(s["dir"], dir.parent().unwrap().display().to_string());
+    // The coordinator, and through it every worker, finds the database
+    // through BEADS_DIR rather than a `.beads` in some repo.
+    let env = h
+        .engine
+        .writes()
+        .into_iter()
+        .find_map(|w| match w {
+            StubWrite::StartCoordinator { account_env, .. } => Some(account_env),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        env.contains(&("BEADS_DIR".into(), dir.display().to_string())),
+        "{env:?}"
+    );
+
+    // Nothing syncs with a tracker until a rule says so.
+    assert_eq!(s["sync_rules"], json!([]));
+    let sync = format!("/v1/projects/{pid}/beads:sync");
+    let (status, e) = call(&h.app, "POST", &sync, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{e}");
+    let rules = format!("/v1/projects/{pid}/beads/sync-rules");
+    let (status, e) = call(
+        &h.app,
+        "PUT",
+        &rules,
+        Some(json!({"rules": [{"repository": "not a repo", "direction": "both"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{e}");
+    let (status, r) = call(
+        &h.app,
+        "PUT",
+        &rules,
+        Some(json!({"rules": [
+            {"repository": "quark-systems/quark", "direction": "both"},
+            {"repository": "quark-systems/web", "direction": "pull", "enabled": false}
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r["sync_rules"][0]["label"], "repo:quark");
+    assert_eq!(r["sync_rules"][0]["tracker"], "github");
+    assert_eq!(r["sync_rules"][1]["enabled"], false);
+    let (_, again) = call(&h.app, "GET", &format!("/v1/projects/{pid}/beads"), None).await;
+    assert_eq!(again["sync_rules"], r["sync_rules"]);
+    let (status, off) = call(&h.app, "PUT", &rules, Some(json!({"rules": []}))).await;
+    assert_eq!(status, StatusCode::OK, "{off}");
+    assert_eq!(off["sync_rules"], json!([]));
 
     let uri = format!("/v1/projects/{pid}/issue-drafts");
     let (status, d) = call(

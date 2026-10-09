@@ -22,14 +22,83 @@ pub enum BeadsState {
     Unavailable,
 }
 
-/// The last two-way sync with GitHub Issues.
+/// The outcome of one sync run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct GithubSync {
+pub struct TrackerSync {
     /// When it finished (RFC 3339 UTC).
     pub at: String,
     pub ok: bool,
     /// What happened, or why it failed.
     pub message: String,
+}
+
+/// An issue tracker a sync rule can mirror. Beads also speaks Jira, Linear
+/// and GitLab; Quark syncs GitHub Issues so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncTracker {
+    Github,
+}
+
+/// Which way a sync rule carries issues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncDirection {
+    /// Bring the tracker's issues into Beads.
+    Pull,
+    /// Send this rule's issues to the tracker.
+    Push,
+    Both,
+}
+
+/// One explicit link between the Project's Beads database and an issue
+/// tracker. A Project has none until someone adds one, so nothing leaves
+/// Beads by default.
+///
+/// A rule only touches its own issues: a pull brings in the tracker's
+/// issues, and a push sends the issues that came from that tracker plus
+/// the new ones carrying the rule's `label`. Decisions never sync.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SyncRule {
+    pub id: String,
+    pub tracker: SyncTracker,
+    /// The tracker's project, as `owner/repo` for GitHub.
+    pub repository: String,
+    pub direction: SyncDirection,
+    /// Issues made in Beads with this label are pushed by this rule.
+    pub label: String,
+    /// A paused rule is kept but does not run.
+    pub enabled: bool,
+    #[serde(default)]
+    pub last_sync: Option<TrackerSync>,
+}
+
+/// A sync rule as written by `PUT .../beads/sync-rules`; an omitted id makes
+/// a new rule, and an omitted label is `repo:<repo name>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct WriteSyncRule {
+    pub id: Option<String>,
+    #[serde(default = "github")]
+    pub tracker: SyncTracker,
+    pub repository: String,
+    pub direction: SyncDirection,
+    pub label: Option<String>,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn github() -> SyncTracker {
+    SyncTracker::Github
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Body of `PUT /v1/projects/{id}/beads/sync-rules`: the whole rule list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct WriteSyncRules {
+    pub rules: Vec<WriteSyncRule>,
 }
 
 /// A Project's Beads database. Also the payload of `beads.status` events.
@@ -39,15 +108,16 @@ pub struct BeadsStatus {
     pub state: BeadsState,
     /// Why it is unavailable or failed, or what setup is doing now.
     pub detail: Option<String>,
-    /// The directory holding the database's `.beads`.
+    /// The directory holding the database's `.beads`; agents get it as
+    /// `BEADS_DIR`.
     pub dir: Option<String>,
     /// Issue id prefix, as in `qk-44`.
     pub prefix: Option<String>,
-    /// The Dolt remote the database syncs with, when it has one.
-    pub remote: Option<String>,
-    /// `owner/repo` mirrored both ways with GitHub Issues.
-    pub github_repo: Option<String>,
-    pub last_sync: Option<GithubSync>,
+    /// Trackers the database syncs with; none by default.
+    #[serde(default)]
+    pub sync_rules: Vec<SyncRule>,
+    /// The latest sync run, over every rule.
+    pub last_sync: Option<TrackerSync>,
 }
 
 /// An issue linked to another, with enough to label the link.

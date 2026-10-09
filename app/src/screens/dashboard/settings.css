@@ -17,3 +17,10 @@
 .set-gate ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .set-error { color: var(--red); font-size: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
 .settings > .set-error { margin: 14px 18px 0; }
+.sync-rules { width: 100%; display: flex; flex-direction: column; gap: 10px; }
+.sync-rule { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.sync-rule-fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+@media (max-width: 640px) { .sync-rule-fields { grid-template-columns: minmax(0, 1fr); } }
+.sync-on { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.sync-on input { accent-color: var(--accent); }
+.sync-rules .bad { color: var(--red); }

@@ -288,7 +288,8 @@ impl Provisioner {
             .lease(&Holder::Coordinator(project.id.clone()), &agent)
             .await
             .map_err(|e| format!("Choosing the coordinator's account: {e}"))?;
-        let account_env = lease.map(|l| l.env).unwrap_or_default();
+        let mut account_env = lease.map(|l| l.env).unwrap_or_default();
+        account_env.push(crate::beads::agent_env(&self.layout.home, &project.id));
         self.step(
             "Starting the coordinator",
             "start_coordinator",

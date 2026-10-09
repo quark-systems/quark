@@ -10,7 +10,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
     AcceptIssueDraft, BeadsMemory, BeadsState, BeadsStatus, DraftMessage, DraftRole, DraftText,
-    ErrorBody, Issue, IssueDetail, IssueDraft, IssueDraftState, WriteIssueDraft,
+    ErrorBody, Issue, IssueDetail, IssueDraft, IssueDraftState, SyncDirection, SyncRule,
+    WriteIssueDraft, WriteSyncRules,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -63,9 +64,9 @@ pub async fn get_beads(
 
 /// Create the Project's Beads database in server mode.
 ///
-/// When the Project's first repo tracks a `.beads` that syncs to a Dolt
-/// remote, the database is cloned from it, so existing issues carry over.
-/// Returns at once with `setting_up`; progress and the outcome arrive as
+/// Projects get one when they are created and at daemon start, so this
+/// retries a failed or unavailable setup. The database lives under Quark's
+/// home, outside every repo. Returns at once with `setting_up`; progress and the outcome arrive as
 /// `beads.status` events. A Project that already has one gets its status.
 #[utoipa::path(
     post,
@@ -87,11 +88,12 @@ pub async fn setup_beads(
     ))
 }
 
-/// Sync the Project's beads with GitHub Issues now, both ways.
+/// Run the Project's enabled sync rules now.
 ///
-/// Pulls every issue, then pushes every bead except decision beads. Uses
-/// `GITHUB_TOKEN`, else the token `gh` is signed in with. The outcome is
-/// kept as `last_sync`, failed or not.
+/// Each rule pulls its tracker's issues, pushes its own issues, or both;
+/// decisions never leave Beads. Uses `GITHUB_TOKEN`, else the token `gh` is
+/// signed in with. Each rule's outcome is kept on the rule, and the run's
+/// as `last_sync`, failed or not.
 #[utoipa::path(
     post,
     path = "/v1/projects/{id}/beads:sync",
@@ -99,7 +101,7 @@ pub async fn setup_beads(
     params(("id" = String, Path, description = "Project id")),
     responses(
         (status = 200, body = BeadsStatus, description = "Synced, or `last_sync` says why not"),
-        (status = 400, body = ErrorBody, description = "The Project's first repo is not on GitHub"),
+        (status = 400, body = ErrorBody, description = "No sync rule is turned on"),
         (status = 404, body = ErrorBody),
         (status = 409, body = ErrorBody, description = "`no_beads`")
     )
@@ -113,6 +115,38 @@ pub async fn sync_beads(
         state
             .beads
             .sync(&state.store, &state.layout.home, &id)
+            .await?,
+    ))
+}
+
+/// Replace the Project's sync rules: which trackers its Beads database
+/// syncs with, which way, and which issues each one carries.
+///
+/// An empty list turns sync off, as it is for a new Project. Answers with
+/// the database's status, rules included, and sends it as `beads.status`.
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{id}/beads/sync-rules",
+    tag = "beads",
+    params(("id" = String, Path, description = "Project id")),
+    request_body = WriteSyncRules,
+    responses(
+        (status = 200, body = BeadsStatus),
+        (status = 400, body = ErrorBody, description = "A rule is not valid"),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody, description = "`no_beads`")
+    )
+)]
+pub async fn put_sync_rules(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<WriteSyncRules>,
+) -> Result<Json<BeadsStatus>, ApiError> {
+    project(&state, &id).await?;
+    Ok(Json(
+        state
+            .beads
+            .set_sync_rules(&state.store, &state.layout.home, &id, body.rules)
             .await?,
     ))
 }
@@ -313,7 +347,7 @@ pub async fn start_draft(
         let (id, text) = (id.clone(), text.clone());
         db(&state, move |s| s.create_issue_draft(&id, &text)).await?
     };
-    let ask = first_ask(state.beads.api_base(), &draft.id, &text);
+    let ask = first_ask(state.beads.api_base(), &draft.id, &text) + &sync_hint(&state, &id).await;
     Ok(Json(send(&state, &p, draft, ask).await?))
 }
 
@@ -355,7 +389,8 @@ pub async fn refine_draft(
     };
     let p = project(&state, &draft.project_id).await?;
     let current = serde_json::to_string(&draft.issues).unwrap_or_default();
-    let ask = refine_ask(state.beads.api_base(), &draft.id, &text, &current);
+    let ask = refine_ask(state.beads.api_base(), &draft.id, &text, &current)
+        + &sync_hint(&state, &draft.project_id).await;
     Ok(Json(send(&state, &p, draft, ask).await?))
 }
 
@@ -415,6 +450,33 @@ Check the open beads first (`bd list`, `bd search`) so you neither duplicate one
 Split the work where it is really separate pieces. `blocked_by` names another draft's key or an existing issue id; \
 `related` lists existing issue ids that are related but separate. Priority is 0 (highest) to 4. \
 Send the whole set each time; it replaces the previous drafts.";
+
+/// How the coordinator gets a draft synced: the label of each rule that
+/// pushes. Empty when nothing pushes.
+async fn sync_hint(state: &AppState, project_id: &str) -> String {
+    let rules = state
+        .beads
+        .status(&state.layout.home, project_id)
+        .await
+        .sync_rules;
+    labels_hint(&rules)
+}
+
+fn labels_hint(rules: &[SyncRule]) -> String {
+    let pushes: Vec<String> = rules
+        .iter()
+        .filter(|r| r.enabled && r.direction != SyncDirection::Pull)
+        .map(|r| format!("`{}` for {}", r.label, r.repository))
+        .collect();
+    if pushes.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nAn issue syncs to an issue tracker only with that tracker's label: {}. \
+         Add it to an issue that belongs in that repository; leave it off to keep the issue in Quark.",
+        pushes.join(", ")
+    )
+}
 
 fn first_ask(base: &str, draft_id: &str, text: &str) -> String {
     format!(
@@ -634,6 +696,7 @@ pub(super) async fn ready(state: &AppState, project_id: &str) -> bool {
         get_beads,
         setup_beads,
         sync_beads,
+        put_sync_rules,
         list_issues,
         get_issue,
         list_memories,
@@ -656,11 +719,12 @@ pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.
 pub(super) fn router() -> axum::Router<AppState> {
-    use axum::routing::{delete, get, post};
+    use axum::routing::{delete, get, post, put};
     axum::Router::new()
         .route("/v1/projects/{id}/beads", get(get_beads))
         .route("/v1/projects/{id}/beads:setup", post(setup_beads))
         .route("/v1/projects/{id}/beads:sync", post(sync_beads))
+        .route("/v1/projects/{id}/beads/sync-rules", put(put_sync_rules))
         .route("/v1/projects/{id}/issues", get(list_issues))
         .route("/v1/projects/{id}/issues/{issue_id}", get(get_issue))
         .route("/v1/projects/{id}/beads/memories", get(list_memories))
@@ -690,5 +754,26 @@ mod tests {
         assert!(a.contains("Do not create any beads yourself"));
         let r = refine_ask("http://h", "draft_1", "make it P0", "[]");
         assert!(r.contains("make it P0") && r.contains("The drafts are now: []"));
+    }
+
+    #[test]
+    fn the_coordinator_learns_the_labels_that_sync() {
+        let rule = |repository: &str, direction, enabled| SyncRule {
+            id: repository.into(),
+            tracker: quark_systems::SyncTracker::Github,
+            repository: repository.into(),
+            direction,
+            label: format!("repo:{}", repository.split('/').nth(1).unwrap()),
+            enabled,
+            last_sync: None,
+        };
+        assert_eq!(labels_hint(&[]), "");
+        let hint = labels_hint(&[
+            rule("o/web", SyncDirection::Both, true),
+            rule("o/api", SyncDirection::Pull, true),
+            rule("o/old", SyncDirection::Push, false),
+        ]);
+        assert!(hint.contains("`repo:web` for o/web"), "{hint}");
+        assert!(!hint.contains("o/api") && !hint.contains("o/old"), "{hint}");
     }
 }

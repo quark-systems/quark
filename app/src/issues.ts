@@ -1,5 +1,5 @@
 // Filtering and labels for the Issues tab and the New issue side chat, kept pure so they are easy to test.
-import type { BeadsStatus, DraftIssue, Issue, IssueDraft, IssueRef, MemoryScope } from "./api";
+import type { BeadsStatus, DraftIssue, Issue, IssueDraft, IssueRef, MemoryScope, SyncRule } from "./api";
 
 /** The Issues tab's filter chips, in order. */
 export type IssueChip = "ready" | "in_progress" | "blocked" | "closed";
@@ -87,17 +87,40 @@ export function parseLabels(s: string): string[] {
   return [...new Set(s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean))];
 }
 
-/** "Beads in owner/repo · mirrored both ways with GitHub Issues", without the sync time. */
+/** The rules that run, in the order they were written. */
+export function activeRules(b: BeadsStatus | undefined): SyncRule[] {
+  return (b?.sync_rules ?? []).filter((r) => r.enabled);
+}
+
+/** "Beads for this project · synced with o/a and o/b", without the sync time. */
 export function beadsWhere(b: BeadsStatus): string {
-  const where = b.github_repo ?? b.dir ?? "this Project";
-  return `Beads in ${where}` + (b.github_repo ? " · mirrored both ways with GitHub Issues" : "");
+  const on = activeRules(b).map((r) => r.repository);
+  const synced = on.length === 0 ? "not synced with any tracker"
+    : on.length <= 2 ? `synced with ${on.join(" and ")}` : `synced with ${on.length} trackers`;
+  return `Beads for this project · ${synced}`;
+}
+
+/** Whether a new issue labelled `labels` would be pushed by some rule. */
+export function pushedTo(b: BeadsStatus | undefined, labels: string[]): string[] {
+  return activeRules(b).filter((r) => r.direction !== "pull" && labels.includes(r.label)).map((r) => r.repository);
+}
+
+/** `owner/repo` of a github.com clone URL, for suggesting a sync rule. */
+export function githubRepo(url: string): string | null {
+  const m = /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https?:\/\/github\.com\/)([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+/** The label a rule uses when none is given. */
+export function defaultLabel(repository: string): string {
+  return `repo:${repository.split("/")[1] ?? repository}`;
 }
 
 /** The Memory screen's "Who should know" choices, with where each one keeps the learning. */
 export function scopeChoices(beads: BeadsStatus | undefined): { scope: MemoryScope; label: string; hint: string }[] {
   const ready = beads?.state === "ready";
   return [
-    { scope: "project", label: "This project", hint: ready ? `Beads in ${beads?.github_repo ?? beads?.dir ?? "the Project repo"}` : "memory/ in the Project repo" },
+    { scope: "project", label: "This project", hint: ready ? "this project's Beads" : "memory/ in the Project repo" },
     { scope: "user", label: "All my projects", hint: "your own memory" },
     { scope: "repo", label: "Anyone who works in this repo", hint: "opens a PR to AGENTS.md" },
   ];

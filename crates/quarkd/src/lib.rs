@@ -200,6 +200,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                 accounts.clone(),
                 sessions.clone(),
                 layout.command_workspace(),
+                layout.home.clone(),
             )
             .run(recovery::INTERVAL),
         )
@@ -332,11 +333,18 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         )
     });
 
-    let beads = Arc::new(beads::Beads::new(
-        std::env::var_os("QUARK_BD").map(Into::into),
-        format!("http://{}", config.listen),
-    ));
+    let beads = Arc::new(
+        beads::Beads::new(
+            std::env::var_os("QUARK_BD").map(Into::into),
+            format!("http://{}", config.listen),
+        )
+        .with_auto_setup(),
+    );
     beads.watch_all(store.clone(), layout.home.clone());
+    tokio::spawn({
+        let (beads, store, home) = (beads.clone(), store.clone(), layout.home.clone());
+        async move { beads.setup_missing(store, home).await }
+    });
 
     let state = AppState {
         store,

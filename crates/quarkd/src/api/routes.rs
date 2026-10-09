@@ -59,7 +59,8 @@ pub async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Pro
 /// With `repos`, returns at once with status `provisioning` and provisions in
 /// the background: clones the repos into a new Project workspace, writes the
 /// Project repo and starts the coordinator. `project.updated` events report
-/// each step and the final `ready` or `failed` status.
+/// each step and the final `ready` or `failed` status. The Project's Beads
+/// database is set up beside it; `beads.status` events report that.
 #[utoipa::path(
     post,
     path = "/v1/projects",
@@ -100,6 +101,17 @@ pub async fn create_project(
     let project = db(&state, move |s| s.create_project(input)).await?;
     if project.status == ProjectStatus::Provisioning {
         start_provisioning(&state, &project.id);
+    }
+    // Every Project has its Beads database from the start.
+    if state.beads.auto_setup() {
+        state
+            .beads
+            .start_setup(
+                state.store.clone(),
+                state.layout.home.clone(),
+                project.clone(),
+            )
+            .await;
     }
     Ok((StatusCode::CREATED, Json(project)))
 }

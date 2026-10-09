@@ -108,8 +108,8 @@ describe("memory proposals", () => {
 describe("beads", () => {
   it("keeps each Project's Beads status and counts its changes", () => {
     let s = applyEvent(initialState, ev(1, "beads.status", { project_id: "p1", state: "setting_up", detail: "Creating the database" }));
-    s = applyEvent(s, ev(2, "beads.status", { project_id: "p1", state: "ready", github_repo: "o/r" }));
-    expect(s.beads.p1).toMatchObject({ state: "ready", github_repo: "o/r" });
+    s = applyEvent(s, ev(2, "beads.status", { project_id: "p1", state: "ready", sync_rules: [] }));
+    expect(s.beads.p1).toMatchObject({ state: "ready", sync_rules: [] });
     s = applyEvent(s, ev(3, "beads.changed", { project_id: "p1", issue_id: "qk-1", op: "update" }));
     s = applyEvent(s, ev(4, "beads.changed", { project_id: "p1", op: "sync" }));
     expect(s.beadsActivity.p1).toBe(2);

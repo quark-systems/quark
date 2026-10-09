@@ -573,15 +573,14 @@ const issueDrafts = new Map(); // draft id -> IssueDraft
 
 function beadsOf(pid) {
   if (!beadsStatus.has(pid)) {
-    beadsStatus.set(pid, { project_id: pid, state: "missing", detail: null, dir: null, prefix: null, remote: null, github_repo: null, last_sync: null });
+    beadsStatus.set(pid, { project_id: pid, state: "missing", detail: null, dir: null, prefix: null, sync_rules: [], last_sync: null });
   }
   return beadsStatus.get(pid);
 }
 const issuesOf = (pid) => beadsIssues.get(pid) ?? new Map();
-const ghRepo = (proj) => {
-  const m = /github\.com[/:]([^/]+\/[^/.]+)/.exec(proj.repos[0]?.url ?? "");
-  return m ? m[1] : null;
-};
+/** The repository a new issue with `labels` is pushed to: the first enabled pushing rule whose label it carries. */
+const pushRepo = (pid, labels) =>
+  beadsOf(pid).sync_rules.find((r) => r.enabled && r.direction !== "pull" && labels.includes(r.label))?.repository ?? null;
 
 function addIssue(pid, i) {
   if (!beadsIssues.has(pid)) beadsIssues.set(pid, new Map());
@@ -617,9 +616,11 @@ function nextIssueId(pid) {
 }
 const beadsChanged = (pid, op, issue_id = null) => emit("beads.changed", { project_id: pid, issue_id, op }, pid);
 
+// Every Project gets its database when it is created, under the daemon's home and outside its
+// repos, with no sync rules.
 function setupBeads(proj) {
   const b = beadsOf(proj.id);
-  const steps = ["Installing the Dolt server", "Creating the database", "Importing GitHub Issues"];
+  const steps = ["Creating the database", "Turning on the events journal"];
   Object.assign(b, { state: "setting_up", detail: steps[0] });
   emit("beads.status", { ...b }, proj.id);
   steps.slice(1).forEach((detail, i) => setTimeout(() => {
@@ -627,11 +628,9 @@ function setupBeads(proj) {
     emit("beads.status", { ...b }, proj.id);
   }, (QUIET ? 60 : 900) * (i + 1)));
   setTimeout(() => {
-    const repo = ghRepo(proj);
     Object.assign(b, {
-      state: "ready", detail: null, dir: `/home/mock/.quark/projects/${proj.id}/projects/${proj.repos[0]?.name ?? proj.id}`,
-      prefix: (proj.repos[0]?.name ?? proj.id).slice(0, 2), remote: proj.repos[0]?.url ?? null, github_repo: repo,
-      last_sync: repo ? { at: now(), ok: true, pulled: 0, pushed: 0, message: "nothing to sync" } : null,
+      state: "ready", detail: null, dir: `/home/mock/.quark/beads/${proj.id}`,
+      prefix: proj.name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || "bd", sync_rules: [], last_sync: null,
     });
     emit("beads.status", { ...b }, proj.id);
   }, (QUIET ? 60 : 900) * steps.length);
@@ -651,7 +650,15 @@ function relatedTo(pid, text) {
   return [...issuesOf(pid).values()].filter((i) => i.status !== "closed" && i.issue_type !== "decision" && [...wordsOf(i.title)].some((w) => said.has(w)))
     .slice(0, 2).map((i) => i.id);
 }
+// Like the real coordinator, which the ask tells which labels sync, the mock labels every draft
+// for the Project's first pushing rule.
 function firstDrafts(pid, text) {
+  const synced = beadsOf(pid).sync_rules.find((r) => r.enabled && r.direction !== "pull")?.label;
+  const drafted = draftsFor(pid, text);
+  if (synced) for (const d of drafted.issues) d.labels = [synced];
+  return drafted;
+}
+function draftsFor(pid, text) {
   // The demo's own example reads as the mock design drew it.
   if (/\bred\b/i.test(text) && /phone/i.test(text)) {
     return {
@@ -731,14 +738,14 @@ function acceptDraft(draft, b) {
   const list = Array.isArray(b.issues) && b.issues.length ? b.issues : draft.issues;
   const created = {};
   for (const d of list) created[d.key] = addIssue(pid, { id: nextIssueId(pid), title: d.title }).id;
-  const repo = beadsOf(pid).github_repo;
   let gh = 70 + issuesOf(pid).size;
   for (const d of list) {
     const i = issuesOf(pid).get(created[d.key]);
     Object.assign(i, {
       description: d.description, priority: d.priority, issue_type: d.issue_type, labels: [...d.labels], created_by: "coordinator",
       blocked_by: d.blocked_by.map((x) => created[x] ?? x),
-      related: draft.related.map((id) => ({ id, kind: "relates-to" })), external_ref: repo ? `https://github.com/${repo}/issues/${gh++}` : null,
+      related: draft.related.map((id) => ({ id, kind: "relates-to" })),
+      external_ref: pushRepo(pid, d.labels) ? `https://github.com/${pushRepo(pid, d.labels)}/issues/${gh++}` : null,
       comments: [{ author: "coordinator", text: "Drafted in the New issue chat.", created_at: now() }],
     });
   }
@@ -997,12 +1004,17 @@ function seed() {
     text: "The design tokens live in tokens.css; components never use raw hex.", source: "worker", date: minutesAgo(9000), accepted_at: minutesAgo(8900),
     accepted_by: "matt", evidence: { task_id: null, task_title: "Move buttons to the new tokens", pull_request_url: null, files: ["src/styles/tokens.css"] },
   });
-  beadsOf(site.id);
+  // The website project runs on a machine without bd, so its memory stays in the Project repo.
+  Object.assign(beadsOf(site.id), { state: "unavailable", detail: "bd is not installed (bd); install the latest bd from https://beads.gascity.com" });
 
   // Quark's Beads database (app/src/api/beads.ts), mirrored with GitHub Issues.
   Object.assign(beadsOf(quark.id), {
-    state: "ready", dir: "/home/mock/.quark/projects/quark/projects/quark", prefix: "qk", remote: "https://github.com/quark-systems/quark.git",
-    github_repo: "quark-systems/quark", last_sync: { at: minutesAgo(1), ok: true, pulled: 2, pushed: 1, message: "pulled 2, pushed 1" },
+    state: "ready", dir: "/home/mock/.quark/beads/quark", prefix: "qk",
+    sync_rules: [{
+      id: "sync_quark", tracker: "github", repository: "quark-systems/quark", direction: "both", label: "repo:quark", enabled: true,
+      last_sync: { at: minutesAgo(1), ok: true, message: "pulled 2, pushed 1" },
+    }],
+    last_sync: { at: minutesAgo(1), ok: true, message: "quark-systems/quark: pulled 2, pushed 1" },
   });
   const gh = (n) => `https://github.com/quark-systems/quark/issues/${n}`;
   const I = (id, title, extra = {}) => addIssue(quark.id, { id, title, external_ref: gh(Number(id.replace(/\D/g, "")) + 17), created_by: "coordinator", ...extra });
@@ -1213,6 +1225,7 @@ const server = http.createServer(async (req, res) => {
     if (b.repos?.length && !b.agent_config) return invalid(res, "agent_config is required with repos");
     const proj = addProject({ ...b, name: b.name.trim() });
     if (proj.repos.length) provision(proj);
+    setupBeads(proj);
     return send(res, 201, proj);
   }
   if ((r = m(/^\/v1\/projects\/([^/:]+)(:provision)?$/))) {
@@ -1524,12 +1537,37 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ...b });
     }
     if (r[2] === ":sync" && req.method === "POST") {
-      if (b.state !== "ready") return send(res, 409, { error: { code: "beads_not_ready", message: `Beads is ${b.state}` } });
-      if (!b.github_repo) return send(res, 409, { error: { code: "no_github_repo", message: "this database does not mirror a GitHub repository" } });
-      b.last_sync = { at: now(), ok: true, pulled: 0, pushed: 0, message: "nothing to sync" };
+      if (b.state !== "ready") return send(res, 409, { error: { code: "no_beads", message: `Beads is ${b.state}` } });
+      const on = b.sync_rules.filter((x) => x.enabled);
+      if (!on.length) return invalid(res, "no sync rule is turned on; add one in the Project's settings");
+      for (const x of on) x.last_sync = { at: now(), ok: true, message: "nothing to sync" };
+      b.last_sync = { at: now(), ok: true, message: on.map((x) => `${x.repository}: nothing to sync`).join("; ") };
       emit("beads.status", { ...b }, proj.id);
       return send(res, 200, b);
     }
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/beads\/sync-rules$/)) && req.method === "PUT") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const b = beadsOf(proj.id);
+    if (b.state !== "ready") return send(res, 409, { error: { code: "no_beads", message: `Beads is ${b.state}` } });
+    const body = await readJson(req);
+    const next = [];
+    for (const w of body?.rules ?? []) {
+      const repository = String(w.repository ?? "").trim().replace(/\.git$/, "");
+      if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) return invalid(res, `"${w.repository}" is not a GitHub repository as owner/repo`);
+      if (next.some((x) => x.repository.toLowerCase() === repository.toLowerCase())) return invalid(res, `${repository} has two rules; keep one`);
+      const kept = w.id ? b.sync_rules.find((x) => x.id === w.id) : null;
+      if (w.id && !kept) return invalid(res, `no sync rule ${w.id}`);
+      next.push({
+        id: kept?.id ?? `sync_${Math.random().toString(16).slice(2, 10)}`, tracker: "github", repository,
+        direction: w.direction ?? "both", label: (w.label ?? "").trim() || `repo:${repository.split("/")[1]}`,
+        enabled: w.enabled ?? true, last_sync: kept?.last_sync ?? null,
+      });
+    }
+    b.sync_rules = next;
+    emit("beads.status", { ...b }, proj.id);
+    return send(res, 200, b);
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/(issues|issues\/[^/]+|issue-drafts|beads\/memories|beads\/memories\/[^/]+)$/))) {
     const proj = projects.get(decodeURIComponent(r[1]));

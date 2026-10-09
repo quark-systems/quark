@@ -528,10 +528,14 @@ impl EngineAdapter for FirstmateEngine {
 /// reach the agent's pane yet.
 const FORWARDED_ACCOUNT_ENVS: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME"];
 
-/// Only a forwarded account variable, set to an absolute directory path,
-/// reaches an engine script.
+/// The Project's Beads database, which `fm-spawn.sh` carries onto every
+/// agent's launch whatever its harness.
+const BEADS_DIR: &str = "BEADS_DIR";
+
+/// Only a forwarded account variable or `BEADS_DIR`, set to an absolute
+/// directory path, reaches an engine script.
 fn check_account_env(key: &str, value: &str) -> Result<(), EngineError> {
-    if !FORWARDED_ACCOUNT_ENVS.contains(&key) {
+    if !FORWARDED_ACCOUNT_ENVS.contains(&key) && key != BEADS_DIR {
         return Err(EngineError::Invalid(format!(
             "the engine cannot launch an agent under {key}"
         )));

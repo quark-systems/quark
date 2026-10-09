@@ -1,6 +1,6 @@
 // Project dashboard, Settings tab: every per-Project switch in one place. Standing approval and
 // each source's holdout tests change here; delivery and the agent are shown as chosen at creation;
-// dispatch rules, pools and memory are summarized with a link to the screen that edits them.
+// issue sync rules are edited here; dispatch rules, pools and memory are summarized with a link to the screen that edits them.
 import React, { useEffect, useState } from "react";
 import { api, ApiError, NotAvailable, ProjectSettings, SourceVerification } from "../../api";
 import { href } from "../../nav";
@@ -9,6 +9,7 @@ import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import { StandingApproval } from "../../components/StandingApproval";
 import { PersonaPicker } from "../../components/PersonaPicker";
+import { IssueSync } from "./IssueSync";
 import "./settings.css";
 import "./overview.css";
 
@@ -102,6 +103,10 @@ export function Settings({ project: pid }: { project: string }) {
           <Section title="Automation" testId="settings-automation">
             <p className="faint">The coordinator's inbox, trigger rules, and what reaches you while you are away or quiet.</p>
             <a className="btn" href={href({ name: "automation", project: pid })} data-testid="settings-open-automation">Open automation</a>
+          </Section>
+
+          <Section title="Issue sync" testId="settings-issue-sync">
+            <IssueSync project={project} />
           </Section>
 
           <Section title="Memory" testId="settings-memory">
