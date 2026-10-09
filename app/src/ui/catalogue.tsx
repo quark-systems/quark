@@ -1,8 +1,8 @@
 // The component catalogue: one entry per shared part in `src/ui`, with when to use it, its
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
-import React from "react";
+import React, { useState } from "react";
 import type { Decision } from "../api";
-import { Button, CoordinatorMark, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -29,6 +29,14 @@ const SAMPLE: Decision = {
   answer: null, answered_by: null, answered_at: null, answered_via: null, answer_why: null,
   outcome: null, acted_at: null, rule_id: null, made_rule_id: null,
 };
+
+function OptionCardsExample() {
+  const [v, setV] = useState<"single" | "light">("single");
+  return <OptionCards name="cat-preset" value={v} onChange={setV} options={[
+    { value: "single", label: "Same for every worker", description: "Every worker runs the agent above." },
+    { value: "light", label: "Low effort for small edits", description: "Renames and typo fixes run at low effort." },
+  ]} />;
+}
 
 const TONES: Tone[] = ["busy", "needs-you", "ready", "failed", "parked", "idle"];
 
@@ -75,6 +83,104 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "An action. One primary per view; quiet for the least likely choice.",
     contract: "kind: primary | secondary | quiet; every other prop is a button's. Say what it does: 'Switch now', not 'OK'.",
     example: () => <div className="cat-inline"><Button kind="primary">Switch now</Button><Button>Wait a week</Button><Button kind="quiet">Open with evidence</Button></div>,
+  },
+  {
+    name: "ButtonLink",
+    when: "An action that navigates, such as Cancel back to a list. Looks exactly like Button.",
+    contract: "kind: primary | secondary | quiet; every other prop is an anchor's (href).",
+    example: () => <div className="cat-inline"><ButtonLink href="#/catalogue">Cancel</ButtonLink></div>,
+  },
+  {
+    name: "Form",
+    when: "Any form on a screen. Stacks its fields with the standard gap; screens set only width and padding.",
+    contract: "Every prop is a form's. Children are Fields, a Disclosure, a FormError and FormActions last.",
+    example: () => (
+      <Form onSubmit={(e) => e.preventDefault()}>
+        <Field label="Name"><TextInput placeholder="Parser rewrite" /></Field>
+        <FormActions><Button kind="quiet">Cancel</Button><Button kind="primary" type="submit">Create</Button></FormActions>
+      </Form>
+    ),
+  },
+  {
+    name: "FormActions",
+    when: "The row of buttons that ends a Form, right-aligned, primary last.",
+    contract: "children are Buttons.",
+    example: () => <FormActions><Button>Save draft</Button><Button kind="primary">Create project</Button></FormActions>,
+  },
+  {
+    name: "FormError",
+    when: "After submitting, when the whole request failed (the daemon refused it). Field problems go on the Field.",
+    contract: "children is the message; it is announced as an alert.",
+    example: () => <FormError>The daemon refused the project: a project with this name exists.</FormError>,
+  },
+  {
+    name: "Field",
+    when: "Every input on every form: a label, the control, then hints and errors. Never hand-roll a label.",
+    contract: "label; hint and error take one node or a list (falsy entries are skipped); group renders a fieldset for several controls or OptionCards, else the label wraps the one control.",
+    example: () => (
+      <div style={{ display: "grid", gap: 24 }}>
+        <Field label="Goal" hint="The coordinator plans against it."><TextArea rows={2} placeholder="What this Project should achieve." /></Field>
+        <Field label="Repository" error="“not a repo” is not owner/name, a clone URL or a local path."><TextInput mono invalid defaultValue="not a repo" /></Field>
+      </div>
+    ),
+  },
+  {
+    name: "FieldHint",
+    when: "A line of help under a control when Field's hint prop does not fit, e.g. inside a custom group.",
+    contract: "children is the text; wrap commands in span.mono.",
+    example: () => <FieldHint>Pi is not installed: <span className="mono">npm install -g pi</span></FieldHint>,
+  },
+  {
+    name: "FieldError",
+    when: "A problem with one field, said as what is wrong and what fits.",
+    contract: "children is the message.",
+    example: () => <FieldError>Codex is not signed in.</FieldError>,
+  },
+  {
+    name: "TextInput",
+    when: "One line of text. Use mono for paths, URLs, branch names and ids.",
+    contract: "Every prop is an input's; mono; invalid marks it red (and sets aria-invalid).",
+    example: () => <div style={{ display: "grid", gap: 8 }}><TextInput placeholder="Parser rewrite" /><TextInput mono placeholder="~/work/parser" /></div>,
+  },
+  {
+    name: "TextArea",
+    when: "A sentence or more of text: a goal, a note, an answer.",
+    contract: "Every prop is a textarea's; mono; invalid. Resizes vertically only.",
+    example: () => <TextArea rows={3} placeholder="What this Project should achieve, in a sentence or two." />,
+  },
+  {
+    name: "Select",
+    when: "Pick one of a list, or of more than four choices. Same height and border as TextInput.",
+    contract: "Every prop is a select's; children are options; invalid.",
+    example: () => <Select defaultValue="high" aria-label="Effort"><option value="">Default effort</option><option value="high">high</option></Select>,
+  },
+  {
+    name: "ControlRow",
+    when: "Several controls that make one setting, side by side: harness, model, effort.",
+    contract: "children share the row equally; put it in a Field with group.",
+    example: () => (
+      <ControlRow>
+        <Select aria-label="Harness"><option>Claude Code 2.1.0</option></Select>
+        <TextInput placeholder="Model (optional)" aria-label="Model" />
+        <Select aria-label="Effort"><option>Default effort</option></Select>
+      </ControlRow>
+    ),
+  },
+  {
+    name: "OptionCards",
+    when: "Pick one of two to four choices that each need a sentence to explain. More than four: Select.",
+    contract: "name, value, onChange, options of { value, label, description }. Radio buttons underneath, so arrow keys move between them.",
+    example: () => <OptionCardsExample />,
+  },
+  {
+    name: "Disclosure",
+    when: "Fields most people leave alone, folded under a summary such as Advanced.",
+    contract: "summary; children are Fields; defaultOpen.",
+    example: () => (
+      <Disclosure summary="Advanced" defaultOpen>
+        <Field label="Workspace path" hint="Leave empty to create a new workspace."><TextInput mono placeholder="~/work/parser" /></Field>
+      </Disclosure>
+    ),
   },
   {
     name: "CoordinatorMark",

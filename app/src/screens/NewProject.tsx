@@ -6,6 +6,7 @@ import { Account, api, DeliveryPolicy, DispatchPreset, HarnessInfo, NotAvailable
 import { poolsFor } from "../accounts";
 import { href } from "../nav";
 import { addProject } from "../store";
+import { Button, ButtonLink, ControlRow, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput } from "../ui";
 import { errText } from "../util";
 
 /** Used until `GET /v1/harnesses` is served. */
@@ -19,8 +20,8 @@ export const FALLBACK_HARNESSES: HarnessInfo[] = [
 }));
 
 export const PRESETS: { id: DispatchPreset; label: string; description: string }[] = [
-  { id: "single", label: "Single", description: "Every task uses the default agent." },
-  { id: "light_trivial", label: "Light for trivial work", description: "Trivial mechanical edits run at low effort; everything else uses the default agent." },
+  { id: "single", label: "Same for every worker", description: "Every worker runs the agent above, at the effort above." },
+  { id: "light_trivial", label: "Low effort for small edits", description: "Renames, typo fixes and one-line changes run at low effort, which is faster and cheaper. Everything else runs as above." },
 ];
 
 const REPO_RE = /^(https?:\/\/\S+|ssh:\/\/\S+|git@\S+:\S+|\/\S+|[\w.-]+\/[\w.-]+)$/;
@@ -115,115 +116,104 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
 
   const modelHint = current?.models.selection === "provider_qualified" ? "provider/model" : "Model (optional)";
 
+  const agentHints = [
+    pool && "Each task runs under one of the pool's accounts, the least busy when it starts.",
+    current?.models.discovery && `Models: ${current.models.discovery}`,
+    current?.models.selection === "automatic" && `${current.name} picks its model itself.`,
+    !harnessesLive && "The daemon does not report installed harnesses yet, so this is a fixed list.",
+    ...options.filter((h) => !h.install.installed && h.install.install_hint).map((h) => (
+      <React.Fragment key={h.id}>{h.name} is not installed: <span className="mono">{h.install.install_hint}</span></React.Fragment>
+    )),
+  ];
+  const agentErrors = [
+    current?.auth.state === "not_configured" && `${current.name} is not signed in${current.auth.detail ? `: ${current.auth.detail}` : "."}`,
+    ...issues.map((i) => i.message),
+  ];
+
   return (
     <>
       <div className="header">
         <h1>New project</h1>
         <span className="spacer" />
-        <a className="btn" href={href({ name: "projects" })}>Cancel</a>
+        <ButtonLink href={href({ name: "projects" })}>Cancel</ButtonLink>
       </div>
       <div className="screen scroll">
-        <form className="form" onSubmit={submit} data-testid="new-project-form">
-          <label className="field">
-            <span>Name</span>
-            <input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="Parser rewrite" name="name" />
-          </label>
-          <label className="field">
-            <span>Goal</span>
-            <textarea rows={3} value={goal} onChange={(e) => setGoal(e.target.value)} name="goal"
-              placeholder="What this Project should achieve, in a sentence or two. The coordinator plans against it." />
-          </label>
+        <Form className="new-project" onSubmit={submit} data-testid="new-project-form">
+          <Field label="Name">
+            <TextInput autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="Parser rewrite" name="name" />
+          </Field>
+          <Field label="Goal" hint="The coordinator plans against it.">
+            <TextArea rows={3} value={goal} onChange={(e) => setGoal(e.target.value)} name="goal"
+              placeholder="What this Project should achieve, in a sentence or two." />
+          </Field>
 
-          <fieldset className="field">
-            <span>Repositories</span>
+          <Field group label="Repositories">
             {repos.map((r, i) => (
-              <div className="repo-row" key={i}>
-                <input value={r} placeholder="owner/name, a clone URL or a local path" aria-label={`Repository ${i + 1}`}
-                  className={r.trim() && !validRepo(r) ? "invalid" : ""}
+              <div className="np-repo" key={i}>
+                <TextInput mono value={r} placeholder="quark-systems/quark" aria-label={`Repository ${i + 1}`}
+                  invalid={!!r.trim() && !validRepo(r)}
                   onChange={(e) => setRepos(repos.map((x, j) => (j === i ? e.target.value : x)))} />
                 {repos.length > 1 && (
-                  <button type="button" className="btn" aria-label="Remove repository"
-                    onClick={() => setRepos(repos.filter((_, j) => j !== i))}>×</button>
+                  <Button kind="quiet" aria-label="Remove repository" onClick={() => setRepos(repos.filter((_, j) => j !== i))}>Remove</Button>
                 )}
               </div>
             ))}
-            <button type="button" className="btn add" onClick={() => setRepos([...repos, ""])}>Add repository</button>
-            {badRepo && <div className="field-error">“{badRepo}” is not owner/name, a clone URL or a local path.</div>}
-          </fieldset>
+            {badRepo
+              ? <FieldError>“{badRepo}” is not owner/name, a clone URL or a local path.</FieldError>
+              : <FieldHint>owner/name for GitHub, a clone URL, or a local path.</FieldHint>}
+            <div><Button onClick={() => setRepos([...repos, ""])}>Add repository</Button></div>
+          </Field>
 
-          <fieldset className="field">
-            <span>Default agent</span>
-            <div className="agent-row">
-              <select value={harness} onChange={(e) => setHarness(e.target.value)} aria-label="Harness" disabled={!harnesses}>
+          <Field group label="Agent" hint={["Runs the coordinator, and every worker unless a dispatch rule says otherwise.", ...agentHints].filter(Boolean)} error={agentErrors.filter(Boolean)}>
+            <ControlRow>
+              <Select value={harness} onChange={(e) => setHarness(e.target.value)} aria-label="Harness" disabled={!harnesses}>
                 {!harnesses && <option>Loading…</option>}
                 {options.map((h) => (
                   <option key={h.id} value={h.id} disabled={!h.install.installed}>
                     {h.name}{h.install.version ? ` ${h.install.version}` : ""}{h.install.installed ? "" : " (not installed)"}
                   </option>
                 ))}
-              </select>
+              </Select>
               {current?.models.selection !== "automatic" && (
-                <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={modelHint} aria-label="Model" />
+                <TextInput value={model} onChange={(e) => setModel(e.target.value)} placeholder={modelHint} aria-label="Model" />
               )}
               {current && current.efforts.length > 0 && (
-                <select value={effort} onChange={(e) => setEffort(e.target.value)} aria-label="Effort">
+                <Select value={effort} onChange={(e) => setEffort(e.target.value)} aria-label="Effort">
                   <option value="">Default effort</option>
                   {current.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
-                </select>
+                </Select>
               )}
               {pools.length > 0 && (
-                <select value={pool} onChange={(e) => setPool(e.target.value)} aria-label="Account pool">
+                <Select value={pool} onChange={(e) => setPool(e.target.value)} aria-label="Account pool">
                   <option value="">Default account</option>
                   {pools.map((p) => <option key={p} value={p}>Pool: {p}</option>)}
-                </select>
+                </Select>
               )}
-            </div>
-            {pool && <div className="hint-line">Each task runs under one of the pool's accounts, the least busy when it starts.</div>}
-            {current?.models.discovery && <div className="hint-line">Models: {current.models.discovery}</div>}
-            {current?.models.selection === "automatic" && <div className="hint-line">{current.name} picks its model itself.</div>}
-            {current?.auth.state === "not_configured" && (
-              <div className="field-error">{current.name} is not signed in{current.auth.detail ? `: ${current.auth.detail}` : "."}</div>
-            )}
-            {!harnessesLive && <div className="hint-line">The daemon does not report installed harnesses yet, so this is a fixed list.</div>}
-            {options.filter((h) => !h.install.installed && h.install.install_hint).map((h) => (
-              <div className="hint-line" key={h.id}>{h.name} is not installed: <span className="mono">{h.install.install_hint}</span></div>
-            ))}
-            {issues.map((i) => <div className="field-error" key={i.field + i.code}>{i.message}</div>)}
-          </fieldset>
+            </ControlRow>
+          </Field>
 
-          <fieldset className="field">
-            <span>Dispatch preset</span>
-            <div className="presets">
-              {PRESETS.map((p) => (
-                <label key={p.id} className={"preset" + (preset === p.id ? " on" : "")}>
-                  <input type="radio" name="preset" value={p.id} checked={preset === p.id} onChange={() => setPreset(p.id)} />
-                  <b>{p.label}</b>
-                  <span className="faint">{p.description}</span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
+          <Field group label="Workers" hint="You can add your own rules later in Settings, under Dispatch.">
+            <OptionCards name="preset" value={preset} onChange={setPreset}
+              options={PRESETS.map((p) => ({ value: p.id, label: p.label, description: p.description }))} />
+          </Field>
 
-          <details className="field">
-            <summary>Advanced</summary>
-            <label className="field">
-              <span>Delivery</span>
-              <select value={delivery} onChange={(e) => setDelivery(e.target.value as DeliveryPolicy)} aria-label="Delivery">
+          <Disclosure summary="Advanced">
+            <Field label="Delivery">
+              <Select value={delivery} onChange={(e) => setDelivery(e.target.value as DeliveryPolicy)} aria-label="Delivery">
                 <option value="gated">Gated: changes pass the verification gates before a PR</option>
                 <option value="direct">Direct: workers open PRs directly; CI is the only check</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Workspace path</span>
-              <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Attach an existing workspace instead of creating one" />
-            </label>
-          </details>
+              </Select>
+            </Field>
+            <Field label="Workspace path" hint="Leave empty to create a new workspace.">
+              <TextInput mono value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="~/work/parser" />
+            </Field>
+          </Disclosure>
 
-          {error && <div className="form-error" role="alert">{error}</div>}
-          <div className="form-actions">
-            <button className="btn on" type="submit" disabled={!canSubmit}>{busy ? "Creating…" : "Create project"}</button>
-          </div>
-        </form>
+          {error && <FormError>{error}</FormError>}
+          <FormActions>
+            <Button kind="primary" type="submit" disabled={!canSubmit}>{busy ? "Creating…" : "Create project"}</Button>
+          </FormActions>
+        </Form>
       </div>
     </>
   );

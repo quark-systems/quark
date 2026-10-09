@@ -8,6 +8,8 @@ export { taskTone, TONE_LABEL } from "./tone";
 export { DecisionCard, DecisionEvidence } from "./DecisionCard";
 export type { DecisionCardSize } from "./DecisionCard";
 export type { Tone } from "./tone";
+export { ControlRow, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput } from "./form";
+export type { OptionCardChoice } from "./form";
 
 /** A small round dot for one of the glossary's state words. Busy pulses with a halo. */
 export function StatusDot({ tone, label }: { tone: Tone; label?: string }) {
@@ -54,6 +56,11 @@ export function Row({ href, current, lead, title, sub, trail, indent, dim, testi
 /** A button in one of three weights: primary (one per view), secondary, or quiet. */
 export function Button({ kind = "secondary", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { kind?: "primary" | "secondary" | "quiet" }) {
   return <button type="button" {...props} className={"ui-btn " + kind + (props.className ? " " + props.className : "")} />;
+}
+
+/** A link styled as a Button, for actions that navigate (Cancel back to a list). */
+export function ButtonLink({ kind = "secondary", className, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { kind?: "primary" | "secondary" | "quiet" }) {
+  return <a {...props} className={"ui-btn " + kind + (className ? " " + className : "")} />;
 }
 
 /** The coordinator's round "C" mark, styled apart from workers. */

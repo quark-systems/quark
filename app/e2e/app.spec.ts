@@ -18,7 +18,7 @@ test("creates a project and lands on its board", async ({ page }) => {
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
   await page.getByLabel("Model", { exact: true }).fill("gpt-5-codex");
   await page.getByLabel("Effort", { exact: true }).selectOption("high");
-  await page.getByText("Light for trivial work").click();
+  await page.getByText("Low effort for small edits").click();
   await page.getByRole("button", { name: "Create project" }).click();
 
   await expect(page).toHaveURL(/#\/p\//);

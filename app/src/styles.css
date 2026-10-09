@@ -95,6 +95,17 @@
   --radius-s: 6px;
   --radius-m: 8px;
   --radius-l: 12px;
+  /* Spacing scale: gaps and padding use these steps, not one-off pixel values. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  /* Form controls: inputs, selects and buttons share one height and type size. */
+  --control-height: 32px;
+  --control-font: 13px;
+  --control-mono-font: 12px;
 
   /* Short aliases the screens use. */
   --bg: var(--background);
@@ -315,18 +326,13 @@ a.side-item { text-decoration: none; }
 .form input, .form textarea, .form select { background: var(--bg-2); color: var(--fg); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px 9px; font: 13px var(--sans); outline: none; min-width: 0; }
 .form input:focus, .form textarea:focus, .form select:focus { border-color: var(--accent); }
 .form input.invalid { border-color: var(--red); }
-.repo-row { display: flex; gap: 6px; }
-.repo-row input { flex: 1; font-family: var(--mono); font-size: 12px; }
 .btn.add { align-self: flex-start; }
-.agent-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 6px; }
-.presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
-.preset { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--line-2); border-radius: 6px; cursor: pointer; font-size: 12px; }
-.preset input { display: none; }
-.preset.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .hint-line { font-size: 12px; color: var(--fg-faint); }
 .field-error, .form-error { color: var(--red); font-size: 12px; padding: 4px 0; }
 .form-error { padding: 6px 10px; }
 .form-actions { display: flex; justify-content: flex-end; }
+.new-project { max-width: 720px; margin: 0 auto; padding: var(--space-6) var(--space-4) 48px; }
+.np-repo { display: flex; gap: var(--space-2); align-items: center; }
 
 /* ---------- project board ---------- */
 .board-layout { display: grid; grid-template-columns: 1fr; }
