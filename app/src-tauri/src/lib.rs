@@ -1,5 +1,5 @@
 // The webview talks to quarkd directly over HTTP and WebSocket, so the Rust side only
-// opens the window. Two environment variables help automation and development:
+// opens the window and the system folder dialog (for local paths on New project). Two environment variables help automation and development:
 // - QUARK_DAEMON points the app at a daemon other than http://127.0.0.1:7380.
 // - QUARK_QUERY is appended to the page URL as-is (e.g. "renderer=webgl").
 // - QUARK_GLASS=0 keeps the macOS window opaque.
@@ -60,6 +60,7 @@ fn encode(s: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let builder = WebviewWindowBuilder::new(
                 app,

@@ -12,7 +12,7 @@ test("catalogue: every shared part with when to use it, searchable, reached from
   await expect(page).toHaveURL(/#\/catalogue$/);
 
   const entries = page.getByTestId("catalogue-entry");
-  await expect(entries).toHaveCount(22);
+  await expect(entries).toHaveCount(23);
   await expect(page.getByRole("heading", { name: "StatusDot" })).toBeVisible();
   await expect(page.getByRole("img", { name: "Needs you" }).first()).toBeVisible();
   await page.getByLabel("Search components").fill("shortcut");

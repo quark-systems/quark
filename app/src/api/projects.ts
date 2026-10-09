@@ -29,6 +29,7 @@ export interface CreateProject {
 export interface Health { status: string; version: string; engine: string; last_seq: number }
 
 export const projectsApi = {
+  forgeRepositories: (refresh = false) => req<ForgeRepository[]>("GET", `/v1/forge/repositories${refresh ? "?refresh=true" : ""}`),
   health: () => req<Health>("GET", "/v1/health"),
   projects: () => req<Project[]>("GET", "/v1/projects"),
   project: (id: string) => req<Project>("GET", `/v1/projects/${enc(id)}`),
@@ -37,3 +38,9 @@ export const projectsApi = {
   setStandingApproval: (projectId: string, on: boolean) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { standing_approval: on }),
 };
+
+/** A GitHub repository the daemon's `gh` account can reach. */
+export interface ForgeRepository {
+  full_name: string; private: boolean; archived: boolean; description?: string | null;
+  pushed_at?: string | null; ssh_url: string; clone_url: string;
+}

@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_systems::{
-    Check, CheckStatus, ChecksState, Mergeability, PullRequestState, Review, ReviewDecision,
-    ReviewState,
+    Check, CheckStatus, ChecksState, ForgeRepository, Mergeability, PullRequestState, Review,
+    ReviewDecision, ReviewState,
 };
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
@@ -138,23 +138,52 @@ pub trait Forge: Send + Sync {
     /// The pull request's whole unified diff, cut at [`MAX_PATCH_BYTES`].
     /// Returns the patch and whether it was cut.
     async fn diff(&self, url: &str) -> Result<(String, bool), ForgeError>;
+
+    /// Repositories the forge account owns, collaborates on or reaches
+    /// through its organizations, most recently pushed first.
+    /// `refresh` skips any recently cached answer.
+    async fn repositories(&self, refresh: bool) -> Result<Vec<ForgeRepository>, ForgeError>;
+}
+
+/// A repository list and when gh answered it.
+type CachedRepos = (std::time::Instant, Vec<ForgeRepository>);
+
+/// How long a repository list is reused before gh is asked again.
+const REPOS_TTL: Duration = Duration::from_secs(120);
+
+/// How many repositories are listed at most.
+pub const MAX_REPOSITORIES: usize = 1000;
+
+/// Parses `gh api --paginate user/repos`: one JSON array per page,
+/// concatenated.
+pub fn parse_gh_repos(out: &[u8]) -> Result<Vec<ForgeRepository>, ForgeError> {
+    let mut repos = Vec::new();
+    for page in serde_json::Deserializer::from_slice(out).into_iter::<Vec<ForgeRepository>>() {
+        repos.extend(page.map_err(|e| ForgeError::Parse(e.to_string()))?);
+    }
+    repos.truncate(MAX_REPOSITORIES);
+    Ok(repos)
 }
 
 /// GitHub through the `gh` CLI.
 #[derive(Debug, Clone)]
 pub struct GhForge {
     gh: String,
+    repos: std::sync::Arc<Mutex<Option<CachedRepos>>>,
 }
 
 impl Default for GhForge {
     fn default() -> Self {
-        Self { gh: "gh".into() }
+        Self::new("gh")
     }
 }
 
 impl GhForge {
     pub fn new(gh: impl Into<String>) -> Self {
-        Self { gh: gh.into() }
+        Self {
+            gh: gh.into(),
+            repos: Default::default(),
+        }
     }
 
     fn github(url: &str) -> Result<(), ForgeError> {
@@ -246,6 +275,35 @@ impl Forge for GhForge {
             .await?;
         Ok((String::from_utf8_lossy(&out).into_owned(), cut))
     }
+
+    async fn repositories(&self, refresh: bool) -> Result<Vec<ForgeRepository>, ForgeError> {
+        if !refresh {
+            if let Some((at, repos)) = &*self.repos.lock().unwrap() {
+                if at.elapsed() < REPOS_TTL {
+                    return Ok(repos.clone());
+                }
+            }
+        }
+        let pages = MAX_REPOSITORIES / 100;
+        let mut repos = Vec::new();
+        for page in 1..=pages {
+            let path = format!(
+                "user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page={page}"
+            );
+            let (out, cut) = self.run(&["api", &path], 16 * 1024 * 1024).await?;
+            if cut {
+                return Err(ForgeError::Parse("answer too large".into()));
+            }
+            let got = parse_gh_repos(&out)?;
+            let last = got.len() < 100;
+            repos.extend(got);
+            if last {
+                break;
+            }
+        }
+        *self.repos.lock().unwrap() = Some((std::time::Instant::now(), repos.clone()));
+        Ok(repos)
+    }
 }
 
 /// Canned forge answers by URL. A URL with no answer fails as a gh error.
@@ -254,6 +312,7 @@ pub struct StubForge {
     prs: Mutex<HashMap<String, ForgePr>>,
     diffs: Mutex<HashMap<String, String>>,
     reads: Mutex<Vec<String>>,
+    repos: Mutex<Option<Vec<ForgeRepository>>>,
 }
 
 impl StubForge {
@@ -267,6 +326,12 @@ impl StubForge {
 
     pub fn set_diff(&self, url: &str, patch: &str) {
         self.diffs.lock().unwrap().insert(url.into(), patch.into());
+    }
+
+    /// What [`Forge::repositories`] answers; until set it fails as if gh
+    /// were missing.
+    pub fn set_repositories(&self, repos: Vec<ForgeRepository>) {
+        *self.repos.lock().unwrap() = Some(repos);
     }
 
     /// URLs read with [`Forge::pull_request`], oldest first.
@@ -295,6 +360,14 @@ impl Forge for StubForge {
             .cloned()
             .map(|d| (d, false))
             .ok_or_else(|| ForgeError::Command(format!("no pull request at {url}")))
+    }
+
+    async fn repositories(&self, _refresh: bool) -> Result<Vec<ForgeRepository>, ForgeError> {
+        self.repos
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(ForgeError::Missing)
     }
 }
 
@@ -506,6 +579,24 @@ fn gh_check(c: GhCheck) -> Option<Check> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_repository_pages() {
+        let page = |name: &str| {
+            format!(
+                r#"[{{"full_name":"{name}","private":true,"archived":false,"description":null,
+                "pushed_at":"2026-10-09T12:00:00Z","ssh_url":"git@github.com:{name}.git",
+                "clone_url":"https://github.com/{name}.git","stargazers_count":3}}]"#
+            )
+        };
+        let out = format!("{}\n{}", page("a/one"), page("b/two"));
+        let repos = parse_gh_repos(out.as_bytes()).unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[1].full_name, "b/two");
+        assert_eq!(repos[0].ssh_url, "git@github.com:a/one.git");
+        assert!(repos[0].private && repos[0].description.is_none());
+        assert!(parse_gh_repos(b"{").is_err());
+    }
 
     #[test]
     fn parses_pull_request_urls() {

@@ -31,6 +31,7 @@ struct Harness {
     addr: std::net::SocketAddr,
     engine: Arc<StubEngine>,
     projector: Projector,
+    forge: Arc<quarkd::forge::StubForge>,
 }
 
 async fn harness() -> Harness {
@@ -38,6 +39,7 @@ async fn harness() -> Harness {
     let engine = Arc::new(StubEngine::new());
     let chat = Arc::new(RecordingInput::new());
     let home = tempfile::tempdir().unwrap();
+    let forge = Arc::new(quarkd::forge::StubForge::new());
     let harnesses = Arc::new(HarnessRegistry::new(
         quarkd::harness::builtin(),
         HostEnv::default(),
@@ -55,7 +57,7 @@ async fn harness() -> Harness {
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: Layout::new(home.path()),
         chat,
-        forge: Arc::new(quarkd::forge::StubForge::new()),
+        forge: forge.clone(),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         triggers: None,
         beads: Default::default(),
@@ -70,6 +72,7 @@ async fn harness() -> Harness {
         addr,
         projector: Projector::new(store, engine.clone()).with_session_roots(Default::default()),
         engine,
+        forge,
     }
 }
 
@@ -1194,4 +1197,27 @@ async fn cors_allows_only_the_desktop_app() {
         .await
         .unwrap();
     assert!(res.headers().get("access-control-allow-origin").is_none());
+}
+
+#[tokio::test]
+async fn lists_forge_repositories() {
+    let h = harness().await;
+    let (status, body) = call(&h.app, "GET", "/v1/forge/repositories", None).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"]["code"], "forge_unavailable");
+
+    h.forge
+        .set_repositories(vec![quark_systems::ForgeRepository {
+            full_name: "quark-systems/quark".into(),
+            private: true,
+            archived: false,
+            description: Some("Agent workspace".into()),
+            pushed_at: None,
+            ssh_url: "git@github.com:quark-systems/quark.git".into(),
+            clone_url: "https://github.com/quark-systems/quark.git".into(),
+        }]);
+    let (status, body) = call(&h.app, "GET", "/v1/forge/repositories?refresh=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body[0]["full_name"], "quark-systems/quark");
+    assert_eq!(body[0]["ssh_url"], "git@github.com:quark-systems/quark.git");
 }

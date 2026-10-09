@@ -10,6 +10,7 @@ export type { DecisionCardSize } from "./DecisionCard";
 export type { Tone } from "./tone";
 export { ControlRow, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput } from "./form";
 export type { OptionCardChoice } from "./form";
+export { FolderPicker } from "./FolderPicker";
 
 /** A small round dot for one of the glossary's state words. Busy pulses with a halo. */
 export function StatusDot({ tone, label }: { tone: Tone; label?: string }) {

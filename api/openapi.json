@@ -659,6 +659,49 @@
         }
       }
     },
+    "/v1/forge/repositories": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "GitHub repositories the account `gh` is logged in to owns, collaborates\non or reaches through its organizations, most recently pushed first (at\nmost 1000). 502 with `forge_unavailable` when gh is missing, and\n`forge_failed` when it is not logged in or GitHub refused.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "description": "Ask GitHub again instead of using the list from the last two minutes.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ForgeRepository"
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/harnesses": {
       "get": {
         "tags": [
@@ -7013,6 +7056,50 @@
           "type_changed",
           "untracked"
         ]
+      },
+      "ForgeRepository": {
+        "type": "object",
+        "description": "A repository the forge account can reach, offered when adding\nrepositories to a Project.",
+        "required": [
+          "full_name",
+          "private",
+          "archived",
+          "ssh_url",
+          "clone_url"
+        ],
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "clone_url": {
+            "type": "string",
+            "description": "HTTPS clone URL."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "full_name": {
+            "type": "string",
+            "description": "`owner/name`."
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "pushed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last push, RFC 3339."
+          },
+          "ssh_url": {
+            "type": "string",
+            "description": "SSH clone URL, e.g. `git@github.com:owner/name.git`."
+          }
+        }
       },
       "Gate": {
         "type": "object",

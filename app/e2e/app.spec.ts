@@ -6,19 +6,32 @@ const terminalText = (page: import("@playwright/test").Page) => () =>
   page.evaluate(() => (window as any).__quark.terminalText(decodeURIComponent(location.hash.split("/")[2] ?? "")) ?? "");
 
 test("creates a project and lands on its board", async ({ page }) => {
+  // Stands in for the desktop app's system folder dialog.
+  await page.addInitScript(() => { (window as any).__quarkPickFolder = async () => "/Users/matt/work/parser"; });
   await open(page, "#/new");
   await page.getByPlaceholder("Parser rewrite").fill("Parser rewrite");
   await page.locator("textarea[name=goal]").fill("Replace the hand-written parser.");
-  await page.getByLabel("Repository 1").fill("not a repo");
-  await expect(page.getByText("is not owner/name, a clone URL or a local path")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Create project" })).toBeDisabled();
-  await page.getByLabel("Repository 1").fill("quark-systems/quark");
+  // Repositories come from the daemon's gh login: type to filter, pick with the keyboard or the mouse.
+  const find = page.getByRole("combobox", { name: "Find a repository" });
+  await find.fill("quark");
+  await expect(page.getByRole("listbox", { name: "Repositories" }).getByRole("option")).toHaveText([/quark-systems\/quark/, /quark-systems\/firstmate/, /quark-systems\/website/, /quark-systems\/old-prototype.*archived/]);
+  await find.press("Enter");
+  await find.fill("not a repo");
+  await expect(page.getByRole("listbox")).toContainText("No repository matches");
+  await find.fill("https://gitlab.com/acme/tools.git");
+  await page.getByRole("option", { name: /Use https:\/\/gitlab.com\/acme\/tools.git/ }).click();
+  await expect(page.getByRole("list", { name: "Chosen repositories" }).locator("li")).toHaveCount(2);
+  await page.getByRole("button", { name: "Remove https://gitlab.com/acme/tools.git" }).click();
+  await expect(page.getByRole("list", { name: "Chosen repositories" })).toContainText("quark-systems/quark");
   // Bob cannot coordinate, so it is not offered; Pi is listed but not installed.
   await expect(page.getByLabel("Harness", { exact: true }).locator("option")).toHaveText(["Claude Code 2.1.0", "Codex 0.50.0", "Pi (not installed)"]);
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
   await page.getByLabel("Model", { exact: true }).fill("gpt-5-codex");
   await page.getByLabel("Effort", { exact: true }).selectOption("high");
   await page.getByText("Low effort for small edits").click();
+  await page.getByText("Advanced").click();
+  await page.getByRole("button", { name: "Choose folder…" }).click();
+  await expect(page.getByRole("button", { name: "Workspace path" })).toHaveText("/Users/matt/work/parser");
   await page.getByRole("button", { name: "Create project" }).click();
 
   await expect(page).toHaveURL(/#\/p\//);
@@ -35,7 +48,7 @@ test("creates a project and lands on its board", async ({ page }) => {
     return (await r.json()).find((p: any) => p.name === "Parser rewrite");
   });
   expect(created).toMatchObject({
-    goal: "Replace the hand-written parser.", repos: [{ url: "https://github.com/quark-systems/quark.git", name: "quark" }],
+    goal: "Replace the hand-written parser.", repos: [{ url: "git@github.com:quark-systems/quark.git", name: "quark" }],
     agent_config: { harness: "codex", model: "gpt-5-codex", effort: "high" }, dispatch_preset: "light_trivial", delivery: "gated",
     status: "ready",
   });

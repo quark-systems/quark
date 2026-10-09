@@ -6,7 +6,8 @@ import { Account, api, DeliveryPolicy, DispatchPreset, HarnessInfo, NotAvailable
 import { poolsFor } from "../accounts";
 import { href } from "../nav";
 import { addProject } from "../store";
-import { Button, ButtonLink, ControlRow, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput } from "../ui";
+import { PickedRepo, RepoPicker } from "../components/RepoPicker";
+import { Button, ButtonLink, ControlRow, Disclosure, Field, FolderPicker, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput } from "../ui";
 import { errText } from "../util";
 
 /** Used until `GET /v1/harnesses` is served. */
@@ -24,19 +25,10 @@ export const PRESETS: { id: DispatchPreset; label: string; description: string }
   { id: "light_trivial", label: "Low effort for small edits", description: "Renames, typo fixes and one-line changes run at low effort, which is faster and cheaper. Everything else runs as above." },
 ];
 
-const REPO_RE = /^(https?:\/\/\S+|ssh:\/\/\S+|git@\S+:\S+|\/\S+|[\w.-]+\/[\w.-]+)$/;
-export function validRepo(s: string) { return REPO_RE.test(s.trim()); }
-
-/** `owner/name` is GitHub shorthand; anything else is passed through as a clone URL or path. */
-export function repoUrl(s: string) {
-  const t = s.trim();
-  return /^[\w.-]+\/[\w.-]+$/.test(t) ? `https://github.com/${t}.git` : t;
-}
-
 export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
-  const [repos, setRepos] = useState<string[]>([""]);
+  const [repos, setRepos] = useState<PickedRepo[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessInfo[] | null>(null);
   const [harnessesLive, setHarnessesLive] = useState(true);
   const [harness, setHarness] = useState("");
@@ -75,9 +67,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
   useEffect(() => { setModel(""); setEffort(""); setPool(""); setIssues([]); }, [harness]);
   const pools = useMemo(() => poolsFor(accounts, harness), [accounts, harness]);
 
-  const cleanRepos = repos.map((r) => r.trim()).filter(Boolean);
-  const badRepo = cleanRepos.find((r) => !validRepo(r));
-  const canSubmit = name.trim() !== "" && !badRepo && !!harness && !busy;
+  const canSubmit = name.trim() !== "" && !!harness && !busy;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,7 +90,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
         name: name.trim(),
         goal: goal.trim() || null,
         workspace_path: workspace.trim() || null,
-        repos: cleanRepos.map((r) => ({ url: repoUrl(r) })),
+        repos: repos.map((r) => ({ url: r.url })),
         agent_config,
         dispatch_preset: preset,
         delivery,
@@ -148,20 +138,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
           </Field>
 
           <Field group label="Repositories">
-            {repos.map((r, i) => (
-              <div className="np-repo" key={i}>
-                <TextInput mono value={r} placeholder="quark-systems/quark" aria-label={`Repository ${i + 1}`}
-                  invalid={!!r.trim() && !validRepo(r)}
-                  onChange={(e) => setRepos(repos.map((x, j) => (j === i ? e.target.value : x)))} />
-                {repos.length > 1 && (
-                  <Button kind="quiet" aria-label="Remove repository" onClick={() => setRepos(repos.filter((_, j) => j !== i))}>Remove</Button>
-                )}
-              </div>
-            ))}
-            {badRepo
-              ? <FieldError>“{badRepo}” is not owner/name, a clone URL or a local path.</FieldError>
-              : <FieldHint>owner/name for GitHub, a clone URL, or a local path.</FieldHint>}
-            <div><Button onClick={() => setRepos([...repos, ""])}>Add repository</Button></div>
+            <RepoPicker value={repos} onChange={setRepos} />
           </Field>
 
           <Field group label="Agent" hint={["Runs the coordinator, and every worker unless a dispatch rule says otherwise.", ...agentHints].filter(Boolean)} error={agentErrors.filter(Boolean)}>
@@ -204,8 +181,8 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
                 <option value="direct">Direct: workers open PRs directly; CI is the only check</option>
               </Select>
             </Field>
-            <Field label="Workspace path" hint="Leave empty to create a new workspace.">
-              <TextInput mono value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="~/work/parser" />
+            <Field group label="Workspace folder" hint="Leave empty and Quark creates a new workspace for this project.">
+              <FolderPicker value={workspace} onChange={setWorkspace} title="Use an existing workspace folder" label="Workspace path" />
             </Field>
           </Disclosure>
 
