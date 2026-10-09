@@ -28,11 +28,13 @@
 .ui-row-sub { font-size: 12px; color: var(--fg-faint); }
 .ui-row:focus-visible, .ui-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.ui-btn { height: 32px; padding: 0 12px; border-radius: var(--radius-m); font: 13px var(--sans); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.ui-btn.primary { border: none; background: var(--accent); color: var(--on-tone); font-weight: 600; }
+.ui-btn { box-sizing: border-box; height: var(--control-height); padding: 0 var(--space-3); border-radius: var(--radius-m); font: var(--control-font) var(--sans); white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.ui-btn.primary { border: 1px solid var(--accent); background: var(--accent); color: var(--on-tone); font-weight: 600; }
 .ui-btn.secondary { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--fg); }
 .ui-btn.quiet { border: none; background: none; color: var(--fg-dim); }
 .ui-btn.quiet:hover, .ui-btn.secondary:hover { background: var(--selection); }
+.ui-btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, var(--content)); }
+.ui-btn.primary:disabled { opacity: 1; background: var(--surface-3); border-color: var(--line-2); color: var(--fg-faint); font-weight: 500; }
 a.ui-btn { text-decoration: none; }
 .ui-btn:disabled { opacity: .45; cursor: default; }
 
