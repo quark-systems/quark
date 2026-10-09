@@ -13,6 +13,7 @@ const all = [
   issue("qk-9", { priority: 1 }),
   issue("qk-44", { priority: 1, blocked_by: ["qk-d14", "qk-30"], ready: false, blocked: true, external_ref: "https://github.com/o/r/issues/61" }),
   issue("qk-d14", { issue_type: "decision" }),
+  issue("qk-g14", { issue_type: "gate" }),
   issue("qk-39", { status: "in_progress", ready: false, assignee: "transcript-search" }),
   issue("qk-30", { status: "closed", ready: false, closed_at: "2026-10-02T00:00:00Z" }),
   issue("qk-31", { status: "closed", ready: false, closed_at: "2026-10-03T00:00:00Z" }),
@@ -20,7 +21,7 @@ const all = [
 const byId = Object.fromEntries(all.map((i) => [i.id, i]));
 
 describe("chipList", () => {
-  it("lists ready work by priority, then issue number; decisions wait on a person, so they are not ready", () => {
+  it("lists ready work by priority, then issue number; decisions and their gates wait on a person, so they are not ready", () => {
     expect(chipList(all, "ready").map((i) => i.id)).toEqual(["qk-9", "qk-41"]);
   });
   it("puts each open issue under one chip and closed ones newest first", () => {

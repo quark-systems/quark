@@ -486,7 +486,8 @@ impl Beads {
         let issues = self.raw_issues(dir).await?;
         let push: Vec<&str> = issues
             .iter()
-            .filter(|i| i.issue_type != "decision")
+            // Decisions and the gates that hold them stay in Quark.
+            .filter(|i| i.issue_type != "decision" && i.issue_type != "gate")
             .map(|i| i.id.as_str())
             .collect();
         let pushed = if push.is_empty() {
