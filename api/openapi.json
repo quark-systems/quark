@@ -1207,7 +1207,7 @@
           "projects"
         ],
         "summary": "Create a Project.",
-        "description": "With `repos`, returns at once with status `provisioning` and provisions in\nthe background: clones the repos into a new Project workspace, writes the\nProject repo and starts the coordinator. `project.updated` events report\neach step and the final `ready` or `failed` status.",
+        "description": "With `repos`, returns at once with status `provisioning` and provisions in\nthe background: clones the repos into a new Project workspace, writes the\nProject repo and starts the coordinator. `project.updated` events report\neach step and the final `ready` or `failed` status. The Project's Beads\ndatabase is set up beside it; `beads.status` events report that.",
         "operationId": "create_project",
         "requestBody": {
           "content": {
@@ -1622,13 +1622,84 @@
         }
       }
     },
+    "/v1/projects/{id}/beads/sync-rules": {
+      "put": {
+        "tags": [
+          "beads"
+        ],
+        "summary": "Replace the Project's sync rules: which trackers its Beads database\nsyncs with, which way, and which issues each one carries.",
+        "description": "An empty list turns sync off, as it is for a new Project. Answers with\nthe database's status, rules included, and sends it as `beads.status`.",
+        "operationId": "put_sync_rules",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteSyncRules"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeadsStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A rule is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_beads`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/beads:setup": {
       "post": {
         "tags": [
           "beads"
         ],
         "summary": "Create the Project's Beads database in server mode.",
-        "description": "When the Project's first repo tracks a `.beads` that syncs to a Dolt\nremote, the database is cloned from it, so existing issues carry over.\nReturns at once with `setting_up`; progress and the outcome arrive as\n`beads.status` events. A Project that already has one gets its status.",
+        "description": "Projects get one when they are created and at daemon start, so this\nretries a failed or unavailable setup. The database lives under Quark's\nhome, outside every repo. Returns at once with `setting_up`; progress and the outcome arrive as\n`beads.status` events. A Project that already has one gets its status.",
         "operationId": "setup_beads",
         "parameters": [
           {
@@ -1668,8 +1739,8 @@
         "tags": [
           "beads"
         ],
-        "summary": "Sync the Project's beads with GitHub Issues now, both ways.",
-        "description": "Pulls every issue, then pushes every bead except decision beads. Uses\n`GITHUB_TOKEN`, else the token `gh` is signed in with. The outcome is\nkept as `last_sync`, failed or not.",
+        "summary": "Run the Project's enabled sync rules now.",
+        "description": "Each rule pulls its tracker's issues, pushes its own issues, or both;\ndecisions never leave Beads. Uses `GITHUB_TOKEN`, else the token `gh` is\nsigned in with. Each rule's outcome is kept on the rule, and the run's\nas `last_sync`, failed or not.",
         "operationId": "sync_beads",
         "parameters": [
           {
@@ -1694,7 +1765,7 @@
             }
           },
           "400": {
-            "description": "The Project's first repo is not on GitHub",
+            "description": "No sync rule is turned on",
             "content": {
               "application/json": {
                 "schema": {
@@ -5258,19 +5329,13 @@
               "string",
               "null"
             ],
-            "description": "The directory holding the database's `.beads`."
-          },
-          "github_repo": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`owner/repo` mirrored both ways with GitHub Issues."
+            "description": "The directory holding the database's `.beads`; agents get it as\n`BEADS_DIR`."
           },
           "last_sync": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/GithubSync"
+                "$ref": "#/components/schemas/TrackerSync",
+                "description": "The latest sync run, over every rule."
               },
               {
                 "type": "null"
@@ -5287,15 +5352,15 @@
           "project_id": {
             "type": "string"
           },
-          "remote": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The Dolt remote the database syncs with, when it has one."
-          },
           "state": {
             "$ref": "#/components/schemas/BeadsState"
+          },
+          "sync_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncRule"
+            },
+            "description": "Trackers the database syncs with; none by default."
           }
         }
       },
@@ -7279,28 +7344,6 @@
           "failed",
           "skipped"
         ]
-      },
-      "GithubSync": {
-        "type": "object",
-        "description": "The last two-way sync with GitHub Issues.",
-        "required": [
-          "at",
-          "ok",
-          "message"
-        ],
-        "properties": {
-          "at": {
-            "type": "string",
-            "description": "When it finished (RFC 3339 UTC)."
-          },
-          "message": {
-            "type": "string",
-            "description": "What happened, or why it failed."
-          },
-          "ok": {
-            "type": "boolean"
-          }
-        }
       },
       "HarnessAuth": {
         "type": "object",
@@ -10288,6 +10331,67 @@
           "low"
         ]
       },
+      "SyncDirection": {
+        "type": "string",
+        "description": "Which way a sync rule carries issues.",
+        "enum": [
+          "pull",
+          "push",
+          "both"
+        ]
+      },
+      "SyncRule": {
+        "type": "object",
+        "description": "One explicit link between the Project's Beads database and an issue\ntracker. A Project has none until someone adds one, so nothing leaves\nBeads by default.\n\nA rule only touches its own issues: a pull brings in the tracker's\nissues, and a push sends the issues that came from that tracker plus\nthe new ones carrying the rule's `label`. Decisions never sync.",
+        "required": [
+          "id",
+          "tracker",
+          "repository",
+          "direction",
+          "label",
+          "enabled"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/SyncDirection"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "A paused rule is kept but does not run."
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "Issues made in Beads with this label are pushed by this rule."
+          },
+          "last_sync": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrackerSync"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repository": {
+            "type": "string",
+            "description": "The tracker's project, as `owner/repo` for GitHub."
+          },
+          "tracker": {
+            "$ref": "#/components/schemas/SyncTracker"
+          }
+        }
+      },
+      "SyncTracker": {
+        "type": "string",
+        "description": "An issue tracker a sync rule can mirror. Beads also speaks Jira, Linear\nand GitLab; Quark syncs GitHub Issues so far.",
+        "enum": [
+          "github"
+        ]
+      },
       "Task": {
         "type": "object",
         "required": [
@@ -10933,6 +11037,28 @@
           "other"
         ]
       },
+      "TrackerSync": {
+        "type": "object",
+        "description": "The outcome of one sync run.",
+        "required": [
+          "at",
+          "ok",
+          "message"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When it finished (RFC 3339 UTC)."
+          },
+          "message": {
+            "type": "string",
+            "description": "What happened, or why it failed."
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "TranscriptEntry": {
         "type": "object",
         "description": "One entry of a coordinator or worker transcript, parsed from the harness's\nown session log. Payload of `coordinator.message` and `worker.transcript`.",
@@ -11463,6 +11589,55 @@
               "null"
             ],
             "description": "What to say in the side chat."
+          }
+        }
+      },
+      "WriteSyncRule": {
+        "type": "object",
+        "description": "A sync rule as written by `PUT .../beads/sync-rules`; an omitted id makes\na new rule, and an omitted label is `repo:<repo name>`.",
+        "required": [
+          "repository",
+          "direction"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/SyncDirection"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repository": {
+            "type": "string"
+          },
+          "tracker": {
+            "$ref": "#/components/schemas/SyncTracker"
+          }
+        }
+      },
+      "WriteSyncRules": {
+        "type": "object",
+        "description": "Body of `PUT /v1/projects/{id}/beads/sync-rules`: the whole rule list.",
+        "required": [
+          "rules"
+        ],
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WriteSyncRule"
+            }
           }
         }
       }

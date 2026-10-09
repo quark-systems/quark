@@ -878,7 +878,7 @@ test("issues: filter, see what an issue waits for, and start a worker once nothi
   await open(page, "#/p/quark");
   await page.getByTestId("nav-issues").click();
   await expect(page).toHaveURL(/#\/p\/quark\/issues$/);
-  await expect(page.getByTestId("beads-strip")).toContainText("Beads in quark-systems/quark · mirrored both ways with GitHub Issues · last sync");
+  await expect(page.getByTestId("beads-strip")).toContainText("Beads for this project · synced with quark-systems/quark · last sync");
 
   // Ready work first, highest priority first; j moves the selection.
   const chips = page.getByRole("group", { name: "Filter issues" });
@@ -948,7 +948,7 @@ test("issues: draft new issues with the coordinator, refine them, and create the
   await expect(drawer).toContainText("I read this as two pieces of work");
   await expect(drafts.first()).toContainText("new · 1");
   await expect(drafts.first()).toContainText("A PR that goes red asks for attention again");
-  await expect(drafts.first()).toContainText("mirrors to GitHub");
+  await expect(drafts.first()).toContainText("syncs to quark-systems/quark");
   await expect(drawer.getByLabel("Priority of new 1")).toHaveValue("1");
   await expect(drafts.nth(1)).toContainText("blocked by new · 1");
   await expect(drawer).toContainText("Related, not merged in: qk-41 Next-attention shortcut in the app.");
@@ -983,7 +983,7 @@ test("issues: draft new issues with the coordinator, refine them, and create the
 
   // The daemon created both, the second waiting for the first, as edited.
   const second = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/issues/qk-48")).json());
-  expect(second).toMatchObject({ title: "Phone notification when a PR goes red", blocked_by: ["qk-47"], labels: ["attention"], blocked: true });
+  expect(second).toMatchObject({ title: "Phone notification when a PR goes red", blocked_by: ["qk-47"], labels: ["repo:quark", "attention"], blocked: true });
 });
 
 test("memory: keep a learning for all projects, and browse this project's Beads memories and decisions", async ({ page }) => {
@@ -1029,4 +1029,51 @@ test("memory: keep a learning for all projects, and browse this project's Beads 
   await rows.filter({ hasText: "Switch slice 2 to native?" }).click();
   await detail.getByRole("link", { name: "Open in Issues" }).click();
   await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-d14$/);
+});
+
+test("issue sync: a new project has its own Beads with no sync, until a rule turns it on", async ({ page }) => {
+  await open(page, "#/");
+  // The project gets its Beads database when it is created; nothing syncs with a tracker.
+  const proj = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Sync check", repos: [{ url: "git@github.com:acme/web.git" }, { url: "git@github.com:acme/api.git" }], agent_config: { harness: "claude-code" } }),
+  })).json());
+  await open(page, `#/p/${proj.id}/issues`);
+  await expect(page.getByTestId("beads-strip")).toContainText("Beads for this project · not synced with any tracker");
+  await expect(page.getByRole("button", { name: "Sync now" })).toHaveCount(0);
+
+  // Settings: one rule per repository, each with its own direction and label.
+  await page.getByTestId("beads-sync-settings").click();
+  await expect(page).toHaveURL(new RegExp(`#/p/${proj.id}/settings$`));
+  const sync = page.getByTestId("settings-issue-sync");
+  await expect(sync).toContainText("It is not synced with any issue tracker");
+  await sync.getByRole("button", { name: "Sync with acme/web" }).click();
+  await sync.getByRole("button", { name: "Sync with acme/api" }).click();
+  const rules = sync.getByTestId("sync-rule");
+  await expect(rules).toHaveCount(2);
+  await rules.nth(1).getByRole("combobox", { name: "Direction" }).click();
+  await page.getByRole("option", { name: "Pull issues in only" }).click();
+  await expect(rules.nth(1).getByLabel("Pushes new issues labelled")).toBeDisabled();
+  await expect(rules.nth(0).getByLabel("Pushes new issues labelled")).toHaveAttribute("placeholder", "repo:web");
+  await sync.getByTestId("sync-save").click();
+  await expect(sync.getByTestId("sync-save")).toHaveCount(0);
+  const saved = await page.evaluate(async (id) => (await fetch(`http://127.0.0.1:7392/v1/projects/${id}/beads`)).json(), proj.id);
+  expect(saved.sync_rules.map((r: { repository: string; direction: string; label: string }) => `${r.repository} ${r.direction} ${r.label}`))
+    .toEqual(["acme/web both repo:web", "acme/api pull repo:api"]);
+
+  // Issues now names what it syncs with and can sync on demand.
+  await open(page, `#/p/${proj.id}/issues`);
+  await expect(page.getByTestId("beads-strip")).toContainText("synced with acme/web and acme/api");
+  await page.getByRole("button", { name: "Sync now" }).click();
+  await expect(page.getByTestId("beads-strip")).toContainText("last sync");
+
+  // Turning a rule off keeps it but stops it running; removing them all turns sync off.
+  await open(page, `#/p/${proj.id}/settings`);
+  await rules.nth(0).getByLabel("On", { exact: true }).uncheck();
+  await sync.getByTestId("sync-save").click();
+  await expect(sync.getByTestId("sync-save")).toHaveCount(0);
+  await rules.nth(1).getByRole("button", { name: "Remove" }).click();
+  await rules.nth(0).getByRole("button", { name: "Remove" }).click();
+  await sync.getByTestId("sync-save").click();
+  await expect(sync).toContainText("It is not synced with any issue tracker");
 });

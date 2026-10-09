@@ -481,6 +481,7 @@ async fn recovery_restarts_a_lost_server_and_resumes_missing_coordinators() {
         accounts,
         sessions.clone(),
         dir.path().join("command"),
+        dir.path().to_path_buf(),
     );
     let starts = || {
         engine

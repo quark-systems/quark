@@ -55,6 +55,8 @@ pub struct CoordinatorRecovery {
     accounts: Arc<Accounts>,
     sessions: Sessions,
     command: PathBuf,
+    /// Quark's home, where each Project's Beads database lives.
+    home: PathBuf,
     attempts: Mutex<HashMap<String, Backoff>>,
 }
 
@@ -65,6 +67,7 @@ impl CoordinatorRecovery {
         accounts: Arc<Accounts>,
         sessions: Sessions,
         command: PathBuf,
+        home: PathBuf,
     ) -> Self {
         Self {
             store,
@@ -72,6 +75,7 @@ impl CoordinatorRecovery {
             accounts,
             sessions,
             command,
+            home,
             attempts: Mutex::new(HashMap::new()),
         }
     }
@@ -198,7 +202,11 @@ impl CoordinatorRecovery {
             .lease(&Holder::Coordinator(project.id.clone()), agent)
             .await
         {
-            Ok(lease) => lease.map(|l| l.env).unwrap_or_default(),
+            Ok(lease) => {
+                let mut env = lease.map(|l| l.env).unwrap_or_default();
+                env.push(crate::beads::agent_env(&self.home, &project.id));
+                env
+            }
             Err(e) => {
                 tracing::warn!(project = %project.id, error = %e, "coordinator recovery could not choose an account");
                 return false;

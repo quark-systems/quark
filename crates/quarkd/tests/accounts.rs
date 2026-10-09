@@ -670,8 +670,10 @@ async fn a_project_coordinator_starts_under_its_pool() {
             _ => None,
         })
         .expect("coordinator started");
-    // The pool's only account, carried to the engine's spawn.
-    assert_eq!(start, [("CLAUDE_CONFIG_DIR".to_string(), work.clone())]);
+    // The pool's only account, carried to the engine's spawn beside the
+    // Project's Beads database.
+    assert_eq!(start[0], ("CLAUDE_CONFIG_DIR".to_string(), work.clone()));
+    assert_eq!(start[1].0, "BEADS_DIR");
     let (_, list) = call(&s.app, "GET", "/v1/accounts", None).await;
     assert_eq!(list[1]["active_tasks"], 1, "{list}");
 }

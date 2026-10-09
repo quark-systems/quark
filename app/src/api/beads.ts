@@ -2,28 +2,48 @@ import { enc, req } from "./client";
 import type { MemoryEvidence, MemorySource } from "./memory";
 
 // Beads (https://beads.gascity.com): the Project's issues, decision beads and memories, in one
-// Beads database per Project that quarkd runs in server mode and mirrors with GitHub Issues.
+// Beads database per Project that quarkd runs in server mode under its home, outside every repo.
+// It syncs with an issue tracker only through the Project's sync rules, and has none by default.
 
 /** `missing`: no database yet (`:setup` creates one). `unavailable`: `bd` or `dolt` is not installed. */
 export type BeadsState = "missing" | "setting_up" | "ready" | "failed" | "unavailable";
-export interface GithubSync {
-  at: string; ok: boolean; pulled?: number | null; pushed?: number | null;
+export interface TrackerSync {
+  at: string; ok: boolean;
   /** What happened, or why it failed. */
   message: string;
+}
+/** Trackers a rule can sync with; Quark syncs GitHub Issues so far. */
+export type SyncTracker = "github";
+/** `pull` brings the tracker's issues in, `push` sends this rule's issues out. */
+export type SyncDirection = "pull" | "push" | "both";
+/** One explicit link between the Project's Beads and a tracker. A rule pushes only the issues
+ *  that came from its repository plus new ones carrying its `label`; decisions never sync. */
+export interface SyncRule {
+  id: string; tracker: SyncTracker;
+  /** `owner/repo` for GitHub. */
+  repository: string;
+  direction: SyncDirection; label: string;
+  /** A paused rule is kept but does not run. */
+  enabled: boolean;
+  last_sync?: TrackerSync | null;
+}
+/** A rule as written; no id makes a new one, no label means `repo:<name>`. */
+export interface WriteSyncRule {
+  id?: string | null; tracker?: SyncTracker; repository: string; direction: SyncDirection;
+  label?: string | null; enabled?: boolean;
 }
 export interface BeadsStatus {
   project_id: string; state: BeadsState;
   /** Why it is unavailable or failed, or what setup is doing now. */
   detail?: string | null;
-  /** The Beads directory quarkd uses (`.beads` lives here). */
+  /** The Beads directory quarkd uses (`.beads` lives here); agents get it as `BEADS_DIR`. */
   dir?: string | null;
   /** Issue id prefix, as in `qk-44`. */
   prefix?: string | null;
-  /** The Dolt remote the database syncs with, when it has one. */
-  remote?: string | null;
-  /** `owner/repo` the database mirrors both ways with GitHub Issues. */
-  github_repo?: string | null;
-  last_sync?: GithubSync | null;
+  /** Trackers it syncs with; none by default. */
+  sync_rules?: SyncRule[];
+  /** The latest sync run, over every rule. */
+  last_sync?: TrackerSync | null;
 }
 
 /** Beads' own values; `deferred`, `pinned` and `hooked` also occur. */
@@ -97,10 +117,14 @@ export interface BeadsMemory {
 
 export const beadsApi = {
   beads: (pid: string) => req<BeadsStatus>("GET", `/v1/projects/${enc(pid)}/beads`),
-  /** Creates (or adopts) the Project's Beads database; returns at once with `setting_up`, then `beads.status` events. */
+  /** Creates the Project's Beads database (normally done at Project creation; this retries);
+   *  returns at once with `setting_up`, then `beads.status` events. */
   setupBeads: (pid: string) => req<BeadsStatus>("POST", `/v1/projects/${enc(pid)}/beads:setup`),
-  /** Two-way sync with GitHub Issues now. */
+  /** Runs the Project's enabled sync rules now. */
   syncBeads: (pid: string) => req<BeadsStatus>("POST", `/v1/projects/${enc(pid)}/beads:sync`),
+  /** Replaces the Project's sync rules; an empty list turns sync off. */
+  setSyncRules: (pid: string, rules: WriteSyncRule[]) =>
+    req<BeadsStatus>("PUT", `/v1/projects/${enc(pid)}/beads/sync-rules`, { rules }),
   issues: (pid: string, filter: IssueFilter = "all") =>
     req<Issue[]>("GET", `/v1/projects/${enc(pid)}/issues?filter=${filter}`),
   issue: (pid: string, id: string) => req<IssueDetail>("GET", `/v1/projects/${enc(pid)}/issues/${enc(id)}`),

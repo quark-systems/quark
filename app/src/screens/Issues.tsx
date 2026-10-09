@@ -10,7 +10,7 @@ import { go, href } from "../nav";
 import { loadBeads, setBeads, setIssueSeed, useStore } from "../store";
 import { step } from "../inbox";
 import {
-  beadsWhere, chipCounts, chipList, CHIPS, githubNumber, inChip, IssueChip, issueMeta, openBlockers, refState, startWorkerMessage, statusLabel,
+  activeRules, beadsWhere, chipCounts, chipList, CHIPS, githubNumber, inChip, IssueChip, issueMeta, openBlockers, refState, startWorkerMessage, statusLabel,
 } from "../issues";
 import { ago, errText } from "../util";
 import { Unavailable } from "../components/Unavailable";
@@ -173,7 +173,7 @@ export function Issues({ project: pid, id }: { project: string; id?: string }) {
   );
 }
 
-/** Where the issues live and when they last synced with GitHub, with Sync now and New issue. */
+/** What the issues sync with and when they last did, with Sync now (or a way to set sync up) and New issue. */
 function BeadsStrip({ b, onNew }: { b: BeadsStatus; onNew: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -191,7 +191,9 @@ function BeadsStrip({ b, onNew }: { b: BeadsStatus; onNew: () => void }) {
         {failed && <span className="bad"> · {b.last_sync!.message}</span>}
         {err && <span className="bad"> · {err}</span>}
       </span>
-      {b.github_repo && <button type="button" className="btn" onClick={() => void sync()} disabled={busy}>{busy ? "Syncing…" : "Sync now"}</button>}
+      {activeRules(b).length > 0
+        ? <button type="button" className="btn" onClick={() => void sync()} disabled={busy}>{busy ? "Syncing…" : "Sync now"}</button>
+        : <a className="btn" href={href({ name: "settings", project: b.project_id })} data-testid="beads-sync-settings">Sync settings</a>}
       <button type="button" className="btn primary" onClick={onNew} title="New issue (n)">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         New issue
@@ -223,7 +225,7 @@ function BeadsSetup({ b }: { b: BeadsStatus }) {
       <div className="u-title">{b.state === "setting_up" ? "Setting up Beads…" : "This project has no issues yet"}</div>
       {b.state === "setting_up" ? <div className="faint">{b.detail ?? "Starting"}</div> : (
         <>
-          <div className="faint">Quark keeps this project's issues and memory in Beads, in the Project repo, mirrored both ways with GitHub Issues.</div>
+          <div className="faint">Quark keeps this project's issues and memory in one Beads database for the whole project, outside its repos. Syncing with an issue tracker is optional and set in Settings.</div>
           <div><button type="button" className="btn big primary" onClick={() => void setup()} disabled={busy}>{busy ? "Setting up…" : "Set up Beads"}</button></div>
         </>
       )}

@@ -8,6 +8,7 @@ A user opens a Project's Settings tab and sees every per-Project switch in one p
 - `set-standing` toggles standing approval.
 - `set-holdout` turns a source's holdout tests off and on, showing the categories found under `holdout/<source>/`.
 - `set-links` leads from the dispatch and memory summaries to the screens that edit them.
+- `set-issue-sync` edits the Project's issue sync rules: none by default; each names a GitHub repository, a direction and the label of new issues it pushes, and can be turned off or removed.
 
 ## How to get to it (user POV)
 
@@ -24,6 +25,8 @@ Preconditions:
 - **Holdout off.** Run `$Q browser click --testid settings-holdout`; `$Q browser wait --testid settings-holdout-state --contains Off`.
 - **Standing approval.** Run `$Q browser click --testid standing-approval`. Save `settings/02-after.png`.
 - **Side effects.** Run `$Q capture settings/api -- $Q api GET /v1/projects/<id>/settings`: `holdout.enabled` is false and `standing_approval` true. Real: `git -C QV_HOME/projects/<id>.git log -1` is `Change holdout tests` and `project.yaml` on `main` has `holdout: false` under the source.
+
+- **Issue sync.** On a new Project, `$Q browser wait --testid settings-issue-sync --contains "not synced"`; click `Sync with <owner/repo>` for a repo, then `$Q browser click --testid sync-save`. `$Q api GET /v1/projects/<id>/beads` lists the rule in `sync_rules`. Real: needs `bd` and `dolt`; the database is under `QV_HOME/beads/<id>` and no repo clone gains a `.beads`.
 
 ## Gotchas
 
