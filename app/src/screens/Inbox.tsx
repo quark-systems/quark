@@ -16,7 +16,8 @@ export function Inbox({ id }: { id?: string }) {
   const connected = useStore((s) => s.connected);
   const all = useMemo(() => Object.values(decisions), [decisions]);
   const selectedDecision = id ? decisions[id] : undefined;
-  const [filter, setFilter] = useState<DecisionState>(selectedDecision?.state ?? "open");
+  const stateOf = (d: Decision): DecisionState => (d.state === "open" ? "open" : "answered");
+  const [filter, setFilter] = useState<DecisionState>(selectedDecision ? stateOf(selectedDecision) : "open");
   const list = useMemo(() => inboxList(all, filter), [all, filter]);
   const openCount = useMemo(() => all.filter((d) => d.state === "open").length, [all]);
 
@@ -27,7 +28,7 @@ export function Inbox({ id }: { id?: string }) {
 
   // Jumping to a decision from elsewhere (the palette) shows the list it is in.
   useEffect(() => {
-    if (selectedDecision && selectedDecision.state !== filter) setFilter(selectedDecision.state);
+    if (selectedDecision && stateOf(selectedDecision) !== filter) setFilter(stateOf(selectedDecision));
     // Only when the URL changes, so switching lists by hand is not undone.
   }, [id]);
 
@@ -88,9 +89,9 @@ export function Inbox({ id }: { id?: string }) {
               <div className="q">{d.question}</div>
               <div className="meta">
                 <span className="pill">{projects[d.project_id]?.name ?? d.project_id}</span>
-                {d.state === "answered" && d.answered_by && <span className="faint">answered by {d.answered_by}</span>}
+                {d.state !== "open" && d.answered_by && <span className="faint">answered by {d.answered_by}</span>}
                 <span className="spacer" />
-                <span>{ago(d.state === "answered" ? d.answered_at ?? d.opened_at : d.opened_at)}</span>
+                <span>{ago(d.state !== "open" ? d.answered_at ?? d.opened_at : d.opened_at)}</span>
               </div>
             </a>
           ))}
@@ -146,9 +147,10 @@ function DecisionDetail({ d, answerBox, onAnswered }: {
         <a href={href({ name: "project", id: d.project_id })}>{project?.name ?? d.project_id}</a>
         {d.task_id && <> · <a href={href({ name: "task", id: d.task_id })}>{task?.title ?? d.task_id}</a></>}
         <span className="faint"> · asked {ago(d.opened_at)}</span>
+        <span className="faint"> · </span><a href={href({ name: "decisions", project: d.project_id, id: d.id })}>Open in the log</a>
       </div>
       <div className="d-question">{d.question}</div>
-      {d.state === "answered" ? (
+      {d.state !== "open" ? (
         <div className="d-answer" data-testid="decision-answer">
           <div className="who">
             Answered{d.answered_by ? <> by <b>{d.answered_by}</b></> : ""}{d.answered_at ? <> · {ago(d.answered_at)}</> : ""}

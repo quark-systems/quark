@@ -20,6 +20,8 @@ export function ProjectBoard({ id }: { id: string }) {
   const [chatOpen, setChatOpen] = useState(true);
   const proposals = useStore((s) => s.memoryProposals);
   const l = useLabels(id);
+  const decisions = useStore((s) => s.decisions);
+  const openDecisions = useMemo(() => Object.values(decisions).filter((d) => d.project_id === id && d.state === "open").length, [decisions, id]);
   const toReview = useMemo(() => Object.values(proposals).filter((m) => m.project_id === id && m.state === "proposed").length, [proposals, id]);
 
   const mine = useMemo(() => Object.values(tasks).filter((t) => t.project_id === id), [tasks, id]);
@@ -50,6 +52,9 @@ export function ProjectBoard({ id }: { id: string }) {
         {project.goal && <span className="crumb ellipsis" title={project.goal}>{project.goal}</span>}
         <span className="spacer" />
         <a className="btn" href={href({ name: "overview", project: id })} data-testid="nav-overview" title="What is happening now, and what changed since you last looked">Overview</a>
+        <a className="btn" href={href({ name: "decisions", project: id })} data-testid="nav-decisions" title="Every decision in this Project: what was asked, the answer, why and what happened">
+          Decisions{openDecisions > 0 && <span className="pill needs-you" data-testid="decisions-count">{openDecisions}</span>}
+        </a>
         <a className="btn" href={href({ name: "issues", project: id })} data-testid="nav-issues" title="The project's issues, in Beads and GitHub Issues">Issues</a>
         <a className="btn" href={href({ name: "memory", project: id })} data-testid="nav-memory" title="Review what finished tasks learned">
           {l.ui("memory", "Memory")}{toReview > 0 && <span className="pill accent" data-testid="memory-count">{toReview}</span>}

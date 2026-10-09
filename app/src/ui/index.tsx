@@ -5,6 +5,8 @@ import { Tone, TONE_LABEL } from "./tone";
 import "./ui.css";
 
 export { taskTone, TONE_LABEL } from "./tone";
+export { DecisionCard, DecisionEvidence } from "./DecisionCard";
+export type { DecisionCardSize } from "./DecisionCard";
 export type { Tone } from "./tone";
 
 /** A small round dot for one of the glossary's state words. Busy pulses with a halo. */

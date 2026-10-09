@@ -4,7 +4,8 @@ import type { Decision, DecisionState } from "./api";
 
 /** Open decisions oldest first, since they hold up work longest; answered ones newest first. */
 export function inboxList(all: Decision[], filter: DecisionState): Decision[] {
-  const list = all.filter((d) => d.state === filter);
+  // A decision someone has acted on is still an answered one here.
+  const list = all.filter((d) => (d.state === "open") === (filter === "open"));
   return filter === "open"
     ? list.sort((a, b) => a.opened_at.localeCompare(b.opened_at) || a.id.localeCompare(b.id))
     : list.sort((a, b) => (b.answered_at ?? b.opened_at).localeCompare(a.answered_at ?? a.opened_at) || a.id.localeCompare(b.id));

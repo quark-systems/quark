@@ -65,8 +65,11 @@ test("coordinator chat: workers started and questions asked show as cards", asyn
   const question = cards.filter({ hasText: "Asked you to decide" });
   await expect(question).toContainText("decision-records");
   await expect(question).toContainText("Keep decision records in docs/adr or in the wiki?");
-  // An hour or more between turns opens a new stretch, marked with its time.
-  await expect(chat.getByRole("separator")).toHaveCount(1);
+  // An hour or more between turns opens a new stretch, marked with its time. The seeded turns
+  // end 35 minutes ago; when midnight has passed since then, the previous journey's turn also
+  // opens a new day.
+  const newDay = new Date(Date.now() - 35 * 60_000).toDateString() !== new Date().toDateString();
+  await expect(chat.getByRole("separator")).toHaveCount(newDay ? 2 : 1);
   await question.getByRole("link", { name: "Open inbox" }).click();
   await expect(page).toHaveURL(/#\/inbox/);
 });

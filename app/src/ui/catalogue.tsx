@@ -1,7 +1,8 @@
 // The component catalogue: one entry per shared part in `src/ui`, with when to use it, its
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React from "react";
-import { Button, CoordinatorMark, CountBadge, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import type { Decision } from "../api";
+import { Button, CoordinatorMark, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -10,6 +11,24 @@ export interface CatalogueEntry {
   contract: string;
   example: () => React.ReactNode;
 }
+
+// A sample decision for the cards below; answering it from here reaches whatever daemon is connected.
+const SAMPLE: Decision = {
+  id: "catalogue-sample", number: 14, project_id: "catalogue", task_id: null, question: "Switch slice 2 (dispatch) to the native engine?",
+  state: "open", opened_at: new Date(Date.now() - 4 * 60_000).toISOString(),
+  brief: {
+    context: "Slice 2 has run in shadow for 7 days and agreed with firstmate on all 212 dispatches. Firstmate keeps running beside it for a week.",
+    options: [
+      { label: "Switch now", consequence: "Merges #95. Slices 3 and 4 can start their shadow window today." },
+      { label: "Wait a week", consequence: "Shadow keeps comparing. Slices 3 and 4 stay blocked." },
+    ],
+    recommended: "Switch now", recommended_why: "No disagreements in 212 dispatches, and switching back is one setting.",
+    asked_by: "coordinator", blocks: ["https://github.com/quark-systems/quark/pull/95"],
+    evidence: [{ label: "Shadow comparison, last 7 days", url: null }],
+  },
+  answer: null, answered_by: null, answered_at: null, answered_via: null, answer_why: null,
+  outcome: null, acted_at: null, rule_id: null, made_rule_id: null,
+};
 
 const TONES: Tone[] = ["busy", "needs-you", "ready", "failed", "parked", "idle"];
 
@@ -62,5 +81,23 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "Stand for a project's coordinator wherever workers have a status dot.",
     contract: "size in px (22 by default).",
     example: () => <CoordinatorMark />,
+  },
+  {
+    name: "DecisionCard",
+    when: "Show a decision wherever it comes up: inline in a conversation, full in the Decisions tab, compact on a phone.",
+    contract: "d is the decision; size inline (one tap answers with an option) | full (options with consequences, why, standing rule; the log entry once answered) | phone (first two options). onAnswered gets the answered decision, already in the store.",
+    example: () => (
+      <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
+        <DecisionCard d={SAMPLE} size="inline" />
+        <div style={{ maxWidth: 360 }}><DecisionCard d={SAMPLE} size="phone" /></div>
+        <DecisionCard d={SAMPLE} size="full" />
+      </div>
+    ),
+  },
+  {
+    name: "DecisionEvidence",
+    when: "Beside a full decision card: the asker's evidence, what waits on the answer, and earlier calls like it.",
+    contract: "d is the decision; links open in a new window, workers and decisions in the app.",
+    example: () => <div style={{ maxWidth: 340 }}><DecisionEvidence d={SAMPLE} /></div>,
   },
 ];

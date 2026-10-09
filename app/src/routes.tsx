@@ -7,6 +7,7 @@ import { NewProject } from "./screens/NewProject";
 import { ProjectBoard } from "./screens/ProjectBoard";
 import { Memory } from "./screens/Memory";
 import { Issues } from "./screens/Issues";
+import { Decisions } from "./screens/Decisions";
 import { Dispatch } from "./screens/Dispatch";
 import { WorkerView } from "./screens/WorkerView";
 import { Inbox } from "./screens/Inbox";
@@ -26,6 +27,7 @@ export const SCREENS: Screens = {
   projects: () => <Projects />,
   new: () => <NewProject onCreated={(id) => go({ name: "project", id })} />,
   project: (r) => <ProjectBoard key={r.id} id={r.id} />,
+  decisions: (r) => <Decisions key={r.project} project={r.project} id={r.id} />,
   memory: (r) => <Memory key={r.project} project={r.project} id={r.id} />,
   issues: (r) => <Issues key={r.project} project={r.project} id={r.id} />,
   dispatch: (r) => <Dispatch key={r.project} project={r.project} />,
