@@ -119,12 +119,6 @@ export function Issues({ project: pid, id }: { project: string; id?: string }) {
 
   return (
     <>
-      <div className="header">
-        <h1>Issues</h1>
-        <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
-        <span className="spacer" />
-        <a className="btn" href={href({ name: "memory", project: pid })} data-testid="nav-memory">Memory</a>
-      </div>
       {beadsUnavailable ? <Unavailable what="Beads" endpoint={`GET /v1/projects/${pid}/beads`} />
         : !beads ? <div className="empty">{loadErr ?? (connected ? "Loading…" : "Waiting for the daemon…")}</div>
         : !ready ? <BeadsSetup b={beads} />

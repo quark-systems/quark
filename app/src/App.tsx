@@ -3,13 +3,11 @@ import { daemonUrl, setDaemonUrl } from "./api";
 import { RouteView } from "./routes";
 import { start, useStore } from "./store";
 import { LeftList } from "./shell/LeftList";
-import { Dock } from "./shell/Dock";
+import { Dock, MOD } from "./shell/Dock";
 import { goNextAttention, useAttention } from "./shell/NextAttention";
 import { parseRoute, useRoute } from "./nav";
 import { Palette } from "./Palette";
 
-const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
-export const MOD = isMac ? "⌘" : "Ctrl+";
 
 export function App() {
   const [palette, setPalette] = useState(false);
@@ -17,7 +15,8 @@ export function App() {
   const queue = useAttention();
   const dock = useRef<HTMLInputElement>(null);
   // The coordinator's own conversation (the project route) has its message box; every other screen has the dock.
-  const hasDock = route.name !== "project";
+  // The worker view places its own, under the worker's conversation.
+  const hasDock = route.name !== "project" && route.name !== "task";
   const latest = useRef({ queue });
   latest.current = { queue };
 
@@ -30,7 +29,7 @@ export function App() {
       if (k === "p") { e.preventDefault(); e.stopPropagation(); setPalette((p) => !p); }
       else if (k === "k") {
         e.preventDefault(); e.stopPropagation(); setPalette(false);
-        const box = dock.current ?? document.querySelector<HTMLTextAreaElement>('[data-testid="coordinator-chat"] textarea');
+        const box = dock.current ?? document.querySelector<HTMLElement>('[data-testid="dock"] input, [data-testid="coordinator-chat"] textarea');
         box?.focus();
       } else if (k === "j") {
         e.preventDefault(); e.stopPropagation();

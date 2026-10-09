@@ -117,3 +117,70 @@ test("dock: Ctrl+K from a worker asks its project's coordinator about that worke
   await dock.getByRole("link", { name: "See the conversation" }).click();
   await expect(page).toHaveURL(/#\/p\/quark$/);
 });
+
+test("routes: project tabs, one Settings page, All projects home, and old links still open", async ({ page }) => {
+  // The project opens on its Conversation: the coordinator in the middle, what changed and what needs you beside it.
+  await open(page, "#/p/quark");
+  const tabs = page.getByRole("navigation", { name: "Project", exact: true });
+  await expect(tabs.getByRole("link")).toHaveText(["Conversation", "Overview", "Work", "Issues", /^Decisions/, /^Memory/, "Metrics"]);
+  await expect(tabs.getByRole("link", { name: "Conversation" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("coordinator-chat")).toBeVisible();
+  const since = page.getByRole("complementary", { name: "Since you looked" });
+  await expect(since).toContainText("Needs you");
+  await expect(since).toContainText("Open PRs");
+
+  // Work is the board; Decisions lists the project's decisions; Issues lists its Beads issues.
+  await tabs.getByRole("link", { name: "Work" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/work$/);
+  await expect(page.getByTestId("col-running")).toBeVisible();
+  await tabs.getByRole("link", { name: /^Decisions/ }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/decisions$/);
+  await expect(page.getByTestId("decision-log-row").first()).toBeVisible();
+  await tabs.getByRole("link", { name: "Issues" }).click();
+  await expect(page.getByTestId("beads-strip")).toBeVisible();
+
+  // Settings is one page; Dispatch and Automation are its sections, and their old links open there.
+  await page.getByTestId("nav-settings").click();
+  const sections = page.getByRole("navigation", { name: "Settings" });
+  await expect(sections.getByRole("link")).toHaveText([/Back to Conversation$/, "General", "Dispatch", "Automation"]);
+  await open(page, "#/p/quark/dispatch");
+  await expect(page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: "Dispatch" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("nav-settings")).toHaveAttribute("aria-current", "page");
+
+  // All projects folds in the decisions inbox and the PR center.
+  await page.getByRole("navigation", { name: "Projects" }).getByRole("link", { name: "All projects" }).click();
+  await expect(page.getByRole("region", { name: "Needs you" }).getByTestId("home-needs").first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Open PRs" })).toContainText("Terminal sessions over tmux control mode");
+  await page.getByTestId("home-filter-pr").click();
+  await expect(page.getByTestId("home-needs")).toHaveText(Array(await page.getByTestId("home-needs").count()).fill(/Check failed/));
+  await page.getByTestId("nav-prs").click();
+  await expect(page).toHaveURL(/#\/prs$/);
+});
+
+test("worker view: transcript in the middle, Terminal, Changes, PR and Why this agent in the work pane", async ({ page }) => {
+  await open(page, "#/p/quark/work");
+  await page.getByTestId("task-card").filter({ hasText: "OpenAPI check in CI" }).click();
+  await expect(page).toHaveURL(/#\/t\//);
+
+  // The center is the conversation with the worker; the work pane opens on its terminal.
+  await expect(page.locator(".worker-center").getByTestId("transcript")).toBeVisible();
+  await expect(page.locator(".worker-center").getByLabel("Message the worker")).toBeVisible();
+  // The dock sits under the worker's conversation, not under the work pane.
+  await expect(page.locator(".worker-center").getByTestId("dock")).toBeVisible();
+  const pane = page.getByRole("complementary", { name: "Work" });
+  await expect(pane.getByRole("tab")).toHaveText(["Terminal", "Changes", "PR", "Why this agent"]);
+  await expect(pane.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
+  await expect(pane.getByTestId("terminal")).toBeVisible();
+
+  // PR: the worker's PR in brief, opening its full view.
+  await pane.getByRole("tab", { name: "PR" }).click();
+  await expect(pane.getByTestId("worker-pr")).toContainText("#2");
+  await expect(pane.getByTestId("terminal")).toBeHidden();
+
+  // Why this agent links to the dispatch rules it was picked by.
+  await pane.getByRole("tab", { name: "Why this agent" }).click();
+  const edit = pane.getByTestId("why-edit-rule").first();
+  await expect(edit).toBeVisible();
+  await edit.click();
+  await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
+});

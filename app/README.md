@@ -8,10 +8,10 @@ The same frontend runs in a plain browser.
 
 ## Screens
 
-- **Projects**: every Project with its active and needs-decision counts.
+- **All projects** (home): what needs you across projects, oldest first, open PRs, and one card per project.
 - **New project** (J2): name, goal, repositories, default agent (harness, model, effort) and dispatch preset.
-- **Project board** (J3): one column per task state, updated live from the event stream, beside the coordinator chat.
-- **Worker view** (J4): live terminal with input, a box to message the worker, cancel and relaunch, and tabs for the transcript and the changed files with their diff.
+- **Project** (J3): tabs Conversation (the coordinator, with what changed since you looked), Overview, Work (one column per worker state, updated live from the event stream), Issues, Decisions, Memory and Metrics; Settings is one page with General, Dispatch and Automation sections.
+- **Worker view** (J4): the transcript and a box to message the worker in the middle, cancel and relaunch, and a work pane with the live terminal (with input), the changed files with their diff, the worker's PR, and Why this agent with a link to the dispatch rule that picked it.
 - **Decisions** (J5): every open decision across Projects, oldest first, with an answer box; the answered list shows who answered and when.
   Keys: `j`/`k` move, `r` or `Enter` answers, `Ctrl/Cmd+Enter` sends, `o`/`a` switch between open and answered, `t` opens the task that asked.
 - **Memory** (J8): per Project, the learnings finished tasks proposed, with their evidence, accepted (edited or not) for this Project, all your Projects or anyone in the repo, rejected, or turned into an issue; what this Project keeps (its Beads memories, or `memory/` files with the commit that added each and promotion to user-level memory), your own memory, and the Project's decisions.

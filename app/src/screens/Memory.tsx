@@ -158,12 +158,6 @@ export function Memory({ project: pid, id }: { project: string; id?: string }) {
   const projectUnavailable = tab === "project" && !beadsReady && unavailable;
   return (
     <>
-      <div className="header">
-        <h1>Memory</h1>
-        <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
-        <span className="spacer" />
-        <a className="btn" href={href({ name: "issues", project: pid })} data-testid="nav-issues">Issues</a>
-      </div>
       <div className="screen issues-layout">
         <section className="mem-list" aria-label="Memory" data-testid="memory-list">
           <div className="chips" role="group" aria-label="Show">

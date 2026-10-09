@@ -37,10 +37,14 @@ export function dockMessage(text: string, ctx: DockContext): string {
   return ctx.about ? `About "${ctx.about}" (${ctx.link}):\n${text}` : text;
 }
 
+const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+/** The shortcut modifier as shown in key hints. */
+export const MOD = isMac ? "⌘" : "Ctrl+";
+
 // The last project you opened, so app-level screens dock to it.
 let lastProject: string | null = null;
 
-export const Dock = forwardRef<HTMLInputElement, { mod: string }>(function Dock({ mod }, ref) {
+export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock({ mod = MOD }, ref) {
   const route = useRoute();
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
@@ -68,6 +72,9 @@ export const Dock = forwardRef<HTMLInputElement, { mod: string }>(function Dock(
     finally { setSending(false); }
   };
 
+  // On a project's pages the dock names the project, as on a worker it names the worker.
+  const scope = !ctx.about && ctx.pinned && projectId ? projects[projectId]?.name ?? null : null;
+
   if (!sorted.length) return null;
   const placeholder = ctx.about ? `Ask the ${coordinator} about ${ctx.about}…` : `Ask the ${coordinator} anything, or describe new work…`;
   return (
@@ -75,6 +82,7 @@ export const Dock = forwardRef<HTMLInputElement, { mod: string }>(function Dock(
       <div className="dock-box">
         <CoordinatorMark size={24} />
         {ctx.about ? <span className="dock-about" data-testid="dock-about" title={ctx.about}>about {ctx.about}</span>
+          : scope ? <span className="dock-about" title={scope}>about {scope}</span>
           : !ctx.pinned && sorted.length > 1 && projectId ? (
             <select className="dock-project" aria-label="Project" value={projectId} onChange={(e) => setPicked(e.target.value)}>
               {sorted.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}

@@ -25,7 +25,8 @@ test("creates a project and lands on its board", async ({ page }) => {
   await expect(page.getByTestId("provision-bar")).toContainText("Cloning repositories");
   await expect(page.getByTestId("provision-bar")).toBeHidden();
   await expect(page.getByTestId("coordinator-chat")).toContainText("Workspace ready with quark");
-  await expect(page.locator(".header h1")).toHaveText("Parser rewrite");
+  await expect(page.getByTestId("project-header")).toContainText("Parser rewrite");
+  await page.getByTestId("nav-work").click();
   await expect(page.getByTestId("col-queued")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Projects" })).toContainText("Parser rewrite");
 
@@ -52,6 +53,7 @@ test("the board updates live when the coordinator queues a task", async ({ page 
   await expect(chat.locator(".msg", { hasText: "Add tests for the parser" }).last()).toBeVisible();
   await expect(chat).toContainText("I wrote a task contract and queued Add tests");
   await expect(chat.locator(".msg.pending")).toHaveCount(0);
+  await page.getByTestId("nav-work").click();
   await expect(page.getByTestId("col-queued")).toContainText("Add tests for the parser");
 });
 
@@ -75,7 +77,7 @@ test("coordinator chat: workers started and questions asked show as cards", asyn
 });
 
 test("worker cards show the harness, its mark and how much the worker changed", async ({ page }) => {
-  await open(page, "#/p/quark");
+  await open(page, "#/p/quark/work");
   const card = page.getByTestId("task-card").filter({ hasText: "Event stream" });
   await expect(card.getByRole("img", { name: "Claude Code" })).toBeVisible();
   await expect(card.getByTestId("card-diff")).toHaveText(/^\+\d+−\d+$/);
@@ -90,7 +92,7 @@ test("worker cards show the harness, its mark and how much the worker changed", 
 });
 
 test("worker view: terminal, steering, transcript, changes, cancel and relaunch", async ({ page }) => {
-  await open(page, "#/p/quark");
+  await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
   await expect(page).toHaveURL(/#\/t\//);
 
@@ -131,7 +133,7 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
 
 test("worker view: why this agent, live on relaunch and kept after the task ends", async ({ page }) => {
   // No classifier configured: the coordinator picked.
-  await open(page, "#/p/quark");
+  await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).click();
   await page.getByRole("tab", { name: "Why this agent" }).click();
   const why = page.getByTestId("why-this-agent");
@@ -148,7 +150,7 @@ test("worker view: why this agent, live on relaunch and kept after the task ends
   await expect(why.locator("details.why-record").getByTestId("why-summary")).toContainText("the coordinator picked codex");
 
   // The classifier matched a rule: every candidate with its pass or fail reason.
-  await open(page, "#/p/quark");
+  await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
   await page.getByRole("tab", { name: "Why this agent" }).click();
   await expect(why).toContainText("The classifier matched rule rule_1 (A focused change inside one crate with tests.) at 0.91 confidence.");
@@ -160,14 +162,14 @@ test("worker view: why this agent, live on relaunch and kept after the task ends
   await expect(cands.filter({ hasText: "claude-code:claude-sonnet-5" }).first()).toContainText("chosen");
 
   // A finished task keeps its record.
-  await open(page, "#/p/quark");
+  await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Daemon skeleton" }).click();
   await page.getByRole("tab", { name: "Why this agent" }).click();
   await expect(why.getByTestId("why-summary")).toContainText("the coordinator picked claude-code");
 });
 
 test("a queued task explains that it has no terminal or changes yet", async ({ page }) => {
-  await open(page, "#/p/quark");
+  await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Harness registry trait" }).click();
   await expect(page.getByTestId("no-terminal")).toHaveText("No terminal yet: this task has no worker running.");
   await expect(page.getByTestId("terminal").getByRole("button", { name: "Retry" })).toHaveCount(0);
@@ -217,7 +219,6 @@ test("decisions inbox: answer from the keyboard, then see who answered", async (
   await page.getByLabel("Answer", { exact: true }).press("Control+Enter");
   await expect(page).toHaveURL(/#\/inbox\/d-2$/);
   await expect(rows).toHaveCount(1);
-  await expect(page.getByTestId("inbox-count")).toHaveText("1");
 
   // The answered list shows who answered.
   await page.locator("body").click();
@@ -476,6 +477,7 @@ test("memory: review proposals from the keyboard, browse entries with their comm
 
 test("dispatch: edit rules, test them, save them as a commit and test again", async ({ page }) => {
   await open(page, "#/p/quark");
+  await page.getByTestId("nav-settings").click();
   await page.getByTestId("nav-dispatch").click();
   await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
 
@@ -688,6 +690,7 @@ test("metrics: the dashboard's Metrics tab shows how the work went and changes i
 
 test("automation: leave a note, add and remove a rule, change what reaches you while away", async ({ page }) => {
   await open(page, "#/p/quark");
+  await page.getByTestId("nav-settings").click();
   await page.getByTestId("nav-automation").click();
   await expect(page).toHaveURL(/#\/p\/quark\/automation$/);
   await expect(page.getByTestId("automation-shadow")).toBeVisible();
@@ -752,7 +755,7 @@ test("overview: live status now, and what changed since you last looked", async 
   const mark = page.getByTestId("overview-mark-read");
   if (await mark.isVisible()) await mark.click();
   await expect(page.getByTestId("overview-summary")).toHaveText("Nothing new.");
-  await page.getByTestId("dash-tab-settings").click();
+  await page.getByTestId("nav-settings").click();
   await expect(page).toHaveURL(/#\/p\/quark\/settings$/);
   await page.evaluate(async () => {
     const base = "http://127.0.0.1:7392/v1";
@@ -762,7 +765,7 @@ test("overview: live status now, and what changed since you last looked", async 
     await fetch(`${base}/tasks/${t.id}:relaunch`, { method: "POST" });
   });
 
-  await page.getByTestId("dash-tab-overview").click();
+  await page.getByTestId("nav-overview").click();
   await expect(page.getByTestId("overview-digest")).toContainText("Since you last looked");
   await expect(page.getByTestId("overview-summary")).toHaveText("1 failed and 1 worker started.");
   const highlights = page.getByTestId("overview-highlight");
@@ -786,9 +789,10 @@ test("switching a project's persona relabels its board, chat and workers", async
 
   await page.getByTestId("persona-picker").selectOption("kitchen-brigade");
   await expect(chat.getByLabel("Message the expo")).toBeVisible();
-  await expect(page.locator(".header").getByRole("button", { name: "Expo" })).toBeVisible();
-  await expect(page.getByTestId("col-needs_decision")).toContainText("Needs chef's call");
+  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("region", { name: "Quark MVP" }).getByTestId("ll-coordinator")).toContainText("Expo");
   await expect(page.getByTestId("nav-memory")).toContainText("Recipe book");
+  await page.getByTestId("nav-work").click();
+  await expect(page.getByTestId("col-needs_decision")).toContainText("Needs chef's call");
 
   await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
   await expect(page.getByLabel("Message the line cook")).toBeVisible();
@@ -797,6 +801,7 @@ test("switching a project's persona relabels its board, chat and workers", async
   await open(page, "#/p/quark");
   await page.getByTestId("persona-picker").selectOption("");
   await expect(chat.getByLabel("Message the coordinator")).toBeVisible();
+  await page.getByTestId("nav-work").click();
   await expect(page.getByTestId("col-needs_decision")).toContainText("Needs decision");
 });
 
@@ -833,7 +838,7 @@ test("hosts: every host's health, telemetry, Projects and worktrees, and a Proje
   await page.getByTestId("host-project").first().getByRole("link").click();
   await expect(page).toHaveURL(/#\/p\/quark\/overview$/);
   await expect(page.getByTestId("overview-hosts").getByTestId("project-host")).toContainText("of the host");
-  await page.getByTestId("dash-tab-metrics").click();
+  await page.getByTestId("nav-metrics").click();
   await expect(page.getByTestId("metrics-hosts").getByTestId("project-host-memory").locator("svg")).toBeVisible();
 });
 

@@ -1,7 +1,7 @@
-// J3: the Project's board, live from the event stream, beside the coordinator chat.
+// J3: the project's Conversation tab (its coordinator) and Work tab (its board, live from the event stream).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Project, Task, TranscriptItem } from "../api";
-import { href } from "../nav";
+import { SinceYouLooked } from "../shell/SinceYouLooked";
 import { loadChat, useStore } from "../store";
 import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
@@ -17,12 +17,7 @@ export function ProjectBoard({ id }: { id: string }) {
   const project = useStore((s) => s.projects[id]);
   const connected = useStore((s) => s.connected);
   const tasks = useStore((s) => s.tasks);
-  const [chatOpen, setChatOpen] = useState(true);
-  const proposals = useStore((s) => s.memoryProposals);
   const l = useLabels(id);
-  const decisions = useStore((s) => s.decisions);
-  const openDecisions = useMemo(() => Object.values(decisions).filter((d) => d.project_id === id && d.state === "open").length, [decisions, id]);
-  const toReview = useMemo(() => Object.values(proposals).filter((m) => m.project_id === id && m.state === "proposed").length, [proposals, id]);
 
   const mine = useMemo(() => Object.values(tasks).filter((t) => t.project_id === id), [tasks, id]);
   const columns = useMemo(() => {
@@ -38,35 +33,12 @@ export function ProjectBoard({ id }: { id: string }) {
   for (const t of mine) if (prev.current[t.id] !== undefined && prev.current[t.id] !== t.state) changed.add(t.id);
   useEffect(() => { prev.current = Object.fromEntries(mine.map((t) => [t.id, t.state])); });
 
-  if (!project) {
-    return <div className="empty">{connected ? "This project does not exist on the daemon." : "Waiting for the daemon…"}</div>;
-  }
+  if (!project) return <Missing connected={connected} />;
 
   return (
     <>
-      <div className="header">
-        <h1>{project.name}</h1>
-        {project.status && project.status !== "ready" && (
-          <span className={"pill " + (project.status === "failed" ? "red" : "yellow")} data-testid="project-status">{project.status}</span>
-        )}
-        {project.goal && <span className="crumb ellipsis" title={project.goal}>{project.goal}</span>}
-        <span className="spacer" />
-        <a className="btn" href={href({ name: "overview", project: id })} data-testid="nav-overview" title="What is happening now, and what changed since you last looked">Overview</a>
-        <a className="btn" href={href({ name: "decisions", project: id })} data-testid="nav-decisions" title="Every decision in this Project: what was asked, the answer, why and what happened">
-          Decisions{openDecisions > 0 && <span className="pill needs-you" data-testid="decisions-count">{openDecisions}</span>}
-        </a>
-        <a className="btn" href={href({ name: "issues", project: id })} data-testid="nav-issues" title="The project's issues, in Beads and GitHub Issues">Issues</a>
-        <a className="btn" href={href({ name: "memory", project: id })} data-testid="nav-memory" title="Review what finished tasks learned">
-          {l.ui("memory", "Memory")}{toReview > 0 && <span className="pill accent" data-testid="memory-count">{toReview}</span>}
-        </a>
-        <a className="btn" href={href({ name: "dispatch", project: id })} data-testid="nav-dispatch" title="Which agent each kind of task gets">Dispatch</a>
-        <a className="btn" href={href({ name: "metrics", project: id })} data-testid="nav-metrics" title="How this Project's work has gone">Metrics</a>
-        <a className="btn" href={href({ name: "automation", project: id })} data-testid="nav-automation" title="Inbox, trigger rules and the away policy">Automation</a>
-        <a className="btn" href={href({ name: "settings", project: id })} data-testid="nav-settings" title="Every switch for this Project">Settings</a>
-        <button className={"btn" + (chatOpen ? " on" : "")} onClick={() => setChatOpen(!chatOpen)}>{l.Role("coordinator")}</button>
-      </div>
       {project.status && project.status !== "ready" && <ProvisionBar project={project} />}
-      <div className={"screen board-layout" + (chatOpen ? " with-chat" : "")}>
+      <div className="screen board-layout">
         <div className="board" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(180px, 1fr))` }}>
           {columns.map((c) => (
             <div className="col" key={c.id} data-testid={`col-${c.id}`}>
@@ -80,10 +52,29 @@ export function ProjectBoard({ id }: { id: string }) {
             </div>
           ))}
         </div>
-        {chatOpen && <CoordinatorChat cid={id} />}
       </div>
     </>
   );
+}
+
+/** The Conversation tab, the project's home: its coordinator, and what changed since you looked. */
+export function Conversation({ id }: { id: string }) {
+  const project = useStore((s) => s.projects[id]);
+  const connected = useStore((s) => s.connected);
+  if (!project) return <Missing connected={connected} />;
+  return (
+    <>
+      {project.status && project.status !== "ready" && <ProvisionBar project={project} />}
+      <div className="conversation">
+        <CoordinatorChat cid={id} />
+        <SinceYouLooked project={id} />
+      </div>
+    </>
+  );
+}
+
+function Missing({ connected }: { connected: boolean }) {
+  return <div className="empty">{connected ? "This project does not exist on the daemon." : "Waiting for the daemon…"}</div>;
 }
 
 function ProvisionBar({ project }: { project: Project }) {

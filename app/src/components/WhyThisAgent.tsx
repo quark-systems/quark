@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { DispatchRecord, DispatchStatus } from "../api";
 import { getState, loadAccounts, loadDispatch, useStore } from "../store";
+import { href } from "../nav";
 import { ago, errText } from "../util";
 import { Unavailable } from "./Unavailable";
 
@@ -26,6 +27,7 @@ const STATUS: Record<DispatchStatus, { label: string; cls: string }> = {
 
 export function WhyThisAgent({ taskId }: { taskId: string }) {
   const records = useStore((s) => s.dispatch[taskId]) ?? NONE;
+  const projectId = useStore((s) => s.tasks[taskId]?.project_id);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
 
@@ -44,16 +46,17 @@ export function WhyThisAgent({ taskId }: { taskId: string }) {
       {status === "error" && <div className="form-error">{err}</div>}
       {status === "loading" && <div className="empty">Loading…</div>}
       {status === "ok" && !records.length && <div className="empty">No dispatch recorded yet: this task's worker has not started.</div>}
-      {newest.map((r, i) => <RecordView key={r.id} r={r} latest={i === 0} />)}
+      {newest.map((r, i) => <RecordView key={r.id} r={r} latest={i === 0} projectId={projectId} />)}
     </div>
   );
 }
 
-function RecordView({ r, latest }: { r: DispatchRecord; latest: boolean }) {
+function RecordView({ r, latest, projectId }: { r: DispatchRecord; latest: boolean; projectId?: string }) {
   const account = useStore((s) => (r.chosen.account ? s.accounts[r.chosen.account] : undefined));
   const st = STATUS[r.resolution.status] ?? { label: r.resolution.status, cls: "" };
   const body = (
     <>
+      <span className="why-chosen">{[r.chosen.harness, r.chosen.model, r.chosen.effort && `${r.chosen.effort} effort`].filter(Boolean).join(" · ")}</span>
       <p className="why-summary" data-testid="why-summary">{r.summary}</p>
       <dl className="why-facts">
         <dt>Agent</dt>
@@ -66,7 +69,10 @@ function RecordView({ r, latest }: { r: DispatchRecord; latest: boolean }) {
         <dt>Decided by</dt>
         <dd><span className="pill accent">{DECIDER[r.decided_by] ?? r.decided_by}</span></dd>
         <dt>Rule</dt>
-        <dd>{r.rule ? <><span className="mono">{r.rule.id}</span>{r.rule.when && <span className="faint"> · {r.rule.when}</span>}</> : <span className="faint">none matched</span>}</dd>
+        <dd>
+          {r.rule ? <><span className="mono">{r.rule.id}</span>{r.rule.when && <span className="faint"> · {r.rule.when}</span>}</> : <span className="faint">none matched</span>}
+          {projectId && <> · <a href={href({ name: "dispatch", project: projectId })} data-testid="why-edit-rule">{r.rule ? "Edit this rule" : "Edit the rules"}</a></>}
+        </dd>
         <dt>Classifier</dt>
         <dd data-testid="why-classifier">
           {r.classifier.provider === "none" ? <span className="faint">none (the coordinator picked)</span> : (
