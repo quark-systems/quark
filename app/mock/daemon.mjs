@@ -48,6 +48,19 @@ const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
 const memoryProposals = new Map(); // proposal id -> MemoryProposal
 const memoryEntries = new Map(); // project id -> MemoryEntry[] (the Project repo's memory/)
+// What `gh api user/repos` would list for the logged-in account, most recently pushed first.
+const FORGE_REPOS = [
+  ["quark-systems/quark", true, "Agent workspace: daemon, engine and desktop app"],
+  ["quark-systems/firstmate", true, "Supervisor for coding agents"],
+  ["mattsanchez/dotfiles", false, "Shell, editor and tmux config"],
+  ["quark-systems/website", false, "quark.systems"],
+  ["mattsanchez/parser-playground", true, null],
+  ["quark-systems/old-prototype", true, "First prototype, kept for reference"],
+].map(([full_name, priv, description], i) => ({
+  full_name, private: priv, archived: full_name.endsWith("old-prototype"), description,
+  pushed_at: new Date(Date.now() - (i + 1) * 36e5 * 7).toISOString(),
+  ssh_url: `git@github.com:${full_name}.git`, clone_url: `https://github.com/${full_name}.git`,
+}));
 const accounts = new Map(); // account id -> Account, in the daemon's order (default first per harness)
 const dispatches = new Map(); // task id -> DispatchRecord[], oldest first; kept after the task ends
 const memoryCommits = new Map(); // commit id -> MemoryCommit
@@ -1605,6 +1618,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
   if (p === "/v1/harnesses" && req.method === "GET") return send(res, 200, HARNESSES);
+  if (p === "/v1/forge/repositories" && req.method === "GET") return send(res, 200, FORGE_REPOS);
   if (p === "/v1/harnesses:validate" && req.method === "POST") {
     const b = await readJson(req);
     const h = HARNESSES.find((x) => x.id === b?.config?.harness);

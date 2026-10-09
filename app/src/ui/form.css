@@ -58,3 +58,8 @@ legend.ui-field-label { margin-bottom: var(--space-2); }
 @media (prefers-reduced-motion: reduce) {
   .ui-input, .ui-option-card, .ui-disclosure > summary::before { transition: none; }
 }
+
+/* FolderPicker: the chosen path in a box that opens the dialog too, then its buttons. */
+.ui-folder { display: flex; gap: var(--space-2); align-items: center; }
+.ui-folder-path { flex: 1; text-align: left; cursor: pointer; font: var(--control-mono-font) var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ui-folder-path.empty { font: var(--control-font) var(--sans); color: var(--fg-faint); }

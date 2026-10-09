@@ -338,3 +338,20 @@ pub struct MergePullRequest {
     /// Default `squash` on GitHub; GitLab uses the project's own setting.
     pub method: Option<MergeMethod>,
 }
+
+/// A repository the forge account can reach, offered when adding
+/// repositories to a Project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ForgeRepository {
+    /// `owner/name`.
+    pub full_name: String,
+    pub private: bool,
+    pub archived: bool,
+    pub description: Option<String>,
+    /// Last push, RFC 3339.
+    pub pushed_at: Option<String>,
+    /// SSH clone URL, e.g. `git@github.com:owner/name.git`.
+    pub ssh_url: String,
+    /// HTTPS clone URL.
+    pub clone_url: String,
+}

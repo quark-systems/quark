@@ -17,6 +17,7 @@ mod openapi;
 mod overview;
 mod personas;
 mod pull_requests;
+mod repositories;
 mod routes;
 mod shadows;
 mod terminals;
@@ -91,6 +92,10 @@ const MODULES: &[Module] = &[
     Module {
         router: pull_requests::router,
         openapi: <pull_requests::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: repositories::router,
+        openapi: <repositories::Api as OpenApi>::openapi,
     },
     Module {
         router: harnesses::router,

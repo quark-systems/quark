@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -29,6 +29,11 @@ const SAMPLE: Decision = {
   answer: null, answered_by: null, answered_at: null, answered_via: null, answer_why: null,
   outcome: null, acted_at: null, rule_id: null, made_rule_id: null,
 };
+
+function FolderPickerExample() {
+  const [path, setPath] = useState("");
+  return <FolderPicker value={path} onChange={setPath} title="Choose a folder" label="Folder" />;
+}
 
 function OptionCardsExample() {
   const [v, setV] = useState<"single" | "light">("single");
@@ -171,6 +176,12 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "Pick one of two to four choices that each need a sentence to explain. More than four: Select.",
     contract: "name, value, onChange, options of { value, label, description }. Radio buttons underneath, so arrow keys move between them.",
     example: () => <OptionCardsExample />,
+  },
+  {
+    name: "FolderPicker",
+    when: "Any folder on disk: a workspace, a local repository. Never a plain text box for a path.",
+    contract: "value, onChange, title (the dialog's), label. Opens the system folder dialog in the desktop app when the daemon runs on this machine; otherwise falls back to typing the path, and says why.",
+    example: () => <FolderPickerExample />,
   },
   {
     name: "Disclosure",
