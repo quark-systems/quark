@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { breakLabel, duration, groupTurns, newDay, stepTitle, summarize, turnMarkdown } from "./turns";
+import { activity, breakLabel, duration, groupTurns, newDay, stepTitle, summarize, turnMarkdown } from "./turns";
 import type { ToolInfo, TranscriptItem, TranscriptRole } from "../../api";
 
 let next = 0;
@@ -84,5 +84,37 @@ describe("breaks and copying", () => {
       item("user", { text: "Fix it\nplease" }), item("tool_call"), item("assistant", { text: "Fixed." }), item("assistant", { text: "Tests pass." }),
     ]);
     expect(turnMarkdown(t)).toBe("> Fix it\n> please\n\nFixed.\n\nTests pass.");
+  });
+});
+
+describe("activity", () => {
+  const at = (min: number) => new Date(Date.parse("2026-10-09T12:00:00Z") + min * 60_000).toISOString();
+  const now = Date.parse(at(0));
+  const call = (command: string, ts: string) =>
+    item("tool_call", { ts, tool_call_id: command, tool: { kind: "shell", title: `Run ${command}`, command } });
+
+  it("is working while entries are recent", () => {
+    const [t] = groupTurns([item("user", { ts: at(-2) }), call("cargo test", at(-1))]);
+    expect(activity(t, now)).toBe("working");
+  });
+
+  it("is listening while the latest step waits for project events, however long", () => {
+    const [t] = groupTurns([item("user", { ts: at(-600) }), call("bin/fm-watch-arm.sh", at(-600))]);
+    expect(activity(t, now)).toBe("listening");
+  });
+
+  it("is quiet when nothing was recorded for a long time", () => {
+    const [t] = groupTurns([item("user", { ts: at(-41 * 60) }), call("bin/fm-wake-drain.sh", at(-41 * 60))]);
+    expect(activity(t, now)).toBe("quiet");
+    expect(activity(groupTurns([item("user"), item("assistant")])[0], now)).toBeNull();
+  });
+
+  it("marks a turn the engine opened, and leaves it out of the copied text", () => {
+    const [t] = groupTurns([
+      item("user", { text: "<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>firstmate watcher wake\nheartbeat\n</system-reminder>" }),
+      item("assistant", { text: "Nothing needs you." }),
+    ]);
+    expect(t.event?.title).toBe("Routine project check");
+    expect(turnMarkdown(t)).toBe("Nothing needs you.");
   });
 });

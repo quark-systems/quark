@@ -76,6 +76,20 @@ test("coordinator chat: workers started and questions asked show as cards", asyn
   await expect(page).toHaveURL(/#\/inbox/);
 });
 
+test("coordinator chat: engine events show as one plain line, not raw XML", async ({ page }) => {
+  await open(page, "#/p/quark");
+  const chat = page.getByTestId("coordinator-chat");
+  const events = chat.getByTestId("engine-event");
+  await expect(events.filter({ hasText: "Routine project check" })).toHaveCount(1);
+  const stale = events.filter({ hasText: "terminals stopped responding" });
+  await expect(stale).toHaveCount(1);
+  await expect(chat).not.toContainText("<task-notification>");
+  await expect(chat).toContainText("Read new project events");
+  // What the engine sent stays one click away.
+  await stale.getByRole("button").click();
+  await expect(stale).toContainText("Stop hook blocking error");
+});
+
 test("worker cards show the harness, its mark and how much the worker changed", async ({ page }) => {
   await open(page, "#/p/quark/work");
   const card = page.getByTestId("task-card").filter({ hasText: "Event stream" });
