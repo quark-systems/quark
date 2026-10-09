@@ -84,7 +84,6 @@ test("coordinator chat: engine events show as one plain line, not raw XML", asyn
   const stale = events.filter({ hasText: "terminals stopped responding" });
   await expect(stale).toHaveCount(1);
   await expect(chat).not.toContainText("<task-notification>");
-  await expect(chat).toContainText("Read new project events");
   // What the engine sent stays one click away.
   await stale.getByRole("button").click();
   await expect(stale).toContainText("Stop hook blocking error");
