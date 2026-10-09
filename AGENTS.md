@@ -28,6 +28,7 @@ bd dolt push          # Push beads data to remote
 - Words in the app follow [app/GLOSSARY.md](app/GLOSSARY.md): one name per concept, never the words under _Avoid_, and its copy rules.
 - Build screens from the shared parts in `app/src/ui`; each has an entry in the component catalogue (`app/src/ui/catalogue.tsx`, shown at `#/catalogue`). A new shared part gets an entry in the same PR.
 - New CSS uses the tokens at the top of `app/src/styles.css`, never raw hex.
+- Shared parts in `app/src/ui` are styled with Tailwind utilities and take behaviour (menus, popovers, radio groups) from Radix (`radix-ui`), shadcn style. Tailwind's palette, radii and fonts are only our tokens (`app/src/tailwind.css`); there is no preflight, so older screens keep their CSS until each moves over.
 
 ## Non-Interactive Shell Commands
 

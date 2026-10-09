@@ -24,10 +24,12 @@ test("creates a project and lands on its board", async ({ page }) => {
   await page.getByRole("button", { name: "Remove https://gitlab.com/acme/tools.git" }).click();
   await expect(page.getByRole("list", { name: "Chosen repositories" })).toContainText("quark-systems/quark");
   // Bob cannot coordinate, so it is not offered; Pi is listed but not installed.
-  await expect(page.getByLabel("Harness", { exact: true }).locator("option")).toHaveText(["Claude Code 2.1.0", "Codex 0.50.0", "Pi (not installed)"]);
-  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  await page.getByRole("combobox", { name: "Harness", exact: true }).click();
+  await expect(page.getByRole("option")).toHaveText(["Claude Code 2.1.0", "Codex 0.50.0", "Pi (not installed)"]);
+  await page.getByRole("option", { name: "Codex 0.50.0" }).click();
   await page.getByLabel("Model", { exact: true }).fill("gpt-5-codex");
-  await page.getByLabel("Effort", { exact: true }).selectOption("high");
+  await page.getByRole("combobox", { name: "Effort", exact: true }).click();
+  await page.getByRole("option", { name: "high" }).click();
   await page.getByText("Low effort for small edits").click();
   await page.getByText("Advanced").click();
   await page.getByRole("button", { name: "Choose folder…" }).click();
@@ -392,7 +394,9 @@ test("accounts: add a second Claude account and see both with health and quota",
   // A new Project's agent can name the pool.
   await page.getByTestId("nav-new-project").click();
   await expect(page.getByLabel("Account pool")).toBeVisible();
-  await expect(page.getByLabel("Account pool").locator("option")).toHaveText(["Default account", "Pool: max"]);
+  await page.getByRole("combobox", { name: "Account pool" }).click();
+  await expect(page.getByRole("option")).toHaveText(["Default account", "Pool: max"]);
+  await page.keyboard.press("Escape");
 
   // Removing takes a second click; the default account has no Remove button.
   await page.getByTestId("nav-accounts").click();

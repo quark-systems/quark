@@ -10,7 +10,7 @@ import {
   answeredVia,
   askedBy, blockLabels, decidedByAgent, decisionLabel, joinAnd, LIFECYCLE, lifecycleStep, ruleDraft, usesOf,
 } from "../decisions";
-import { Button } from ".";
+import { Button, ButtonLink } from "./button";
 
 export type DecisionCardSize = "inline" | "full" | "phone";
 
@@ -107,9 +107,9 @@ function InlineCard({ d, send, ...status }: { d: Decision; send: Send } & Status
             <Button key={o.label} kind={isRecommended(d, o) ? "primary" : "secondary"} disabled={status.busy}
               title={o.consequence ?? undefined} onClick={() => void send(o.label)}>{o.label}</Button>
           ))}
-          <a className="ui-btn quiet" href={href({ name: "decisions", project: d.project_id, id: d.id })}>
+          <ButtonLink kind="quiet" href={href({ name: "decisions", project: d.project_id, id: d.id })}>
             {options(d).length ? "Open with evidence" : "Answer"}
-          </a>
+          </ButtonLink>
           <Problem {...status} />
         </div>
       ) : (
@@ -136,7 +136,7 @@ function PhoneCard({ d, send, ...status }: { d: Decision; send: Send } & Status)
               onClick={() => void send(o.label)}>{o.label}</Button>
           ))}
           {!options(d).length && (
-            <a className="ui-btn secondary" href={href({ name: "decisions", project: d.project_id, id: d.id })}>Answer</a>
+            <ButtonLink href={href({ name: "decisions", project: d.project_id, id: d.id })}>Answer</ButtonLink>
           )}
           <Problem {...status} />
         </span>
@@ -333,7 +333,7 @@ function LogEntry({ d }: { d: Decision }) {
       {rule && !rule.revoked_at && (
         <div className="dc-send">
           {draft === null && <Button onClick={() => setDraft(rule.text)}>Change the rule</Button>}
-          <Button onClick={() => void revoke()} className="danger">Revoke the rule</Button>
+          <Button onClick={() => void revoke()} kind="danger">Revoke the rule</Button>
           {err && <span className="bad small-text" role="alert">{err}</span>}
         </div>
       )}
