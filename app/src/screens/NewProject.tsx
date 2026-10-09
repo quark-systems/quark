@@ -143,7 +143,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
 
           <Field group label="Agent" hint={["Runs the coordinator, and every worker unless a dispatch rule says otherwise.", ...agentHints].filter(Boolean)} error={agentErrors.filter(Boolean)}>
             <ControlRow>
-              <Select value={harness} onChange={(e) => setHarness(e.target.value)} aria-label="Harness" disabled={!harnesses}>
+              <Select value={harness} onValueChange={setHarness} aria-label="Harness" disabled={!harnesses}>
                 {!harnesses && <option>Loading…</option>}
                 {options.map((h) => (
                   <option key={h.id} value={h.id} disabled={!h.install.installed}>
@@ -155,13 +155,13 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
                 <TextInput value={model} onChange={(e) => setModel(e.target.value)} placeholder={modelHint} aria-label="Model" />
               )}
               {current && current.efforts.length > 0 && (
-                <Select value={effort} onChange={(e) => setEffort(e.target.value)} aria-label="Effort">
+                <Select value={effort} onValueChange={setEffort} aria-label="Effort">
                   <option value="">Default effort</option>
                   {current.efforts.map((x) => <option key={x} value={x}>{x}</option>)}
                 </Select>
               )}
               {pools.length > 0 && (
-                <Select value={pool} onChange={(e) => setPool(e.target.value)} aria-label="Account pool">
+                <Select value={pool} onValueChange={setPool} aria-label="Account pool">
                   <option value="">Default account</option>
                   {pools.map((p) => <option key={p} value={p}>Pool: {p}</option>)}
                 </Select>
@@ -176,7 +176,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
 
           <Disclosure summary="Advanced">
             <Field label="Delivery">
-              <Select value={delivery} onChange={(e) => setDelivery(e.target.value as DeliveryPolicy)} aria-label="Delivery">
+              <Select value={delivery} onValueChange={(v) => setDelivery(v as DeliveryPolicy)} aria-label="Delivery">
                 <option value="gated">Gated: changes pass the verification gates before a PR</option>
                 <option value="direct">Direct: workers open PRs directly; CI is the only check</option>
               </Select>

@@ -1,12 +1,13 @@
 // Picks a Project's repositories: GitHub repositories the daemon's gh account can reach, found
 // by typing part of a name; a local folder through the system dialog; or, for anything else,
-// a clone URL pasted in.
-import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+// a clone URL pasted in. The search is a cmdk list in a Radix popover, the shadcn combobox.
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Command } from "cmdk";
+import { Popover } from "radix-ui";
 import { api, ApiError, ForgeRepository, NotAvailable } from "../api";
 import { folderPicking, pickFolder } from "../folders";
-import { Button, FieldHint } from "../ui";
+import { Button, controlClass, cx, FieldHint } from "../ui";
 import { ago } from "../util";
-import "./RepoPicker.css";
 
 /** One chosen repository: the URL or path the daemon clones, and how to show it. */
 export interface PickedRepo { url: string; label: string; kind: "github" | "url" | "folder"; private?: boolean }
@@ -44,14 +45,18 @@ function loadRepos(refresh = false) {
 
 type Option = { key: string; repo: PickedRepo; title: string; sub?: string; tag?: string };
 
+const NAME = "truncate font-mono text-s text-fg";
+const SUB = "truncate font-sans text-s text-faint";
+const TAG = "shrink-0 rounded-full border border-line-2 px-[7px] font-sans text-xs font-medium leading-[18px] text-dim";
+const KIND_DOT: Record<PickedRepo["kind"], string> = { github: "bg-accent", folder: "bg-yellow", url: "bg-faint" };
+
 export function RepoPicker({ value, onChange }: { value: PickedRepo[]; onChange: (v: PickedRepo[]) => void }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
   const [repos, setRepos] = useState<ForgeRepository[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  const listId = useId();
+  const anchor = useRef<HTMLDivElement>(null);
 
   const load = (refresh = false) => {
     setLoadError(null);
@@ -75,23 +80,17 @@ export function RepoPicker({ value, onChange }: { value: PickedRepo[]; onChange:
     }));
     const typed = typedRepo(query);
     if (typed && !chosen.has(typed.url) && !listed.some((o) => o.repo.url === typed.url)) {
-      listed.push({ key: "typed", repo: typed, title: `Use ${typed.label}`, sub: typed.kind === "folder" ? "Local folder" : typed.kind === "url" ? "Clone URL" : "GitHub repository", tag: undefined });
+      listed.push({ key: "typed", repo: typed, title: `Use ${typed.label}`, sub: typed.kind === "folder" ? "Local folder" : typed.kind === "url" ? "Clone URL" : "GitHub repository" });
     }
     return listed;
   }, [repos, query, value]);
-  useEffect(() => setActive(0), [query]);
 
+  const close = () => { setOpen(false); setQuery(""); };
   const add = (r: PickedRepo) => {
     if (!chosen.has(r.url)) onChange([...value, r]);
     setQuery("");
     setOpen(false);
     input.current?.focus();
-  };
-  const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, options.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-    else if (e.key === "Enter") { if (open && options[active]) { e.preventDefault(); add(options[active].repo); } else if (query) e.preventDefault(); }
-    else if (e.key === "Escape") { setOpen(false); }
   };
   const folders = folderPicking();
   const addFolder = async () => {
@@ -101,47 +100,65 @@ export function RepoPicker({ value, onChange }: { value: PickedRepo[]; onChange:
 
   const showList = open && (options.length > 0 || repos === null || query !== "");
   return (
-    <div className="rp">
+    <div className="flex flex-col gap-2">
       {value.length > 0 && (
-        <ul className="rp-chosen" aria-label="Chosen repositories">
+        <ul className="m-0 flex list-none flex-col divide-y divide-line rounded-m border border-line-2 bg-surface-1 p-0" aria-label="Chosen repositories">
           {value.map((r) => (
-            <li key={r.url}>
-              <span className={"rp-kind " + r.kind} aria-hidden="true" />
-              <span className="rp-name">{r.label}</span>
-              {r.private && <span className="rp-tag">private</span>}
-              {r.kind !== "github" && <span className="rp-sub">{r.kind === "folder" ? "local folder" : "clone URL"}</span>}
-              <Button kind="quiet" aria-label={`Remove ${r.label}`} onClick={() => onChange(value.filter((x) => x.url !== r.url))}>Remove</Button>
+            <li key={r.url} className="flex min-h-control items-center gap-2 py-0.5 pr-1 pl-3">
+              <span className={cx("size-2 shrink-0 rounded-[2px]", KIND_DOT[r.kind])} aria-hidden="true" />
+              <span className={NAME}>{r.label}</span>
+              {r.private && <span className={TAG}>private</span>}
+              {r.kind !== "github" && <span className={SUB}>{r.kind === "folder" ? "local folder" : "clone URL"}</span>}
+              <Button kind="quiet" className="ml-auto" aria-label={`Remove ${r.label}`} onClick={() => onChange(value.filter((x) => x.url !== r.url))}>Remove</Button>
             </li>
           ))}
         </ul>
       )}
-      <div className="rp-search">
-        <input ref={input} className="ui-input" value={query} role="combobox" aria-label="Find a repository"
-          aria-expanded={showList} aria-controls={listId} aria-autocomplete="list"
-          aria-activedescendant={showList && options[active] ? `${listId}-${active}` : undefined}
-          placeholder={repos && repos.length ? `Search ${repos.length} GitHub repositories, or paste a clone URL` : "Paste a clone URL or owner/name"}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
-          onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => { setOpen(false); setQuery(""); }, 120)} onKeyDown={onKey} />
-        {folders.ok && <Button onClick={addFolder}>Add local folder…</Button>}
-        {showList && (
-          <ul className="rp-list" id={listId} role="listbox" aria-label="Repositories">
-            {repos === null && <li className="rp-empty">Loading your GitHub repositories…</li>}
-            {repos !== null && options.length === 0 && <li className="rp-empty">No repository matches “{query}”. Paste a clone URL to use one that is not on GitHub.</li>}
-            {options.map((o, i) => (
-              <li key={o.key} id={`${listId}-${i}`} role="option" aria-selected={i === active} className={"rp-opt" + (i === active ? " on" : "")}
-                onMouseDown={(e) => { e.preventDefault(); add(o.repo); }} onMouseEnter={() => setActive(i)}>
-                <span className="rp-opt-text">
-                  <span className="rp-name">{o.title}</span>
-                  {o.sub && <span className="rp-sub">{o.sub}</span>}
-                </span>
-                {o.tag && <span className="rp-tag">{o.tag}</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {/* We rank the matches ourselves (matchRepos), so cmdk only does the keyboard and the ARIA. */}
+      <Command shouldFilter={false} loop label="Find a repository">
+        <Popover.Root open={showList} onOpenChange={(o) => (o ? setOpen(true) : close())}>
+          <Popover.Anchor asChild>
+            <div ref={anchor} className="flex gap-2">
+              <Command.Input ref={input} value={query} className={controlClass({}, "flex-1")}
+                placeholder={repos && repos.length ? `Search ${repos.length} GitHub repositories, or paste a clone URL` : "Paste a clone URL or owner/name"}
+                onValueChange={(q) => { setQuery(q); setOpen(true); }}
+                onFocus={() => setOpen(true)} onClick={() => setOpen(true)}
+                onKeyDown={(e) => { if (e.key === "Escape" && showList) { e.preventDefault(); close(); } }}
+                onBlur={(e) => { if (!anchor.current?.parentElement?.contains(e.relatedTarget as Node)) close(); }} />
+              {folders.ok && <Button onClick={addFolder}>Add local folder…</Button>}
+            </div>
+          </Popover.Anchor>
+          <Popover.Portal>
+            <Popover.Content align="start" sideOffset={4}
+              // Focus stays in the search box; clicks inside the list must not blur it.
+              onOpenAutoFocus={(e) => e.preventDefault()} onCloseAutoFocus={(e) => e.preventDefault()}
+              onMouseDown={(e) => e.preventDefault()}
+              onInteractOutside={(e) => { if (anchor.current?.contains(e.target as Node)) e.preventDefault(); }}
+              className="z-50 w-(--radix-popover-trigger-width) rounded-m bg-popover text-fg shadow-popover outline-none">
+              <Command.List label="Repositories" className="max-h-80 overflow-auto p-1">
+                {repos === null && <Command.Loading><div className="px-3 py-2 font-sans text-s text-faint">Loading your GitHub repositories…</div></Command.Loading>}
+                {repos !== null && (
+                  <Command.Empty className="px-3 py-2 font-sans text-s text-faint">
+                    No repository matches “{query}”. Paste a clone URL to use one that is not on GitHub.
+                  </Command.Empty>
+                )}
+                {options.map((o) => (
+                  <Command.Item key={o.key} value={o.key} onSelect={() => add(o.repo)}
+                    className="flex cursor-pointer items-center gap-3 rounded-s px-3 py-1.5 data-[selected=true]:bg-selection-strong">
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className={NAME}>{o.title}</span>
+                      {o.sub && <span className={SUB}>{o.sub}</span>}
+                    </span>
+                    {o.tag && <span className={TAG}>{o.tag}</span>}
+                  </Command.Item>
+                ))}
+              </Command.List>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+      </Command>
       {loadError
-        ? <FieldHint>Can't list GitHub repositories: {loadError}. <button type="button" className="rp-retry" onClick={() => load(true)}>Try again</button></FieldHint>
+        ? <FieldHint>Can't list GitHub repositories: {loadError}. <button type="button" className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-link underline" onClick={() => load(true)}>Try again</button></FieldHint>
         : <FieldHint>Your GitHub repositories, as the daemon's gh login sees them. Anything else: paste a clone URL{folders.ok ? " or add a local folder" : " or a path"}.</FieldHint>}
     </div>
   );

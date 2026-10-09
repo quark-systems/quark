@@ -35,6 +35,11 @@ function FolderPickerExample() {
   return <FolderPicker value={path} onChange={setPath} title="Choose a folder" label="Folder" />;
 }
 
+function SelectExample() {
+  const [v, setV] = useState("high");
+  return <Select value={v} onValueChange={setV} aria-label="Effort"><option value="">Default effort</option><option value="low">low</option><option value="high">high</option></Select>;
+}
+
 function OptionCardsExample() {
   const [v, setV] = useState<"single" | "light">("single");
   return <OptionCards name="cat-preset" value={v} onChange={setV} options={[
@@ -86,13 +91,13 @@ export const CATALOGUE: CatalogueEntry[] = [
   {
     name: "Button",
     when: "An action. One primary per view; quiet for the least likely choice.",
-    contract: "kind: primary | secondary | quiet; every other prop is a button's. Say what it does: 'Switch now', not 'OK'.",
-    example: () => <div className="cat-inline"><Button kind="primary">Switch now</Button><Button>Wait a week</Button><Button kind="quiet">Open with evidence</Button></div>,
+    contract: "kind: primary | secondary | quiet | danger (undoes or removes something); every other prop is a button's. Say what it does: 'Switch now', not 'OK'. buttonClass(kind) gives the same look to other elements.",
+    example: () => <div className="cat-inline"><Button kind="primary">Switch now</Button><Button>Wait a week</Button><Button kind="quiet">Open with evidence</Button><Button kind="danger">Revoke the rule</Button></div>,
   },
   {
     name: "ButtonLink",
     when: "An action that navigates, such as Cancel back to a list. Looks exactly like Button.",
-    contract: "kind: primary | secondary | quiet; every other prop is an anchor's (href).",
+    contract: "kind as Button's; every other prop is an anchor's (href).",
     example: () => <div className="cat-inline"><ButtonLink href="#/catalogue">Cancel</ButtonLink></div>,
   },
   {
@@ -156,8 +161,8 @@ export const CATALOGUE: CatalogueEntry[] = [
   {
     name: "Select",
     when: "Pick one of a list, or of more than four choices. Same height and border as TextInput.",
-    contract: "Every prop is a select's; children are options; invalid.",
-    example: () => <Select defaultValue="high" aria-label="Effort"><option value="">Default effort</option><option value="high">high</option></Select>,
+    contract: "value and onValueChange (an option may have value \"\"); children are plain <option>s; disabled; invalid; aria-label when the Field's label is not enough. A Radix Select underneath: its list is drawn in our colours and keyboard and screen readers work as a native one.",
+    example: () => <SelectExample />,
   },
   {
     name: "ControlRow",
@@ -165,9 +170,9 @@ export const CATALOGUE: CatalogueEntry[] = [
     contract: "children share the row equally; put it in a Field with group.",
     example: () => (
       <ControlRow>
-        <Select aria-label="Harness"><option>Claude Code 2.1.0</option></Select>
+        <Select value="claude" onValueChange={() => {}} aria-label="Harness"><option value="claude">Claude Code 2.1.0</option></Select>
         <TextInput placeholder="Model (optional)" aria-label="Model" />
-        <Select aria-label="Effort"><option>Default effort</option></Select>
+        <SelectExample />
       </ControlRow>
     ),
   },

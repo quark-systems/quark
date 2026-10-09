@@ -6,7 +6,7 @@ import { go, href, Route, useRoute } from "../nav";
 import { useStore } from "../store";
 import { useLabels } from "../persona";
 import { errText } from "../util";
-import { CoordinatorMark, Kbd } from "../ui";
+import { Button, CoordinatorMark, Kbd } from "../ui";
 
 export interface DockContext {
   projectId: string | null;
@@ -92,7 +92,7 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
           onChange={(e) => { setText(e.target.value); setSent(null); }}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } if (e.key === "Escape") (e.target as HTMLInputElement).blur(); }} />
         <Kbd keys={`${mod}K`} />
-        {projectId && <button type="button" className="ui-btn secondary dock-open" onClick={() => go({ name: "project", id: projectId })}>Open</button>}
+        {projectId && <Button className="dock-open" onClick={() => go({ name: "project", id: projectId })}>Open</Button>}
       </div>
       {(sent || err) && (
         <div className={"dock-note" + (err ? " bad" : "")} role="status" data-testid="dock-note">

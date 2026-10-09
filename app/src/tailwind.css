@@ -1,0 +1,63 @@
+/* Tailwind 4, themed with Quark's tokens (styles.css). Preflight is left out: the app's own element
+   defaults live in the base layer of styles.css. The default palette is cleared so utilities can only
+   use the tokens below: bg-surface-1, text-dim, border-line-2, rounded-m, gap-2 (8px) and so on.
+   Shared parts in src/ui are built with these utilities; see AGENTS.md. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme inline {
+  --color-*: initial;
+  --color-bg: var(--background);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-inset: var(--surface-inset);
+  --color-popover: var(--surface-popover);
+  --color-fg: var(--text);
+  --color-dim: var(--text-dim);
+  --color-faint: var(--text-faint);
+  --color-line: var(--stroke);
+  --color-line-2: var(--stroke-strong);
+  --color-selection-subtle: var(--selection-subtle);
+  --color-selection: var(--selection);
+  --color-selection-strong: var(--selection-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-tone: var(--on-tone);
+  --color-link: var(--link);
+  --color-red: var(--red);
+  --color-green: var(--green);
+  --color-yellow: var(--yellow);
+  --color-blue: var(--blue);
+  --color-violet: var(--violet);
+  --color-danger-fg: var(--diff-del-fg);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-s: 12px;
+  --text-s--line-height: 1.5;
+  --text-control: var(--control-font);
+  --text-control--line-height: 1.4;
+  --text-m: 14px;
+  --text-m--line-height: 1.45;
+
+  --radius-*: initial;
+  --radius-s: var(--radius-s);
+  --radius-m: var(--radius-m);
+  --radius-l: var(--radius-l);
+  --radius-full: 9999px;
+
+  --spacing: 4px;
+  --spacing-control: var(--control-height);
+
+  --shadow-*: initial;
+  --shadow-popover: var(--shadow-popover);
+  --ease-out: var(--motion-ease-out);
+  --default-transition-duration: var(--motion-feedback-duration);
+  --default-transition-timing-function: var(--motion-ease-out);
+}

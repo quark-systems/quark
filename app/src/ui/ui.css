@@ -26,17 +26,8 @@
 .ui-row-title, .ui-row-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ui-row-title { font-weight: 500; }
 .ui-row-sub { font-size: 12px; color: var(--fg-faint); }
-.ui-row:focus-visible, .ui-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.ui-btn { box-sizing: border-box; height: var(--control-height); padding: 0 var(--space-3); border-radius: var(--radius-m); font: var(--control-font) var(--sans); white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.ui-btn.primary { border: 1px solid var(--accent); background: var(--accent); color: var(--on-tone); font-weight: 600; }
-.ui-btn.secondary { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--fg); }
-.ui-btn.quiet { border: none; background: none; color: var(--fg-dim); }
-.ui-btn.quiet:hover, .ui-btn.secondary:hover { background: var(--selection); }
-.ui-btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, var(--content)); }
-.ui-btn.primary:disabled { opacity: 1; background: var(--surface-3); border-color: var(--line-2); color: var(--fg-faint); font-weight: 500; }
-a.ui-btn { text-decoration: none; }
-.ui-btn:disabled { opacity: .45; cursor: default; }
 
 .ui-coord-mark { flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 600 11px var(--sans);
   color: var(--tone-needs-you); background: color-mix(in srgb, var(--tone-needs-you) 16%, var(--background)); border: 1px solid color-mix(in srgb, var(--tone-needs-you) 45%, transparent); }
@@ -52,8 +43,6 @@ a.ui-btn { text-decoration: none; }
 
 /* The decision card (DecisionCard.tsx) in its three sizes, and the Decisions tab around it. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.ui-btn.danger { border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); background: none; color: var(--diff-del-fg); }
-.ui-btn.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
 
 .dc { display: flex; flex-direction: column; gap: 6px; min-width: 0; box-sizing: border-box; color: var(--fg); font: 13px var(--sans); }
 .dc-meta { font-size: 12px; color: var(--fg-faint); }
