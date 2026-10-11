@@ -4,8 +4,9 @@
 # Usage:
 #   selfhost/selfhost.sh [--daemon <url>] [--holdout <dir>]
 #
-# Against a running quarkd (default http://127.0.0.1:7380, or $QUARKD_URL),
-# using the firstmate engine:
+# First installs treehouse 3.1.2 when this machine has no 3.x at or above it
+# (selfhost/treehouse.sh). Then, against a running quarkd (default
+# http://127.0.0.1:7380, or $QUARKD_URL), using the firstmate engine:
 #   1. creates the Project "Quark" from project.json (quark and firstmate),
 #      or reuses it when one with that name exists, and waits until it is
 #      ready (a failed one is retried once);
@@ -20,7 +21,7 @@
 # Holdout tests are kept out of this repo on purpose: workers must never see
 # them, and every worker on quark has this directory in its worktree.
 #
-# Requires curl, jq and git.
+# Requires curl, jq, git and tar.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,7 +39,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --daemon) DAEMON=${2:?--daemon needs a URL}; shift 2 ;;
     --holdout) HOLDOUT=${2:?--holdout needs a directory}; shift 2 ;;
-    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -47,6 +48,8 @@ DAEMON=${DAEMON%/}
 for tool in curl jq git; do
   command -v "$tool" >/dev/null || die "$tool is required"
 done
+# Engine slice 9's shadow needs treehouse 3.1.2 or a later 3.x.
+"$HERE/treehouse.sh" || die "treehouse 3.1.2 is required: see selfhost/treehouse.sh --help"
 if [ -n "$HOLDOUT" ]; then
   [ -d "$HOLDOUT" ] || die "--holdout $HOLDOUT is not a directory"
   HOLDOUT="$(cd "$HOLDOUT" && pwd)"

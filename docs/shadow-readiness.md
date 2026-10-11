@@ -81,7 +81,7 @@ Only slice 1 can run native so far; quarkd refuses `native` for any other slice 
 
 The native worktree pool is a port of treehouse 3.1.2, so slice 9's shadow only runs against 3.1.2 or a later 3.x.
 An older treehouse answers differently by design (2.x reports no checked-out branch and exits 0 on a dirty return), so quarkd leaves the shadow off, logs which version it found, and the report reads `off` for slice 9.
-Install 3.1.2 with `curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh` (or the release archive) and restart quarkd.
+Run `selfhost/treehouse.sh` to install 3.1.2 (the checksummed release archive, next to the treehouse already on PATH, else in `~/.local/bin`) and restart quarkd; `selfhost/treehouse.sh --check` only reports. `selfhost/selfhost.sh` runs it first.
 
 ## What the report can't judge yet
 

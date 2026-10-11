@@ -450,11 +450,15 @@ async fn unknown_ids_are_not_found() {
 }
 
 /// The same lifecycle against a real treehouse. Opt-in: set
-/// `QUARK_TREEHOUSE_BIN` to a treehouse 3.1.2 binary.
+/// `QUARK_TREEHOUSE_BIN` or `TREEHOUSE_BIN` (as CI does) to a treehouse 3.1.2
+/// binary.
 #[tokio::test]
 async fn real_treehouse_lifecycle() {
-    let Ok(bin) = std::env::var("QUARK_TREEHOUSE_BIN") else {
-        eprintln!("skipped: QUARK_TREEHOUSE_BIN is not set");
+    let Some(bin) = ["QUARK_TREEHOUSE_BIN", "TREEHOUSE_BIN"]
+        .into_iter()
+        .find_map(std::env::var_os)
+    else {
+        eprintln!("skipped: neither QUARK_TREEHOUSE_BIN nor TREEHOUSE_BIN is set");
         return;
     };
     let fx = Fixture::new();
@@ -497,5 +501,6 @@ async fn real_treehouse_lifecycle() {
         p.return_worktree(&home.id).await.unwrap(),
         ReturnOutcome::Returned
     );
-    assert_eq!(log.events().len(), 4);
+    // Handed out, kept, returned, leased, returned.
+    assert_eq!(log.events().len(), 5);
 }
