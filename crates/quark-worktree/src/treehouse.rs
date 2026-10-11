@@ -174,8 +174,13 @@ impl TreehouseCli {
         S: AsRef<std::ffi::OsStr>,
     {
         let mut cmd = Command::new(&self.bin);
-        cmd.current_dir(dir)
-            .args(args)
+        cmd.current_dir(dir);
+        // Before the subcommand: after a flag-only argv such as `--version`,
+        // treehouse reads the root's value as a command name.
+        if let Some(root) = &self.root {
+            cmd.arg("--root").arg(root);
+        }
+        cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -183,9 +188,6 @@ impl TreehouseCli {
             // A lease holder from the environment would override ours.
             .env_remove("TREEHOUSE_LEASE_HOLDER")
             .env_remove("TREEHOUSE_DIR");
-        if let Some(root) = &self.root {
-            cmd.arg("--root").arg(root);
-        }
         cmd
     }
 

@@ -19,8 +19,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      # The native worktree pool's parity tests run against the real
-      # treehouse release it replaces (crates/quark-worktree/tests/native_parity.rs).
+      # The native worktree pool's parity tests and the treehouse provider's
+      # lifecycle test run against the real treehouse release the pool replaces
+      # (crates/quark-worktree/tests/native_parity.rs, tests/provider.rs).
       - name: Install treehouse 3.1.2
         run: |
           curl -fsSL -o "$RUNNER_TEMP/treehouse.tgz" https://github.com/kunchenguid/treehouse/releases/download/v3.1.2/treehouse-v3.1.2-linux-amd64.tar.gz
