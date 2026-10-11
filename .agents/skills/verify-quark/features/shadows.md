@@ -6,7 +6,7 @@ The shadow journey compresses the days of real use that report waits for into mi
 ## Sub-features
 
 - `shadow-workload`: one Project and N rounds of work driven through firstmate's own scripts. Each round spawns a ship task, a scout and a ship that fails; the workers report working, a keyed decision, a pause and a keyed blocker; the person answers both decisions; the workers finish (a PR link, a report, a failure); the scout's report is reviewed and both the scout and the failed task are cleaned up.
-- `shadow-disruptions`: each round disrupts the run once, in turn a daemon crash and restart, a lost tmux server (after which the coordinator cleans up the tasks the loss left behind), and the daemon down for 3s. Every third round also cancels and relaunches a worker.
+- `shadow-disruptions`: each round disrupts the run once, in turn a daemon crash and restart, a lost tmux server (after which the person relaunches every worker the loss took), and the daemon down for 3s. Every third round also cancels and relaunches a worker.
 - `shadow-report`: the run's `quarkd shadows` report, its JSON, and how many inputs of each kind the event log holds, so a slice that saw nothing is visible.
 
 ## How to get to it (user POV)
@@ -37,4 +37,4 @@ How the journey acts:
 - The report's 7-day bar is time, so every slice reads `watching` after a run; what the journey judges is the divergence count.
 - What the scripted workload does not reach yet: slice 2 compares guard decisions, which firstmate records only for a github.com origin with `gh` signed in, and the fixture repo is local; slice 6 compares coordinator turns from the harness transcript, which the fake agent does not write. Their zero is no evidence either way. Slice 5 compares every fresh spawn's dispatch and slice 7 the away classifier's routing, so they are exercised.
 - The fake agent runs under a copy of bash named `claude`, shows Claude Code's bare `❯` composer and honors `/exit`, because firstmate tells an agent from a bare shell by its process name and types into it only over an empty composer.
-- Firstmate refuses to relaunch a worker whose window is gone ("reconcile the task"), and Treehouse hands a dead worker's slot to the next spawn, so after the tmux loss the journey cleans those tasks up before spawning more, as the coordinator would.
+- After the tmux loss, the journey relaunches every lost worker that still has work (not the finished scout) through `/v1/tasks/{id}:relaunch` and has it take a turn; firstmate recreates the window in the worktree the task kept leased. Each round also checks that no two tasks record the same worktree.

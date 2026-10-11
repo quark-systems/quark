@@ -137,6 +137,7 @@ quark_id() { # id
   [ -n "$q" ] && echo "$q" | tee "$work/qid-$1"
 }
 terminal_of() { api GET "/v1/projects/$project/terminals" | jq -r --arg t "fm-$1" '.[] | select(.title == $t) | .id' | head -1; }
+has_terminal() { [ -n "$(terminal_of "$1")" ]; }
 
 # A worker turn: type `QV-STATUS <line>` into its terminal; the fake agent
 # appends <line> to the task's status file between its turn hooks.
@@ -179,6 +180,16 @@ teardown() { # id
   else step_fail "cleanup $1: $(tail -3 "$work/coord-$coord_n.log" | tr '\n' ' ')"; fi
 }
 
+# Every live task keeps its own worktree: a slot handed to a second task
+# while the first still holds a record would let one worker into the other's
+# work.
+distinct_worktrees() { # round
+  local dup
+  dup=$(sed -n 's/^worktree=//p' "$home"/state/*.meta 2>/dev/null | sort | uniq -d)
+  if [ -z "$dup" ]; then step_ok "round $1: every task has its own worktree"
+  else step_fail "round $1: worktree shared by two tasks: $dup"; fi
+}
+
 # Give the daemon a few refreshes (5s each) to read, ingest and compare.
 settle() { sleep "${1:-15}"; }
 
@@ -195,16 +206,20 @@ disrupt() { # round
       # quarkd's recovery brings the server and the coordinator back.
       wait_for 90 bash -c "'$Q' api GET /v1/projects/$project/terminals 2>/dev/null | jq -e 'any(.[]; .role == \"coordinator\")' >/dev/null" ||
         step_fail "round $1: the coordinator did not come back after the tmux loss"
-      # Firstmate refuses to relaunch a worker whose window is gone ("reconcile
-      # the task"), and treehouse hands a dead worker's slot to the next spawn,
-      # so the coordinator cleans up every task the loss left behind (none
-      # holds unlanded work here) before spawning more.
+      # The person relaunches every worker the loss took that still has work
+      # (a scout whose report is written is done, and the native supervisor
+      # never restarts a done task): each comes back in a recreated window,
+      # in the worktree it kept leased, and takes a turn.
       local m t
       for m in "$home"/state/*.meta; do
         t=$(basename "$m" .meta)
         [ -s "$work/qid-$t" ] || continue
-        case $t in *-scout) coord bin/fm-captain-hold.sh complete "$t" --none >/dev/null ;; esac
-        teardown "$t"
+        case $t in *-scout) continue ;; esac
+        task_action "$t" relaunch || continue
+        wait_for 30 has_terminal "$t" ||
+          { step_fail "round $1: $t has no worker terminal after its relaunch"; continue; }
+        settle 5
+        worker "$t" "working: back after the tmux loss"
       done
       ;;
     0)
@@ -226,6 +241,7 @@ for r in $(seq 1 "$rounds"); do
   spawn "$c" ship "Try a flaky change $r"
   settle 10
   for t in "$a" "$b" "$c"; do quark_id "$t" >/dev/null || step_fail "$t: no worker terminal in /v1"; done
+  distinct_worktrees "$r"
   worker "$a" "working: implementing greeting $r"
   worker "$b" "working: reading the code"
   worker "$c" "working: trying the change"
