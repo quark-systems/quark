@@ -6971,7 +6971,8 @@
           "memory.rejected",
           "beads.status",
           "beads.changed",
-          "issue_draft.updated"
+          "issue_draft.updated",
+          "notice.posted"
         ]
       },
       "Evidence": {
@@ -8625,6 +8626,76 @@
             "type": "string"
           }
         }
+      },
+      "Notice": {
+        "type": "object",
+        "description": "Something the automation engine told the user: one occasion right\naway, or a digest of what waited. Carried by `notice.posted` events.",
+        "required": [
+          "project_id",
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NoticeItem"
+            },
+            "description": "What a digest or return brief carries, oldest first."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NoticeKind"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The task it is about, for `now`."
+          },
+          "text": {
+            "type": "string",
+            "description": "One line for `now`; a heading for digests."
+          }
+        }
+      },
+      "NoticeItem": {
+        "type": "object",
+        "description": "One occasion in a digest.",
+        "required": [
+          "occasion",
+          "summary",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "occasion": {
+            "$ref": "#/components/schemas/AwayOccasion"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NoticeKind": {
+        "type": "string",
+        "enum": [
+          "now",
+          "digest",
+          "return"
+        ]
       },
       "OperationCount": {
         "type": "object",
@@ -11152,7 +11223,7 @@
       },
       "TriggerRule": {
         "type": "object",
-        "description": "A condition-to-action rule as defined.\n\n`when` is one of `{\"source\": \"event\", \"kind\", \"task\"?, \"fields\"?}`,\n`{\"source\": \"every\", \"secs\"}`, `{\"source\": \"at\", \"at\"}` or\n`{\"source\": \"command\", \"argv\", \"interval_secs\"?, \"stable\"?,\n\"timeout_secs\"?, \"expect\"?, \"error_budget\"?}`. `then` is one of\n`{\"do\": \"wake\", \"note\"}`, `{\"do\": \"inbox\", \"body\"}`,\n`{\"do\": \"steer\", \"task\", \"text\"}` or\n`{\"do\": \"command\", \"argv\", \"timeout_secs\"?}`.",
+        "description": "A condition-to-action rule as defined.\n\n`when` is one of `{\"source\": \"event\", \"kind\", \"task\"?, \"fields\"?}`,\n`{\"source\": \"every\", \"secs\"}`, `{\"source\": \"at\", \"at\"}` or\n`{\"source\": \"command\", \"argv\", \"interval_secs\"?, \"stable\"?,\n\"timeout_secs\"?, \"expect\"?, \"error_budget\"?, \"until\"?}`. `then` is one of\n`{\"do\": \"wake\", \"note\"}`, `{\"do\": \"inbox\", \"body\"}`,\n`{\"do\": \"steer\", \"task\", \"text\"}` or\n`{\"do\": \"command\", \"argv\", \"timeout_secs\"?}`.",
         "required": [
           "id",
           "description",

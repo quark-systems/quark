@@ -3,7 +3,7 @@
 //!
 //! | Piece | Module | Replaces in firstmate |
 //! |---|---|---|
-//! | one inbound API; the user's inbox first, plug-in [`Channel`]s later | [`channel`] | `fm-inbox.sh` (mail, voice and Relay become channels) |
+//! | one inbound API: the user's inbox, and plug-in [`Channel`]s such as a [`CommandChannel`] | [`channel`] | `fm-inbox.sh`, `fm-mail*.sh` (mail, voice and Relay become channels) |
 //! | typed event sources and condition-to-action [`Rule`]s | [`trigger`] | `fm-procevent*`, `fm-procevent-when.sh`, `fm-contributions.sh` |
 //! | per-Project or global [`AwayPolicy`] and [`Posture`] | [`away`] | `/afk`, `/quiet`, `fm-supervise-daemon.sh`, `fm-afk-*` |
 //!
@@ -24,7 +24,7 @@ pub mod firstmate;
 pub mod trigger;
 
 pub use away::{AwayPolicy, Item, Occasion, Posture, Reach, Route};
-pub use channel::{Channel, Inbound, INBOX};
+pub use channel::{Channel, ChannelManifest, CommandChannel, Inbound, INBOX};
 pub use commands::{Commands, Processes};
 pub use engine::{occasion, Effects, Engine, MirrorReport, Mode, NoEffects, TickReport, ENGINE};
 pub use trigger::{Action, Condition, Expect, Rule, RuleId};

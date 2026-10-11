@@ -6,7 +6,7 @@ import { enc, req } from "./client";
 export interface InboxMessage { id: string; channel: string; from: string; body: string; at: string; task_id?: string | null }
 
 /** `when`: `{source: "event", kind, task?, fields?}`, `{source: "every", secs}`, `{source: "at", at}` or
- *  `{source: "command", argv, interval_secs?, stable?, timeout_secs?, expect?, error_budget?}`. */
+ *  `{source: "command", argv, interval_secs?, stable?, timeout_secs?, expect?, error_budget?, until?}`. */
 export type TriggerCondition = { source: "event" | "every" | "at" | "command"; [k: string]: unknown };
 /** `then`: `{do: "wake", note}`, `{do: "inbox", body}`, `{do: "steer", task, text}` or `{do: "command", argv, timeout_secs?}`. */
 export type TriggerAction = { do: "wake" | "inbox" | "steer" | "command"; [k: string]: unknown };
@@ -34,6 +34,11 @@ export interface ProjectAutomation {
   acting: boolean;
   inbox: InboxMessage[]; rules: TriggerRule[]; away: AwaySettings;
 }
+
+/** Something the automation engine told you (a `notice.posted` event): one update now, or a digest of what waited. */
+export type NoticeKind = "now" | "digest" | "return";
+export interface NoticeItem { occasion: AwayOccasion; summary: string; task_id?: string | null; at: string }
+export interface Notice { project_id: string; kind: NoticeKind; text: string; task_id?: string | null; items?: NoticeItem[] }
 
 const base = (p: string) => `/v1/projects/${enc(p)}`;
 export const automationApi = {

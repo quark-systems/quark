@@ -54,7 +54,9 @@ pub const ENGINE: &str = "engine";
 /// What native mode does in the world. quarkd implements it.
 #[async_trait]
 pub trait Effects: Send + Sync {
-    /// Wake the coordinator of `project` for judgment.
+    /// Wake the coordinator of `project` for judgment: a rule's `wake`
+    /// action. Occasions are not woken through here; the coordinator
+    /// applies the away policy's `wake` column to them itself.
     async fn wake(&self, project: &ProjectId, task: Option<&TaskId>, note: &str) -> Result<()>;
     /// Tell the user now.
     async fn notify(&self, project: &ProjectId, task: Option<&TaskId>, note: &str) -> Result<()>;
@@ -107,6 +109,12 @@ pub struct MirrorReport {
     pub received: usize,
     pub acked: usize,
     pub posture: bool,
+    /// When-then watches mirrored as new or changed rules.
+    pub watches: usize,
+    /// Watches whose end was compared with their rule's: how many agreed
+    /// and how many did not.
+    pub agreed: usize,
+    pub diverged: usize,
 }
 
 #[derive(Debug, Default)]
@@ -302,6 +310,13 @@ impl Engine {
 
     // ------------------------------------------------------------ reads
 
+    /// Whether a message from (channel, id) was ever received, pending or
+    /// handled.
+    pub async fn knows(&self, project: &ProjectId, channel: &str, id: &str) -> bool {
+        let st = self.state.lock().await;
+        st.inboxes.is_pending(project, channel, id) || st.inboxes.was_acked(project, channel, id)
+    }
+
     pub async fn inbox(&self, project: &ProjectId) -> Vec<Inbound> {
         self.state.lock().await.inboxes.pending(project)
     }
@@ -363,9 +378,21 @@ impl Engine {
     }
 
     /// Mirror the firstmate home of `project` into the log: new inbox
-    /// notes, notes firstmate handled, and its away posture. Safe to run
-    /// again at any time.
+    /// notes, notes firstmate handled, its away posture, and its when-then
+    /// watches as rules, comparing how each watch ended with its rule.
+    /// Safe to run again at any time.
     pub async fn mirror_firstmate(&self, project: &ProjectId, home: &Path) -> Result<MirrorReport> {
+        self.mirror_firstmate_at(project, home, OffsetDateTime::now_utc())
+            .await
+    }
+
+    /// [`Engine::mirror_firstmate`] as of `now`.
+    pub async fn mirror_firstmate_at(
+        &self,
+        project: &ProjectId,
+        home: &Path,
+        now: OffsetDateTime,
+    ) -> Result<MirrorReport> {
         let path = home.to_path_buf();
         let home = tokio::task::spawn_blocking(move || firstmate::read_home(&path))
             .await
@@ -420,7 +447,102 @@ impl Engine {
             report.posture = true;
         }
         self.refresh().await?;
+        self.mirror_watches(project, &home.watches, now, &mut report)
+            .await?;
         Ok(report)
+    }
+
+    /// Keep one rule per firstmate when-then watch, defined by `firstmate`,
+    /// and compare how each ended. A disagreement is a `shadow.divergence`
+    /// for slice `sub_coordinators`, operation `trigger.when`. A rule
+    /// whose watch firstmate retired is removed once compared.
+    async fn mirror_watches(
+        &self,
+        project: &ProjectId,
+        watches: &[firstmate::Watch],
+        now: OffsetDateTime,
+        report: &mut MirrorReport,
+    ) -> Result<()> {
+        let by = "firstmate";
+        for w in watches {
+            let id = RuleId::new(&w.source);
+            let Some(spec) = &w.spec else { continue };
+            let rule = spec.rule(&w.source);
+            if rule.validate().is_err() {
+                continue;
+            }
+            let current = self.state.lock().await.rules.rule(project, &id).cloned();
+            if current.is_none_or(|d| d.rule != rule) {
+                self.define(project, rule, by).await?;
+                report.watches += 1;
+            }
+        }
+        let mirrored: Vec<Defined> = {
+            let st = self.state.lock().await;
+            st.rules
+                .rules(project)
+                .into_iter()
+                .filter(|d| firstmate::mirrored(&d.rule).is_some())
+                .cloned()
+                .collect()
+        };
+        for d in mirrored {
+            let (armed, grace) = firstmate::mirrored(&d.rule).expect("filtered");
+            let watch = watches.iter().find(|w| w.source == d.rule.id.0);
+            let retired = watch.is_none_or(|w| w.spec.is_none());
+            let Some(watch) = watch else {
+                self.remove(project, &d.rule.id, by).await?;
+                continue;
+            };
+            let native = {
+                let st = self.state.lock().await;
+                let at = |k: &str| st.rules.fired_at(project, &d.rule.id, &d.fire_id(k));
+                firstmate::NativeEnd {
+                    held: at("held"),
+                    error: at("error"),
+                    deadline: at("deadline"),
+                }
+            };
+            let verdict = firstmate::compare_watch(watch, armed, grace, native, now);
+            match &verdict {
+                firstmate::Verdict::Agree => report.agreed += 1,
+                firstmate::Verdict::Diverge { bash: b, native: n } => {
+                    report.diverged += 1;
+                    let outcome = watch.outcomes.iter().rev().find(|o| o.at >= armed);
+                    let div = Divergence {
+                        slice: Slice::SubCoordinators,
+                        operation: "trigger.when".into(),
+                        bash: serde_json::json!({
+                            "watch": watch.source,
+                            "end": b,
+                            "status": outcome.map(|o| o.status),
+                            "detail": outcome.map(|o| o.detail.clone()),
+                        }),
+                        native: serde_json::json!({ "rule": d.rule.id, "end": n }),
+                    };
+                    let armed_s = armed.unix_timestamp().to_string();
+                    self.append(
+                        project,
+                        None,
+                        &div,
+                        kinds::SHADOW_DIVERGENCE.into(),
+                        Some(crate::stable_id(&[
+                            "when",
+                            project.as_str(),
+                            &watch.source,
+                            &armed_s,
+                        ])),
+                    )
+                    .await?;
+                }
+                firstmate::Verdict::Pending | firstmate::Verdict::Skip => {}
+            }
+            let no_outcome = !watch.outcomes.iter().any(|o| o.at >= armed);
+            if retired && (verdict != firstmate::Verdict::Pending || no_outcome) {
+                self.remove(project, &d.rule.id, by).await?;
+            }
+        }
+        self.refresh().await
     }
 
     /// Evaluate every new event once, then clocks and polled commands,
@@ -541,15 +663,9 @@ impl Engine {
         summary: &str,
         report: &mut TickReport,
     ) -> Result<()> {
-        if route.wake {
-            if let Err(err) = self
-                .effects
-                .wake(&e.project, e.task.as_ref(), summary)
-                .await
-            {
-                tracing::warn!(project = %e.project, error = %err, "could not wake the coordinator");
-            }
-        }
+        // `route.wake` is not acted on here: the coordinator (slice 6) reads
+        // the same policy from the same log and wakes itself for this
+        // event, so waking it here too would wake it twice.
         if route.user == Reach::Notify {
             if let Err(err) = self
                 .effects
@@ -590,7 +706,7 @@ impl Engine {
         d: &Defined,
         fire: String,
         cause: Option<Seq>,
-        failure: Option<String>,
+        failure: Option<(Status, String)>,
         report: &mut TickReport,
     ) -> Result<()> {
         let id = d.rule.id.clone();
@@ -615,7 +731,7 @@ impl Engine {
         self.append_stable(project, None, &claim, &key).await?;
         self.refresh_locked(st).await?;
         let (status, detail) = match failure {
-            Some(why) => (Status::ConditionError, why),
+            Some(f) => f,
             None => self.act(project, &d.rule, &fire).await,
         };
         let outcome = TriggerEvent::Outcome {
@@ -720,8 +836,32 @@ impl Engine {
                     timeout_secs,
                     expect,
                     error_budget,
+                    until,
                 } => {
                     let key = (project.clone(), d.rule.id.clone());
+                    if until.is_some_and(|u| now >= u) {
+                        let why = format!(
+                            "the condition never held for {stable} polls in a row before {}",
+                            until
+                                .and_then(|u| u
+                                    .format(&time::format_description::well_known::Rfc3339)
+                                    .ok())
+                                .unwrap_or_default()
+                        );
+                        st.polls.remove(&key);
+                        let fire = d.fire_id("deadline");
+                        self.fire(
+                            st,
+                            &project,
+                            &d,
+                            fire,
+                            None,
+                            Some((Status::NeverTrue, why)),
+                            report,
+                        )
+                        .await?;
+                        continue;
+                    }
                     let poll = st.polls.entry(key.clone()).or_default();
                     if poll.next.is_some_and(|n| now < n) {
                         continue;
@@ -754,8 +894,16 @@ impl Engine {
                         );
                         st.polls.remove(&key);
                         let fire = d.fire_id("error");
-                        self.fire(st, &project, &d, fire, None, Some(why), report)
-                            .await?;
+                        self.fire(
+                            st,
+                            &project,
+                            &d,
+                            fire,
+                            None,
+                            Some((Status::ConditionError, why)),
+                            report,
+                        )
+                        .await?;
                     } else if poll.streak >= *stable {
                         st.polls.remove(&key);
                         let fire = d.fire_id("held");

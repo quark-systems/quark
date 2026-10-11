@@ -40,7 +40,7 @@ struct Rig {
     _dir: tempfile::TempDir,
     app: axum::Router,
     engine: Arc<StubEngine>,
-    shadow: quarkd::native_triggers::ShadowTriggers,
+    shadow: quarkd::native_triggers::Triggers,
     project: String,
     home: std::path::PathBuf,
 }
@@ -56,10 +56,15 @@ async fn rig(with_triggers: bool) -> Rig {
         quarkd::harness::HostEnv::default(),
     ));
     let events = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
-    let shadow =
-        quarkd::native_triggers::ShadowTriggers::open(store.clone(), Arc::new(events.clone()))
-            .await
-            .unwrap();
+    let shadow = quarkd::native_triggers::Triggers::open(
+        store.clone(),
+        Arc::new(events.clone()),
+        engine.clone(),
+        quark_triggers::Mode::Shadow,
+        &dir.path().join("channels"),
+    )
+    .await
+    .unwrap();
     let app = quarkd::api::router(quarkd::api::AppState {
         store: store.clone(),
         engine: engine.clone(),

@@ -28,6 +28,8 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
   const mine = queue.filter((i) => i.projectId === pid);
   const open = useMemo(() => Object.values(prs).filter((p) => p.project_id === pid && (p.state === "open" || p.state === "draft"))
     .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs, pid]);
+  const allNotices = useStore((s) => s.notices);
+  const notices = useMemo(() => allNotices.filter((n) => n.project_id === pid).slice(-5).reverse(), [allNotices, pid]);
   const recent = useMemo(() => Object.values(decisions).filter((d) => d.project_id === pid && d.state === "answered")
     .sort((a, b) => (b.answered_at ?? "").localeCompare(a.answered_at ?? "")).slice(0, 3), [decisions, pid]);
 
@@ -57,6 +59,17 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
           </a>
         )) : <p className="since-none">No open PRs.</p>}
       </section>
+      {notices.length > 0 && (
+        <section data-testid="since-updates">
+          <SectionLabel right={<a href={href({ name: "automation", project: pid })}>Automation</a>}>Updates</SectionLabel>
+          {notices.map((n) => (
+            <div key={n.seq} className="since-item since-update">
+              <span className="since-title" title={n.items?.map((i) => i.summary).join("\n") || n.text}>{n.text}</span>
+              <span className="since-kind" title={n.ts}>{ago(n.ts)}</span>
+            </div>
+          ))}
+        </section>
+      )}
       {recent.length > 0 && (
         <section>
           <SectionLabel right={<a href={href({ name: "decisions", project: pid })}>All</a>}>Recent decisions</SectionLabel>

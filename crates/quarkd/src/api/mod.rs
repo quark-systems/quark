@@ -1,7 +1,7 @@
 //! The `/v1` HTTP API and event stream.
 
 mod accounts;
-mod automation;
+pub(crate) mod automation;
 mod beads;
 mod dashboard;
 mod decision_beads;

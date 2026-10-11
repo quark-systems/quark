@@ -40,7 +40,7 @@ pub struct NewInboxNote {
 /// `when` is one of `{"source": "event", "kind", "task"?, "fields"?}`,
 /// `{"source": "every", "secs"}`, `{"source": "at", "at"}` or
 /// `{"source": "command", "argv", "interval_secs"?, "stable"?,
-/// "timeout_secs"?, "expect"?, "error_budget"?}`. `then` is one of
+/// "timeout_secs"?, "expect"?, "error_budget"?, "until"?}`. `then` is one of
 /// `{"do": "wake", "note"}`, `{"do": "inbox", "body"}`,
 /// `{"do": "steer", "task", "text"}` or
 /// `{"do": "command", "argv", "timeout_secs"?}`.
@@ -154,4 +154,42 @@ pub struct UpdateAwayPolicy {
     pub digest_secs: u64,
     #[serde(default)]
     pub routes: Vec<AwayRoute>,
+}
+
+/// Something the automation engine told the user: one occasion right
+/// away, or a digest of what waited. Carried by `notice.posted` events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Notice {
+    pub project_id: String,
+    pub kind: NoticeKind,
+    /// One line for `now`; a heading for digests.
+    pub text: String,
+    /// The task it is about, for `now`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// What a digest or return brief carries, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<NoticeItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeKind {
+    /// Something to know now.
+    Now,
+    /// What waited since the last digest.
+    Digest,
+    /// The brief for a user who just came back, with what was held.
+    Return,
+}
+
+/// One occasion in a digest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct NoticeItem {
+    pub occasion: AwayOccasion,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// RFC 3339.
+    pub at: String,
 }
