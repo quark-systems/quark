@@ -23,6 +23,7 @@ use crate::now_rfc3339;
 
 mod accounts;
 mod beads;
+mod coordinator;
 mod decisions;
 mod failover;
 mod memory;
@@ -30,6 +31,7 @@ mod migrations;
 mod pull_requests;
 
 pub use accounts::{default_account_id, AccountRow};
+pub use coordinator::{coordinator_decision_id, coordinator_decision_key};
 pub use failover::is_daemon_decision;
 pub use memory::{NewProposal, PendingLearning};
 pub use pull_requests::{artifact_id, artifact_path, PrOwner, PrSyncTarget};

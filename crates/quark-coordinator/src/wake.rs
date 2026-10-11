@@ -40,6 +40,8 @@ pub enum Need {
     HostUnhealthy,
     /// Someone asked for a wake (a rule's `wake` action, the API).
     Requested,
+    /// The user answered a decision the coordinator raised.
+    Answered,
     /// An occasion a Project's away policy routes to the coordinator
     /// although the default does not (progress, paused, stale, a rule that
     /// fired).
@@ -73,6 +75,7 @@ impl Need {
             Need::SpawnFailed => "spawn failed",
             Need::HostUnhealthy => "host unhealthy",
             Need::Requested => "requested",
+            Need::Answered => "answered",
             Need::Policy => "policy",
         }
     }
@@ -156,14 +159,22 @@ pub fn judgment(e: &Event, away: &AwayState) -> Option<WakeItem> {
             _ => None,
         };
     }
-    if kind == format!("{PREFIX}.requested") {
-        if let Ok(CoordinatorEvent::Requested { note, by }) = e.decode::<CoordinatorEvent>() {
-            return Some(item(
+    if e.kind.prefix() == PREFIX {
+        return match e.decode::<CoordinatorEvent>() {
+            Ok(CoordinatorEvent::Requested { note, by }) => Some(item(
                 Need::Requested,
                 format!("{task_prefix}{by} asks: {note}"),
                 by_event(),
-            ));
-        }
+            )),
+            Ok(CoordinatorEvent::Answered {
+                key, answer, by, ..
+            }) => Some(item(
+                Need::Answered,
+                format!("{task_prefix}{by} answered your question {key}: {answer}"),
+                format!("answered:{key}"),
+            )),
+            _ => None,
+        };
     }
     None
 }
@@ -359,5 +370,46 @@ mod tests {
         .unwrap();
         assert_eq!(r.need, Need::Requested);
         assert_eq!(r.summary, "rule nightly asks: check nightly");
+    }
+
+    #[test]
+    fn the_user_s_answer_wakes_and_the_coordinator_s_own_records_do_not() {
+        let away = AwayState::default();
+        let answered = CoordinatorEvent::Answered {
+            key: "storage".into(),
+            decision: "dec_1".into(),
+            answer: "SQLite".into(),
+            by: "Matt".into(),
+        };
+        let a = judgment(
+            &ev(
+                5,
+                None,
+                "coordinator.answered",
+                serde_json::to_value(&answered).unwrap(),
+            ),
+            &away,
+        )
+        .unwrap();
+        assert_eq!(a.need, Need::Answered);
+        assert_eq!(a.key, "answered:storage");
+        assert_eq!(a.summary, "Matt answered your question storage: SQLite");
+        let ended = CoordinatorEvent::TurnEnded {
+            turn: None,
+            end: Default::default(),
+            usage: Default::default(),
+        };
+        assert_eq!(
+            judgment(
+                &ev(
+                    6,
+                    None,
+                    "coordinator.turn_ended",
+                    serde_json::to_value(&ended).unwrap()
+                ),
+                &away
+            ),
+            None
+        );
     }
 }

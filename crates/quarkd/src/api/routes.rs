@@ -780,7 +780,22 @@ pub(crate) async fn answer(
         project_id: target.project_id,
         root: root.into(),
     };
-    if crate::store::is_daemon_decision(&target.engine_id) {
+    if let Some(key) = crate::store::coordinator_decision_key(&target.engine_id) {
+        // The native coordinator's own question: the answer wakes it
+        // through the event log.
+        quark_coordinator::events::record_answer(
+            &state.events,
+            crate::event_ingest::host(),
+            &quark_core::ProjectId::new(ws.project_id.clone()),
+            None,
+            key,
+            &id,
+            &engine_answer,
+            &answered_by,
+        )
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, "engine_failed", e.to_string()))?;
+    } else if crate::store::is_daemon_decision(&target.engine_id) {
         // The daemon's own question about a rate limit: the answer
         // relaunches the worker instead of going to the engine.
         let decision = {

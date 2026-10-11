@@ -1,77 +1,122 @@
-//! The judgment-only coordinator (slice 6), shadowed beside the bash
-//! engine.
+//! The judgment-only coordinator (slice 6), in shadow beside the bash
+//! engine or native once slices 1 to 5 are.
 //!
 //! Slice 6 switches on after slices 1 to 5, so firstmate's coordinator still
 //! runs every Project. Unless [`ENV`] is `0`, quarkd runs the native
-//! coordinator in shadow mode on a timer, for each Project:
+//! coordinator on a timer, for each Project:
 //!
 //! - builds its layered prompt (built-in, persona, the Project repo's
 //!   instructions and memory, code repo instructions, skills) and records it
 //!   when it changes;
-//! - reads firstmate's coordinator transcript into `coordinator.baseline`
-//!   turns, the token baseline the native coordinator is measured against;
-//! - records which events would have woken the native coordinator
-//!   (`coordinator.would_wake`).
+//! - in shadow, reads firstmate's coordinator transcript into
+//!   `coordinator.baseline` turns, the token baseline the native coordinator
+//!   is measured against, and records which events would have woken the
+//!   native coordinator (`coordinator.would_wake`);
+//! - native, points a Claude Code coordinator at its tools and turn-end hook
+//!   ([`crate::coordinator_http::install_claude`]), wakes it through the
+//!   [`Brain`] and runs its calls through the [`Hands`]
+//!   ([`crate::coordinator_hands`]).
 //!
-//! It never wakes or runs anything. See `docs/engine/coordinator.md`.
+//! See `docs/engine/coordinator.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use quark_coordinator::{Config, Coordinator, LayeredPrompt, Mode, NoBrain, NoHands, Sources};
+use quark_coordinator::{
+    Brain, Config, Coordinator, Hands, LayeredPrompt, Mode, NoBrain, NoHands, Sources,
+};
 use quark_core::{EventLog, ProjectId};
 use quark_persona::FilePersonas;
 use quark_transcript::{locate, SessionFormat, SessionRoots};
 
+use crate::coordinator_http::{install_claude, CoordinatorUrls, Tokens};
 use crate::provision::Layout;
 use crate::store::Store;
 
-/// Set to `0` to turn the slice 6 shadow off.
+/// Set to `0` to turn the slice 6 coordinator off.
 pub const ENV: &str = "QUARK_NATIVE_COORDINATOR";
 
 pub fn enabled() -> bool {
     !std::env::var(ENV).is_ok_and(|v| v == "0")
 }
 
-/// The shadow coordinator and the Projects it watches.
-pub struct ShadowCoordinator {
+/// How the coordinator is wired.
+pub enum Wiring {
+    /// Beside firstmate: records, never acts.
+    Shadow,
+    /// Wakes the coordinator and runs its tools. `base_url` is quarkd's own
+    /// address, for the coordinator's MCP server and turn-end hook.
+    Native {
+        brain: Arc<dyn Brain>,
+        hands: Arc<dyn Hands>,
+        base_url: String,
+    },
+}
+
+/// The slice 6 coordinator and the Projects it serves.
+pub struct NativeCoordinator {
     coordinator: Arc<Coordinator>,
     store: Arc<Store>,
     layout: Layout,
     roots: SessionRoots,
+    tokens: Tokens,
+    base_url: Option<String>,
 }
 
-impl ShadowCoordinator {
+impl NativeCoordinator {
     pub async fn open(
         store: Arc<Store>,
         log: Arc<dyn EventLog>,
         layout: Layout,
         roots: SessionRoots,
+        wiring: Wiring,
     ) -> anyhow::Result<Self> {
+        let (mode, brain, hands, base_url): (Mode, Arc<dyn Brain>, Arc<dyn Hands>, _) = match wiring
+        {
+            Wiring::Shadow => (Mode::Shadow, Arc::new(NoBrain), Arc::new(NoHands), None),
+            Wiring::Native {
+                brain,
+                hands,
+                base_url,
+            } => (Mode::Native, brain, hands, Some(base_url)),
+        };
         let coordinator = Coordinator::open(
             log,
             crate::event_ingest::host(),
-            Mode::Shadow,
+            mode,
             Config::default(),
-            Arc::new(NoBrain),
-            Arc::new(NoHands),
+            brain,
+            hands,
         )
         .await?;
         Ok(Self {
             coordinator: Arc::new(coordinator),
             store,
+            tokens: Tokens::new(&layout.home),
             layout,
             roots,
+            base_url,
         })
     }
 
-    /// Refresh each Project's prompt and baseline, then evaluate.
+    /// The coordinator, for its routes.
+    pub fn coordinator(&self) -> Arc<Coordinator> {
+        self.coordinator.clone()
+    }
+
+    /// Each Project coordinator's token, for its routes.
+    pub fn tokens(&self) -> Tokens {
+        self.tokens.clone()
+    }
+
+    /// Refresh each Project's prompt, then its baseline (shadow) or its
+    /// tool and hook config (native), then evaluate.
     pub async fn pass(&self) -> anyhow::Result<()> {
         let store = self.store.clone();
         let projects = tokio::task::spawn_blocking(move || store.list_projects()).await??;
         for project in projects {
-            let Some(workspace) = project.workspace_path else {
+            let Some(workspace) = project.workspace_path.clone() else {
                 continue;
             };
             let id = ProjectId::new(project.id.clone());
@@ -95,9 +140,19 @@ impl ShadowCoordinator {
                 }
                 Err(e) => tracing::warn!(project = %id, error = %e, "slice 6 prompt not built"),
             }
-            if let Some(path) = locate(SessionFormat::Claude, &workspace, &self.roots) {
-                if let Err(e) = self.coordinator.read_baseline(&id, &path).await {
-                    tracing::warn!(project = %id, error = %e, "slice 6 baseline not read");
+            match &self.base_url {
+                None => {
+                    if let Some(path) = locate(SessionFormat::Claude, &workspace, &self.roots) {
+                        if let Err(e) = self.coordinator.read_baseline(&id, &path).await {
+                            tracing::warn!(project = %id, error = %e, "slice 6 baseline not read");
+                        }
+                    }
+                }
+                Some(base) => {
+                    let harness = project.agent_config.as_ref().map(|a| a.harness.as_str());
+                    if let Err(e) = self.install(base, &project.id, &workspace, harness) {
+                        tracing::warn!(project = %id, error = %e, "coordinator tools not installed");
+                    }
                 }
             }
         }
@@ -109,10 +164,27 @@ impl ShadowCoordinator {
             tracing::debug!(
                 items = r.items,
                 turns = r.turns,
-                "slice 6 shadow would have woken the coordinator"
+                mode = ?self.coordinator.mode(),
+                "slice 6 opened coordinator turns"
             );
         }
         Ok(())
+    }
+
+    /// Point the Project's coordinator at its tools and turn-end hook. Only
+    /// Claude Code coordinators are configured so far.
+    fn install(
+        &self,
+        base: &str,
+        project: &str,
+        workspace: &Path,
+        harness: Option<&str>,
+    ) -> std::io::Result<bool> {
+        if harness.is_some_and(|h| !h.starts_with("claude")) {
+            return Ok(false);
+        }
+        let token = self.tokens.get_or_create(project)?;
+        install_claude(workspace, &CoordinatorUrls::new(base, project, &token))
     }
 
     pub async fn run(self, interval: Duration) {
@@ -121,7 +193,7 @@ impl ShadowCoordinator {
         loop {
             ticker.tick().await;
             if let Err(e) = self.pass().await {
-                tracing::error!(error = %format!("{e:#}"), "slice 6 shadow pass failed");
+                tracing::error!(error = %format!("{e:#}"), "slice 6 pass failed");
             }
         }
     }
@@ -209,11 +281,12 @@ mod tests {
             claude: vec![claude],
             ..Default::default()
         };
-        let shadow = ShadowCoordinator::open(
+        let shadow = NativeCoordinator::open(
             store,
             Arc::new(log.clone()),
             Layout::new(dir.path().join("home")),
             roots,
+            Wiring::Shadow,
         )
         .await
         .unwrap();
