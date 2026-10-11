@@ -18,7 +18,7 @@ pub fn message_transitions(
     let paused = matches!(state, TaskState::Blocked | TaskState::Paused);
     let mut events = Vec::new();
     match message {
-        WorkerMessage::Report { state, note } => match state.to_ascii_lowercase().as_str() {
+        WorkerMessage::Report { state, note, .. } => match state.to_ascii_lowercase().as_str() {
             "blocked" => events.push(TaskEvent::Blocked {
                 reason: note.clone(),
             }),

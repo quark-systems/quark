@@ -55,13 +55,13 @@ mod tests {
     use crate::log_shadow::LogShadow;
 
     #[tokio::test]
-    async fn misread_lines_are_divergences() {
+    async fn firstmates_lines_read_the_same() {
         let home = tempfile::tempdir().unwrap();
         let state = home.path().join("state");
         std::fs::create_dir_all(&state).unwrap();
         let mut f = std::fs::File::create(state.join("t1.status")).unwrap();
         f.write_all(
-            b"working: go\nblocked [key=creds]: need a token\nresolved [key=creds]: given\ndone: PR https://github.com/o/r/pull/1\n",
+            b"working: go\nblocked [key=creds]: need a token\nresolved [key=creds]: given\nblocked: [key=env] no env\ndone: PR https://github.com/o/r/pull/1\n",
         )
         .unwrap();
         let db = tempfile::tempdir().unwrap();
@@ -72,18 +72,14 @@ mod tests {
             .unwrap();
         let mut shadow = LogShadow::new(log.clone(), HostId::from("h"), StatusLines);
         let pass = shadow.pass().await.unwrap();
-        assert_eq!(pass.diverged, 1);
-        let d: quark_core::slice::Divergence = log
+        assert_eq!(pass.diverged, 0);
+        let divergences = log
             .read(Seq::ZERO, 100)
             .await
             .unwrap()
             .iter()
-            .find(|e| e.kind.as_str() == quark_core::event::kinds::SHADOW_DIVERGENCE)
-            .unwrap()
-            .decode()
-            .unwrap();
-        assert_eq!(d.slice, Slice::WorkerProtocol);
-        assert_eq!(d.bash["key"], "creds");
-        assert!(d.native.get("key").is_none());
+            .filter(|e| e.kind.as_str() == quark_core::event::kinds::SHADOW_DIVERGENCE)
+            .count();
+        assert_eq!(divergences, 0);
     }
 }

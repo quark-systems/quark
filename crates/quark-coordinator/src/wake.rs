@@ -230,10 +230,12 @@ mod tests {
             WorkerMessage::Report {
                 state: "working".into(),
                 note: "tests pass".into(),
+                key: None,
             },
             WorkerMessage::Report {
                 state: "paused".into(),
                 note: "waiting on CI".into(),
+                key: None,
             },
             WorkerMessage::Signal {
                 signal: "turn_end".into(),
@@ -291,6 +293,7 @@ mod tests {
                 WorkerMessage::Report {
                     state: "blocked".into(),
                     note: "no creds".into(),
+                    key: None,
                 },
             ),
             &away,

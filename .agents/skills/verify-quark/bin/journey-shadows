@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+# journey-shadows: run every native shadow (QUARK_SHADOWS=all) against a
+# scripted workload and report each slice's divergences from firstmate
+# (features/shadows.md). It compresses the days of real use the shadow
+# report waits for into minutes, so a native bug shows up here first.
+#
+#   quark-verify journey shadows [--rounds N] [--engine-dir DIR] [--keep]
+#
+# One run: quarkd with the firstmate engine and the fake harness, one
+# Project, and N rounds of work driven the way the coordinator and its
+# workers drive it. The journey acts as the coordinator (firstmate's own
+# fm-brief, fm-tasks-axi and fm-spawn in the Project's home, on the run's
+# tmux server) and as each worker (status lines typed into the worker's
+# terminal, which the fake agent appends to its status file between the
+# hooks Claude Code fires). The person's side goes through the /v1 API:
+# answering decisions, cancelling and relaunching workers. Each round also
+# disrupts the run once: a daemon crash, a lost tmux server, or a relaunch.
+#
+# At the end it prints `quarkd shadows` for the run, writes the JSON report
+# and the inputs each slice saw to the evidence, and exits 1 when any slice
+# diverged or a workload step failed. Needs tmux 3.2+, jq, python3,
+# tasks-axi, and treehouse (3.1.2 for the slice 9 shadow).
+set -uo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$here/../../../.." && pwd)
+Q=${QV_HELPER:-$here/quark-verify}
+base=${QUARK_VERIFY_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/quark-verify}
+
+rounds=3 engine_dir="" keep=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --rounds) rounds=$2; shift 2 ;;
+    --engine-dir) engine_dir=$2; shift 2 ;;
+    --keep) keep=1; shift ;;
+    *) echo "journey-shadows: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$engine_dir" ] || engine_dir=$(cd "$repo/.." && pwd)/firstmate
+[ -d "$engine_dir/bin" ] || { echo "journey-shadows: no firstmate checkout at $engine_dir (pass --engine-dir)" >&2; exit 2; }
+for t in tmux jq python3 tasks-axi treehouse git; do
+  command -v "$t" >/dev/null || { echo "journey-shadows: $t is required" >&2; exit 2; }
+done
+
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$base/journeys"
+summary=$base/journeys/shadows-$stamp.txt
+fails=0
+say() { echo "$*"; echo "$*" >>"$summary"; }
+step_ok() { say "ok   $*"; }
+step_fail() { say "FAIL $*"; fails=$((fails + 1)); }
+
+api() { "$Q" api "$@" 2>/dev/null; }
+wait_for() { # secs cmd...
+  local deadline=$((SECONDS + $1)); shift
+  until "$@"; do [ $SECONDS -lt "$deadline" ] || return 1; sleep 1; done
+}
+
+run_id=shadows-$stamp
+"$Q" launch --run "$run_id" --engine firstmate --engine-dir "$engine_dir" --harness fake \
+  --env QUARK_SHADOWS=all >/dev/null || { echo "journey-shadows: launch failed" >&2; exit 1; }
+export QUARK_VERIFY_RUN=$run_id
+eval "$("$Q" env)"
+ev=$QV_EVIDENCE/shadows
+mkdir -p "$ev"
+work=$base/$run_id/instance/journey
+mkdir -p "$work"
+cleanup() { [ "$keep" = 1 ] || "$Q" cleanup >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+# --- The Project -----------------------------------------------------------
+
+fixture=$work/fixture
+git init -q --bare -b main "$fixture/repo.git"
+git -C "$fixture" clone -q repo.git work 2>/dev/null
+git -C "$fixture/work" -c user.name=quark-verify -c user.email=verify@quark.invalid \
+  commit -q --allow-empty -m "Shadow fixture"
+git -C "$fixture/work" push -q origin main 2>/dev/null
+
+project=$(api POST /v1/projects "$(jq -nc --arg r "$fixture/repo.git" \
+  '{name: "Shadow soak", goal: "Exercise every shadow", repos: [{url: $r}],
+    agent_config: {harness: "claude-code", effort: "low"}, delivery: "direct"}')" | jq -r '.id // empty')
+[ -n "$project" ] || { echo "journey-shadows: creating the Project failed" >&2; exit 1; }
+wait_for 180 bash -c "'$Q' api GET /v1/projects/$project 2>/dev/null | jq -e '.status == \"ready\"' >/dev/null" ||
+  { echo "journey-shadows: the Project did not become ready" >&2; exit 1; }
+home=$(api GET "/v1/projects/$project" | jq -r '.workspace_path')
+step_ok "Project $project ready, firstmate home $home"
+
+# --- Acting as the coordinator ---------------------------------------------
+
+# Run a command in the Project's firstmate home on the run's tmux server, as
+# the coordinator does (same PATH, TMUX and FM_HOME). Output lands in
+# $work/coord-<n>.log; returns the command's exit code.
+coord_n=0
+coord() {
+  coord_n=$((coord_n + 1))
+  local n=$coord_n
+  {
+    echo '#!/usr/bin/env bash'
+    printf 'cd %q && export FM_HOME=%q\n' "$home" "$home"
+    printf '%q ' "$@"; echo
+    printf 'echo $? >%q\n' "$work/coord-$n.rc"
+  } >"$work/coord-$n.sh"
+  "$Q" tmux new-window -d -n "qv-coord-$n" "bash '$work/coord-$n.sh' >'$work/coord-$n.log' 2>&1"
+  wait_for 240 test -s "$work/coord-$n.rc" || { echo "timed out" >>"$work/coord-$n.log"; return 124; }
+  return "$(cat "$work/coord-$n.rc")"
+}
+
+# Brief, backlog item and spawn: what the coordinator runs for each task.
+spawn() { # id kind(ship|scout) title
+  local id=$1 kind=$2 title=$3 brief_args spawn_args
+  if [ "$kind" = scout ]; then brief_args=(--scout); spawn_args=(--scout)
+  else brief_args=(--mode direct-PR); spawn_args=(--mode direct-PR --yolo off); fi
+  coord bin/fm-brief.sh "$id" repo "${brief_args[@]}" || { step_fail "brief $id ($(tail -1 "$work/coord-$coord_n.log"))"; return 1; }
+  python3 - "$home/data/$id/brief.md" "$title" <<'PY'
+import sys
+p, title = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = s.replace("{TASK}", title + ".").replace("{FIRSTMATE_SPEC}", "Keep the change small.")
+open(p, "w").write(s)
+PY
+  coord bin/fm-tasks-axi.sh add "$id" "$title" --kind "$kind" || { step_fail "backlog $id"; return 1; }
+  if coord bin/fm-spawn.sh "$id" projects/repo "${spawn_args[@]}" --harness claude --effort low; then
+    step_ok "spawned $id ($kind)"
+  else
+    step_fail "spawn $id: $(tail -3 "$work/coord-$coord_n.log" | tr '\n' ' ')"; return 1
+  fi
+}
+
+# Quark's id for a firstmate task: its worker terminal is titled fm-<id> and
+# carries the Quark task id, remembered here once seen (a lost terminal
+# server takes the terminal away, not the task).
+quark_id() { # id
+  local q
+  [ -s "$work/qid-$1" ] && { cat "$work/qid-$1"; return; }
+  q=$(api GET "/v1/projects/$project/terminals" | jq -r --arg t "fm-$1" '.[] | select(.title == $t) | .task_id // empty' | head -1)
+  [ -n "$q" ] && echo "$q" | tee "$work/qid-$1"
+}
+terminal_of() { api GET "/v1/projects/$project/terminals" | jq -r --arg t "fm-$1" '.[] | select(.title == $t) | .id' | head -1; }
+
+# A worker turn: type `QV-STATUS <line>` into its terminal; the fake agent
+# appends <line> to the task's status file between its turn hooks.
+worker() { # id line
+  local t; t=$(terminal_of "$1")
+  [ -n "$t" ] || { step_fail "$1: no worker terminal for '$2'"; return 1; }
+  api POST "/v1/terminals/$t/input" "$(jq -nc --arg d "$(printf 'QV-STATUS %s\r' "$2" | base64 -w0)" '{data_b64: $d}')" >/dev/null ||
+    { step_fail "$1: typing '$2' failed"; return 1; }
+  if wait_for 20 grep -qxF "$2" "$home/state/$1.status" 2>/dev/null; then step_ok "$1 reported '$2'"
+  else step_fail "$1: '$2' never reached its status file"; return 1; fi
+}
+
+# Answer the open decision <task>:<key> as the person would: the open
+# decision on that task whose question is <question>.
+open_decision() { # quark-task-id question
+  api GET /v1/decisions | jq -r --arg t "$1" --arg q "$2" \
+    '[.[] | select(.task_id == $t and .state == "open" and (.question | contains($q)))][0].id // empty'
+}
+answer() { # id key question answer
+  local qid did
+  qid=$(quark_id "$1")
+  local deadline=$((SECONDS + 60))
+  until did=$(open_decision "$qid" "$3"); [ -n "$did" ] || [ $SECONDS -ge $deadline ]; do sleep 1; done
+  [ -n "$did" ] || { step_fail "decision $1:$2 never opened in /v1/decisions"; return 1; }
+  if api POST "/v1/decisions/$did:answer" "$(jq -nc --arg a "$4" '{answer: $a, answered_by: "quark-verify"}')" >/dev/null; then
+    step_ok "answered $1:$2"
+  else step_fail "answering $1:$2 ($did) failed"; return 1; fi
+  wait_for 30 grep -q "^resolved.*\[key=$2\]" "$home/state/$1.status" ||
+    step_fail "$1:$2 answered but no resolved line in its status log"
+}
+
+task_action() { # id action
+  local qid; qid=$(quark_id "$1")
+  if api POST "/v1/tasks/$qid:$2" '{}' >/dev/null; then step_ok "$2 $1"; else step_fail "$2 $1 ($qid)"; return 1; fi
+}
+
+teardown() { # id
+  [ -e "$home/state/$1.meta" ] || return 0
+  if coord bin/fm-teardown.sh "$1"; then step_ok "cleaned up $1"
+  else step_fail "cleanup $1: $(tail -3 "$work/coord-$coord_n.log" | tr '\n' ' ')"; fi
+}
+
+# Give the daemon a few refreshes (5s each) to read, ingest and compare.
+settle() { sleep "${1:-15}"; }
+
+disrupt() { # round
+  case $(($1 % 3)) in
+    1)
+      if "$Q" crash daemon >/dev/null && "$Q" restart >/dev/null; then
+        step_ok "round $1: daemon crashed and restarted"
+      else step_fail "round $1: daemon restart"; fi
+      ;;
+    2)
+      if "$Q" crash tmux >/dev/null; then step_ok "round $1: tmux server killed (agents lost)"
+      else step_fail "round $1: tmux crash"; fi
+      # quarkd's recovery brings the server and the coordinator back.
+      wait_for 90 bash -c "'$Q' api GET /v1/projects/$project/terminals 2>/dev/null | jq -e 'any(.[]; .role == \"coordinator\")' >/dev/null" ||
+        step_fail "round $1: the coordinator did not come back after the tmux loss"
+      # Firstmate refuses to relaunch a worker whose window is gone ("reconcile
+      # the task"), and treehouse hands a dead worker's slot to the next spawn,
+      # so the coordinator cleans up every task the loss left behind (none
+      # holds unlanded work here) before spawning more.
+      local m t
+      for m in "$home"/state/*.meta; do
+        t=$(basename "$m" .meta)
+        [ -s "$work/qid-$t" ] || continue
+        case $t in *-scout) coord bin/fm-captain-hold.sh complete "$t" --none >/dev/null ;; esac
+        teardown "$t"
+      done
+      ;;
+    0)
+      "$Q" crash daemon >/dev/null
+      settle 3
+      if "$Q" restart >/dev/null; then step_ok "round $1: daemon down 3s and back"
+      else step_fail "round $1: daemon restart"; fi
+      ;;
+  esac
+}
+
+# --- The workload ----------------------------------------------------------
+
+for r in $(seq 1 "$rounds"); do
+  say "-- round $r"
+  a=r${r}-ship b=r${r}-scout c=r${r}-fail
+  spawn "$a" ship "Add greeting $r"
+  spawn "$b" scout "Survey logging $r"
+  spawn "$c" ship "Try a flaky change $r"
+  settle 10
+  for t in "$a" "$b" "$c"; do quark_id "$t" >/dev/null || step_fail "$t: no worker terminal in /v1"; done
+  worker "$a" "working: implementing greeting $r"
+  worker "$b" "working: reading the code"
+  worker "$c" "working: trying the change"
+  settle
+  worker "$a" "needs-decision: [key=shape-$r] Flat or nested greeting?"
+  worker "$b" "paused: waiting on an upstream answer"
+  worker "$c" "blocked: [key=token-$r] Needs a deploy token"
+  settle
+  answer "$a" "shape-$r" "Flat or nested" "Flat."
+  answer "$c" "token-$r" "deploy token" "Skip the deploy step."
+  worker "$b" "working: resumed"
+  settle
+  if [ $((r % 3)) = 0 ]; then
+    task_action "$a" cancel && settle 5 && task_action "$a" relaunch && settle 10
+  fi
+  worker "$a" "done: PR https://github.com/quark-verify/fixture/pull/$r"
+  printf '# Logging survey %s\n\nNothing to change.\n' "$r" >"$home/data/$b/report.md"
+  worker "$b" "done: report written"
+  worker "$c" "failed: the change does not build"
+  settle
+  disrupt "$r"
+  settle
+  # A scout's report is reviewed before cleanup; it leaves nothing for the person.
+  coord bin/fm-captain-hold.sh complete "$b" --none || step_fail "review $b: $(tail -2 "$work/coord-$coord_n.log" | tr '\n' ' ')"
+  teardown "$b"
+  teardown "$c"
+  settle
+done
+settle 20
+
+# --- The report ------------------------------------------------------------
+
+days=1
+quarkd=${CARGO_TARGET_DIR:-$repo/target}/debug/quarkd
+"$quarkd" shadows --home "$QV_HOME" --days "$days" >"$ev/report.txt" 2>&1
+"$quarkd" shadows --home "$QV_HOME" --days "$days" --json >"$ev/report.json" 2>/dev/null
+
+# What each slice had to compare: the inputs the event log holds.
+python3 - "$QV_HOME/events.db" >"$ev/inputs.txt" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+for kind, n in c.execute("select kind, count(*) from events group by kind order by kind"):
+    print(f"{n:6d}  {kind}")
+PY
+cp "$summary" "$ev/steps.txt" 2>/dev/null || true
+
+say ""
+cat "$ev/report.txt"
+say ""
+say "inputs in the event log:"
+cat "$ev/inputs.txt"
+
+diverged=$(jq -r '[.slices[] | select(.divergences > 0) | "\(.number) \(.slice): \(.divergences)"] | .[]' "$ev/report.json" 2>/dev/null)
+off=$(jq -r '[.slices[] | select(.status == "off") | "\(.number) \(.slice)"] | .[]' "$ev/report.json" 2>/dev/null)
+say ""
+if [ -n "$diverged" ]; then say "DIVERGED:"; say "$diverged"; fi
+if [ -n "$off" ]; then say "OFF (not compared):"; say "$off"; fi
+say "evidence: $ev"
+say "workload steps failed: $fails"
+[ -z "$diverged" ] && [ "$fails" = 0 ]

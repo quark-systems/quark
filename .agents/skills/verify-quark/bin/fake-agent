@@ -39,7 +39,51 @@ case "${1:-}" in
 esac
 
 echo "fake-agent $name pid $$ ($([ "$resumed" = true ] && echo resumed || echo fresh))"
+
+# A firstmate worker: the engine wrote Claude Code hooks into the worktree
+# and named the status file and steering inbox in the launch brief (the last
+# argument). The agent then keeps the engine's turn bookkeeping the way
+# Claude Code does: UserPromptSubmit when a line arrives, Stop when the turn
+# ends, so firstmate reads the status log instead of a pane stuck busy.
+hooks=.claude/settings.local.json brief=""
+[ $# -gt 0 ] && brief=${!#}
+status_file=$(printf '%s' "$brief" | grep -o ">> '[^']*\.status'" | head -1 | sed "s/^>> '//; s/'$//")
+# shellcheck disable=SC2016 # the backquotes are literal brief text
+inbox=$(printf '%s' "$brief" | grep -o 'steering inbox is `[^`]*`' | head -1 | sed 's/^steering inbox is `//; s/`$//')
+
+hook() { # UserPromptSubmit | Stop | SessionEnd
+  [ -f "$hooks" ] && command -v jq >/dev/null || return 0
+  jq -r --arg e "$1" '.hooks[$e][]?.hooks[]?.command // empty' "$hooks" 2>/dev/null |
+    while IFS= read -r c; do bash -c "$c" </dev/null >/dev/null 2>&1; done
+}
+
+# Acknowledge every steering message, as the worker contract asks.
+ack_inbox() {
+  [ -n "$inbox" ] && [ -d "$inbox" ] || return 0
+  local f
+  mkdir -p "$inbox/handled"
+  for f in "$inbox"/*; do
+    [ -f "$f" ] && mv "$f" "$inbox/handled/" 2>/dev/null
+  done
+}
+
 echo "Working..."
-while IFS= read -r line; do
+hook Stop
+# Claude Code's empty composer is a bare `❯` row; the engine reads it before
+# typing into the agent (an exit, a steer).
+while IFS= read -r -p '❯ ' line; do
+  # Claude Code's /exit ends the session, as the engine's exit control types it.
+  if [ "$line" = /exit ]; then
+    hook SessionEnd
+    exit 0
+  fi
+  hook UserPromptSubmit
   echo "fake-agent: got ${line}"
+  ack_inbox
+  # A scripted worker turn: `QV-STATUS <line>` appends <line> to the task's
+  # status file, as a worker reports (journey-shadows drives these).
+  case $line in
+    "QV-STATUS "*) [ -n "$status_file" ] && printf '%s\n' "${line#QV-STATUS }" >>"$status_file" ;;
+  esac
+  hook Stop
 done

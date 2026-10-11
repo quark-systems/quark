@@ -17,7 +17,14 @@ use crate::{EventId, Result, TaskId};
 pub enum WorkerMessage {
     /// Progress or state the coordinator may need, such as `working`,
     /// `blocked` or `paused` with a note.
-    Report { state: String, note: String },
+    Report {
+        state: String,
+        note: String,
+        /// The decision key a report states explicitly, as firstmate's
+        /// `blocked: [key=<slug>] ...` does: answering it resumes the task.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
     /// A question. `key` stays the same if the worker asks again.
     Ask { key: String, question: String },
     /// Something worth keeping in Project memory.

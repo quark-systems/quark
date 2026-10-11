@@ -23,6 +23,10 @@
 //!
 //! A read that disagrees is asked again of both engines before it is
 //! recorded, so a file that changed between the two reads is not counted.
+//! A read of firstmate's task files is recorded only when those files did
+//! not change during the second read either: firstmate's snapshot takes
+//! seconds, and a line a worker appends meanwhile reaches the event log's
+//! answer but not firstmate's (see [`task_files`]).
 //! Slice 1's reads compare only what the event log can know (see
 //! [`super::eventlog`]): which tasks exist, the state of those whose state
 //! firstmate read from the status log, their open decisions, and the status
@@ -175,10 +179,15 @@ impl ShadowEngine {
             let Ok(Some(_)) = check.diverges(ws, bash).await else {
                 continue;
             };
+            let before = task_files(&ws.root);
             let Ok(bash) = self.bash.snapshot(ws).await else {
                 continue;
             };
-            if let Ok(Some((b, n))) = check.diverges(ws, &bash).await {
+            let found = check.diverges(ws, &bash).await;
+            if task_files(&ws.root) != before {
+                continue;
+            }
+            if let Ok(Some((b, n))) = found {
                 let d = Divergence {
                     slice: check.slice(),
                     operation: check.operation().to_string(),
@@ -260,7 +269,7 @@ impl ShadowEngine {
         T: Serialize,
         F: Fn(&'a dyn EngineAdapter) -> Call<'a, T>,
     {
-        self.read_compared(slice, operation, project, call, None)
+        self.read_compared(slice, operation, project, None, call, None)
             .await
     }
 
@@ -272,6 +281,7 @@ impl ShadowEngine {
         slice: Slice,
         operation: &str,
         project: &str,
+        root: Option<&Path>,
         call: F,
         compare: Option<Compare<'_, T>>,
     ) -> Result<T, EngineError>
@@ -290,10 +300,12 @@ impl ShadowEngine {
                     return bash;
                 }
                 // Ask both again: a file that changed between the two reads
-                // is not a divergence.
+                // is not a divergence, nor one that changed during them.
+                let before = root.map(task_files);
                 bash = call(self.bash.as_ref()).await;
                 let native = call(self.native.as_ref()).await;
-                if let Some((b, n)) = differ(&bash, &native, compare) {
+                let settled = before == root.map(task_files);
+                if let (true, Some((b, n))) = (settled, differ(&bash, &native, compare)) {
                     let d = Divergence {
                         slice,
                         operation: operation.to_string(),
@@ -380,6 +392,33 @@ impl ShadowEngine {
         let tasks = seen.get(project)?;
         holds_view(tasks, bash, native)
     }
+}
+
+/// The size and modification time of each task file firstmate's answers
+/// are read from (`state/<task>.status`, `.meta` and `.busy-state`), so a
+/// comparison can tell whether a worker or firstmate wrote one while both
+/// engines were answering. Other files under `state/` (watcher beats,
+/// locks) change all the time and decide no task's state.
+fn task_files(root: &Path) -> Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)> {
+    let Ok(dir) = std::fs::read_dir(root.join("state")) else {
+        return Vec::new();
+    };
+    let mut files: Vec<_> = dir
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            [".status", ".meta", ".busy-state"]
+                .iter()
+                .any(|s| name.ends_with(s))
+        })
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            Some((e.file_name(), m.len(), m.modified().ok()))
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 /// Whether two answers differ, and if so what to record for each.
@@ -606,6 +645,7 @@ impl EngineAdapter for ShadowEngine {
                 Slice::EventLog,
                 "snapshot",
                 project,
+                Some(&ws.root),
                 |e| e.snapshot(ws),
                 Some(&|b: &FleetSnapshot, n: &FleetSnapshot| self.compare_snapshot(project, b, n)),
             )
@@ -626,6 +666,7 @@ impl EngineAdapter for ShadowEngine {
             Slice::EventLog,
             "status_tail",
             &ws.project_id,
+            Some(&ws.root),
             |e| e.status_tail(ws, task_id, offset),
             Some(&tail_view),
         )
@@ -641,6 +682,7 @@ impl EngineAdapter for ShadowEngine {
             Slice::EventLog,
             "holds",
             project,
+            Some(&ws.root),
             |e| e.holds(ws),
             Some(&|b: &Vec<Hold>, n: &Vec<Hold>| self.compare_holds(project, b, n)),
         )
@@ -1186,11 +1228,13 @@ mod tests {
         assert!(r.log.events().is_empty());
     }
 
-    /// Answers `first` once, then `rest`.
+    /// Answers `first` once, then `rest`; appends a status line to
+    /// `writes` (a worker reporting) during every answer when set.
     struct Flaky {
         calls: Mutex<u32>,
         first: TaskState,
         rest: TaskState,
+        writes: Option<PathBuf>,
     }
 
     #[async_trait]
@@ -1201,6 +1245,14 @@ mod tests {
         async fn snapshot(&self, _: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
             let mut calls = self.calls.lock().unwrap();
             *calls += 1;
+            if let Some(f) = &self.writes {
+                let mut f = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(f)
+                    .unwrap();
+                std::io::Write::write_all(&mut f, b"working: more\n").unwrap();
+            }
             let state = if *calls == 1 { self.first } else { self.rest };
             Ok(FleetSnapshot {
                 tasks: vec![task("t1", state)],
@@ -1292,6 +1344,7 @@ mod tests {
             calls: Mutex::new(0),
             first: TaskState::Running,
             rest: TaskState::Blocked,
+            writes: None,
         });
         let native = Arc::new(StubEngine::new());
         native.set_snapshot(FleetSnapshot {
@@ -1312,6 +1365,39 @@ mod tests {
             "the second answer is served"
         );
         assert!(log.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_disagreement_while_task_files_change_is_not_recorded() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("state")).unwrap();
+        let bash = Arc::new(Flaky {
+            calls: Mutex::new(0),
+            first: TaskState::Running,
+            rest: TaskState::Running,
+            writes: Some(root.path().join("state/t1.status")),
+        });
+        let native = Arc::new(StubEngine::new());
+        native.set_snapshot(FleetSnapshot {
+            tasks: vec![task("t1", TaskState::Blocked)],
+        });
+        let log = MemoryEventLog::new();
+        let engine = ShadowEngine::new(
+            bash,
+            native,
+            SliceSwitch::parse("1=shadow").unwrap(),
+            Arc::new(log.clone()),
+            HostId::from("local"),
+        );
+        let ws = WorkspaceRef {
+            project_id: "p1".into(),
+            root: root.path().to_path_buf(),
+        };
+        engine.snapshot(&ws).await.unwrap();
+        assert!(
+            log.events().is_empty(),
+            "a worker wrote while firstmate was read: inconclusive"
+        );
     }
 
     struct FixedCheck(FleetSnapshot);

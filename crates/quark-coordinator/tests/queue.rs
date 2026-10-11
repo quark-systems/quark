@@ -111,6 +111,7 @@ impl Rig {
             WorkerMessage::Report {
                 state: "working".into(),
                 note: "tests pass".into(),
+                key: None,
             },
         )
         .await
@@ -179,6 +180,7 @@ async fn shadow_records_would_wake_once_and_acts_on_nothing() {
         WorkerMessage::Report {
             state: "blocked".into(),
             note: "no credentials".into(),
+            key: None,
         },
     )
     .await;
