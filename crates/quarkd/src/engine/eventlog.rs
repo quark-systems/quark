@@ -281,7 +281,7 @@ impl super::shadow::SnapshotCheck for SupervisionCheck {
                     id: t.task.to_string(),
                     title: t.task.to_string(),
                     kind: None,
-                    state: t.state,
+                    state: t.shown_state(),
                     state_note: None,
                     state_source: Some(SOURCE.to_string()),
                     harness: None,

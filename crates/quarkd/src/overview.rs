@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use quark_core::{Event, EventLog, Result, Seq};
 use quark_engine::meta::SpawnMeta;
-use quark_eventlog::firstmate::{kinds, StatusPayload};
+use quark_eventlog::firstmate::{kinds, StatusPayload, TasksPayload};
 use quark_eventlog::SqliteEventLog;
 use quark_systems::{
     DigestItem, DigestKind, LiveStatus, OverviewDigest, ProjectOverview, PulseState, StatusCounts,
@@ -139,6 +139,17 @@ impl OverviewModel {
                 }
                 Err(_) => What::Other,
             },
+            (kinds::TASKS, _) => {
+                // A task firstmate removed while still open (cleaned up
+                // mid-work) is no longer live; finished ones stay for
+                // FINISHED_FOR on purpose.
+                if let Ok(t) = e.decode::<TasksPayload>() {
+                    let live: BTreeSet<&str> = t.live.iter().map(String::as_str).collect();
+                    p.tasks
+                        .retain(|id, f| live.contains(id.as_str()) || !f.state().is_open());
+                }
+                What::Other
+            }
             _ => What::Other,
         };
         p.history.push(Entry {
@@ -553,6 +564,38 @@ mod tests {
         let o = m.overview("p1", None, later);
         assert!(o.live.tasks.iter().all(|t| t.engine_task != "a"));
         assert!(o.digest.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_task_removed_while_open_leaves_the_live_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        add(&log, "p1", "open", status("working", None, "building")).await;
+        add(&log, "p1", "finished", status("done", None, "shipped")).await;
+        add(&log, "p1", "kept", status("working", None, "still going")).await;
+        let tasks = TasksPayload {
+            live: vec!["kept".into()],
+        };
+        let e = NewEvent::typed(
+            HostId::from("local"),
+            ProjectId::new("p1"),
+            None,
+            kinds::TASKS,
+            &tasks,
+        )
+        .unwrap();
+        log.append(e).await.unwrap();
+        let mut m = OverviewModel::new(log);
+        m.catch_up().await.unwrap();
+        let o = m.overview("p1", None, OffsetDateTime::now_utc());
+        let mut ids: Vec<&str> = o
+            .live
+            .tasks
+            .iter()
+            .map(|t| t.engine_task.as_str())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["finished", "kept"], "{ids:?}");
     }
 
     #[test]

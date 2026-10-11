@@ -6,7 +6,9 @@
 //! firstmate's tasks as if the supervisor ran it:
 //!
 //! - a `firstmate.spawn` is a launch (`Queued` and `Started` for a new
-//!   task, `Started` for a new generation);
+//!   task, `Started` for a new generation). Firstmate keeps showing a
+//!   relaunched task's last line until its new worker writes, so the
+//!   compared state ([`SupervisedTask::shown_state`]) does too;
 //! - each status line the worker wrote is read by the native file protocol
 //!   (`quark_worker::parse_status_line`) and turned into transitions by
 //!   [`crate::rules::message_transitions`], the supervisor's own rule;
@@ -39,6 +41,11 @@ pub struct SupervisedTask {
     pub open_decisions: BTreeSet<String>,
     /// Transitions the machine refused.
     pub refused: u32,
+    /// The state before a relaunch, until the new worker's first line:
+    /// firstmate keeps showing the previous incarnation's last line until
+    /// then, so the comparison does too ([`Self::shown_state`]).
+    #[serde(default)]
+    pub before_relaunch: Option<TaskState>,
 }
 
 impl SupervisedTask {
@@ -50,7 +57,14 @@ impl SupervisedTask {
             state: TaskState::Unknown,
             open_decisions: BTreeSet::new(),
             refused: 0,
+            before_relaunch: None,
         }
+    }
+
+    /// The state to compare with firstmate's: [`Self::state`], or the
+    /// previous incarnation's while a relaunched worker has written nothing.
+    pub fn shown_state(&self) -> TaskState {
+        self.before_relaunch.unwrap_or(self.state)
     }
 
     /// Apply `events` in order until the machine refuses one.
@@ -84,6 +98,9 @@ impl SupervisedTask {
         if self.generation.as_deref() == Some(generation) {
             return;
         }
+        if self.generation.is_some() {
+            self.before_relaunch = Some(self.state);
+        }
         let mut events = Vec::new();
         if self.state == TaskState::Unknown {
             events.push(TaskEvent::Queued {
@@ -98,6 +115,7 @@ impl SupervisedTask {
     }
 
     fn status(&mut self, line: &StatusPayload) {
+        self.before_relaunch = None;
         if matches!(line.verb.as_str(), "resolved" | "captain-held") {
             if let Some(key) = &line.key {
                 if let Some(events) =
@@ -301,6 +319,23 @@ mod tests {
         let t = &fleet(&log).await.tasks(&"p".into())[0];
         assert_eq!(t.state, TaskState::InReview);
         assert_eq!(t.refused, 0);
+    }
+
+    #[tokio::test]
+    async fn a_relaunch_shows_the_last_line_until_the_new_worker_writes() {
+        let log = MemoryEventLog::new();
+        let spawn = |g: &str| serde_json::json!({"generation": g, "harness": "claude"});
+        push(&log, "t", kinds::SPAWN, spawn("g1")).await;
+        line(&log, "t", "working: go").await;
+        line(&log, "t", "failed: does not build").await;
+        push(&log, "t", kinds::SPAWN, spawn("g2")).await;
+        let t = &fleet(&log).await.tasks(&"p".into())[0];
+        assert_eq!(t.state, TaskState::Running);
+        assert_eq!(t.shown_state(), TaskState::Failed);
+
+        line(&log, "t", "working: back").await;
+        let t = &fleet(&log).await.tasks(&"p".into())[0];
+        assert_eq!(t.shown_state(), TaskState::Running);
     }
 
     #[tokio::test]
