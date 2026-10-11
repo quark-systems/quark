@@ -83,3 +83,49 @@ async fn drives_sessions_and_finds_them_after_a_restart() {
     ));
     server.kill().await;
 }
+
+/// A pane that outlives its program (here `remain-on-exit`; also a missed
+/// SIGCHLD) is listed as ended, with its exit code, so the supervisor
+/// relaunches its worker.
+#[tokio::test]
+async fn a_pane_whose_program_ended_is_not_alive() {
+    if !tmux_installed() {
+        eprintln!("tmux is not installed; skipping");
+        return;
+    }
+    let dir = short_dir();
+    let server = Server::new("tmux", dir.path().join("tmux").join("quark")).unwrap();
+    let tmux = TmuxBackend::new(server.clone());
+
+    let info = tmux
+        .create(&spec("worker-1", &["/bin/sh", "-c", "read x; exit 3"]))
+        .await
+        .unwrap();
+    server
+        .run(&["set-option", "-w", "-t", &info.id.0, "remain-on-exit", "on"])
+        .await
+        .unwrap();
+    let listed = |tmux: TmuxBackend, id| async move {
+        tmux.list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == id)
+            .unwrap()
+    };
+    assert!(listed(tmux.clone(), info.id.clone()).await.alive);
+
+    tmux.input(&info.id, b"\r").await.unwrap();
+    let mut ended = None;
+    for _ in 0..100 {
+        let s = listed(tmux.clone(), info.id.clone()).await;
+        if !s.alive {
+            ended = Some(s);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let ended = ended.expect("the pane reads as ended");
+    assert_eq!(ended.exit_code, Some(3));
+    server.kill().await;
+}

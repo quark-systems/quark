@@ -31,7 +31,7 @@ It composes the other native crates through their `quark-core` contracts and kee
 1. reads each worker's status file into the log (the file protocol; ids are derived from file offsets, so re-reading after a restart records nothing twice);
 2. turns new `worker.message` events into transitions: `blocked`/`paused`/`failed` reports, `needs-decision` asks, `done` (`InReview` with a pull request, `Completed` without), and a `working` report resuming a blocked task; how far it got is recorded as `supervisor.handled`, so a restart never re-applies an old message;
 3. finishes a spawn a crash interrupted (assigned but never launched, or launched before `Started` was recorded);
-4. notices ended sessions (`supervisor.exited` with the exit code) and relaunches an active task's worker in the same worktree, telling it what happened, up to `max_recoveries` times in a row before failing the task;
+4. notices ended sessions (`supervisor.exited` with the exit code) and relaunches an active task's worker in the same worktree, telling it what happened, up to `max_recoveries` times in a row before failing the task. A session runs the agent as its own program, so the agent exiting ends it; a tmux pane that outlives its program (`remain-on-exit`, or a SIGCHLD tmux missed) is listed as ended and closed before the relaunch;
 5. delivers steering still waiting;
 6. records `supervisor.stale` once per episode when a running worker's screen and messages have not changed for `stale_after` (15 minutes by default).
 
