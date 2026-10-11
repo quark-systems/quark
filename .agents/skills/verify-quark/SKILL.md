@@ -100,6 +100,8 @@ $Q crash host                                                  # a reboot: daemo
 $Q agents                                                      # the fake harness's start journal (pid, argv, resumed)
 ```
 
+Native shadows: `$Q journey shadows --rounds 3 --engine-dir ../firstmate` runs every shadow against a scripted firstmate workload and fails on any divergence ([features/shadows.md](features/shadows.md)). `launch --env NAME=VALUE` puts a setting in the daemon's start script, so it survives `restart`.
+
 ## Hand-off to a person
 
 While the run is up, a person can test the same instance by hand:

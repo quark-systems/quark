@@ -2,7 +2,7 @@
 # quark-verify: launch, doctor, drive and clean up an isolated Quark instance
 # for verification. See ../SKILL.md for the full recipe.
 #
-#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate] [--engine-dir DIR] [--harness real|fake] [--run ID]
+#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate] [--engine-dir DIR] [--harness real|fake] [--env K=V]... [--run ID]
 #   quark-verify doctor
 #   quark-verify env                         print the run's variables (eval-able)
 #   quark-verify browser <command> ...       drive the app (bin/browser.mjs)
@@ -69,7 +69,7 @@ start_bg() { # name cmd... ; records instance/<name>.pid, appends to instance/<n
 }
 
 cmd_launch() {
-  local daemon=real engine=stub engine_dir="" harness=real id=""
+  local daemon=real engine=stub engine_dir="" harness=real id="" envs=()
   while [ $# -gt 0 ]; do
     case $1 in
       --daemon) daemon=$2; shift 2 ;;
@@ -77,6 +77,7 @@ cmd_launch() {
       --engine-dir) engine_dir=$2; shift 2 ;;
       --harness) harness=$2; shift 2 ;;
       --run) id=$2; shift 2 ;;
+      --env) [[ $2 =~ ^[A-Z_][A-Z0-9_]*= ]] || die "--env takes NAME=VALUE"; envs+=("$2"); shift 2 ;;
       *) die "launch: unknown argument $1" ;;
     esac
   done
@@ -117,8 +118,16 @@ cmd_launch() {
       echo '#!/usr/bin/env bash'
       if [ "$harness" = fake ]; then
         mkdir -p "$inst/fakebin"
+        # Each fake runs under a copy of bash named after the harness, so the
+        # agent's process is called `claude` (or `codex`) as the real CLI's is:
+        # the engine tells an agent from a bare shell by that name.
         local h
-        for h in claude codex; do ln -s "$here/fake-agent" "$inst/fakebin/$h"; done
+        mkdir -p "$inst/fakebin/.rt"
+        for h in claude codex; do
+          cp "$(command -v bash)" "$inst/fakebin/.rt/$h"
+          { printf '#!%s\n' "$inst/fakebin/.rt/$h"; tail -n +2 "$here/fake-agent"; } >"$inst/fakebin/$h"
+          chmod +x "$inst/fakebin/$h"
+        done
         # A login shell's profile can put the real CLIs back in front of
         # fakebin, so the tmux server's windows get a shell without profile.
         # shellcheck disable=SC2016 # $PATH and $@ expand when the shell runs
@@ -130,6 +139,9 @@ cmd_launch() {
         printf 'export SHELL=%q\n' "$inst/fakebin/shell"
         printf 'export QV_AGENT_JOURNAL=%q\n' "$run_dir/evidence/agents.jsonl"
       fi
+      # --env settings are part of the script, so a restart keeps them.
+      local e
+      for e in ${envs[@]+"${envs[@]}"}; do printf 'export %s=%q\n' "${e%%=*}" "${e#*=}"; done
       printf 'exec %q --home %q --listen %q --engine %q\n' "$target/debug/quarkd" "$home" "127.0.0.1:$dport" "$engine"
     } >"$inst/quarkd.sh"
     chmod +x "$inst/quarkd.sh"

@@ -16,7 +16,7 @@
 use quark_core::worker::WorkerMessage;
 use serde::{Deserialize, Serialize};
 
-use crate::file::parse_status_line;
+use crate::file::{parse_status_line, pull_request_in};
 
 /// The operation a divergence is recorded under.
 pub const OPERATION: &str = "status_line";
@@ -87,10 +87,10 @@ pub fn native_reading(m: &WorkerMessage) -> Reading {
             text: summary.clone(),
             pull_request: pull_request.clone(),
         },
-        WorkerMessage::Report { state, note } => Reading {
+        WorkerMessage::Report { state, note, key } => Reading {
             kind: "report".into(),
             state: Some(state.clone()),
-            key: None,
+            key: key.clone(),
             text: note.clone(),
             pull_request: None,
         },
@@ -197,45 +197,6 @@ fn valid_key(k: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// The first `https?://...` URL ending in `/pull/<n>`, as firstmate's
-/// fleet snapshot finds a pull request in a status log.
-fn pull_request_in(note: &str) -> Option<String> {
-    let mut from = 0;
-    while let Some(i) = note[from..].find("http") {
-        let start = from + i;
-        let tail = &note[start..];
-        let scheme = ["https://", "http://"]
-            .iter()
-            .find(|s| tail.starts_with(**s))
-            .map(|s| s.len());
-        if let Some(scheme) = scheme {
-            let end = tail
-                .find(|c: char| c.is_whitespace() || c == ')' || c == '"')
-                .unwrap_or(tail.len());
-            let url = &tail[..end];
-            // The longest prefix of the URL that ends in /pull/<digits>.
-            let mut best = None;
-            let mut at = scheme;
-            while let Some(p) = url[at..].find("/pull/") {
-                let digits_at = at + p + "/pull/".len();
-                let n = url[digits_at..]
-                    .bytes()
-                    .take_while(|b| b.is_ascii_digit())
-                    .count();
-                if n > 0 {
-                    best = Some(&url[..digits_at + n]);
-                }
-                at = digits_at;
-            }
-            if let Some(b) = best {
-                return Some(b.to_string());
-            }
-        }
-        from = start + 4;
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,6 +219,13 @@ mod tests {
         agrees("continuation prose without a colon");
         agrees("");
         agrees("# a comment: ignored");
+        // Found by journey-shadows: a keyed blocker opens a decision.
+        agrees("blocked [key=creds]: need a token");
+        agrees("blocked: [key=creds] need a token");
+        agrees("working [key=x]: a key on a report that opens nothing");
+        agrees("needs-decision[key=x]: pick");
+        agrees("done: see https://ci.example/run/1 and PR https://github.com/o/r/pull/3");
+        agrees("done: branch pushed to https://example.com/o/r");
     }
 
     #[test]
@@ -268,23 +236,6 @@ mod tests {
 
     #[test]
     fn differences_are_reported() {
-        // A keyed blocker loses its key.
-        let (b, n) = compare("blocked [key=creds]: need a token").unwrap();
-        assert_eq!(b.key.as_deref(), Some("creds"));
-        assert_eq!(n.key, None);
-        // A key with no space before it is part of the native verb.
-        let (b, n) = compare("needs-decision[key=x]: pick").unwrap();
-        assert_eq!(b.kind, "ask");
-        assert_eq!(n.kind, "report");
-        // The first URL is not always the pull request.
-        let (b, n) =
-            compare("done: see https://ci.example/run/1 and PR https://github.com/o/r/pull/3")
-                .unwrap();
-        assert_eq!(
-            b.pull_request.as_deref(),
-            Some("https://github.com/o/r/pull/3")
-        );
-        assert_eq!(n.pull_request.as_deref(), Some("https://ci.example/run/1"));
         // A malformed key opens nothing in firstmate.
         let (b, n) = compare("needs-decision [key=a b]: pick").unwrap();
         assert_eq!(b.key, None);

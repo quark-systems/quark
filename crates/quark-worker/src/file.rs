@@ -32,12 +32,15 @@ use crate::recorder::{Recorder, WorkerIdentity};
 /// Parses one status line. `Ok(None)` for blank lines and `#` comments.
 ///
 /// `<verb>[ corr=<id>][ [key=<slug>]]: <note>` maps by verb: `done` to
-/// [`WorkerMessage::Done`] (the first URL in the note is the pull request),
-/// `needs-decision` or `ask` to [`WorkerMessage::Ask`] (key `default` when
-/// none is stated, before the colon or at the head of the note), `learned`
-/// to [`WorkerMessage::Learned`], and any other verb to
-/// [`WorkerMessage::Report`] with the verb as the state. A line starting
-/// with `{` is a JSON worker message.
+/// [`WorkerMessage::Done`] (the pull request is the first URL ending in
+/// `/pull/<n>`, as firstmate finds it), `needs-decision` or `ask` to
+/// [`WorkerMessage::Ask`] (key `default` when none is stated, before the
+/// colon or at the head of the note), `learned` to
+/// [`WorkerMessage::Learned`], and any other verb to
+/// [`WorkerMessage::Report`] with the verb as the state; a `blocked` report
+/// keeps its stated key, because firstmate opens a decision for it. The verb
+/// ends at the first space or `[`. A line starting with `{` is a JSON worker
+/// message.
 pub fn parse_status_line(line: &str) -> Result<Option<WorkerMessage>> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -53,14 +56,18 @@ pub fn parse_status_line(line: &str) -> Result<Option<WorkerMessage>> {
             "status line has no `<state>:` prefix: {line}"
         )));
     };
-    let mut words = head.split_whitespace();
-    let verb = words.next().unwrap_or("").to_ascii_lowercase();
+    let verb = head
+        .split('[')
+        .next()
+        .and_then(|h| h.split_whitespace().next())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if verb.is_empty() {
         return Err(CoreError::Invalid(format!(
             "status line has no state: {line}"
         )));
     }
-    let mut key = words.find_map(key_token);
+    let mut key = key_token(head);
     let mut note = note.trim();
     if let Some(rest) = note.strip_prefix("[key=") {
         if let Some((k, after)) = rest.split_once(']') {
@@ -75,7 +82,7 @@ pub fn parse_status_line(line: &str) -> Result<Option<WorkerMessage>> {
     let note = note.to_string();
     Ok(Some(match verb.as_str() {
         "done" => WorkerMessage::Done {
-            pull_request: first_url(&note),
+            pull_request: pull_request_in(&note),
             summary: if note.is_empty() { "done".into() } else { note },
         },
         "needs-decision" | "ask" => WorkerMessage::Ask {
@@ -83,12 +90,19 @@ pub fn parse_status_line(line: &str) -> Result<Option<WorkerMessage>> {
             question: note,
         },
         "learned" => WorkerMessage::Learned { fact: note },
-        _ => WorkerMessage::Report { state: verb, note },
+        _ => WorkerMessage::Report {
+            key: if verb == "blocked" { key } else { None },
+            state: verb,
+            note,
+        },
     }))
 }
 
-fn key_token(word: &str) -> Option<String> {
-    let k = word.strip_prefix("[key=")?.strip_suffix(']')?;
+/// The `[key=<slug>]` stated before the colon.
+fn key_token(head: &str) -> Option<String> {
+    let start = head.find("[key=")? + "[key=".len();
+    let len = head[start..].find(']')?;
+    let k = &head[start..start + len];
     valid_key(k).then(|| k.to_string())
 }
 
@@ -98,10 +112,43 @@ fn valid_key(k: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-fn first_url(note: &str) -> Option<String> {
-    note.split_whitespace()
-        .find(|w| w.starts_with("https://") || w.starts_with("http://"))
-        .map(|w| w.trim_end_matches(['.', ',', ')', ';']).to_string())
+/// The first `https?://...` URL ending in `/pull/<n>`, as firstmate's
+/// fleet snapshot finds a pull request in a status log.
+pub(crate) fn pull_request_in(note: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(i) = note[from..].find("http") {
+        let start = from + i;
+        let tail = &note[start..];
+        let scheme = ["https://", "http://"]
+            .iter()
+            .find(|s| tail.starts_with(**s))
+            .map(|s| s.len());
+        if let Some(scheme) = scheme {
+            let end = tail
+                .find(|c: char| c.is_whitespace() || c == ')' || c == '"')
+                .unwrap_or(tail.len());
+            let url = &tail[..end];
+            // The longest prefix of the URL that ends in /pull/<digits>.
+            let mut best = None;
+            let mut at = scheme;
+            while let Some(p) = url[at..].find("/pull/") {
+                let digits_at = at + p + "/pull/".len();
+                let n = url[digits_at..]
+                    .bytes()
+                    .take_while(|b| b.is_ascii_digit())
+                    .count();
+                if n > 0 {
+                    best = Some(&url[..digits_at + n]);
+                }
+                at = digits_at;
+            }
+            if let Some(b) = best {
+                return Some(b.to_string());
+            }
+        }
+        from = start + 4;
+    }
+    None
 }
 
 /// What one [`StatusFile::poll`] did.
@@ -267,7 +314,16 @@ mod tests {
             parse("blocked: staging token expired"),
             WorkerMessage::Report {
                 state: "blocked".into(),
-                note: "staging token expired".into()
+                note: "staging token expired".into(),
+                key: None,
+            }
+        );
+        assert_eq!(
+            parse("blocked: [key=creds] staging token expired"),
+            WorkerMessage::Report {
+                state: "blocked".into(),
+                note: "staging token expired".into(),
+                key: Some("creds".into()),
             }
         );
         assert_eq!(

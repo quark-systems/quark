@@ -58,6 +58,17 @@ Time the daemon was stopped counts toward it, so a laptop that was asleep for da
 The bar is time only: a slice reads `agreeing` once "on since" is a whole window (7 days by default) old with no divergence in that window, and a `watching` slice prints the moment it gets there ("agreeing from", `agrees_at` in the JSON).
 A divergence keeps a slice `diverging` until it ages out of the window.
 
+## Check the shadows in minutes
+
+Days of real use are the bar, but a scripted run finds most divergences first.
+`quark-verify journey shadows` (`.agents/skills/verify-quark/features/shadows.md`) launches its own quarkd with `QUARK_SHADOWS=all`, drives a Project through rounds of firstmate work (spawns, keyed decisions answered from the API, pauses, blockers, finished and failed tasks, cleanups, a daemon crash, a lost tmux server, a relaunch) and prints this report for that run:
+
+```sh
+.agents/skills/verify-quark/bin/quark-verify journey shadows --rounds 3 --engine-dir ../firstmate
+```
+
+It exits non-zero when any slice diverged. Run it after changing a native slice or firstmate's status handling; it needs no signed-in harness.
+
 ## Switch slice 1 to native
 
 Slices switch native strictly in order, so slice 1 goes first, once it reads `agreeing` and the G2 durability journeys pass (`verify-quark`).

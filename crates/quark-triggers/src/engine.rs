@@ -1040,7 +1040,7 @@ pub fn occasion(e: &Event) -> Option<(Occasion, String)> {
         kinds::WORKER => {
             let env = e.decode::<WorkerEnvelope>().ok()?;
             match env.message {
-                WorkerMessage::Report { state, note } => {
+                WorkerMessage::Report { state, note, .. } => {
                     let occ = match state.as_str() {
                         "blocked" => Occasion::Blocked,
                         "failed" => Occasion::Failed,

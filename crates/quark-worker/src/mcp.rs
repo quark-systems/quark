@@ -125,6 +125,7 @@ fn tool_message(name: &str, args: &Value) -> Result<WorkerMessage, ToolError> {
         "report" => WorkerMessage::Report {
             state: text("state")?,
             note: optional("note").unwrap_or_default(),
+            key: None,
         },
         "ask" => WorkerMessage::Ask {
             key: optional("key").unwrap_or_else(|| "default".into()),
@@ -312,7 +313,8 @@ mod tests {
             [
                 WorkerMessage::Report {
                     state: "blocked".into(),
-                    note: "need a token".into()
+                    note: "need a token".into(),
+                    key: None,
                 },
                 WorkerMessage::Ask {
                     key: "default".into(),
