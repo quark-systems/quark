@@ -218,7 +218,9 @@ impl State {
             CoordinatorEvent::TranscriptRead { path, offset } => {
                 self.transcripts.insert(path, offset);
             }
-            CoordinatorEvent::Requested { .. } | CoordinatorEvent::Baseline { .. } => {}
+            CoordinatorEvent::Requested { .. }
+            | CoordinatorEvent::Answered { .. }
+            | CoordinatorEvent::Baseline { .. } => {}
         }
     }
 }
@@ -227,7 +229,7 @@ impl State {
 /// engines' cursors.
 fn is_bookkeeping(e: &Event) -> bool {
     let k = e.kind.as_str();
-    (e.kind.prefix() == PREFIX && k != "coordinator.requested")
+    (e.kind.prefix() == PREFIX && !matches!(k, "coordinator.requested" | "coordinator.answered"))
         || k.ends_with(".cursor")
         || matches!(k, "away.shadowed" | "shadow.divergence")
 }

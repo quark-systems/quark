@@ -7,7 +7,7 @@
 //! firstmate's coordinator spent its turns. [`crate::Coordinator`] folds
 //! them back.
 
-use quark_core::{EventKind, Seq};
+use quark_core::{EventKind, EventLog, HostId, NewEvent, ProjectId, Result, Seq, TaskId};
 use serde::{Deserialize, Serialize};
 
 use crate::baseline::BaselineTurn;
@@ -68,6 +68,15 @@ pub enum CoordinatorEvent {
     /// A wake asked for from outside the log's own events, such as a
     /// trigger rule's `wake` action or the API.
     Requested { note: String, by: String },
+    /// The user answered a decision the coordinator raised with `ask_user`
+    /// under `key`. Wakes the coordinator with the answer.
+    Answered {
+        key: String,
+        /// The decision's id in the Quark store.
+        decision: String,
+        answer: String,
+        by: String,
+    },
     /// Native: a turn was opened for `items` and handed to the coordinator.
     /// `attempt` counts deliveries of the same turn (a restart redelivers).
     Woken {
@@ -110,6 +119,31 @@ pub enum CoordinatorEvent {
     Cursor { through: Seq },
 }
 
+/// Record the user's answer to a decision the coordinator raised, which
+/// wakes it with the answer. Recording the same decision's answer twice
+/// lands once.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_answer(
+    log: &dyn EventLog,
+    host: HostId,
+    project: &ProjectId,
+    task: Option<TaskId>,
+    key: &str,
+    decision: &str,
+    answer: &str,
+    by: &str,
+) -> Result<Seq> {
+    let ev = CoordinatorEvent::Answered {
+        key: key.to_string(),
+        decision: decision.to_string(),
+        answer: answer.to_string(),
+        by: by.to_string(),
+    };
+    let mut e = NewEvent::typed(host, project.clone(), task, ev.kind(), &ev)?;
+    e.id = crate::stable_id(&["answered", project.as_str(), decision]);
+    log.append(e).await
+}
+
 fn one() -> u32 {
     1
 }
@@ -119,6 +153,7 @@ impl CoordinatorEvent {
         let name = match self {
             CoordinatorEvent::Prompt { .. } => "prompt",
             CoordinatorEvent::Requested { .. } => "requested",
+            CoordinatorEvent::Answered { .. } => "answered",
             CoordinatorEvent::Woken { .. } => "woken",
             CoordinatorEvent::WouldWake { .. } => "would_wake",
             CoordinatorEvent::Tool { .. } => "tool",

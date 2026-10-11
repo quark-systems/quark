@@ -10,6 +10,8 @@ pub mod beads;
 pub mod chat;
 pub mod classifier;
 pub mod config;
+pub mod coordinator_hands;
+pub mod coordinator_http;
 pub mod coordinator_shadow;
 pub mod crew_dispatch;
 pub mod dashboard_shadow;
@@ -241,23 +243,57 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     } else {
         (None, None)
     };
-    let coordinator_task = if native_coordinator::enabled() {
-        match native_coordinator::ShadowCoordinator::open(
+    let chat_input: Arc<dyn chat::CoordinatorInput> = Arc::new(chat::SessionsInput::new(
+        sessions.clone(),
+        quark_transcript::SessionRoots::from_env(),
+    ));
+    let coordinator_native = engine::shadow::slices_from_env()?
+        .mode(quark_core::Slice::Coordinator)
+        == quark_core::SliceMode::Native;
+    let (coordinator_routes, coordinator_task) = if native_coordinator::enabled() {
+        let wiring = if coordinator_native {
+            native_coordinator::Wiring::Native {
+                brain: Arc::new(coordinator_hands::InputBrain::new(
+                    store.clone(),
+                    chat_input.clone(),
+                )),
+                hands: Arc::new(coordinator_hands::EngineHands::new(
+                    store.clone(),
+                    engine.clone(),
+                )),
+                base_url: format!("http://{}", config.listen),
+            }
+        } else {
+            native_coordinator::Wiring::Shadow
+        };
+        match native_coordinator::NativeCoordinator::open(
             store.clone(),
             Arc::new(events.clone()),
             layout.clone(),
             quark_transcript::SessionRoots::from_env(),
+            wiring,
         )
         .await
         {
-            Ok(c) => Some(tokio::spawn(c.run(config.refresh_interval))),
+            Ok(c) => {
+                let routes = coordinator_http::router(
+                    c.coordinator(),
+                    c.tokens(),
+                    store.clone(),
+                    quark_transcript::SessionRoots::from_env(),
+                );
+                (
+                    Some(routes),
+                    Some(tokio::spawn(c.run(config.refresh_interval))),
+                )
+            }
             Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "slice 6 shadow not started");
-                None
+                tracing::warn!(error = %format!("{e:#}"), "slice 6 coordinator not started");
+                (None, None)
             }
         }
     } else {
-        None
+        (None, None)
     };
     let slices = engine::shadow::slices_from_env()?;
     let verify_task = (slices.mode(quark_core::Slice::Verification)
@@ -303,7 +339,10 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                 slices.mode(Slice::Supervision) == quark_core::SliceMode::Shadow,
             ),
             (Slice::Dispatch, native_dispatch::enabled()),
-            (Slice::Coordinator, coordinator_task.is_some()),
+            (
+                Slice::Coordinator,
+                coordinator_task.is_some() && !coordinator_native,
+            ),
             (Slice::SubCoordinators, triggers_task.is_some()),
             (Slice::Sandbox, dashboard_shadow),
             (Slice::WorktreePool, native_worktrees::shadowing()),
@@ -322,7 +361,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         shadows::record_started(&events, event_ingest::host(), on, native).await;
     }
     // After the start is recorded, so the judge knows the shadow is watching.
-    let wake_task = coordinator_task.is_some().then(|| {
+    let wake_task = (coordinator_task.is_some() && !coordinator_native).then(|| {
         tokio::spawn(
             log_shadow::LogShadow::new(
                 events.clone(),
@@ -353,10 +392,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         accounts,
         sessions: sessions.clone(),
         layout,
-        chat: Arc::new(chat::SessionsInput::new(
-            sessions.clone(),
-            quark_transcript::SessionRoots::from_env(),
-        )),
+        chat: chat_input,
         forge,
         events,
         triggers,
@@ -366,6 +402,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let mut app = api::router(state);
     if let Some(n) = &native {
         app = app.nest(native::WORKER_PREFIX, n.worker_router());
+    }
+    if let Some(routes) = coordinator_routes {
+        app = app.nest(coordinator_http::PREFIX, routes);
     }
     let listener = TcpListener::bind(config.listen)
         .await

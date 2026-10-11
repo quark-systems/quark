@@ -8,7 +8,7 @@ It replaces firstmate's coordinator contract (`AGENTS.md`, the watcher's wake qu
 |---|---|---|
 | Layered prompt | `prompt` | `coordinator.prompt` |
 | Which events need judgment | `wake` | |
-| Wake queue: items batched into turns | `Coordinator` | `coordinator.woken`, `coordinator.turn_ended`, `coordinator.requested`, `coordinator.cursor` |
+| Wake queue: items batched into turns | `Coordinator` | `coordinator.woken`, `coordinator.turn_ended`, `coordinator.requested`, `coordinator.answered`, `coordinator.cursor` |
 | Native tools, over MCP | `tools`, `mcp` | `coordinator.tool`, `coordinator.tool_done` |
 | Token efficiency | `efficiency`, `baseline` | `coordinator.baseline`, `coordinator.transcript_read`, `coordinator.would_wake` |
 
@@ -31,6 +31,7 @@ The log keeps a `PromptRecord` (each layer's source, size and digest, never the 
 - Worker messages, firstmate status lines, inbound channel messages and rule outcomes follow the away policy (`docs/engine/triggers.md`): an occasion wakes the coordinator when the Project's route for it says so. By default that is a question, blocked, failed, done, an inbound message and a failed rule.
 - Dispatch decisions left to the coordinator: `dispatch.escalated` (pick an agent), `dispatch.spawn_failed` and `dispatch.host_unhealthy`.
 - An explicit `Coordinator::request` (a rule's `wake` action, the API), recorded as `coordinator.requested`.
+- The user's answer to a decision the coordinator raised with `ask_user`, recorded as `coordinator.answered` (`events::record_answer`).
 
 Nothing else wakes it: progress, hook signals, steering, launches, the engine's own transitions.
 A question asked again under the same key while still waiting replaces the waiting one.
@@ -99,9 +100,28 @@ Deciding is the LLM's job, so there is no decision to compare one by one; what s
 Whether firstmate's coordinator would have been woken for the same status lines is already compared by the slice 7 shadow (`away.route` divergences).
 The slice 6 shadow checks the other direction: every wake turn in which firstmate's coordinator acted should have a native `would_wake` within 10 minutes, and each one without is a `shadow.divergence` (operation `acting_wake`; `crates/quarkd/src/coordinator_shadow.rs`, `docs/shadow-readiness.md`).
 
+## In quarkd
+
+quarkd opens the coordinator in shadow, or native when the slice switch puts slice 6 on native (which it allows only after slices 1 to 5), in `crates/quarkd/src/native_coordinator.rs`.
+
+| Piece | Where | Does |
+|---|---|---|
+| `InputBrain` | `coordinator_hands.rs` | Types each turn's briefing into the coordinator's session, the way the coordinator chat does. A typed but unconfirmed wake is not typed again; the turn timeout redelivers it. |
+| `EngineHands` | `coordinator_hands.rs` | `fleet`, `task`, `steer`, `answer`, `relaunch` and `cancel` go to the engine adapter. `ask_user` opens a decision in the store, `tell_user` puts a message in the coordinator chat (`coordinator.message`) and `remember` proposes a memory entry. `start_task` and `choose_profile` wait for native dispatch (slice 5) and `ack_message` for the channels API (slice 7); they are refused until then. |
+| Routes | `coordinator_http.rs` | `POST /v1/coordinator/{project}/{token}/mcp` serves the tools over MCP; `POST /v1/coordinator/{project}/{token}/hooks/turn_end` (or `Stop`) closes the turn. |
+| Hook install | `coordinator_http::install_claude` | Native only: writes the MCP server into the workspace's `.mcp.json` (approved in `.claude/settings.local.json`) and a `Stop` hook that POSTs the turn end, keeping everything else in both files. |
+
+Each Project's token is minted once into `<home>/coordinators/<project>.token` (mode 0600); a wrong token is `404`.
+The turn-end hook takes the turn's `usage` from its body when it sends one, else reads it from the coordinator's newest session log; an `Idempotency-Key` header makes a retried hook count once.
+
+The coordinator's decisions have the engine id `quarkd/coordinator/<key>`, so no engine refresh closes them. Asking again under the same key while one is open updates it in place.
+Answering one through `POST /v1/decisions/{id}:answer` (from the app, the phone, chat or Beads) records `coordinator.answered` instead of calling the engine, and that wakes the coordinator with the answer.
+`crates/quarkd/tests/coordinator.rs` runs that whole loop: a worker's question wakes the coordinator, it asks the user over MCP, its hook ends the turn, and the user's answer wakes it again.
+
 ## Not yet
 
-- quarkd's `Brain` (typing the briefing into the coordinator's session, or a direct model call) and `Hands` (the dispatcher, supervisor, channels and memory), the MCP route for the coordinator, and installing its turn-end hook, once slices 1 to 5 are native.
 - A native `EngineAdapter::start_coordinator` that launches the coordinator with the layered prompt instead of firstmate's `AGENTS.md`.
+- Hooks and MCP config for Codex and Pi coordinators; only Claude Code is configured.
+- `start_task`, `choose_profile` and `ack_message` through native dispatch and channels.
 - In native slice 7, the triggers engine's `Effects::wake` should become `Coordinator::request` for rule actions only, since occasions already wake the coordinator from the log.
 - Baselines from Codex and Pi coordinator transcripts.
