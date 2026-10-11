@@ -1001,6 +1001,17 @@ impl Supervisor {
                 .flatten();
             if !info.is_some_and(|i| i.alive) {
                 let code = info.and_then(|i| i.exit_code);
+                if info.is_some() {
+                    // The program ended but its session is still listed (a
+                    // tmux pane tmux has not closed). Close it, so the
+                    // relaunch does not share its name.
+                    match self.sessions.kill(&g.session).await {
+                        Ok(()) | Err(CoreError::NotFound(_)) => {}
+                        Err(e) => {
+                            tracing::warn!(session = %g.session.0, error = %e, "closing an ended session failed")
+                        }
+                    }
+                }
                 self.record(
                     project,
                     task,

@@ -12,8 +12,16 @@
 //! fell behind on is answered with a fresh repaint. tmux does not report
 //! exit codes: a session whose window closed ends with
 //! `Exited { code: None }`.
+//!
+//! A pane can outlive its program: with `remain-on-exit`, or when tmux
+//! misses the program's SIGCHLD and leaves it a zombie. [`TmuxBackend::list`]
+//! reports such a pane as not alive, with the exit code once tmux has reaped
+//! it, so the supervisor relaunches its worker. A program typed into a
+//! shell (firstmate's workers) leaves the shell behind when it exits;
+//! [`TmuxBackend::foreground`] tells that apart.
 
 pub mod control;
+pub mod foreground;
 pub mod server;
 pub mod snapshot;
 
@@ -29,6 +37,7 @@ use tokio::sync::broadcast;
 
 use crate::stream::{Chunk, Resync, Viewer, CHANNEL};
 use control::{ControlClient, ControlError, Handler, Reply, Waiter};
+pub use foreground::Foreground;
 use server::{Server, ServerError, WindowSpec};
 use snapshot::{parse_cursor, render_snapshot, send_keys, Cursor, CURSOR_FORMAT};
 
@@ -42,8 +51,8 @@ const REAP_RETRY: std::time::Duration = std::time::Duration::from_millis(25);
 /// Window option holding the session's task id.
 const TASK_OPTION: &str = "@quark_task";
 
-const LIST_FORMAT: &str =
-    "#{session_id}|#{window_id}|#{pane_id}|#{pane_index}|#{@quark_task}|#{window_name}";
+const LIST_FORMAT: &str = "#{session_id}|#{window_id}|#{pane_id}|#{pane_index}|#{pane_dead}|\
+#{pane_dead_status}|#{@quark_task}|#{window_name}";
 
 /// Sessions on one private tmux server. Cheap to clone.
 #[derive(Clone)]
@@ -67,6 +76,9 @@ struct Pane {
     window_id: String,
     pane_id: String,
     pane_index: u32,
+    /// The pane's program has exited, though the pane is still listed.
+    dead: bool,
+    dead_status: Option<i32>,
     name: String,
     task: Option<TaskId>,
 }
@@ -93,17 +105,64 @@ impl TmuxBackend {
         if !self.inner.server.is_running().await {
             return Ok(Vec::new());
         }
+        let mut panes = self.list_rows().await?;
+        if panes.iter().any(|p| p.dead && p.dead_status.is_none()) {
+            // tmux missed the SIGCHLD (`tmux-missed-sigchld`): any command
+            // makes the server reap its children, and the real code shows.
+            let _ = self.inner.server.run(&["run-shell", "true"]).await;
+            panes = self.list_rows().await?;
+        }
+        // A session is a window; its first pane stands for it.
+        panes.sort_by(|a, b| (&a.window_id, a.pane_index).cmp(&(&b.window_id, b.pane_index)));
+        panes.dedup_by(|b, a| a.window_id == b.window_id);
+        Ok(panes)
+    }
+
+    async fn list_rows(&self) -> Result<Vec<Pane>> {
         let out = self
             .inner
             .server
             .run(&["list-panes", "-a", "-F", LIST_FORMAT])
             .await
             .map_err(backend)?;
-        let mut panes: Vec<Pane> = out.lines().filter_map(parse_pane).collect();
-        // A session is a window; its first pane stands for it.
-        panes.sort_by(|a, b| (&a.window_id, a.pane_index).cmp(&(&b.window_id, b.pane_index)));
-        panes.dedup_by(|b, a| a.window_id == b.window_id);
-        Ok(panes)
+        Ok(out.lines().filter_map(parse_pane).collect())
+    }
+
+    /// What runs in the foreground of the pane `target` (a pane id or
+    /// `session:window`), which must exist: tmux reads an absent
+    /// `session:window` as the active window.
+    pub async fn foreground(&self, target: &str) -> Foreground {
+        let Ok(out) = self
+            .inner
+            .server
+            .run(&[
+                "display-message",
+                "-p",
+                "-t",
+                target,
+                "#{pane_dead}|#{pane_tty}",
+            ])
+            .await
+        else {
+            return Foreground::Unknown;
+        };
+        let Some((dead, tty)) = out.trim().split_once('|') else {
+            return Foreground::Unknown;
+        };
+        if dead == "1" || tty.is_empty() {
+            return Foreground::Unknown;
+        }
+        let ps = tokio::process::Command::new("ps")
+            .args(["-t", tty.trim_start_matches("/dev/")])
+            .args(["-o", "pid=,pgid=,tpgid=,stat=,comm="])
+            .env("LC_ALL", "C")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await;
+        match ps {
+            Ok(o) => foreground::classify(&String::from_utf8_lossy(&o.stdout)),
+            Err(_) => Foreground::Unknown,
+        }
     }
 
     async fn pane(&self, id: &SessionId) -> Result<Pane> {
@@ -174,11 +233,13 @@ impl TmuxBackend {
 }
 
 fn parse_pane(line: &str) -> Option<Pane> {
-    let mut f = line.splitn(6, '|');
+    let mut f = line.splitn(8, '|');
     let session_id = f.next()?.to_string();
     let window_id = f.next()?.to_string();
     let pane_id = f.next()?.to_string();
     let pane_index = f.next()?.parse().ok()?;
+    let dead = f.next()? == "1";
+    let dead_status = f.next()?.parse().ok();
     let task = Some(f.next()?).filter(|t| !t.is_empty()).map(TaskId::new);
     let name = f.next()?.to_string();
     Some(Pane {
@@ -186,6 +247,8 @@ fn parse_pane(line: &str) -> Option<Pane> {
         window_id,
         pane_id,
         pane_index,
+        dead,
+        dead_status,
         name,
         task,
     })
@@ -210,8 +273,8 @@ fn info(p: Pane) -> SessionInfo {
         id: SessionId(p.pane_id),
         name: p.name,
         task: p.task,
-        alive: true,
-        exit_code: None,
+        alive: !p.dead,
+        exit_code: p.dead.then_some(p.dead_status).flatten(),
     }
 }
 
@@ -495,11 +558,18 @@ mod tests {
 
     #[test]
     fn parses_list_rows() {
-        let p = parse_pane("$1|@2|%4|0|t-1|work|er").unwrap();
+        let p = parse_pane("$1|@2|%4|0|0||t-1|work|er").unwrap();
         assert_eq!(p.pane_id, "%4");
         assert_eq!(p.name, "work|er");
         assert_eq!(p.task, Some(TaskId::new("t-1")));
-        assert!(parse_pane("$1|@2|%4|0||w").unwrap().task.is_none());
+        assert!(!p.dead);
+        assert!(parse_pane("$1|@2|%4|0|0|||w").unwrap().task.is_none());
+        let dead = info(parse_pane("$1|@2|%4|0|1|3|t-1|w").unwrap());
+        assert!(!dead.alive);
+        assert_eq!(dead.exit_code, Some(3));
+        let unreaped = info(parse_pane("$1|@2|%4|0|1||t-1|w").unwrap());
+        assert!(!unreaped.alive);
+        assert_eq!(unreaped.exit_code, None);
         assert!(parse_pane("junk").is_none());
     }
 }
