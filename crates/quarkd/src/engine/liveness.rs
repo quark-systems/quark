@@ -18,7 +18,8 @@
 //! which is when the native supervisor would relaunch it (a native session
 //! runs its agent as the pane's own program, so there the pane ends too).
 //! Firstmate says the agent is gone with "agent gone, pane shell remains",
-//! and that it runs with "harness busy". An idle pane says nothing about the
+//! and that it runs with "harness busy" (but not while the busy record is
+//! still the one `fm-spawn.sh` armed before the launch). An idle pane says nothing about the
 //! agent, and firstmate notices an exited agent there only when its watcher
 //! reports the worker stale, so a pane whose agent the native backend has
 //! seen gone for [`SHELL_GRACE`] while firstmate still keeps the worker is a
@@ -57,6 +58,11 @@ const GONE: &str = "backend target gone:";
 const AGENT_GONE: &str = "agent gone";
 /// What it writes when the harness in the pane is working.
 const BUSY: &str = "harness busy";
+/// Its note while the busy record is still the one `fm-spawn.sh` armed
+/// before typing the agent into the shell: the launch is under way and
+/// nothing from the agent has been heard yet, so the pane may still hold
+/// only its shell.
+const LAUNCHING: &str = "harness busy (fm-spawn)";
 
 /// What one side says about a task's worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +212,7 @@ pub fn firstmate_seen(t: &EngineTask) -> Option<Seen> {
     }
     let note = t.state_note.as_deref().unwrap_or_default();
     match t.state_source.as_deref() {
+        Some("pane") if note.starts_with(LAUNCHING) => Some(Seen::Pane),
         Some("pane") if note.starts_with(BUSY) => Some(Seen::Agent),
         Some("pane" | "status-log") => Some(Seen::Pane),
         Some("none") if note.starts_with(GONE) => Some(if note.contains(AGENT_GONE) {
@@ -297,6 +304,15 @@ mod tests {
         assert_eq!(read("pane", None), Some(Seen::Pane));
         assert_eq!(
             read("pane", Some("harness busy (record)")),
+            Some(Seen::Agent)
+        );
+        // Armed before the launch: the agent may not be running yet.
+        assert_eq!(
+            read("pane", Some("harness busy (fm-spawn)")),
+            Some(Seen::Pane)
+        );
+        assert_eq!(
+            read("pane", Some("harness busy (claude-hook)")),
             Some(Seen::Agent)
         );
         assert_eq!(read("status-log", None), Some(Seen::Pane));
