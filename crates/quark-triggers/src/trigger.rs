@@ -100,6 +100,14 @@ pub enum Condition {
         /// row.
         #[serde(default = "default_error_budget")]
         error_budget: u32,
+        /// Give up, and wake the coordinator, if it has not held by then
+        /// (firstmate's when-watch deadline).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "time::serde::rfc3339::option"
+        )]
+        until: Option<OffsetDateTime>,
     },
 }
 
@@ -272,6 +280,8 @@ pub enum Status {
     ActionFailed,
     /// The condition could not be evaluated within its error budget.
     ConditionError,
+    /// A command condition never held before its `until`.
+    NeverTrue,
     /// A fire was claimed but its outcome was never recorded (a crash
     /// mid-action). The action may or may not have run; it is not retried.
     Ambiguous,
@@ -348,6 +358,8 @@ pub struct RuleSet {
     rules: BTreeMap<ProjectId, BTreeMap<RuleId, Defined>>,
     /// (project, rule) -> fire ids claimed or recorded.
     fires: BTreeMap<(ProjectId, RuleId), BTreeSet<String>>,
+    /// (project, rule, fire) -> when it was first claimed or recorded.
+    fired_at: BTreeMap<(ProjectId, RuleId, String), OffsetDateTime>,
     /// Fires with a claim and no outcome yet: (project, rule, fire).
     open: BTreeSet<(ProjectId, RuleId, String)>,
     /// (project, rule) whose once-only fire already happened.
@@ -400,6 +412,9 @@ impl RuleSet {
                     .entry(key.clone())
                     .or_default()
                     .insert(fire.clone());
+                self.fired_at
+                    .entry((p.clone(), id.clone(), fire.clone()))
+                    .or_insert(e.ts);
                 if self
                     .rule(&p, &id)
                     .is_some_and(|d| d.rule.fires_once() && d.since <= e.seq)
@@ -446,6 +461,13 @@ impl RuleSet {
         self.fires
             .get(&(project.clone(), id.clone()))
             .is_some_and(|f| f.contains(fire))
+    }
+
+    /// When fire `fire` of `id` was first claimed or recorded.
+    pub fn fired_at(&self, project: &ProjectId, id: &RuleId, fire: &str) -> Option<OffsetDateTime> {
+        self.fired_at
+            .get(&(project.clone(), id.clone(), fire.to_string()))
+            .copied()
     }
 
     /// How many fires `id` has had.
@@ -495,6 +517,7 @@ pub mod templates {
                 timeout_secs: 60,
                 expect: Some(Expect::Differs(seen.into())),
                 error_budget: 24,
+                until: None,
             },
             Action::Wake {
                 note: format!(

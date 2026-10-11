@@ -344,7 +344,7 @@ const OCCASIONS: [(Occasion, AwayOccasion); 10] = [
     (Occasion::TriggerFailed, AwayOccasion::TriggerFailed),
 ];
 
-fn occasion_out(o: Occasion) -> AwayOccasion {
+pub(crate) fn occasion_out(o: Occasion) -> AwayOccasion {
     OCCASIONS
         .iter()
         .find(|(n, _)| *n == o)
@@ -363,7 +363,14 @@ fn occasion_in(o: AwayOccasion) -> Occasion {
 /// This module's endpoints, merged into the served document by
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(get, post_note, put_rule, delete_rule, put_policy))]
+#[openapi(
+    paths(get, post_note, put_rule, delete_rule, put_policy),
+    components(schemas(
+        quark_systems::Notice,
+        quark_systems::NoticeKind,
+        quark_systems::NoticeItem,
+    ))
+)]
 pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.

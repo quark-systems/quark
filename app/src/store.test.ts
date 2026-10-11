@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppState, applyEvent, initialState } from "./store";
+import { AppState, applyEvent, initialState, NOTICES_KEPT } from "./store";
 import type { DaemonEvent, Task } from "./api";
 
 const task = (over: Partial<Task> = {}): Task => ({
@@ -123,5 +123,15 @@ describe("beads", () => {
     expect(s.issueDrafts["idr-1"].waiting).toBe(false);
     // An older version arriving late changes nothing.
     expect(applyEvent(s, ev(3, "issue_draft.updated", { ...draft, updated_at: "2026-10-02T10:00:02Z" }))).toBe(s);
+  });
+
+  it("keeps the latest notices once each", () => {
+    const n = { project_id: "p1", kind: "now", text: "t1: done" };
+    let s = applyEvent(initialState, ev(1, "notice.posted", n));
+    expect(applyEvent(s, ev(1, "notice.posted", n))).toBe(s);
+    expect(s.notices).toMatchObject([{ seq: 1, text: "t1: done" }]);
+    for (let i = 2; i < NOTICES_KEPT + 5; i++) s = applyEvent(s, ev(i, "notice.posted", n));
+    expect(s.notices).toHaveLength(NOTICES_KEPT);
+    expect(s.notices[s.notices.length - 1].seq).toBe(NOTICES_KEPT + 4);
   });
 });

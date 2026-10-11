@@ -2,7 +2,7 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  Account, AccountQuotaChanged, api, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Project, PullRequest,
+  Account, AccountQuotaChanged, api, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Notice, Project, PullRequest,
   ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
 } from "./api";
 
@@ -45,14 +45,18 @@ export interface AppState {
   issueDrafts: Record<string, IssueDraft>;
   /** Text to start a New issue side chat with when the Issues tab opens ("Turn into an issue" on Memory). */
   issueSeed: { project_id: string; text: string } | null;
+  /** What the automation engine told you since the app connected, oldest first, the last `NOTICES_KEPT`. */
+  notices: (Notice & { seq: number; ts: string })[];
 }
+
+export const NOTICES_KEPT = 50;
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
   projects: {}, tasks: {}, decisions: {}, rules: {}, memoryProposals: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
   pullRequests: {}, prsAvailable: null, prActivity: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
-  beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null,
+  beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null, notices: [],
 };
 
 function upsertById<T extends { id: string | number }>(list: T[] | undefined, item: T): T[] {
@@ -158,6 +162,11 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
       // A reply to the request that changed it may have recorded a newer one already.
       if ((s.issueDrafts[p.id]?.updated_at ?? "") > p.updated_at) return s;
       return { ...s, issueDrafts: { ...s.issueDrafts, [p.id]: p as IssueDraft } };
+    case "notice.posted": {
+      if (typeof p?.project_id !== "string" || s.notices.some((n) => n.seq === e.seq)) return s;
+      const n = { ...(p as Notice), seq: e.seq, ts: e.ts };
+      return { ...s, notices: [...s.notices, n].slice(-NOTICES_KEPT) };
+    }
     default:
       return s;
   }

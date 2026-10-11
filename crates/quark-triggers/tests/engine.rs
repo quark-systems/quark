@@ -291,11 +291,14 @@ async fn inbox_is_one_inbound_api() {
         .await
         .is_err());
 
-    // Each arrival wakes the coordinator once.
-    engine.tick(now()).await.unwrap();
-    let woke = rig.effects.take();
-    assert_eq!(woke.len(), 2, "{woke:?}");
-    assert!(woke[0].starts_with("wake[] inbox from user: rebase"));
+    // Each arrival is routed to the coordinator, which wakes itself for
+    // it (slice 6 reads the same policy), so the engine wakes no one and
+    // the user hears nothing.
+    let r = engine.tick(now()).await.unwrap();
+    assert_eq!(r.routed, 2);
+    let calls = rig.effects.take();
+    assert!(calls.is_empty(), "{calls:?}");
+    assert!(engine.route(&project(), Occasion::Inbound).await.wake);
 
     engine
         .ack(&project(), INBOX, &note.id, "coordinator")
@@ -408,13 +411,14 @@ async fn an_interrupted_fire_is_ambiguous_not_rerun() {
         panic!()
     };
     assert_eq!(status, Status::Ambiguous);
-    // An unknown outcome reaches the coordinator.
+    // An unknown outcome reaches the user (and the coordinator, which
+    // wakes itself for it).
     again.tick(now()).await.unwrap();
     assert!(rig
         .effects
         .take()
         .iter()
-        .any(|c| c.starts_with("wake[] rule deploy")));
+        .any(|c| c.starts_with("notify rule deploy")));
 }
 
 #[tokio::test]
@@ -431,6 +435,7 @@ async fn polled_conditions_need_a_stable_true_and_have_an_error_budget() {
                 timeout_secs: 5,
                 expect,
                 error_budget: 2,
+                until: None,
             },
             Action::Inbox {
                 body: format!("{id} holds"),
@@ -541,9 +546,8 @@ async fn away_holds_decisions_digests_the_rest_and_briefs_on_return() {
     let t = now();
     engine.tick(t).await.unwrap();
     let calls = rig.effects.take();
-    // The coordinator is woken for both; the user hears nothing yet.
-    assert_eq!(calls.len(), 2, "{calls:?}");
-    assert!(calls.iter().all(|c| c.starts_with("wake")));
+    // The coordinator wakes itself for both; the user hears nothing yet.
+    assert!(calls.is_empty(), "{calls:?}");
     assert_eq!(engine.held(&project()).await.len(), 1);
     assert_eq!(engine.digest(&project()).await.len(), 1);
 

@@ -230,7 +230,22 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .run(config.refresh_interval),
     );
     let (triggers, triggers_task) = if native_triggers::enabled() {
-        match native_triggers::ShadowTriggers::open(store.clone(), Arc::new(events.clone())).await {
+        let mode = if engine.slices().mode(quark_core::Slice::SubCoordinators)
+            == quark_core::SliceMode::Native
+        {
+            quark_triggers::Mode::Native
+        } else {
+            quark_triggers::Mode::Shadow
+        };
+        match native_triggers::Triggers::open(
+            store.clone(),
+            Arc::new(events.clone()),
+            engine.clone(),
+            mode,
+            &layout.home.join("channels"),
+        )
+        .await
+        {
             Ok(t) => (
                 Some(t.engine()),
                 Some(tokio::spawn(t.run(config.refresh_interval))),

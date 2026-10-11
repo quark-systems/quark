@@ -67,10 +67,14 @@ pub enum EventType {
     /// A New issue draft changed; payload is the [`IssueDraft`](crate::IssueDraft).
     #[serde(rename = "issue_draft.updated")]
     IssueDraftUpdated,
+    /// The automation engine told the user something; payload is a
+    /// [`Notice`](crate::Notice).
+    #[serde(rename = "notice.posted")]
+    NoticePosted,
 }
 
 impl EventType {
-    pub const ALL: [EventType; 22] = [
+    pub const ALL: [EventType; 23] = [
         EventType::ProjectUpdated,
         EventType::TaskCreated,
         EventType::TaskStateChanged,
@@ -93,6 +97,7 @@ impl EventType {
         EventType::BeadsStatus,
         EventType::BeadsChanged,
         EventType::IssueDraftUpdated,
+        EventType::NoticePosted,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -119,6 +124,7 @@ impl EventType {
             EventType::BeadsStatus => "beads.status",
             EventType::BeadsChanged => "beads.changed",
             EventType::IssueDraftUpdated => "issue_draft.updated",
+            EventType::NoticePosted => "notice.posted",
         }
     }
 
