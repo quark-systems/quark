@@ -2,7 +2,9 @@
 //! `type`. `user` and `assistant` lines carry an Anthropic Messages API
 //! `message`; everything else (attachments, summaries, snapshots, queue
 //! operations) is bookkeeping. Sidechain lines belong to subagents and meta
-//! lines are harness-injected context, so both are skipped.
+//! lines are harness-injected context, so both are skipped. Text the person
+//! pasted reaches the log wrapped in `<pasted_content id="..">` tags, which
+//! are dropped so the entry reads as what they sent.
 
 use serde_json::Value;
 
@@ -24,23 +26,22 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
     let mut out = Vec::new();
     match content {
         Value::String(s) => {
-            let role = if kind == Some("user") {
-                TranscriptRole::User
+            if kind == Some("user") {
+                out.extend(entry(TranscriptRole::User, &unwrap_pasted(s), ts));
             } else {
-                TranscriptRole::Assistant
-            };
-            out.extend(entry(role, s, ts));
+                out.extend(entry(TranscriptRole::Assistant, s, ts));
+            }
         }
         Value::Array(blocks) => {
             for b in blocks {
                 match str_at(b, "type") {
                     Some("text") => {
-                        let role = if kind == Some("user") {
-                            TranscriptRole::User
+                        let text = str_at(b, "text").unwrap_or("");
+                        if kind == Some("user") {
+                            out.extend(entry(TranscriptRole::User, &unwrap_pasted(text), ts));
                         } else {
-                            TranscriptRole::Assistant
-                        };
-                        out.extend(entry(role, str_at(b, "text").unwrap_or(""), ts));
+                            out.extend(entry(TranscriptRole::Assistant, text, ts));
+                        }
                     }
                     Some("thinking") => out.extend(entry(
                         TranscriptRole::Thinking,
@@ -69,4 +70,63 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
         _ => {}
     }
     out
+}
+
+/// `text` with each `<pasted_content id="X">..</pasted_content id="X">`
+/// wrapper replaced by what it holds. A tag without its matching close stays.
+fn unwrap_pasted(text: &str) -> String {
+    const OPEN: &str = "<pasted_content id=\"";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        let after = &rest[at + OPEN.len()..];
+        let Some(id_end) = after.find("\">") else {
+            break;
+        };
+        let id = &after[..id_end];
+        let body = &after[id_end + 2..];
+        let close = format!("</pasted_content id=\"{id}\">");
+        let Some(close_at) = body.find(&close) else {
+            break;
+        };
+        out.push_str(&rest[..at]);
+        let inner = body[..close_at]
+            .strip_prefix('\n')
+            .unwrap_or(&body[..close_at]);
+        out.push_str(inner.strip_suffix('\n').unwrap_or(inner));
+        rest = &body[close_at + close.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pasted_text_reads_as_sent() {
+        assert_eq!(
+            unwrap_pasted("<pasted_content id=\"967c\">\nBuild it.\nThen ship.\n</pasted_content id=\"967c\">"),
+            "Build it.\nThen ship."
+        );
+        assert_eq!(
+            unwrap_pasted("see <pasted_content id=\"a\">x</pasted_content id=\"a\"> and <pasted_content id=\"b\">y</pasted_content id=\"b\">"),
+            "see x and y"
+        );
+        let open = "<pasted_content id=\"a\">no close";
+        assert_eq!(unwrap_pasted(open), open);
+        assert_eq!(unwrap_pasted("plain"), "plain");
+    }
+
+    #[test]
+    fn a_pasted_user_line_has_no_tags() {
+        let v: Value = serde_json::from_str(
+            r#"{"type":"user","message":{"role":"user","content":"<pasted_content id=\"1\">\nhi\n</pasted_content id=\"1\">"}}"#,
+        )
+        .unwrap();
+        let e = parse(&v);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].text, "hi");
+    }
 }

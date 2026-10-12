@@ -22,4 +22,8 @@ describe("stillPending", () => {
     expect(stillPending(p, [user(4, "yes")]).map((m) => m.key)).toEqual([2]);
     expect(stillPending(p, [user(4, "yes"), user(7, "yes")])).toEqual([]);
   });
+  it("matches a multi-line message whatever its line breaks became", () => {
+    const p = [sent(1, "Build it.\nThen ship.", 0)];
+    expect(stillPending(p, [user(3, "Build it.\r\n\r\nThen ship.\n")])).toEqual([]);
+  });
 });
