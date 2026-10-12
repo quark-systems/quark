@@ -22,6 +22,9 @@ pub mod eventlog;
 pub mod firstmate;
 pub mod liveness;
 pub mod native;
+pub mod native_dispatch_engine;
+pub mod native_project;
+pub mod native_verify;
 pub mod shadow;
 
 use std::collections::HashMap;
@@ -203,6 +206,45 @@ pub struct WorkspacePlan {
     /// User-level memory, shared by every Project, for the coordinator to
     /// read.
     pub user_memory: Option<PathBuf>,
+}
+
+/// A task for the engine to create and dispatch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewTask {
+    pub title: String,
+    /// The worker's instructions; dispatch resolution reads them too.
+    pub brief: String,
+    /// The source repo the task works in, by its name in the workspace;
+    /// `None` when the workspace has exactly one.
+    pub repo: Option<String>,
+    /// The agent to run it with; `None` lets dispatch resolve one.
+    pub agent: Option<AgentConfig>,
+}
+
+/// Where a task the engine was asked to start stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskStart {
+    /// The task's engine id.
+    pub task_id: String,
+    pub outcome: StartOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum StartOutcome {
+    /// Its worker is running.
+    Started {
+        harness: String,
+        model: Option<String>,
+        effort: Option<String>,
+        /// The account it runs under, when its harness has accounts.
+        account: Option<String>,
+    },
+    /// Its agent is chosen and it waits for a host with room.
+    Waiting { reason: String },
+    /// Dispatch could not pick its agent;
+    /// [`EngineAdapter::choose_profile`] picks one.
+    Escalated { reason: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -435,6 +477,28 @@ pub trait EngineAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// Create a task and dispatch it: resolve its agent (unless `task.agent`
+    /// names one), then start its worker in an isolated worktree once a host
+    /// has room. An engine whose own coordinator starts tasks refuses.
+    async fn start_task(
+        &self,
+        _ws: &WorkspaceRef,
+        _task: &NewTask,
+    ) -> Result<TaskStart, EngineError> {
+        Err(EngineError::Invalid(NO_DISPATCH.into()))
+    }
+
+    /// Pick the agent of a task whose dispatch escalated, and start it as
+    /// [`EngineAdapter::start_task`] would.
+    async fn choose_profile(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+        _agent: &AgentConfig,
+    ) -> Result<TaskStart, EngineError> {
+        Err(EngineError::Invalid(NO_DISPATCH.into()))
+    }
+
     /// Each running Project coordinator's tmux window target in the
     /// command-center workspace, keyed by Project id. Engines without
     /// coordinator windows have none.
@@ -445,6 +509,9 @@ pub trait EngineAdapter: Send + Sync {
         Ok(HashMap::new())
     }
 }
+
+/// Why an engine without native dispatch refuses to start a task.
+pub const NO_DISPATCH: &str = "this engine starts tasks through its own coordinator";
 
 /// Refuses an artifact path the evidence does not list.
 pub fn listed_artifact(e: &Evidence, path: &str) -> Result<(), EngineError> {
@@ -518,6 +585,13 @@ pub enum StubWrite {
     CrewDispatch {
         project_id: String,
         config: String,
+    },
+    StartTask {
+        task: NewTask,
+    },
+    ChooseProfile {
+        task_id: String,
+        agent: AgentConfig,
     },
 }
 
@@ -864,5 +938,55 @@ impl EngineAdapter for StubEngine {
             project_id: ws.project_id.clone(),
             config: config.to_string(),
         })
+    }
+
+    /// Ids are `stub-<n>`. A task with an agent starts on it; one without
+    /// escalates, since the stub has no dispatch rules.
+    async fn start_task(
+        &self,
+        _ws: &WorkspaceRef,
+        task: &NewTask,
+    ) -> Result<TaskStart, EngineError> {
+        self.accept(StubWrite::StartTask { task: task.clone() })?;
+        let n = self
+            .writes()
+            .iter()
+            .filter(|w| matches!(w, StubWrite::StartTask { .. }))
+            .count();
+        let outcome = match &task.agent {
+            Some(a) => stub_started(a),
+            None => StartOutcome::Escalated {
+                reason: "the stub engine has no dispatch rules".into(),
+            },
+        };
+        Ok(TaskStart {
+            task_id: format!("stub-{n}"),
+            outcome,
+        })
+    }
+
+    async fn choose_profile(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        agent: &AgentConfig,
+    ) -> Result<TaskStart, EngineError> {
+        self.accept(StubWrite::ChooseProfile {
+            task_id: task_id.into(),
+            agent: agent.clone(),
+        })?;
+        Ok(TaskStart {
+            task_id: task_id.into(),
+            outcome: stub_started(agent),
+        })
+    }
+}
+
+fn stub_started(agent: &AgentConfig) -> StartOutcome {
+    StartOutcome::Started {
+        harness: agent.harness.clone(),
+        model: agent.model.clone(),
+        effort: agent.effort.clone(),
+        account: None,
     }
 }

@@ -121,17 +121,11 @@ impl NativeCoordinator {
             };
             let id = ProjectId::new(project.id.clone());
             let workspace = PathBuf::from(workspace);
-            let personas = FilePersonas::new(self.layout.home.clone());
-            let user_memory = self.layout.user_memory();
+            let layout = self.layout.clone();
             let ws = workspace.clone();
             let pid = project.id.clone();
-            let built = tokio::task::spawn_blocking(move || {
-                let pack = personas.resolve(&pid)?.pack;
-                let persona = pack.id.clone();
-                let sources = sources(&ws, pack, user_memory);
-                Ok::<_, quark_core::CoreError>((LayeredPrompt::build(&sources), persona))
-            })
-            .await?;
+            let built =
+                tokio::task::spawn_blocking(move || build_prompt(&layout, &pid, &ws)).await?;
             match built {
                 Ok((prompt, persona)) => {
                     if let Err(e) = self.coordinator.set_prompt(&id, prompt, &persona).await {
@@ -199,13 +193,32 @@ impl NativeCoordinator {
     }
 }
 
-/// A Project's prompt sources in its firstmate workspace: the Project repo
-/// checkout (`project/`), then each code repo under `projects/`, the
-/// Project's memory and the user's.
+/// The Project's layered prompt from its workspace, with the id of the
+/// persona pack it speaks in.
+pub(crate) fn build_prompt(
+    layout: &Layout,
+    project: &str,
+    workspace: &Path,
+) -> quark_core::Result<(LayeredPrompt, String)> {
+    let pack = FilePersonas::new(layout.home.clone())
+        .resolve(project)?
+        .pack;
+    let persona = pack.id.clone();
+    let sources = sources(workspace, pack, layout.user_memory());
+    Ok((LayeredPrompt::build(&sources), persona))
+}
+
+/// A Project's prompt sources in its workspace: the Project repo checkout
+/// (`project/`), then each code repo (under `projects/` in a firstmate
+/// workspace, `repos/` in a native one), the Project's memory and the
+/// user's.
 fn sources(workspace: &Path, persona: quark_core::PersonaPack, user_memory: PathBuf) -> Sources {
     let project_repo = workspace.join("project");
     let mut repos = vec![("project".to_string(), project_repo.clone())];
-    if let Ok(rd) = std::fs::read_dir(workspace.join("projects")) {
+    for dir in ["projects", crate::engine::native_project::REPOS_DIR] {
+        let Ok(rd) = std::fs::read_dir(workspace.join(dir)) else {
+            continue;
+        };
         let mut code: Vec<(String, PathBuf)> = rd
             .filter_map(|e| e.ok())
             .filter(|e| e.path().join(".git").exists())

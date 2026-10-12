@@ -8,7 +8,11 @@
 //!   messages from the `worker.message` events the worker protocol records
 //!   ([`WorkerLines`]);
 //! - steering, answers and lifecycle control go to the native
-//!   [`Supervisor`] (slice 4).
+//!   [`Supervisor`] (slice 4);
+//! - merges, standing approval and the verification gates go to
+//!   [`NativeVerify`] (slice 2).
+//! - adding a repo, seeding a Project workspace and starting its
+//!   coordinator go to [`ProjectSetup`], when the engine has one.
 //!
 //! Operations whose native slice is not wired here yet are refused with
 //! [`EngineError::Invalid`] naming the slice, never silently ignored.
@@ -25,11 +29,15 @@ use quark_core::{
 };
 use quark_eventlog::TaskRecord;
 use quark_supervisor::{Relaunch, Supervisor, Worker};
-use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind};
+use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind};
 
+use super::native_dispatch_engine::{self, NativeDispatch};
+use super::native_project::ProjectSetup;
+use super::native_verify::NativeVerify;
 use super::{
-    EngineAdapter, EngineError, EngineSpawn, EngineTask, FleetSnapshot, Hold, SourceRepo,
-    StatusEntry, StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
+    EngineAdapter, EngineError, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold,
+    NewTask, SourceRepo, StatusEntry, StatusTail, TaskControl, TaskStart, WorkspacePlan,
+    WorkspaceRef,
 };
 
 /// `state_source` of every task this engine reports.
@@ -40,15 +48,54 @@ pub struct NativeEngine {
     log: Arc<dyn EventLog>,
     supervisor: Arc<Supervisor>,
     lines: WorkerLines,
+    dispatch: Option<Arc<NativeDispatch>>,
+    verify: NativeVerify,
+    /// Project setup and coordinator start; refused without it.
+    project: Option<Arc<ProjectSetup>>,
 }
 
 impl NativeEngine {
+    /// Reads and merges GitHub through `gh`.
     pub fn new(log: Arc<dyn EventLog>, supervisor: Arc<Supervisor>) -> Self {
+        Self::with_forge(log, supervisor, Arc::new(quark_verify::GhForge::default()))
+    }
+
+    pub fn with_forge(
+        log: Arc<dyn EventLog>,
+        supervisor: Arc<Supervisor>,
+        forge: Arc<dyn quark_verify::Forge>,
+    ) -> Self {
+        let host = supervisor.config().host.clone();
         Self {
+            verify: NativeVerify::new(forge, log.clone(), host),
             log,
             supervisor,
             lines: WorkerLines::default(),
+            dispatch: None,
+            project: None,
         }
+    }
+
+    /// Start tasks and resolve dispatch through `dispatch` (slice 5).
+    pub fn with_dispatch(mut self, dispatch: Arc<NativeDispatch>) -> Self {
+        self.dispatch = Some(dispatch);
+        self
+    }
+
+    fn dispatch(&self) -> Result<&NativeDispatch, EngineError> {
+        self.dispatch
+            .as_deref()
+            .map_or_else(|| Self::refuse("starting a task", "dispatch (slice 5)"), Ok)
+    }
+
+    pub fn verify(&self) -> &NativeVerify {
+        &self.verify
+    }
+
+    /// Creates Projects and starts their coordinators with `setup`.
+    pub fn with_project_setup(mut self, setup: Arc<ProjectSetup>) -> Self {
+        self.project = Some(setup);
+        self
     }
 
     pub fn supervisor(&self) -> &Arc<Supervisor> {
@@ -131,7 +178,12 @@ impl EngineAdapter for NativeEngine {
 
     fn slices(&self) -> SliceSwitch {
         let mut s = SliceSwitch::new();
-        for slice in [Slice::EventLog, Slice::WorkerProtocol, Slice::Supervision] {
+        for slice in [
+            Slice::EventLog,
+            Slice::Verification,
+            Slice::WorkerProtocol,
+            Slice::Supervision,
+        ] {
             // Infallible for a fresh switch.
             let _ = s.set(slice, SliceMode::Native, "native engine");
         }
@@ -141,12 +193,16 @@ impl EngineAdapter for NativeEngine {
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
         self.catch_up().await?;
         let p = project(ws);
-        let tasks = self
+        let mut tasks: Vec<EngineTask> = self
             .tasks(ws)
             .await?
             .iter()
             .map(|(r, w)| engine_task(r, w, self.lines.last(&p, &w.task).as_ref()))
             .collect();
+        if let Some(d) = &self.dispatch {
+            let running = tasks.iter().map(|t| t.id.clone()).collect();
+            tasks.extend(d.queued(ws, &running).await?);
+        }
         Ok(FleetSnapshot { tasks })
     }
 
@@ -279,48 +335,150 @@ impl EngineAdapter for NativeEngine {
 
     async fn merge_pull_request(
         &self,
-        _: &WorkspaceRef,
-        _: &str,
-        _: &str,
-        _: Option<MergeMethod>,
+        ws: &WorkspaceRef,
+        task: &str,
+        url: &str,
+        method: Option<MergeMethod>,
     ) -> Result<(), EngineError> {
-        Self::refuse("merging", "verification (slice 2)")
+        self.verify
+            .merge(&self.supervisor, ws, &task_id(task)?, url, method)
+            .await
     }
 
     async fn set_standing_approval(
         &self,
-        _: &WorkspaceRef,
-        _: &[String],
-        _: bool,
+        ws: &WorkspaceRef,
+        repos: &[String],
+        on: bool,
     ) -> Result<(), EngineError> {
-        Self::refuse("standing approval", "verification (slice 2)")
+        self.verify.set_standing_approval(ws, repos, on).await
     }
 
+    async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        self.verify.set_gates(ws, config)
+    }
+
+    async fn gate_evidence(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+    ) -> Result<Option<Evidence>, EngineError> {
+        self.verify.gate_evidence(ws, &task_id(task)?)
+    }
+
+    fn gate_artifact(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        path: &str,
+    ) -> Result<PathBuf, EngineError> {
+        self.verify.gate_artifact(ws, &task_id(task)?, path)
+    }
+
+    /// Delivery is the Project's own setting in the store; the clone does
+    /// not carry it.
     async fn add_source(
         &self,
-        _: &Path,
-        _: &SourceRepo,
+        command: &Path,
+        source: &SourceRepo,
         _: DeliveryPolicy,
     ) -> Result<(), EngineError> {
-        Self::refuse("adding a repo", "native Project setup")
+        match &self.project {
+            Some(p) => p.add_source(command, source).await,
+            None => Self::refuse("adding a repo", "native Project setup"),
+        }
     }
 
-    async fn seed_workspace(&self, _: &Path, _: &WorkspacePlan) -> Result<PathBuf, EngineError> {
-        Self::refuse("creating a Project", "native Project setup")
+    async fn seed_workspace(
+        &self,
+        command: &Path,
+        plan: &WorkspacePlan,
+    ) -> Result<PathBuf, EngineError> {
+        match &self.project {
+            Some(p) => p.seed_workspace(command, plan).await,
+            None => Self::refuse("creating a Project", "native Project setup"),
+        }
     }
 
     async fn start_coordinator(
         &self,
-        _: &Path,
-        _: &WorkspaceRef,
-        _: &AgentConfig,
-        _: &[(String, String)],
-        _: bool,
+        command: &Path,
+        ws: &WorkspaceRef,
+        agent: &AgentConfig,
+        account_env: &[(String, String)],
+        resume: bool,
     ) -> Result<(), EngineError> {
-        Self::refuse(
-            "starting the coordinator",
-            "the native coordinator (slice 6)",
-        )
+        match &self.project {
+            Some(p) => {
+                p.start_coordinator(command, ws, agent, account_env, resume)
+                    .await
+            }
+            None => Self::refuse(
+                "starting the coordinator",
+                "the native coordinator (slice 6)",
+            ),
+        }
+    }
+
+    async fn coordinator_terminals(
+        &self,
+        command: &Path,
+    ) -> Result<HashMap<String, String>, EngineError> {
+        match &self.project {
+            Some(p) => p.coordinator_terminals(command),
+            None => Ok(HashMap::new()),
+        }
+    }
+
+    fn account_envs(&self) -> &'static [&'static str] {
+        native_dispatch_engine::ACCOUNT_ENVS
+    }
+
+    async fn start_task(
+        &self,
+        ws: &WorkspaceRef,
+        task: &NewTask,
+    ) -> Result<TaskStart, EngineError> {
+        self.dispatch()?.start(ws, task).await
+    }
+
+    async fn choose_profile(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        agent: &AgentConfig,
+    ) -> Result<TaskStart, EngineError> {
+        self.dispatch()?.choose(ws, task, agent).await
+    }
+
+    async fn resolve_dispatch(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        _: Option<&str>,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        match &self.dispatch {
+            Some(d) => d.resolution(ws, task).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn resolve_description(
+        &self,
+        ws: &WorkspaceRef,
+        description: &str,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        Ok(match &self.dispatch {
+            Some(d) => Some(d.describe(ws, description).await),
+            None => None,
+        })
+    }
+
+    async fn set_crew_dispatch(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        match &self.dispatch {
+            Some(d) => d.set_config(ws, config).await,
+            None => Ok(()),
+        }
     }
 }
 
