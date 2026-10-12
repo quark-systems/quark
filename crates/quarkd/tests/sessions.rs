@@ -1,11 +1,13 @@
-//! Terminal sessions against a real tmux server. Skipped when tmux is not
-//! installed.
+//! Terminal sessions against a real tmux server, skipped when tmux is not
+//! installed, and against a PTY supervisor on a socket.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
+use quark_core::session::{SessionBackend, SessionId, SessionSpec, TermSize};
+use quark_sessions::pty::{self, PtyClient, PtySupervisor};
 use quark_systems::{
     CreateProject, Event, EventType, TerminalChunkKind, TerminalOutput, TerminalRole,
 };
@@ -512,4 +514,257 @@ async fn recovery_restarts_a_lost_server_and_resumes_missing_coordinators() {
 
     sessions.detach_all();
     server.kill().await;
+}
+
+/// A PTY supervisor served on a socket in `dir`, as `quark-ptyd` serves
+/// one, and a client for it.
+fn ptyd(dir: &std::path::Path) -> Arc<dyn SessionBackend> {
+    let socket = dir.join("ptyd.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    tokio::spawn(pty::serve(listener, PtySupervisor::new()));
+    Arc::new(PtyClient::new(socket))
+}
+
+fn bash(task: &str) -> SessionSpec {
+    SessionSpec {
+        task: Some(task.into()),
+        name: format!("worker-{task}"),
+        cwd: std::env::temp_dir(),
+        argv: vec!["bash".into(), "--norc".into(), "--noprofile".into()],
+        env: [("PS1".to_string(), "$ ".to_string())].into(),
+        size: TermSize { cols: 80, rows: 24 },
+    }
+}
+
+fn pty_target(task: &str, session: &SessionId) -> Vec<TaskTarget> {
+    vec![TaskTarget {
+        task_id: task.into(),
+        target: quarkd::sessions::pty::target(session),
+    }]
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_workers_stream_switch_sessions_and_reattach() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let project = store
+        .create_project(CreateProject {
+            name: "p".into(),
+            goal: None,
+            workspace_path: None,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut rx = store.subscribe();
+    let backend = ptyd(dir.path());
+    // No tmux at all: PTY terminals do not need it.
+    let sessions =
+        Sessions::disabled("no tmux in this test").with_pty(backend.clone(), store.clone());
+    let task = "task-1";
+    let first = backend.create(&bash(task)).await.unwrap();
+    sessions
+        .sync(&project.id, pty_target(task, &first.id))
+        .await
+        .unwrap();
+
+    // The first event is a snapshot at the session's size; then it lists.
+    let (out, _) = wait_for(&mut rx, task, "first snapshot", |o, _| {
+        o.kind == TerminalChunkKind::Snapshot
+    })
+    .await;
+    assert_eq!((out.cols, out.rows), (Some(80), Some(24)));
+    assert_eq!(out.role, TerminalRole::Worker);
+    assert_eq!(out.task_id.as_deref(), Some(task));
+    let terminals = sessions.list(&project.id);
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(
+        (terminals[0].id.as_str(), terminals[0].title.as_str()),
+        (task, "worker-task-1")
+    );
+
+    // Input reaches the program, once per sequence number.
+    sessions
+        .input(task, b"echo hello-$((6*7))\r", Some(1))
+        .await
+        .unwrap();
+    wait_for(&mut rx, task, "echo", |_, b| contains(b, "hello-42")).await;
+    assert!(matches!(
+        sessions.input(task, b"x", Some(1)).await,
+        Err(SessionError::StaleInput { got: 1, last: 1 })
+    ));
+
+    // Resize reaches the program.
+    let t = sessions.resize(task, 100, 30).await.unwrap();
+    assert_eq!((t.cols, t.rows), (100, 30));
+    sessions
+        .input(task, b"echo size-$(tput cols)x$(tput lines)\r", None)
+        .await
+        .unwrap();
+    wait_for(&mut rx, task, "resized", |_, b| contains(b, "size-100x30")).await;
+
+    // An explicit snapshot holds the current screen, at the new size.
+    let snap = sessions.snapshot(task).await.unwrap();
+    let (out, bytes) = output(&snap).unwrap();
+    assert_eq!(out.kind, TerminalChunkKind::Snapshot);
+    assert_eq!((out.cols, out.rows), (Some(100), Some(30)));
+    assert!(contains(&bytes, "hello-42"));
+    // Output keeps flowing after it, once.
+    sessions
+        .input(task, b"echo after-$((2+2))\r", None)
+        .await
+        .unwrap();
+    let (_, seen) = wait_for(&mut rx, task, "output after snapshot", |_, b| {
+        contains(b, "after-4")
+    })
+    .await;
+    assert_eq!(
+        seen.windows(7).filter(|w| *w == b"after-4").count(),
+        1,
+        "output sent twice: {:?}",
+        String::from_utf8_lossy(&seen)
+    );
+
+    // A relaunch: the engine names a new session and the terminal follows.
+    let second = backend.create(&bash(task)).await.unwrap();
+    sessions
+        .sync(&project.id, pty_target(task, &second.id))
+        .await
+        .unwrap();
+    let (_, screen) = wait_for(&mut rx, task, "new session's snapshot", |o, _| {
+        o.kind == TerminalChunkKind::Snapshot
+    })
+    .await;
+    assert!(!contains(&screen, "hello-42"), "still the old screen");
+    sessions
+        .input(task, b"echo second-$((1+1))\r", None)
+        .await
+        .unwrap();
+    wait_for(&mut rx, task, "echo in the new session", |_, b| {
+        contains(b, "second-2")
+    })
+    .await;
+    backend.kill(&first.id).await.unwrap();
+
+    // A daemon restart: the sessions live on in the PTY supervisor and come
+    // back with a snapshot of where they were.
+    sessions.detach_all();
+    drop(sessions);
+    let sessions =
+        Sessions::disabled("no tmux in this test").with_pty(backend.clone(), store.clone());
+    assert!(sessions.list(&project.id).is_empty());
+    sessions
+        .sync(&project.id, pty_target(task, &second.id))
+        .await
+        .unwrap();
+    wait_for(&mut rx, task, "reattach snapshot", |o, b| {
+        o.kind == TerminalChunkKind::Snapshot && contains(b, "second-2")
+    })
+    .await;
+    sessions
+        .input(task, b"echo again-$((3+3))\r", None)
+        .await
+        .unwrap();
+    wait_for(&mut rx, task, "echo after reattach", |_, b| {
+        contains(b, "again-6")
+    })
+    .await;
+
+    // When the program exits the terminal goes away, and the next sync does
+    // not bring it back while the engine still names the session.
+    sessions.input(task, b"exit\r", None).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while sessions.list(&project.id).iter().any(|t| t.id == task) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "terminal stayed listed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    sessions
+        .sync(&project.id, pty_target(task, &second.id))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(sessions.list(&project.id).is_empty());
+    assert!(matches!(
+        sessions.input(task, b"x", None).await,
+        Err(SessionError::NotFound)
+    ));
+    sessions.detach_all();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_floods_are_pruned_to_a_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let project = store
+        .create_project(CreateProject {
+            name: "flood".into(),
+            goal: None,
+            workspace_path: None,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut rx = store.subscribe();
+    let backend = ptyd(dir.path());
+    let sessions =
+        Sessions::disabled("no tmux in this test").with_pty(backend.clone(), store.clone());
+    let task = "flood-1";
+    let s = backend.create(&bash(task)).await.unwrap();
+    sessions
+        .sync(&project.id, pty_target(task, &s.id))
+        .await
+        .unwrap();
+    wait_for(&mut rx, task, "first snapshot", |o, _| {
+        o.kind == TerminalChunkKind::Snapshot
+    })
+    .await;
+
+    // About 3 MB of numbered lines, then a marker.
+    sessions
+        .input(task, b"seq 1 500000; echo flood-$((1+1))-done\r", None)
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut last_line = Vec::new();
+    let mut snapshots = 0;
+    loop {
+        let event = tokio::time::timeout_at(deadline, rx.recv())
+            .await
+            .expect("flood finished")
+            .unwrap();
+        if let Some((out, bytes)) = output(&event) {
+            if out.terminal_id == task {
+                snapshots += usize::from(out.kind == TerminalChunkKind::Snapshot);
+                last_line.extend_from_slice(&bytes);
+                if contains(&last_line, "flood-2-done") {
+                    break;
+                }
+                let keep = last_line.len().saturating_sub(64);
+                last_line.drain(..keep);
+            }
+        }
+    }
+    assert!(snapshots > 0, "no snapshot after pruning");
+
+    // Wait for the writer's last prune, then check what replay would give.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let events = store.events_after(0, 100_000).unwrap();
+    let kept: Vec<_> = events
+        .iter()
+        .filter_map(output)
+        .filter(|(o, _)| o.terminal_id == task)
+        .collect();
+    let bytes: usize = kept.iter().map(|(_, b)| b.len()).sum();
+    assert!(
+        bytes as u64 <= RETAIN_BYTES + 512 * 1024,
+        "kept {bytes} bytes of output"
+    );
+    assert_eq!(
+        kept.first().map(|(o, _)| o.kind),
+        Some(TerminalChunkKind::Snapshot),
+        "replay starts from a snapshot"
+    );
+    sessions.detach_all();
+    backend.kill(&s.id).await.unwrap();
 }

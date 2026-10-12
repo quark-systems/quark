@@ -115,6 +115,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     } else {
         None
     };
+    // Workers of the native supervisor run in `quark-ptyd`; their terminals
+    // come from there. Before any clone of the sessions.
+    let sessions = match &native {
+        Some(n) => sessions.with_pty(n.supervisor.sessions().clone(), store.clone()),
+        None => sessions,
+    };
     let layout = provision::Layout::new(&config.home).with_user_memory(config.user_memory.clone());
     let native_engine = engine == EngineKind::Native;
     // Native dispatch (slice 5) starts the native engine's tasks.

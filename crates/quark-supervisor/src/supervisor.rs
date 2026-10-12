@@ -191,6 +191,11 @@ impl Supervisor {
         &self.config
     }
 
+    /// The session backend workers run in, for viewers of their terminals.
+    pub fn sessions(&self) -> &Arc<dyn SessionBackend> {
+        &self.sessions
+    }
+
     /// The task as the ledger and the fleet see it.
     pub fn task(&self, project: &ProjectId, task: &TaskId) -> Option<(TaskRecord, Worker)> {
         let record = self.ledger.states().get(project, task)?;

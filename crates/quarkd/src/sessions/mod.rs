@@ -23,6 +23,13 @@
 //! the daemon fell behind on) or old output was pruned. After a daemon
 //! restart the server is still running, so terminals reattach where they
 //! were and start again from a snapshot.
+//!
+//! Workers of the native engine run in `quark-ptyd` sessions instead. Their
+//! endpoint is `pty:<session id>`, and [`Sessions::with_pty`] serves those
+//! terminals from the PTY supervisor ([`pty`]) with the same ids, events,
+//! input and resize. Every call below looks at PTY terminals first.
+
+pub mod pty;
 
 pub use quark_sessions::tmux::{control, server};
 
@@ -32,6 +39,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use base64::Engine as _;
+use quark_core::session::{SessionBackend, TermSize};
 use quark_systems::{Event, Terminal, TerminalChunkKind, TerminalOutput, TerminalRole};
 use tokio::sync::{oneshot, Notify};
 
@@ -74,7 +82,8 @@ pub enum SessionError {
     Store(#[from] store::StoreError),
 }
 
-/// A task whose engine endpoint is a tmux `session:window` target.
+/// A task and its engine endpoint: a tmux `session:window` target, or a
+/// PTY session as [`pty::target`] writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskTarget {
     pub task_id: String,
@@ -85,6 +94,8 @@ pub struct TaskTarget {
 #[derive(Clone)]
 pub struct Sessions {
     shared: Option<Arc<Shared>>,
+    /// Worker terminals on the PTY supervisor, when the native engine runs.
+    pty: Option<Arc<pty::PtyHub>>,
     reason: Arc<str>,
 }
 
@@ -111,20 +122,64 @@ impl Sessions {
         let weak = Arc::downgrade(&shared);
         std::thread::Builder::new()
             .name("terminal-output".into())
-            .spawn(move || write_output(rx, store, weak))
+            .spawn(move || {
+                write_output(rx, store, |terminal_id| {
+                    if let Some(shared) = weak.upgrade() {
+                        resnapshot(&shared, terminal_id);
+                    }
+                })
+            })
             .expect("spawn terminal output writer");
         Ok(Self {
             shared: Some(shared),
+            pty: None,
             reason: Arc::from(""),
         })
     }
 
-    /// Sessions that report `reason` for every call, e.g. without tmux.
+    /// Sessions that report `reason` for every tmux call, e.g. without tmux.
     pub fn disabled(reason: impl Into<String>) -> Self {
         Self {
             shared: None,
+            pty: None,
             reason: Arc::from(reason.into()),
         }
+    }
+
+    /// Also serves terminals of tasks whose endpoint is a session of
+    /// `backend`, the PTY supervisor. Their output is written to `store` by
+    /// a writer thread of their own. Must be called from within a Tokio
+    /// runtime, before the sessions are cloned.
+    pub fn with_pty(mut self, backend: Arc<dyn SessionBackend>, store: Arc<Store>) -> Self {
+        let (sink, rx) = std::sync::mpsc::channel();
+        let hub = pty::PtyHub::new(backend, sink);
+        let weak = Arc::downgrade(&hub);
+        std::thread::Builder::new()
+            .name("pty-terminal-output".into())
+            .spawn(move || {
+                write_output(rx, store, |terminal_id| {
+                    if let Some(hub) = weak.upgrade() {
+                        hub.resnapshot(terminal_id);
+                    }
+                })
+            })
+            .expect("spawn PTY terminal output writer");
+        self.pty = Some(hub);
+        self
+    }
+
+    /// The tmux hub, for a terminal no PTY session serves. With tmux off
+    /// and PTY terminals on, such a terminal does not exist.
+    fn pane_hub(&self) -> Result<&Arc<Hub>, SessionError> {
+        match (&self.shared, &self.pty) {
+            (None, Some(_)) => Err(SessionError::NotFound),
+            _ => self.hub(),
+        }
+    }
+
+    /// The PTY hub, when it serves `terminal_id`.
+    fn pty_for(&self, terminal_id: &str) -> Option<&Arc<pty::PtyHub>> {
+        self.pty.as_ref().filter(|p| p.owns(terminal_id))
     }
 
     /// The tmux binary to use: `tmux` from `PATH` unless given, checked by
@@ -217,9 +272,22 @@ impl Sessions {
         Ok(())
     }
 
-    /// Replaces the task window targets of one Project and reconciles the
-    /// panes. Called after every projection refresh.
+    /// Replaces the task endpoints of one Project and reconciles the panes
+    /// and PTY sessions. Called after every projection refresh.
     pub async fn sync(&self, project_id: &str, tasks: Vec<TaskTarget>) -> Result<(), SessionError> {
+        let (ptys, tasks): (Vec<_>, Vec<_>) = tasks
+            .into_iter()
+            .partition(|t| pty::parse(&t.target).is_some());
+        if let Some(hub) = &self.pty {
+            let ptys = ptys
+                .into_iter()
+                .filter_map(|t| Some((t.task_id, pty::parse(&t.target)?)))
+                .collect();
+            hub.sync(project_id, ptys);
+            if tasks.is_empty() && self.shared.is_none() {
+                return Ok(());
+            }
+        }
         let hub = self.hub()?;
         {
             let mut targets = hub.targets.lock().unwrap();
@@ -239,23 +307,30 @@ impl Sessions {
 
     /// Live terminals of one Project, coordinator first.
     pub fn list(&self, project_id: &str) -> Vec<Terminal> {
-        let Ok(hub) = self.hub() else {
-            return Vec::new();
-        };
-        let mut out: Vec<Terminal> = hub
-            .panes
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|p| p.terminal.project_id == project_id)
-            .map(|p| p.terminal.clone())
-            .collect();
+        let mut out: Vec<Terminal> = self
+            .pty
+            .as_ref()
+            .map(|p| p.list(project_id))
+            .unwrap_or_default();
+        if let Ok(hub) = self.hub() {
+            out.extend(
+                hub.panes
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .filter(|p| p.terminal.project_id == project_id)
+                    .map(|p| p.terminal.clone()),
+            );
+        }
         out.sort_by(|a, b| (a.role as u8, &a.id).cmp(&(b.role as u8, &b.id)));
         out
     }
 
     pub fn get(&self, terminal_id: &str) -> Result<Terminal, SessionError> {
-        let hub = self.hub()?;
+        if let Some(pty) = self.pty_for(terminal_id) {
+            return pty.get(terminal_id);
+        }
+        let hub = self.pane_hub()?;
         let pane = hub.find(terminal_id)?;
         let panes = hub.panes.lock().unwrap();
         Ok(panes
@@ -274,23 +349,16 @@ impl Sessions {
         bytes: &[u8],
         seq: Option<u64>,
     ) -> Result<(), SessionError> {
-        let hub = self.hub()?;
+        if let Some(pty) = self.pty_for(terminal_id) {
+            return pty.input(terminal_id, bytes, seq).await;
+        }
+        let hub = self.pane_hub()?;
         let pane = hub.find(terminal_id)?;
         let client = hub.client_for(&pane)?;
         // Hold the input lock while typing so concurrent requests are applied
         // in sequence order or refused.
         let _guard = hub.input_lock.lock().await;
-        if let Some(seq) = seq {
-            let mut last = hub.input_seq.lock().unwrap();
-            let entry = last.entry(terminal_id.to_string()).or_insert(0);
-            if seq <= *entry {
-                return Err(SessionError::StaleInput {
-                    got: seq,
-                    last: *entry,
-                });
-            }
-            *entry = seq;
-        }
+        check_seq(&hub.input_seq, terminal_id, seq)?;
         for chunk in bytes.chunks(INPUT_CHUNK) {
             client.run(&send_keys(&pane, chunk)).await?;
         }
@@ -310,7 +378,10 @@ impl Sessions {
                 "size {cols}x{rows} is out of range"
             )));
         }
-        let hub = self.hub()?;
+        if let Some(pty) = self.pty_for(terminal_id) {
+            return pty.resize(terminal_id, TermSize { cols, rows }).await;
+        }
+        let hub = self.pane_hub()?;
         let pane = hub.find(terminal_id)?;
         let client = hub.client_for(&pane)?;
         let window = {
@@ -337,7 +408,10 @@ impl Sessions {
     /// and returns that event. A client opening a terminal applies it, then
     /// the terminal's `worker.output` events with a greater `seq`.
     pub async fn snapshot(&self, terminal_id: &str) -> Result<Event, SessionError> {
-        let hub = self.hub()?;
+        if let Some(pty) = self.pty_for(terminal_id) {
+            return pty.snapshot(terminal_id).await;
+        }
+        let hub = self.pane_hub()?;
         let pane = hub.find(terminal_id)?;
         let client = hub.client_for(&pane)?;
         let (tx, rx) = oneshot::channel();
@@ -346,13 +420,39 @@ impl Sessions {
             .map_err(|_| SessionError::Unavailable("the terminal closed".into()))
     }
 
-    /// Detaches every control client. The tmux server and its programs keep
-    /// running, so a later daemon reattaches to them.
+    /// Detaches every control client and PTY stream. The tmux server, the
+    /// PTY supervisor and their programs keep running, so a later daemon
+    /// reattaches to them.
     pub fn detach_all(&self) {
         if let Ok(hub) = self.hub() {
             hub.detach();
         }
+        if let Some(pty) = &self.pty {
+            pty.detach();
+        }
     }
+}
+
+/// Refuses input whose sequence number is not above the last one applied
+/// to the terminal, and records it otherwise.
+fn check_seq(
+    last: &Mutex<HashMap<String, u64>>,
+    terminal_id: &str,
+    seq: Option<u64>,
+) -> Result<(), SessionError> {
+    let Some(seq) = seq else {
+        return Ok(());
+    };
+    let mut last = last.lock().unwrap();
+    let entry = last.entry(terminal_id.to_string()).or_insert(0);
+    if seq <= *entry {
+        return Err(SessionError::StaleInput {
+            got: seq,
+            last: *entry,
+        });
+    }
+    *entry = seq;
+    Ok(())
 }
 
 /// Who a window target belongs to.
@@ -751,9 +851,13 @@ struct Chunk {
 
 /// Writes output to the store: takes whatever is queued, merges adjacent
 /// output for each terminal, appends it in one transaction, and prunes each
-/// terminal's old output, asking for a fresh snapshot after pruning so the
-/// retained output always starts from a full screen.
-fn write_output(rx: std::sync::mpsc::Receiver<Chunk>, store: Arc<Store>, shared: Weak<Shared>) {
+/// terminal's old output, asking for a fresh snapshot after pruning
+/// (`resnapshot`) so the retained output always starts from a full screen.
+fn write_output(
+    rx: std::sync::mpsc::Receiver<Chunk>,
+    store: Arc<Store>,
+    resnapshot: impl Fn(&str),
+) {
     let mut since_prune: HashMap<String, u64> = HashMap::new();
     while let Ok(first) = rx.recv() {
         let mut batch: Vec<Chunk> = vec![first];
@@ -815,9 +919,7 @@ fn write_output(rx: std::sync::mpsc::Receiver<Chunk>, store: Arc<Store>, shared:
                 if let Err(e) = store.prune_terminal_output(&chunk.terminal_id, RETAIN_BYTES) {
                     tracing::warn!(error = %e, "pruning terminal output failed");
                 }
-                if let Some(shared) = shared.upgrade() {
-                    resnapshot(&shared, &chunk.terminal_id);
-                }
+                resnapshot(&chunk.terminal_id);
             }
         }
     }

@@ -18,6 +18,25 @@ It sits on the native supervisor (`quark-supervisor`, slice 4), native verificat
 | `set_gates`, `gate_evidence`, `gate_artifact` | `config/gates.json` (schema `fm.gates.v1`) and `verify/<task>/` under the Project workspace root |
 
 | `add_source`, `seed_workspace`, `start_coordinator`, `coordinator_terminals` | `ProjectSetup` (`engine/native_project.rs`) |
+| a task's `terminal` | the current generation's PTY session, as `pty:<session id>`, while its program runs |
+
+## Worker terminals
+
+Native workers run in `quark-ptyd` sessions, not tmux windows, and the app shows them in the same worker terminal: same terminal ids (the task ids), same `worker.output` events, same input, resize and snapshot routes.
+The app needs no change.
+
+- `NativeEngine` reports a running worker's endpoint as `pty:<session id>` (`sessions::pty::target`), from the generation's session in the supervisor's fleet.
+  An exited worker reports none, so its terminal goes away, as a closed tmux window's does.
+- The projector hands every task endpoint to `Sessions::sync`, as it does tmux targets.
+  `Sessions::with_pty` (wired by `quarkd` whenever the native supervisor runs, tmux or not) serves the `pty:` ones from the supervisor's session backend (`crates/quarkd/src/sessions/pty.rs`); everything else stays on tmux.
+- Each terminal holds one attach stream.
+  Its first chunk is the screen repainted in stream order, recorded as the snapshot; the rest is output.
+  A snapshot the app asks for, or the one after old output is pruned, opens a fresh stream after stopping the old one, so nothing is lost or sent twice.
+  A viewer that falls behind gets a repaint, which starts with a terminal reset and is recorded as output.
+- A relaunch starts a new session; the next refresh names it, and the terminal switches to it with a snapshot.
+- `quark-ptyd` keeps the sessions across a daemon restart: the first refresh reattaches each terminal and starts it again from a snapshot.
+
+A PTY worker's process ids are not reported to host attribution yet.
 
 ## Verification
 
@@ -102,7 +121,6 @@ The native engine refuses the operations below, each with an error that names th
 These steps remain, in order:
 
 1. Coordinators on other harnesses: their tool and turn-end hook wiring.
-2. The worker terminal for PTY-backed workers (today `EngineTask::terminal` names only tmux windows).
-3. `verify-quark` journeys run with `--engine native`.
-4. Self-hosting starts quarkd with `--engine native`.
-5. Retire the firstmate adapter, the ingest bridge, and the shadows (slice 10).
+2. `verify-quark` journeys run with `--engine native`.
+3. Self-hosting starts quarkd with `--engine native`.
+4. Retire the firstmate adapter, the ingest bridge, and the shadows (slice 10).

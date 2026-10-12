@@ -90,7 +90,8 @@ impl Projector {
         self
     }
 
-    /// Also maps each refreshed workspace's tmux windows to its tasks.
+    /// Also maps each refreshed workspace's tmux windows and PTY sessions
+    /// to its tasks.
     pub fn with_sessions(mut self, sessions: Sessions) -> Self {
         self.sessions = Some(sessions);
         self
@@ -493,7 +494,8 @@ impl Projector {
         }
     }
 
-    /// Hands the workspace's task window targets to the session layer.
+    /// Hands the workspace's task endpoints (tmux windows, PTY sessions)
+    /// to the session layer.
     async fn sync_sessions(&self, ws: &WorkspaceRef, terminals: Vec<(String, String)>) {
         let Some(sessions) = &self.sessions else {
             return;
