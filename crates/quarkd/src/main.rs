@@ -24,6 +24,13 @@ enum Command {
     /// Print how ready each native slice is to switch on, from its shadow's
     /// divergences in the event log.
     Shadows(ShadowsArgs),
+    /// Run the PTY supervisor the native engine's workers live in (what
+    /// `quark-ptyd` runs). quarkd starts it itself; it outlives quarkd.
+    #[command(hide = true)]
+    Ptyd {
+        #[arg(long)]
+        socket: PathBuf,
+    },
 }
 
 #[derive(clap::Args)]
@@ -82,6 +89,10 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve(cli.serve)) {
+        Command::Ptyd { socket } => {
+            quark_sessions::pty::run_daemon(&socket).await?;
+            Ok(())
+        }
         Command::Openapi => {
             print!("{}", quarkd::api::ApiDoc::json());
             Ok(())

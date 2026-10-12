@@ -39,12 +39,23 @@ impl PtyClient {
     /// it first when nothing answers. `quark-ptyd` runs in its own session,
     /// so it and its programs outlive the caller.
     pub async fn start(socket: impl Into<PathBuf>, ptyd: &Path) -> Result<Self> {
+        Self::start_with(socket, ptyd, &[]).await
+    }
+
+    /// [`PtyClient::start`], running `program <args...> --socket <socket>`,
+    /// such as `quarkd ptyd --socket <socket>`.
+    pub async fn start_with(
+        socket: impl Into<PathBuf>,
+        program: &Path,
+        args: &[&str],
+    ) -> Result<Self> {
         let client = Self::new(socket);
         if client.connect().await.is_ok() {
             return Ok(client);
         }
-        let mut cmd = std::process::Command::new(ptyd);
-        cmd.arg("--socket")
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(args)
+            .arg("--socket")
             .arg(&client.socket)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -55,7 +66,7 @@ impl PtyClient {
         }
         let mut child = cmd
             .spawn()
-            .map_err(|e| CoreError::Backend(format!("starting {}: {e}", ptyd.display())))?;
+            .map_err(|e| CoreError::Backend(format!("starting {}: {e}", program.display())))?;
         // Reap it if it exits early; otherwise it outlives us by design.
         std::thread::spawn(move || {
             let _ = child.wait();

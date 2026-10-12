@@ -100,8 +100,8 @@ cmd_launch() {
   daemon_url=http://127.0.0.1:$dport
   if [ "$daemon" = real ]; then
     echo "building quarkd..." >&2
-    # quark-ptyd sits next to quarkd, where the native supervisor looks for it.
-    (cd "$repo" && cargo build --quiet -p quarkd -p quark-sessions --bin quarkd --bin quark-ptyd 2>"$inst/cargo.log") ||
+    # quarkd runs the native engine's PTY supervisor itself (quarkd ptyd).
+    (cd "$repo" && cargo build --quiet -p quarkd --bin quarkd 2>"$inst/cargo.log") ||
       die "quarkd build failed; see $inst/cargo.log"
     local target=${CARGO_TARGET_DIR:-$repo/target}
     home=$inst/home
@@ -284,12 +284,12 @@ pane_groups() {
   done | sort -u
 }
 
-# The run's PTY supervisor (quark-ptyd, started by the native supervisor in
+# The run's PTY supervisor (quarkd ptyd, started by the native supervisor in
 # a session of its own so worker sessions outlive the daemon), and the
 # process group of every session it holds.
 ptyd_pid() {
   [ -n "$QV_HOME" ] || return 0
-  pgrep -f "quark-ptyd --socket $QV_HOME/run/ptyd.sock" 2>/dev/null | head -1 || true
+  pgrep -f "ptyd --socket $QV_HOME/run/ptyd.sock" 2>/dev/null | head -1 || true
 }
 
 ptyd_groups() {

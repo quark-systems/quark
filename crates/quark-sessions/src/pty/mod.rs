@@ -39,6 +39,32 @@ use crate::stream::{Chunk, Viewer, CHANNEL};
 pub use client::PtyClient;
 pub use serve::serve;
 
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::Path;
+
+/// Run a [`PtySupervisor`] on `socket` until it fails: the body of
+/// `quark-ptyd --socket <path>` (and of `quarkd ptyd`). Refuses to start
+/// when another supervisor already answers on the socket.
+pub async fn run_daemon(socket: &Path) -> std::io::Result<()> {
+    if tokio::net::UnixStream::connect(socket).await.is_ok() {
+        return Err(std::io::Error::other(format!(
+            "another supervisor is listening on {}",
+            socket.display()
+        )));
+    }
+    if let Some(dir) = socket
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty() && !d.exists())
+    {
+        std::fs::create_dir_all(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    // Nothing answered, so a socket file left here belongs to a dead one.
+    let _ = std::fs::remove_file(socket);
+    let listener = tokio::net::UnixListener::bind(socket)?;
+    serve(listener, PtySupervisor::new()).await
+}
+
 /// Rows of scrollback each screen model keeps.
 const SCROLLBACK: usize = 10_000;
 /// How long a killed program has between SIGHUP and SIGKILL.

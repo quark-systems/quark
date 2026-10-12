@@ -11,7 +11,7 @@ Quark has three surfaces:
 
 - **Desktop app** (`app/`): Tauri 2 + React. The same frontend runs in a browser, which is what this skill drives; the Tauri shell only opens a window (`app/README.md`).
 - **quarkd** (`crates/quarkd`): the `/v1` REST API, the `/v1/events` WebSocket, and terminal sessions on a private tmux server.
-- **Engine terminals**: coordinator and worker windows the engine opens on quarkd's tmux server, streamed to the app's xterm.js terminal (the native engine's workers run in `quark-ptyd` sessions instead, which the app does not show yet).
+- **Engine terminals**: coordinator and worker windows the engine opens on quarkd's tmux server, streamed to the app's xterm.js terminal (the native engine's workers run in PTY supervisor sessions instead, shown in the same terminal).
 
 Everything goes through one helper, run from any directory or worktree:
 
@@ -32,7 +32,7 @@ $Q launch --engine firstmate --engine-dir ../firstmate --harness fake   # agents
 $Q launch --engine native --harness fake                     # quarkd's own engine, no firstmate anywhere (needs treehouse)
 ```
 
-Launch builds `app/dist` (`npm ci` first if `app/node_modules` is missing) and `quarkd` with `quark-ptyd` next to it (`cargo build -p quarkd -p quark-sessions --bin quarkd --bin quark-ptyd`), then starts, each on a free port and in its own process group:
+Launch builds `app/dist` (`npm ci` first if `app/node_modules` is missing) and `quarkd` (`cargo build -p quarkd --bin quarkd`; it runs the native engine's PTY supervisor itself as `quarkd ptyd`), then starts, each on a free port and in its own process group:
 
 - the daemon, with `--home <run>/instance/home`, so its SQLite store, workspaces and tmux server (`<home>/run/tmux/quark`) are private to the run;
 - `bin/serve.mjs`, which serves `app/dist` and proxies `/v1` (HTTP and WebSocket) to the daemon on one origin, so no CORS change is needed;
