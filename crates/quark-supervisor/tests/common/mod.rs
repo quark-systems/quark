@@ -106,6 +106,7 @@ exit = "/exit"
 
     pub fn config(&self) -> Config {
         let mut c = Config::new(HostId::from("h"), self.dir.path().join("state"));
+        c.agent_home = Some(self.dir.path().join("agent-home"));
         c.ready_timeout = Duration::from_secs(5);
         c.ready_quiet = Duration::from_millis(200);
         c.exit_grace = Duration::from_millis(500);

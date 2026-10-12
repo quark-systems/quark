@@ -633,6 +633,7 @@ async fn creates_a_project_and_recovers_its_coordinator_with_no_firstmate() {
     let server = sessions.server().unwrap().clone();
     let layout = Layout::new(dir.join("home"));
     let setup = ProjectSetup::new(sessions.clone(), layout.clone(), "http://127.0.0.1:1")
+        .with_agent_home(dir.join("agent-home"))
         .with_manifests(fake_claude(dir))
         .with_roots(SessionRoots {
             claude: vec![dir.join("claude")],
@@ -682,6 +683,15 @@ async fn creates_a_project_and_recovers_its_coordinator_with_no_firstmate() {
         .await
         .unwrap();
     assert_eq!(starts(dir, 1).await.len(), 1);
+    // Claude Code would otherwise open on its trust question.
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("agent-home/.claude.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        state["projects"][root.to_string_lossy().as_ref()]["hasTrustDialogAccepted"],
+        true
+    );
     let target = format!("quark:coordinator-{}", project.id);
     assert_eq!(
         engine.coordinator_terminals(&command).await.unwrap(),
