@@ -21,10 +21,11 @@ use quark_core::{
 use quark_harness::ManifestRegistry;
 use quark_supervisor::{Assignment, Config, SpawnRequest, Supervisor};
 
-/// A fake agent: prints a prompt, logs every line it reads next to its
-/// status file, and acts on a few words.
+/// A fake agent: prints a prompt, logs its arguments and every line it
+/// reads next to its status file, and acts on a few words.
 const AGENT: &str = r#"#!/bin/sh
 dir=$(dirname "$QUARK_STATUS_FILE")
+echo "args: $*" >> "$dir/received"
 echo "fake agent ready"
 while IFS= read -r line; do
   clean=$(printf '%s' "$line" | tr -d '\033\r' | sed 's/\[20[01]~//g')
@@ -73,6 +74,7 @@ bins = ["sh"]
 [launch]
 argv = ["sh", "{agent}"]
 prompt_via = "paste"
+resume = ["--continue"]
 [turn_signals]
 busy = "none"
 turn_end = "none"

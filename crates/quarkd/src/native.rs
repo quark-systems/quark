@@ -11,19 +11,23 @@
 //!   (shadowed by the native pool with `QUARK_NATIVE_WORKTREES=1`), the
 //!   harness manifests in `<home>/harnesses`, and the host's sandbox;
 //! - adopts the sessions that survived the last daemon and supervises on a
-//!   timer;
+//!   timer, resuming a lost worker's conversation when its harness logged
+//!   one ([`Transcripts`]);
 //! - serves the worker protocol (MCP and hooks) under [`WORKER_PREFIX`].
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use quark_core::harness::HarnessManifest;
 use quark_core::{EventLog, WorktreeProvider};
 use quark_harness::ManifestRegistry;
 use quark_isolation::HostIsolation;
 use quark_sessions::pty::PtyClient;
-use quark_supervisor::{Supervisor, WorkerUrls};
+use quark_supervisor::{Conversations, Supervisor, WorkerUrls};
+use quark_transcript::{locate, SessionFormat, SessionRoots};
 use quark_worktree::TreehouseProvider;
 
 use crate::config::Config;
@@ -87,7 +91,8 @@ impl NativeSupervision {
                 Arc::new(HostIsolation::detect().await),
                 sup_config,
             )
-            .await?,
+            .await?
+            .with_conversations(Arc::new(Transcripts)),
         );
         let orphans = supervisor.recover().await?;
         tracing::info!(socket = %socket.display(), orphans, "native supervisor running");
@@ -106,9 +111,83 @@ impl NativeSupervision {
     }
 }
 
+/// Finds a worker's conversation in its harness's own session logs, as the
+/// harness would to continue it: the manifest's transcript format, under the
+/// account's config directory when the worker runs on one, else the
+/// harness's default.
+pub struct Transcripts;
+
+impl Conversations for Transcripts {
+    fn exists(&self, m: &HarnessManifest, cwd: &Path, env: &BTreeMap<String, String>) -> bool {
+        let Some(format) = m
+            .transcript
+            .as_ref()
+            .and_then(|t| session_format(&t.format))
+        else {
+            return false;
+        };
+        let mut roots = SessionRoots::from_env();
+        let account = m
+            .account
+            .as_ref()
+            .and_then(|a| a.env.as_ref())
+            .and_then(|var| env.get(var));
+        if let Some(dir) = account {
+            let list = match format {
+                SessionFormat::Claude => &mut roots.claude,
+                SessionFormat::Codex => &mut roots.codex,
+                SessionFormat::Pi => &mut roots.pi,
+            };
+            list.insert(0, PathBuf::from(dir));
+        }
+        locate(format, cwd, &roots).is_some()
+    }
+}
+
+/// The session log format of a manifest's `transcript.format`.
+fn session_format(format: &str) -> Option<SessionFormat> {
+    match format {
+        "claude-jsonl" => Some(SessionFormat::Claude),
+        "codex-rollout" => Some(SessionFormat::Codex),
+        "pi-session" => Some(SessionFormat::Pi),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_a_workers_conversation_under_its_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = quark_harness::builtin()
+            .iter()
+            .find(|m| m.id == "claude-code")
+            .unwrap();
+        let worktree = dir.path().join("wt");
+        let account = dir.path().join("account");
+        let env = BTreeMap::from([(
+            "CLAUDE_CONFIG_DIR".to_string(),
+            account.to_string_lossy().into_owned(),
+        )]);
+        assert!(!Transcripts.exists(claude, &worktree, &env));
+
+        let slug: String = worktree
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let logs = account.join("projects").join(slug);
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("s1.jsonl"), "{}\n").unwrap();
+        assert!(Transcripts.exists(claude, &worktree, &env));
+
+        // A harness with no transcript format has nothing to continue.
+        let mut none = (**claude).clone();
+        none.transcript = None;
+        assert!(!Transcripts.exists(&none, &worktree, &env));
+    }
 
     #[test]
     fn ptyd_sits_next_to_quarkd_by_default() {

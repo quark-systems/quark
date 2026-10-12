@@ -122,6 +122,11 @@ pub struct Launch {
     /// the agent is ready).
     #[serde(default = "default_prompt_via")]
     pub prompt_via: String,
+    /// Arguments added to continue the agent's latest conversation in its
+    /// working directory, such as Claude Code's `["--continue"]`; empty
+    /// when the harness cannot.
+    #[serde(default)]
+    pub resume: Vec<String>,
 }
 
 fn default_prompt_via() -> String {

@@ -310,7 +310,7 @@ fn launch_argv(
     ];
     argv.extend(quark_harness::argv(m, &vars));
     if resume {
-        argv.push("--continue".into());
+        argv.extend(m.launch.resume.iter().cloned());
     }
     Ok(argv)
 }

@@ -11,7 +11,7 @@ Quark has three surfaces:
 
 - **Desktop app** (`app/`): Tauri 2 + React. The same frontend runs in a browser, which is what this skill drives; the Tauri shell only opens a window (`app/README.md`).
 - **quarkd** (`crates/quarkd`): the `/v1` REST API, the `/v1/events` WebSocket, and terminal sessions on a private tmux server.
-- **Engine terminals**: coordinator and worker windows the firstmate engine opens on quarkd's tmux server, streamed to the app's xterm.js terminal.
+- **Engine terminals**: coordinator and worker windows the engine opens on quarkd's tmux server, streamed to the app's xterm.js terminal (the native engine's workers run in `quark-ptyd` sessions instead, which the app does not show yet).
 
 Everything goes through one helper, run from any directory or worktree:
 
@@ -29,9 +29,10 @@ $Q launch                                                    # real quarkd, stub
 $Q launch --engine firstmate --engine-dir ../firstmate       # real quarkd driving a clone of a quark-systems/firstmate checkout
 $Q launch --daemon mock                                      # the app against app/mock/daemon.mjs (demo data, quiet)
 $Q launch --engine firstmate --engine-dir ../firstmate --harness fake   # agents run bin/fake-agent: no account or network needed
+$Q launch --engine native --harness fake                     # quarkd's own engine, no firstmate anywhere (needs treehouse)
 ```
 
-Launch builds `app/dist` (`npm ci` first if `app/node_modules` is missing) and `quarkd` (`cargo build -p quarkd`), then starts, each on a free port and in its own process group:
+Launch builds `app/dist` (`npm ci` first if `app/node_modules` is missing) and `quarkd` with `quark-ptyd` next to it (`cargo build -p quarkd -p quark-sessions --bin quarkd --bin quark-ptyd`), then starts, each on a free port and in its own process group:
 
 - the daemon, with `--home <run>/instance/home`, so its SQLite store, workspaces and tmux server (`<home>/run/tmux/quark`) are private to the run;
 - `bin/serve.mjs`, which serves `app/dist` and proxies `/v1` (HTTP and WebSocket) to the daemon on one origin, so no CORS change is needed;
@@ -47,6 +48,7 @@ Modes and what they prove:
 | :--- | :--- | :--- |
 | `--daemon real --engine stub` (default) | the app against the real daemon: API, store, events, Project provisioning without an engine | anything an engine or agent does: no tasks, decisions or terminals appear |
 | `--daemon real --engine firstmate` | the real daemon driving the real engine: provisioning, coordinator and worker windows, decisions, terminals | agent behavior unless a harness is installed and signed in (the coordinator window runs it) |
+| `--daemon real --engine native` | quarkd's own engine with no firstmate: provisioning, the coordinator window and its tools, dispatch, worker sessions in `quark-ptyd`, steering, decisions, cancel and relaunch | worker terminals in the app (not served yet); agent behavior unless a harness is signed in. Worker worktrees come from treehouse, kept in the run (`TREEHOUSE_ROOT`) |
 | `--daemon mock` | app-only behavior against demo data (what `npm run e2e` uses) | the daemon or engine; say "against the mock" in any proof |
 
 ## Doctor
@@ -96,9 +98,11 @@ Disruptions (real daemon), for durability work; [features/durability.md](feature
 $Q sleep 20                                                    # stop every process the run started, then continue them
 $Q crash daemon                                                # SIGKILL the daemon; start it again with: $Q restart
 $Q crash tmux                                                  # SIGKILL the private tmux server; the daemon keeps running
-$Q crash host                                                  # a reboot: daemon, tmux server and agents gone at once
+$Q crash host                                                  # a reboot: daemon, tmux server, quark-ptyd and agents gone at once
 $Q agents                                                      # the fake harness's start journal (pid, argv, resumed)
 ```
+
+Native engine: `$Q journey native` runs a Project end to end on `--engine native` with no firstmate ([features/native-engine.md](features/native-engine.md)), and `$Q journey durability -- --engine native --harness fake` is its durability bar ([features/durability.md](features/durability.md)).
 
 Native shadows: `$Q journey shadows --rounds 3 --engine-dir ../firstmate` runs every shadow against a scripted firstmate workload and fails on any divergence ([features/shadows.md](features/shadows.md)). `launch --env NAME=VALUE` puts a setting in the daemon's start script, so it survives `restart`.
 

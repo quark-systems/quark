@@ -10,7 +10,7 @@ use quark_core::session::{SessionBackend, SessionSpec};
 use quark_core::worktree::ReturnOutcome;
 use quark_core::{CoreError, NewEvent, ProjectId, TaskEvent, TaskId, WorkerProtocol};
 use quark_sessions::pty::PtySupervisor;
-use quark_supervisor::{Cause, Relaunch, SupervisorEvent};
+use quark_supervisor::{Cause, Conversations, Relaunch, SupervisorEvent};
 use quark_systems::TaskState;
 
 fn ids(task: &str) -> (ProjectId, TaskId) {
@@ -149,6 +149,57 @@ async fn lost_sessions_are_relaunched_with_waiting_messages() {
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::Refused(_)), "{err}");
+}
+
+/// Finds a conversation in every worktree.
+struct Logged;
+
+impl Conversations for Logged {
+    fn exists(
+        &self,
+        _: &quark_core::harness::HarnessManifest,
+        _: &std::path::Path,
+        _: &std::collections::BTreeMap<String, String>,
+    ) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn lost_sessions_resume_their_conversation() {
+    let env = Env::new();
+    let (p, t) = ids("t1");
+    let first = {
+        let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+        sup.spawn(env.request("t1")).await.unwrap().current.unwrap()
+    };
+    eventually("the first worker", async || {
+        received(&env, "t1", &first.id).contains(&"args: ".to_string())
+    })
+    .await;
+    // The session server went away (a reboot); the harness has logged the
+    // worker's conversation in its worktree.
+    let sup = env
+        .supervisor(Arc::new(PtySupervisor::new()))
+        .await
+        .with_conversations(Arc::new(Logged));
+    sup.steer(&p, &t, "remember the schema").await.unwrap();
+    sup.recover().await.unwrap();
+    assert_eq!(sup.tick().await.unwrap().recovered, 1);
+
+    let new = sup.task(&p, &t).unwrap().1.current.unwrap();
+    assert_eq!(new.cause, Cause::Recover);
+    eventually("the resumed worker", async || {
+        let got = received(&env, "t1", &new.id);
+        got.contains(&"args: --continue".to_string())
+            && got.iter().any(|l| {
+                l.starts_with("Your previous session ended. This is the same conversation, resumed")
+            })
+            && got.iter().any(|l| l == "- remember the schema")
+    })
+    .await;
+    // The conversation has the brief already.
+    assert!(!received(&env, "t1", &new.id).contains(&"Fix the parser.".to_string()));
 }
 
 #[tokio::test]

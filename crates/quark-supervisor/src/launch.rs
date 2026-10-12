@@ -84,6 +84,9 @@ pub struct Inputs<'a> {
     pub steers: &'a [Steer],
     pub extra_env: &'a BTreeMap<String, String>,
     pub urls: Option<&'a WorkerUrls>,
+    /// Continue the agent's latest conversation in the worktree (the
+    /// manifest's `launch.resume`), which already holds the brief.
+    pub resume: bool,
 }
 
 /// The launch plan for one generation.
@@ -120,7 +123,10 @@ pub fn plan(i: &Inputs<'_>) -> Result<Plan> {
         prompt_file: on_argv.then(|| path_str(&brief_path)),
         cwd: Some(path_str(i.worktree)),
     };
-    let argv = quark_harness::argv(m, &vars);
+    let mut argv = quark_harness::argv(m, &vars);
+    if i.resume {
+        argv.extend(m.launch.resume.iter().cloned());
+    }
 
     let mut env = m.launch.env.clone();
     env.extend(i.extra_env.clone());
@@ -145,14 +151,17 @@ fn path_str(p: &Path) -> String {
 }
 
 /// The note, the brief, any steering the worker missed, and how to report.
+/// A resumed conversation already has the brief, so it is left out.
 fn compose_brief(i: &Inputs<'_>, status: &Path) -> String {
     let mut out = String::new();
     if let Some(note) = i.note.filter(|n| !n.trim().is_empty()) {
         out.push_str(note.trim());
         out.push_str("\n\n");
     }
-    out.push_str(i.brief.trim_end());
-    out.push('\n');
+    if !i.resume {
+        out.push_str(i.brief.trim_end());
+        out.push('\n');
+    }
     if !i.steers.is_empty() {
         out.push_str("\nMessages sent while you were not running, oldest first:\n");
         for s in i.steers {
@@ -235,6 +244,7 @@ mod tests {
             steers,
             extra_env: env,
             urls,
+            resume: false,
         }
     }
 
@@ -280,6 +290,32 @@ mod tests {
             "http://127.0.0.1:7777/v1/worker/mcp/t1/g1"
         );
         assert_eq!(p.env["CLAUDE_CONFIG_DIR"], "/a");
+    }
+
+    #[test]
+    fn resumed_worker_continues_without_the_brief() {
+        let reg = ManifestRegistry::builtin();
+        let ids = (ProjectId::from("p"), TaskId::from("t1"));
+        let m = reg.get("claude-code").unwrap();
+        let env = BTreeMap::new();
+        let steers = [Steer {
+            id: "s1".into(),
+            text: "use the new API".into(),
+            delivered_to: None,
+        }];
+        let mut i = inputs(&ids, m, &steers, &env, None);
+        i.note = Some("Your session ended.");
+        i.resume = true;
+        let p = plan(&i).unwrap();
+        assert_eq!(p.argv.last().unwrap(), "--continue");
+        assert!(p.brief.starts_with("Your session ended.\n"));
+        assert!(!p.brief.contains("Fix the parser."), "{}", p.brief);
+        assert!(p.brief.contains("- use the new API"));
+        assert!(p.brief.contains("/state/p/t1/g1/status"));
+
+        // A harness that cannot resume starts as it always does.
+        i.resume = false;
+        assert!(!plan(&i).unwrap().argv.contains(&"--continue".to_string()));
     }
 
     #[test]

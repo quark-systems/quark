@@ -96,7 +96,7 @@ Creating a Project needs no firstmate home and no `AGENTS.md` persona.
 - `start_coordinator` renders the coordinator's layered prompt (built-in, persona, the Project repo's `instructions.md` and memory, each code repo's instructions, skills; `quark-coordinator` and `quark-persona`) into `.quark/coordinator.md`.
   It installs the coordinator's MCP route and turn-end hook into the workspace (`.mcp.json`, `.claude/settings.local.json`, as the native coordinator's pass does), then starts the harness in the `coordinator-<Project id>` window of quarkd's tmux server, in the workspace, under the account's variables.
   The prompt reaches the agent as its system prompt (`--append-system-prompt`, read from the file by `sh` because a tmux command cannot carry it), so it takes effect at the next start when it changes.
-  With `resume`, the agent continues its latest conversation in the workspace (`--continue`); with no logged conversation the start is refused, and recovery starts the coordinator fresh.
+  With `resume`, the agent continues its latest conversation in the workspace (the manifest's `launch.resume`, `--continue` for Claude Code); with no logged conversation the start is refused, and recovery starts the coordinator fresh.
   A coordinator whose window is up is not started a second time.
 - Each start is recorded in `<command>/coordinators/<Project id>.json`; `coordinator_terminals` reads those records, so the app's coordinator terminal and chat, and coordinator recovery (`recovery.rs`), find the window after a daemon restart.
 
@@ -110,6 +110,13 @@ Coordinator recovery runs for the native engine as it does for firstmate.
 
 With `--engine native`, the slice 7 engine (`native_triggers.rs`) always runs in native mode: the user's inbox note and plug-in channel messages land as `channel.received` events, wake the coordinator, and the coordinator's `ack_message` tool marks them handled.
 
+## Durability
+
+Workers run in `quark-ptyd`'s sessions, which outlive the daemon and the tmux server; the coordinator runs on quarkd's tmux server.
+A worker whose session is lost (a reboot) is relaunched by the supervisor in the same worktree, and continues its conversation when its harness can (`launch.resume` in the manifest) and has logged one there (`native::Transcripts`, under the account's config directory when the worker runs on one); otherwise it starts fresh with its brief.
+A lost coordinator is relaunched by coordinator recovery with `resume`.
+`verify-quark`'s durability journeys (`quark-verify journey durability -- --engine native --harness fake`) and its native journey (`quark-verify journey native`) check this, and the Project, dispatch, steering, decision and lifecycle paths, from outside with no firstmate checkout.
+
 ## Still refused
 
 The native engine refuses the operations below, each with an error that names the missing part, until it is wired:
@@ -121,6 +128,7 @@ The native engine refuses the operations below, each with an error that names th
 These steps remain, in order:
 
 1. Coordinators on other harnesses: their tool and turn-end hook wiring.
-2. `verify-quark` journeys run with `--engine native`.
-3. Self-hosting starts quarkd with `--engine native`.
-4. Retire the firstmate adapter, the ingest bridge, and the shadows (slice 10).
+2. Self-hosting starts quarkd with `--engine native`.
+3. Retire the firstmate adapter, the ingest bridge, and the shadows (slice 10).
+
+The `verify-quark` journeys run and pass with `--engine native` (durability: 33 checks; native: 18).

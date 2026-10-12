@@ -11,7 +11,11 @@
 # Journeys: sleep, daemon-crash, tmux-loss, reboot (all four by default, in
 # that order). Launch args default to the stub engine; agent checks need an
 # engine that opens agent windows, for example
+#   -- --engine native --harness fake
 #   -- --engine firstmate --engine-dir ../firstmate --harness fake
+# Worker checks need a coordinator start_task tool (the native engine's
+# quark-coordinator MCP server), which the journeys call as a coordinator
+# agent would, since the fake harness is no LLM.
 # Every check prints one line, PASS, FAIL or SKIP (with the unmet
 # prerequisite). The summary lands in $QUARK_VERIFY_HOME/journeys/ and each
 # journey's evidence in its run's evidence/<journey>/. Exits 1 when any check
@@ -120,6 +124,91 @@ new_project() { # name ; prints the id once it is no longer provisioning
   echo "$id"
 }
 
+# The coordinator's own tool route, when the engine serves one: the MCP
+# server named quark-coordinator in the Project workspace's .mcp.json. The
+# fake harness is not an LLM, so the journeys call its start_task tool
+# themselves, as a coordinator agent would.
+coordinator_mcp() { # project
+  local ws
+  ws=$(api GET "/v1/projects/$1" | jq -r '.workspace_path // empty')
+  [ -n "$ws" ] && jq -r '.mcpServers["quark-coordinator"].url // empty' "$ws/.mcp.json" 2>/dev/null
+}
+
+# Start a task through the coordinator's start_task tool; prints the task's
+# id once the Project lists it running. Returns 2 when the engine serves no
+# such tool.
+start_task() { # project title
+  local url out
+  url=$(coordinator_mcp "$1")
+  [ -n "$url" ] || return 2
+  out=$(curl -s -X POST -H 'content-type: application/json' "$url" -d "$(jq -nc --arg t "$2" \
+    '{jsonrpc: "2.0", id: 1, method: "tools/call", params: {name: "start_task",
+      arguments: {title: $t, brief: "A durability journey worker: answer what you are sent.",
+                  agent: {harness: "claude-code", effort: "low"}}}}')")
+  echo "$out" | jq -e '.result.isError == false' >/dev/null || { echo "start_task: $out" >&2; return 1; }
+  wait_for 60 bash -c "'$Q' api GET /v1/projects/$1/tasks 2>/dev/null | jq -e --arg t '$2' 'any(.[]; .title == \$t and .state == \"running\")' >/dev/null" ||
+    { echo "start_task: $2 is not running 60s after it was started" >&2; return 1; }
+  api GET "/v1/projects/$1/tasks" | jq -r --arg t "$2" '.[] | select(.title == $t) | .id' | head -1
+}
+
+# Steer a task's worker through /v1 with a line the fake harness answers by
+# reporting it with its own pid; prints that pid once the task's state note
+# shows it, so the answer proves which process got the message.
+worker_pid() { # task secs
+  local word="qv$RANDOM$RANDOM" note
+  api POST "/v1/tasks/$1/messages" "$(jq -nc --arg t "QV-STATUS working: $word pid {pid}" '{text: $t}')" >/dev/null || return 1
+  for _ in $(seq 1 "${2:-30}"); do
+    note=$(api GET "/v1/tasks/$1" | jq -r '.state_note // empty')
+    case $note in "$word pid "*) echo "${note##* }"; return 0 ;; esac
+    sleep 1
+  done
+  return 1
+}
+
+# Records the workers to follow: task id and the pid that answered a steer.
+record_workers() {
+  workers=() worker_skip=""
+  local t rc pid
+  t=$(start_task "$project" "Durability $journey worker" 2>>"$ev/workers.txt"); rc=$?
+  if [ $rc -eq 2 ]; then
+    worker_skip="no coordinator start_task tool to start a worker through (the Project workspace's .mcp.json names no quark-coordinator server; the native engine serves one)"
+    return
+  fi
+  if [ $rc -ne 0 ] || [ -z "$t" ]; then
+    fail "setup: the coordinator's start_task did not start a running worker (see $ev/workers.txt)"
+    return
+  fi
+  if ! pid=$(worker_pid "$t" 30); then
+    fail "setup: worker $t does not answer a steer"
+    return
+  fi
+  workers+=("$t|$pid")
+}
+
+# Every worker recorded before answers a steer within the recovery bound:
+# the same process, or (expect "back") a new one started as a resumed
+# conversation.
+check_workers() {
+  local expect=$1 w t pid now
+  if [ -n "$worker_skip" ]; then skip "workers: $worker_skip"; return; fi
+  for w in ${workers[@]+"${workers[@]}"}; do
+    IFS='|' read -r t pid <<<"$w"
+    if ! now=$(worker_pid "$t" "$recovery"); then
+      fail "worker $t: does not answer a steer within ${recovery}s (state $(api GET "/v1/tasks/$t" | jq -r .state))"
+      continue
+    fi
+    if [ "$now" = "$pid" ]; then
+      pass "worker $t: the same process (pid $pid) kept running and answers a steer"
+    elif [ "$expect" = same ]; then
+      fail "worker $t: was restarted (pid $pid -> $now); nothing should have restarted it"
+    elif resumed "$now"; then
+      pass "worker $t: relaunched (pid $pid -> $now), resumed its conversation and answers a steer"
+    else
+      fail "worker $t: relaunched (pid $pid -> $now) as a fresh conversation, not resumed"
+    fi
+  done
+}
+
 # Records the agents to follow: terminal id, role and (fake harness) pid.
 record_agents() {
   agents=()
@@ -218,6 +307,15 @@ check_new_work() {
   local p; p=$(api GET "/v1/projects/$id")
   if echo "$p" | jq -e '.status == "ready"' >/dev/null; then
     pass "new work: a Project created after recovery reaches ready"
+    local t rc
+    t=$(start_task "$id" "After $journey worker" 2>>"$ev/workers.txt"); rc=$?
+    if [ $rc -eq 2 ]; then
+      skip "new work: starting a task: $worker_skip"
+    elif [ $rc -eq 0 ] && [ -n "$t" ] && worker_pid "$t" 30 >/dev/null; then
+      pass "new work: a task started in it runs and its worker answers a steer"
+    else
+      fail "new work: a task started after recovery does not run or answer (see $ev/workers.txt)"
+    fi
   else
     fail "new work: a Project created after recovery ends $(echo "$p" | jq -r .status): $(echo "$p" | jq -r '.status_detail // ""' | grep -v '^●' | grep . | tail -1)"
   fi
@@ -245,12 +343,13 @@ run_journey() {
   # Give the engine a moment to open the Project's agents, then follow them.
   wait_for 20 bash -c "[ -n \"\$('$Q' api GET /v1/projects/$project/terminals 2>/dev/null | jq -r '.[].id')\" ]" || true
   record_agents
+  record_workers
   state >"$ev/state-before.jsonl"
   local seq; seq=$(last_seq)
   "$Q" browser open "#/p/$project" >/dev/null 2>&1
   "$Q" browser wait --testid connection --contains connected --timeout 10000 >/dev/null 2>&1
   "$Q" browser screenshot --path "$journey/01-before.png" >/dev/null 2>&1 || true
-  say "     before: ${#agents[@]} agent(s) ${agents[*]:-}; last_seq $seq"
+  say "     before: ${#agents[@]} agent(s) ${agents[*]:-}; ${#workers[@]} worker(s) ${workers[*]:-}; last_seq $seq"
 
   case $journey in
     sleep)
@@ -259,6 +358,7 @@ run_journey() {
       check_state "$ev/state-before.jsonl"
       check_events "$seq"
       check_agents same
+      check_workers same
       check_app ;;
     daemon-crash)
       "$Q" crash daemon >>"$ev/disrupt.txt" 2>&1
@@ -267,6 +367,7 @@ run_journey() {
       check_state "$ev/state-before.jsonl"
       check_events "$seq"
       check_agents same
+      check_workers same
       check_app
       check_new_work ;;
     tmux-loss)
@@ -276,6 +377,7 @@ run_journey() {
       fi
       if wait_for 5 health_ok; then pass "daemon: keeps answering after the tmux server is lost"; else fail "daemon: stopped answering after the tmux server was lost"; fi
       check_agents back
+      check_workers back
       check_state "$ev/state-before.jsonl"
       check_events "$seq"
       check_new_work ;;
@@ -284,6 +386,7 @@ run_journey() {
       sleep 2
       if "$Q" restart >>"$ev/disrupt.txt" 2>&1; then pass "daemon: starts again on the same home after the reboot"; else fail "daemon: does not start again (see $ev/disrupt.txt)"; fi
       check_agents back
+      check_workers back
       check_state "$ev/state-before.jsonl"
       check_events "$seq"
       check_app

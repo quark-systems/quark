@@ -2,7 +2,7 @@
 # quark-verify: launch, doctor, drive and clean up an isolated Quark instance
 # for verification. See ../SKILL.md for the full recipe.
 #
-#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate] [--engine-dir DIR] [--harness real|fake] [--env K=V]... [--run ID]
+#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate|native] [--engine-dir DIR] [--harness real|fake] [--env K=V]... [--run ID]
 #   quark-verify doctor
 #   quark-verify env                         print the run's variables (eval-able)
 #   quark-verify browser <command> ...       drive the app (bin/browser.mjs)
@@ -82,7 +82,7 @@ cmd_launch() {
     esac
   done
   case $daemon in real|mock) ;; *) die "--daemon must be real or mock" ;; esac
-  case $engine in stub|firstmate) ;; *) die "--engine must be stub or firstmate" ;; esac
+  case $engine in stub|firstmate|native) ;; *) die "--engine must be stub, firstmate or native" ;; esac
   case $harness in real|fake) ;; *) die "--harness must be real or fake" ;; esac
   [ "$engine" = firstmate ] && [ -z "$engine_dir" ] && die "--engine firstmate needs --engine-dir <quark-systems/firstmate checkout>"
   id=${id:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
@@ -100,7 +100,9 @@ cmd_launch() {
   daemon_url=http://127.0.0.1:$dport
   if [ "$daemon" = real ]; then
     echo "building quarkd..." >&2
-    (cd "$repo" && cargo build --quiet -p quarkd 2>"$inst/cargo.log") || die "quarkd build failed; see $inst/cargo.log"
+    # quark-ptyd sits next to quarkd, where the native supervisor looks for it.
+    (cd "$repo" && cargo build --quiet -p quarkd -p quark-sessions --bin quarkd --bin quark-ptyd 2>"$inst/cargo.log") ||
+      die "quarkd build failed; see $inst/cargo.log"
     local target=${CARGO_TARGET_DIR:-$repo/target}
     home=$inst/home
     # quarkd's tmux server listens on <home>/run/tmux/quark; a unix socket path
@@ -138,6 +140,15 @@ cmd_launch() {
         printf 'export PATH=%q:"$PATH"\n' "$inst/fakebin"
         printf 'export SHELL=%q\n' "$inst/fakebin/shell"
         printf 'export QV_AGENT_JOURNAL=%q\n' "$run_dir/evidence/agents.jsonl"
+        # The fake keeps Claude Code's conversation logs, which the engine
+        # reads to resume an agent, in the run rather than in ~/.claude.
+        mkdir -p "$inst/claude-config"
+        printf 'export CLAUDE_CONFIG_DIR=%q\n' "$inst/claude-config"
+      fi
+      # The native supervisor takes worker worktrees from treehouse; keep the
+      # pool in the run, not in the user's ~/.treehouse.
+      if [ "$engine" = native ]; then
+        printf 'export TREEHOUSE_ROOT=%q\n' "$inst/treehouse"
       fi
       # --env settings are part of the script, so a restart keeps them.
       local e
@@ -273,6 +284,20 @@ pane_groups() {
   done | sort -u
 }
 
+# The run's PTY supervisor (quark-ptyd, started by the native supervisor in
+# a session of its own so worker sessions outlive the daemon), and the
+# process group of every session it holds.
+ptyd_pid() {
+  [ -n "$QV_HOME" ] || return 0
+  pgrep -f "quark-ptyd --socket $QV_HOME/run/ptyd.sock" 2>/dev/null | head -1 || true
+}
+
+ptyd_groups() {
+  local p; p=$(ptyd_pid)
+  [ -n "$p" ] || return 0
+  ps -o pgid= --ppid "$p" 2>/dev/null | tr -d ' ' | sort -u
+}
+
 tmux_server_pid() {
   [ -n "$QV_TMUX_SOCKET" ] || return 0
   tmux -S "$QV_TMUX_SOCKET" display-message -p '#{pid}' 2>/dev/null || true
@@ -299,12 +324,13 @@ cmd_crash() {
       # A reboot as the run sees it: the daemon, the tmux server and every agent
       # are gone at once. The app server and Chromium stay up so the app can be
       # read after the daemon comes back, as a person reopening it would.
-      for g in $(pane_groups); do kill -KILL -- "-$g" 2>/dev/null || true; done
+      for g in $(pane_groups) $(ptyd_groups); do kill -KILL -- "-$g" 2>/dev/null || true; done
       pid=$(tmux_server_pid); [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null || true
+      pid=$(ptyd_pid); [ -z "$pid" ] || kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
       pid=$(cat "$inst/quarkd.pid" 2>/dev/null || true)
       if [ -n "$pid" ]; then kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true; fi
       rm -f "$inst/quarkd.pid"
-      echo "rebooted: the daemon, the tmux server and every agent are gone; start the daemon with: quark-verify restart" ;;
+      echo "rebooted: the daemon, the tmux server, the PTY supervisor and every agent are gone; start the daemon with: quark-verify restart" ;;
     *) die "crash: usage: crash daemon|tmux|host" ;;
   esac
 }
@@ -327,11 +353,11 @@ cmd_sleep() {
   [[ $secs =~ ^[0-9]+$ ]] || die "sleep: usage: sleep <secs>"
   # Stop agents first and the daemon last, and continue in reverse, so no
   # running process sees another one frozen.
-  groups=$(pane_groups)
-  pids="$(tmux_server_pid) $(cat "$inst/quarkd.pid" 2>/dev/null || true)"
+  groups="$(pane_groups) $(ptyd_groups)"
+  pids="$(tmux_server_pid) $(ptyd_pid) $(cat "$inst/quarkd.pid" 2>/dev/null || true)"
   for p in $groups; do kill -STOP -- "-$p" 2>/dev/null || true; done
   for p in $pids; do kill -STOP -- "-$p" 2>/dev/null || kill -STOP "$p" 2>/dev/null || true; done
-  echo "asleep for ${secs}s (daemon, tmux server and $(echo "$groups" | grep -c .) agent groups stopped)"
+  echo "asleep for ${secs}s (daemon, tmux server, PTY supervisor and $(echo "$groups" | tr ' ' '\n' | grep -c .) agent groups stopped)"
   sleep "$secs"
   for p in $(echo "$pids" | tr ' ' '\n' | tac); do kill -CONT -- "-$p" 2>/dev/null || kill -CONT "$p" 2>/dev/null || true; done
   for p in $groups; do kill -CONT -- "-$p" 2>/dev/null || true; done
@@ -347,6 +373,10 @@ cmd_cleanup() {
   if [ -n "$QV_TMUX_SOCKET" ] && [ -S "$QV_TMUX_SOCKET" ]; then
     tmux -S "$QV_TMUX_SOCKET" kill-server 2>/dev/null || true
   fi
+  # Worker sessions outlive the daemon by design; the run's end is theirs too.
+  local g p
+  for g in $(ptyd_groups); do kill -KILL -- "-$g" 2>/dev/null || true; done
+  p=$(ptyd_pid); [ -z "$p" ] || kill -KILL -- "-$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null || true
   # Keep the daemon log with the evidence; drop the rest of the instance.
   [ -f "$inst/quarkd.log" ] && cp "$inst/quarkd.log" "$QV_EVIDENCE/daemon.log"
   rm -rf "$inst"

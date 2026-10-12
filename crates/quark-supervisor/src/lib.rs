@@ -33,4 +33,6 @@ mod supervisor;
 pub use events::{Assignment, Cause, SupervisorEvent};
 pub use fleet::{Fleet, Generation, Steer, Worker};
 pub use launch::WorkerUrls;
-pub use supervisor::{assert_isolated, Config, Relaunch, SpawnRequest, Supervisor, Tick};
+pub use supervisor::{
+    assert_isolated, Config, Conversations, Relaunch, SpawnRequest, Supervisor, Tick,
+};
