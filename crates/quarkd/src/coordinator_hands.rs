@@ -183,7 +183,7 @@ fn started(s: &TaskStart) -> String {
             format!("Queued {t}: {reason}. It starts when a host has room.")
         }
         StartOutcome::Escalated { reason } => format!(
-            "Created {t}, but dispatch left its agent to you: {reason}. Pick one with choose_profile for task {t}."
+            "Created {t}, but dispatch left its agent to you: {reason}. Pick with choose_profile for task {t}."
         ),
     }
 }
@@ -288,22 +288,31 @@ impl Hands for EngineHands {
                 brief,
                 repo,
                 agent,
+                rule,
             } => {
                 let task = NewTask {
                     title: title.clone(),
                     brief: brief.clone(),
                     repo: repo.clone(),
                     agent: agent.as_ref().map(agent_config),
+                    rule: rule.clone(),
                 };
                 let start = self.engine.start_task(&ws, &task).await.map_err(core)?;
                 Ok(started(&start))
             }
-            ToolCall::ChooseProfile { task, agent } => {
-                let start = self
-                    .engine
-                    .choose_profile(&ws, task.as_str(), &agent_config(agent))
-                    .await
-                    .map_err(core)?;
+            ToolCall::ChooseProfile { task, agent, rule } => {
+                let start = match (agent, rule) {
+                    (Some(agent), _) => {
+                        self.engine
+                            .choose_profile(&ws, task.as_str(), &agent_config(agent))
+                            .await
+                    }
+                    (None, Some(rule)) => self.engine.choose_rule(&ws, task.as_str(), rule).await,
+                    (None, None) => {
+                        return Err(CoreError::Invalid("give `rule` or `agent`".into()))
+                    }
+                }
+                .map_err(core)?;
                 Ok(started(&start))
             }
             ToolCall::AckMessage { channel, id } => {
@@ -539,6 +548,7 @@ mod tests {
             brief: "It drops trailing commas.".into(),
             repo: Some("app".into()),
             agent: None,
+            rule: None,
         };
         let out = hands.run(&p, &start).await.unwrap();
         assert!(
@@ -547,11 +557,12 @@ mod tests {
         );
         let choose = ToolCall::ChooseProfile {
             task: TaskId::from("stub-1"),
-            agent: Agent {
+            agent: Some(Agent {
                 harness: "codex".into(),
                 model: Some("gpt-5.5".into()),
                 effort: Some("high".into()),
-            },
+            }),
+            rule: None,
         };
         let out = hands.run(&p, &choose).await.unwrap();
         assert_eq!(out, "Started stub-1 on codex gpt-5.5 at high effort.");
@@ -563,6 +574,19 @@ mod tests {
         assert!(matches!(
             &writes[1],
             StubWrite::ChooseProfile { task_id, agent } if task_id == "stub-1" && agent.harness == "codex"
+        ));
+
+        // Or the dispatch rule the task fits.
+        let by_rule = ToolCall::ChooseProfile {
+            task: TaskId::from("stub-1"),
+            agent: None,
+            rule: Some("rule_1".into()),
+        };
+        let out = hands.run(&p, &by_rule).await.unwrap();
+        assert_eq!(out, "Started stub-1 on stub-rule_1.");
+        assert!(matches!(
+            &engine.writes()[2],
+            StubWrite::ChooseRule { task_id, rule } if task_id == "stub-1" && rule == "rule_1"
         ));
 
         // An engine without dispatch refuses.

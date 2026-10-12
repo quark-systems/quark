@@ -498,6 +498,72 @@ pub fn resolve(
     if config.rules.is_empty() {
         return Resolution::no_rules();
     }
+    select(config, settings, classification, quota, families)
+}
+
+/// Resolve `rule` (`rule_N`, a rule's name, or `default`) as the
+/// coordinator's match when no classifier is configured: the rule's
+/// approval, floor, candidates and selection apply exactly as they do to a
+/// confident classifier answer, and no classifier is recorded. An `error`
+/// resolution when the rules have no such rule.
+pub fn resolve_rule(
+    config: &DispatchConfig,
+    rule: &str,
+    quota: Result<&QuotaSnapshot, &str>,
+    families: &ProviderFamilies,
+) -> Resolution {
+    let Some(choice) = config.find_rule(rule) else {
+        return Resolution::error(format!(
+            "rule {rule} is not in the rules file; the rules are {}",
+            config.menu()
+        ));
+    };
+    let settings = ClassifierSettings {
+        on: true,
+        model: String::new(),
+        credential: None,
+        confidence_floor: 0.0,
+        timeout_ms: 0,
+        on_failure: OnFailure::Coordinator,
+    };
+    let answer = Answer {
+        choice: choice.clone(),
+        confidence: 1.0,
+        probabilities: Default::default(),
+        model: None,
+        latency_ms: None,
+        input_tokens: None,
+        output_tokens: None,
+    };
+    let mut out = select(
+        config,
+        &settings,
+        &Classification::Answered { answer },
+        quota,
+        families,
+    );
+    out.answer = None;
+    out.notes
+        .insert(0, format!("{COORDINATOR_MATCHED} {choice}"));
+    out
+}
+
+/// How a [`resolve_rule`] resolution's first note begins.
+pub const COORDINATOR_MATCHED: &str = "the coordinator matched";
+
+/// The first note of the resolution with no classifier and no rules, where
+/// the default profiles apply with nothing to judge.
+pub const ONLY_DEFAULT: &str =
+    "no classifier is configured and no rules are listed, so the default profiles apply";
+
+/// [`resolve`] once a classification is in hand and the rules are read.
+fn select(
+    config: &DispatchConfig,
+    settings: &ClassifierSettings,
+    classification: &Classification,
+    quota: Result<&QuotaSnapshot, &str>,
+    families: &ProviderFamilies,
+) -> Resolution {
     let (answer, failure) = match classification {
         Classification::Answered { answer } => (Some(answer), None),
         Classification::Failed { reason } => {

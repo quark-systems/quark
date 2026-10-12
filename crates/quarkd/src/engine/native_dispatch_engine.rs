@@ -218,7 +218,15 @@ impl NativeDispatch {
                 env: BTreeMap::new(),
                 profile: profile.clone(),
             };
-            match self.dispatcher.submit(p.clone(), t.clone(), request).await {
+            let submitted = match (&profile, task.rule.as_deref()) {
+                (None, Some(rule)) => {
+                    self.dispatcher
+                        .submit_rule(p.clone(), t.clone(), request, rule)
+                        .await
+                }
+                _ => self.dispatcher.submit(p.clone(), t.clone(), request).await,
+            };
+            match submitted {
                 Ok(stage) => return self.settle(&p, &t, stage).await,
                 // Dispatched before and gone: a withdrawn or failed task.
                 Err(CoreError::Invalid(m)) if m.contains("already dispatched") => continue,
@@ -242,6 +250,24 @@ impl NativeDispatch {
         let stage = self
             .dispatcher
             .choose(&p, &t, profile_of(agent))
+            .await
+            .map_err(engine_error)?;
+        self.settle(&p, &t, stage).await
+    }
+
+    /// The dispatch rule the coordinator matched a task whose dispatch
+    /// escalated to, resolved as a classifier's answer would be.
+    pub async fn choose_rule(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        rule: &str,
+    ) -> Result<TaskStart, EngineError> {
+        let p = self.roots.remember(ws);
+        let t = task_id(task)?;
+        let stage = self
+            .dispatcher
+            .choose_rule(&p, &t, rule)
             .await
             .map_err(engine_error)?;
         self.settle(&p, &t, stage).await

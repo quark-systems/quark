@@ -39,5 +39,5 @@ pub use dispatcher::{
 pub use events::{Choice, Decider, DispatchEvent, Request};
 pub use pools::{Accounts, NoAccounts, PoolAccount, StaticAccounts};
 pub use quota::{FixedQuota, ProviderFamilies, QuotaAxi, QuotaSnapshot, QuotaSource};
-pub use resolve::{resolve, Resolution, Status};
+pub use resolve::{resolve, resolve_rule, Resolution, Status, COORDINATOR_MATCHED, ONLY_DEFAULT};
 pub use rules::{ClassifierSettings, DispatchConfig, Profile, Select};

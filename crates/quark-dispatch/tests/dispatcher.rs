@@ -205,11 +205,21 @@ impl Rig {
         classification: Classification,
         unhealthy_after: Duration,
     ) -> Dispatcher {
+        self.dispatcher_with(RULES, classification, unhealthy_after)
+            .await
+    }
+
+    async fn dispatcher_with(
+        &self,
+        rules: &str,
+        classification: Classification,
+        unhealthy_after: Duration,
+    ) -> Dispatcher {
         Dispatcher::open(
             Parts {
                 log: Arc::new(self.log.clone()),
                 host: "mac".into(),
-                configs: Arc::new(FixedConfig(DispatchConfig::parse(RULES).unwrap())),
+                configs: Arc::new(FixedConfig(DispatchConfig::parse(rules).unwrap())),
                 classifier: Arc::new(Given(classification)),
                 quota: Arc::new(FixedQuota(Some(quota(0.8, 0.3)))),
                 families: ProviderFamilies::builtin(),
@@ -353,6 +363,112 @@ async fn escalations_wait_for_the_coordinator() {
         panic!();
     };
     assert!(notes[0].contains("no telemetry sample"));
+}
+
+/// RULES with no classifier: the coordinator matches the rule.
+const NO_CLASSIFIER: &str = r#"{"classifier":{"provider":"none"},
+  "rules":[{"name":"docs","when":"Documentation only.","use":{"harness":"codex","effort":"low"}},
+           {"when":"anything","use":[{"harness":"claude","model":"claude-sonnet-5","pool":"team"},{"harness":"codex"}]}],
+  "default":{"harness":"claude","effort":"high"}}"#;
+
+fn resolutions(log: &MemoryEventLog) -> Vec<quark_dispatch::Resolution> {
+    log.events()
+        .into_iter()
+        .filter(|e| e.kind.as_str() == "dispatch.resolved")
+        .map(|e| match e.decode().unwrap() {
+            DispatchEvent::Resolved { resolution } => resolution,
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn with_no_classifier_the_coordinator_matches_a_rule() {
+    let rig = Rig::new().await;
+    let never = answer("rule_1", 1.0);
+    let d = rig
+        .dispatcher_with(NO_CLASSIFIER, never, Duration::from_secs(600))
+        .await;
+
+    // Escalated with the rules to match.
+    let stage = d
+        .submit("p".into(), "t1".into(), request("one"))
+        .await
+        .unwrap();
+    let Stage::Escalated { reason } = stage else {
+        panic!("{stage:?}");
+    };
+    assert!(
+        reason.contains("rule_1 (docs): Documentation only.")
+            && reason.contains("rule_2: anything")
+            && reason.contains("default: ")
+            && reason.contains("choose_profile"),
+        "{reason}"
+    );
+
+    // An unknown rule is refused and the task still waits.
+    let err = d
+        .choose_rule(&"p".into(), &"t1".into(), "rule_9")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("rule_2: anything"), "{err}");
+
+    // The matched rule's candidates are selected on quota, as a classifier
+    // answer's would be: claude ranks first, in its pool's account.
+    let stage = d
+        .choose_rule(&"p".into(), &"t1".into(), "rule_2")
+        .await
+        .unwrap();
+    let Stage::Chosen { choice } = stage else {
+        panic!("{stage:?}");
+    };
+    assert_eq!(choice.profile.harness, "claude");
+    assert_eq!(choice.account.as_deref(), Some("acc_work"));
+    let r = resolutions(&rig.log).pop().unwrap();
+    assert_eq!(r.rule.as_deref(), Some("rule_2"));
+    assert!(r.answer.is_none());
+    assert_eq!(r.notes[0], "the coordinator matched rule_2");
+
+    // Started with the rule named up front, by its name.
+    let stage = d
+        .submit_rule("p".into(), "t2".into(), request("two"), "Docs")
+        .await
+        .unwrap();
+    let Stage::Chosen { choice } = stage else {
+        panic!("{stage:?}");
+    };
+    assert_eq!(choice.profile.harness, "codex");
+    assert_eq!(
+        resolutions(&rig.log).pop().unwrap().rule.as_deref(),
+        Some("rule_1")
+    );
+    assert!(d
+        .submit_rule("p".into(), "t3".into(), request("three"), "nope")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn with_no_classifier_and_no_rules_the_default_applies() {
+    let rig = Rig::new().await;
+    let d = rig
+        .dispatcher_with(
+            r#"{"classifier":{"provider":"none"},"rules":[],"default":{"harness":"claude","effort":"high"}}"#,
+            answer("rule_1", 1.0),
+            Duration::from_secs(600),
+        )
+        .await;
+    let stage = d
+        .submit("p".into(), "t1".into(), request("one"))
+        .await
+        .unwrap();
+    let Stage::Chosen { choice } = stage else {
+        panic!("{stage:?}");
+    };
+    assert_eq!(choice.profile.effort.as_deref(), Some("high"));
+    let r = resolutions(&rig.log).pop().unwrap();
+    assert_eq!(r.rule.as_deref(), Some("default"));
+    assert_eq!(r.notes[0], quark_dispatch::ONLY_DEFAULT);
 }
 
 #[tokio::test]

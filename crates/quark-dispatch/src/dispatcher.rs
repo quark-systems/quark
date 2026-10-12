@@ -34,7 +34,7 @@ use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
 use crate::admission::{self, Admission, HostView, Limits};
-use crate::classify::Classifier;
+use crate::classify::{Classifier, DEFAULT_CHOICE};
 use crate::events::{Choice, Decider, DispatchEvent, Request, PREFIX};
 use crate::pools::{self, Accounts};
 use crate::quota::{ProviderFamilies, QuotaSource};
@@ -405,6 +405,90 @@ impl Dispatcher {
         self.resolve_one(&mut s, &key).await
     }
 
+    /// Like [`Dispatcher::submit`], with the dispatch rule the coordinator
+    /// matched the task to instead of a classifier's answer (see
+    /// [`Dispatcher::choose_rule`]).
+    pub async fn submit_rule(
+        &self,
+        project: ProjectId,
+        task: TaskId,
+        request: Request,
+        rule: &str,
+    ) -> Result<Stage> {
+        let config = self
+            .parts
+            .configs
+            .config(&project)
+            .await
+            .map_err(|e| CoreError::Invalid(format!("dispatch rules: {e}")))?;
+        if config.find_rule(rule).is_none() {
+            return Err(unknown_rule(rule, &config));
+        }
+        let mut s = self.state.lock().await;
+        self.refresh(&mut s).await?;
+        let key = (project.clone(), task.clone());
+        if s.known.contains(&key) {
+            return Err(CoreError::Invalid(format!(
+                "task {task} was already dispatched"
+            )));
+        }
+        self.record(
+            &mut s,
+            &project,
+            Some(&task),
+            DispatchEvent::Requested { request },
+        )
+        .await?;
+        let resolution = self.resolve_rule(&config, rule).await;
+        self.apply(&mut s, &key, resolution).await
+    }
+
+    /// The coordinator's match for an escalated (or waiting) task: the
+    /// dispatch rule `rule` (`rule_N`, a rule's name, or `default`) is
+    /// resolved as a confident classifier answer would be, its candidates
+    /// judged on quota and selected as the rule says.
+    pub async fn choose_rule(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+        rule: &str,
+    ) -> Result<Stage> {
+        let config = self
+            .parts
+            .configs
+            .config(project)
+            .await
+            .map_err(|e| CoreError::Invalid(format!("dispatch rules: {e}")))?;
+        if config.find_rule(rule).is_none() {
+            return Err(unknown_rule(rule, &config));
+        }
+        let mut s = self.state.lock().await;
+        self.refresh(&mut s).await?;
+        let key = (project.clone(), task.clone());
+        let Some(p) = s.pending.get(&key) else {
+            return Err(CoreError::NotFound(format!(
+                "pending dispatch of task {task}"
+            )));
+        };
+        if matches!(p.stage, Stage::Placed { .. }) {
+            return Err(CoreError::Invalid(format!("task {task} is already placed")));
+        }
+        let resolution = self.resolve_rule(&config, rule).await;
+        self.apply(&mut s, &key, resolution).await
+    }
+
+    /// `rule` resolved under `config`, with a fresh quota reading.
+    async fn resolve_rule(&self, config: &DispatchConfig, rule: &str) -> Resolution {
+        let providers = resolve::providers(config, &self.parts.families);
+        let quota = self.parts.quota.snapshot(&providers).await;
+        resolve::resolve_rule(
+            config,
+            rule,
+            quota.as_ref().map_err(String::as_str),
+            &self.parts.families,
+        )
+    }
+
     /// The coordinator's pick for an escalated (or waiting) task.
     pub async fn choose(
         &self,
@@ -461,6 +545,12 @@ impl Dispatcher {
                 .await;
         }
         let resolution = self.resolution(&p.project, &p.request.brief).await;
+        self.apply(s, key, resolution).await
+    }
+
+    /// Record `resolution` for a task and act on it: a clear one chooses
+    /// its profile's account, anything else escalates to the coordinator.
+    async fn apply(&self, s: &mut State, key: &Key, resolution: Resolution) -> Result<Stage> {
         let (project, task) = key;
         self.record(
             s,
@@ -478,7 +568,14 @@ impl Dispatcher {
             }
             _ => {
                 let reason = match resolution.status {
-                    Status::Off => "no classifier is configured; the coordinator picks".into(),
+                    Status::Off => match &resolution.reason {
+                        Some(rules) => format!(
+                            "no classifier is configured, so match the task to one of the \
+                             Project's dispatch rules and pass its id to choose_profile as \
+                             `rule`; {rules}"
+                        ),
+                        None => "no classifier is configured; the coordinator picks".into(),
+                    },
                     st => format!(
                         "dispatch resolution is {}: {}",
                         st.as_str(),
@@ -502,7 +599,18 @@ impl Dispatcher {
         };
         let settings = ClassifierSettings::from_config(&config, self.settings.key_present);
         if !settings.on {
-            return Resolution::off();
+            // Nothing to judge: the default profiles are the only rule.
+            if config.rules.is_empty() && !config.default.is_empty() {
+                let mut r = self.resolve_rule(&config, DEFAULT_CHOICE).await;
+                r.notes[0] = resolve::ONLY_DEFAULT.into();
+                return r;
+            }
+            let mut off = Resolution::off();
+            off.reason = Some(format!(
+                "the coordinator matches the task to a rule: {}",
+                config.menu()
+            ));
+            return off;
         }
         if config.rules.is_empty() {
             return Resolution::no_rules();
@@ -839,4 +947,13 @@ impl Dispatcher {
             }
         }
     }
+}
+
+/// The refusal for a rule the Project's rules do not have, listing those
+/// they do.
+fn unknown_rule(rule: &str, config: &DispatchConfig) -> CoreError {
+    CoreError::Invalid(format!(
+        "no dispatch rule {rule:?}; the rules are {}",
+        config.menu()
+    ))
 }
