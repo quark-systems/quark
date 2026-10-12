@@ -74,8 +74,10 @@ pub struct EngineTask {
     pub state_source: Option<String>,
     pub harness: Option<String>,
     pub pull_request_url: Option<String>,
-    /// The tmux `session:window` target the task runs in, when it runs in
-    /// tmux. Terminal sessions map windows to tasks by it.
+    /// The terminal the task runs in: a tmux `session:window` target, or
+    /// `pty:<session id>` for a session of the PTY supervisor
+    /// ([`crate::sessions::pty::target`]). Terminal sessions map windows
+    /// and PTY sessions to tasks by it.
     #[serde(default)]
     pub terminal: Option<String>,
     /// The task's isolated working copy, while it exists. Its harness keys

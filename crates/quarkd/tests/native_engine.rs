@@ -14,12 +14,14 @@ use std::time::Duration;
 use common::{eventually, received, Env};
 use quark_core::fake::MemoryHosts;
 use quark_core::host::{Capacity, Health, Host, HostRegistry, Platform, RuntimeKind};
+use quark_core::ProjectId;
 use quark_dispatch::classify::{Answer, Classification};
 use quark_dispatch::{FixedQuota, Given, ProviderFamilies, Settings};
 use quark_harness::ManifestRegistry;
 use quark_sessions::pty::PtySupervisor;
 use quark_systems::{
-    AgentConfig, CreateProject, DeliveryPolicy, DispatchStatus, ProjectStatus, TaskState,
+    AgentConfig, CreateProject, DeliveryPolicy, DispatchStatus, EventType, ProjectStatus,
+    TaskState, TerminalChunkKind, TerminalOutput,
 };
 use quark_transcript::SessionRoots;
 use quarkd::accounts::{Accounts, StubQuota};
@@ -31,9 +33,10 @@ use quarkd::engine::{
     WorkspaceRef,
 };
 use quarkd::harness::HarnessRegistry;
+use quarkd::projector::Projector;
 use quarkd::provision::Layout;
 use quarkd::recovery::CoordinatorRecovery;
-use quarkd::sessions::Sessions;
+use quarkd::sessions::{pty, Sessions};
 use quarkd::store::Store;
 
 fn ws(env: &Env) -> WorkspaceRef {
@@ -725,4 +728,132 @@ async fn creates_a_project_and_recovers_its_coordinator_with_no_firstmate() {
 
     sessions.detach_all();
     server.kill().await;
+}
+
+/// Lines the fake agent of the generation in `dir` has read.
+fn lines_read(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("received"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Waits for a snapshot of `terminal` recorded after `after`; returns its
+/// sequence number and bytes.
+async fn terminal_snapshot(store: &Store, terminal: &str, after: i64) -> (i64, Vec<u8>) {
+    use base64::Engine as _;
+    let mut found = None;
+    eventually("a terminal snapshot", async || {
+        found = store
+            .events_after(after, 100_000)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.event_type == EventType::WorkerOutput)
+            .find_map(|e| {
+                let out: TerminalOutput = serde_json::from_value(e.payload).ok()?;
+                (out.terminal_id == terminal && out.kind == TerminalChunkKind::Snapshot).then(
+                    || {
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(&out.data_b64)
+                            .unwrap();
+                        (e.seq, bytes)
+                    },
+                )
+            });
+        found.is_some()
+    })
+    .await;
+    found.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workers_have_terminals_that_follow_relaunches() {
+    let env = Env::new();
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let project = store
+        .create_project(CreateProject {
+            name: "p".into(),
+            workspace_path: Some(env.dir.path().display().to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+    let ws = WorkspaceRef {
+        project_id: project.id.clone(),
+        root: env.dir.path().to_path_buf(),
+    };
+    let engine = Arc::new(NativeEngine::new(env.log(), sup.clone()));
+    // As the daemon wires it: no tmux, terminals from the supervisor's
+    // session backend.
+    let sessions =
+        Sessions::disabled("no tmux in this test").with_pty(sup.sessions().clone(), store.clone());
+    let projector = Projector::new(store.clone(), engine.clone()).with_sessions(sessions.clone());
+
+    let mut req = env.request("t1");
+    req.project = ProjectId::from(project.id.as_str());
+    let w = sup.spawn(req).await.unwrap();
+    let g = w.current.unwrap();
+    let t = engine.snapshot(&ws).await.unwrap().tasks.remove(0);
+    assert_eq!(t.terminal, Some(pty::target(&g.session)));
+
+    // The task's terminal is the worker's session, under the task's id.
+    projector.refresh(&ws).await;
+    let id = store.task_ids_by_engine(&project.id).unwrap()["t1"].clone();
+    let (seq, screen) = terminal_snapshot(&store, &id, 0).await;
+    assert!(String::from_utf8_lossy(&screen).contains("fake agent ready"));
+    let listed = sessions.list(&project.id);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].id.as_str(), listed[0].task_id.as_deref()),
+        (id.as_str(), Some(id.as_str()))
+    );
+    sessions.input(&id, b"typed-in\r", None).await.unwrap();
+    eventually("typed input", async || {
+        lines_read(&g.dir).iter().any(|l| l == "typed-in")
+    })
+    .await;
+    let resized = sessions.resize(&id, 120, 40).await.unwrap();
+    assert_eq!((resized.cols, resized.rows), (120, 40));
+
+    // A relaunch starts a new session, and the terminal switches to it.
+    engine
+        .control(
+            &ws,
+            "t1",
+            &TaskControl::Relaunch {
+                harness: None,
+                model: None,
+                effort: None,
+                note: "Carry on.".into(),
+                account_env: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let g2 = sup
+        .task(&ProjectId::from(project.id.as_str()), &"t1".into())
+        .unwrap()
+        .1
+        .current
+        .unwrap();
+    assert_ne!(g2.session, g.session);
+    projector.refresh(&ws).await;
+    terminal_snapshot(&store, &id, seq).await;
+    sessions.input(&id, b"second-typed\r", None).await.unwrap();
+    eventually("input to the new generation", async || {
+        lines_read(&g2.dir).iter().any(|l| l == "second-typed")
+    })
+    .await;
+
+    // A cancelled worker has no terminal.
+    engine
+        .control(&ws, "t1", &TaskControl::Cancel)
+        .await
+        .unwrap();
+    let t = engine.snapshot(&ws).await.unwrap().tasks.remove(0);
+    assert_eq!(t.terminal, None);
+    projector.refresh(&ws).await;
+    assert!(sessions.list(&project.id).is_empty());
+    sessions.detach_all();
 }

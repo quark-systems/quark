@@ -6,7 +6,8 @@
 //!   task state from the [`quark_eventlog::TaskLedger`] the supervisor
 //!   writes, workers from its [`quark_supervisor::Fleet`], and each task's
 //!   messages from the `worker.message` events the worker protocol records
-//!   ([`WorkerLines`]);
+//!   ([`WorkerLines`]); a running worker's endpoint is its PTY session,
+//!   which [`crate::sessions`] streams as the task's terminal;
 //! - steering, answers and lifecycle control go to the native
 //!   [`Supervisor`] (slice 4);
 //! - merges, standing approval and the verification gates go to
@@ -42,6 +43,9 @@ use super::{
 
 /// `state_source` of every task this engine reports.
 pub const SOURCE: &str = "native";
+/// The name of the PTY session backend ([`quark_sessions::pty`]), whose
+/// sessions the app's worker terminals show.
+const PTY_BACKEND: &str = "pty";
 const REPLAY_BATCH: usize = 512;
 /// The task part of the red-main decision's hold id, `red-main:<decision>`.
 /// Task ids never contain this exact word followed by a colon.
@@ -182,7 +186,11 @@ fn engine_task(record: &TaskRecord, worker: &Worker, last: Option<&StatusEntry>)
                 .unwrap_or_else(|| worker.assignment.harness.clone()),
         ),
         pull_request_url: record.pull_request.clone(),
-        terminal: None,
+        // The current generation's PTY session while its program runs; a
+        // relaunch names the new one, and the terminal follows it.
+        terminal: current
+            .filter(|g| g.backend == PTY_BACKEND && g.exited.is_none())
+            .map(|g| crate::sessions::pty::target(&g.session)),
         worktree: worker
             .worktree
             .as_ref()
