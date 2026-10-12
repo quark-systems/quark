@@ -4,7 +4,8 @@
 //! worker, so the native supervisor starts only when [`ENV`] is `1`. It
 //! then:
 //!
-//! - starts `quark-ptyd` (from [`PTYD_ENV`], else next to this binary) on
+//! - starts the PTY supervisor (`quark-ptyd` from [`PTYD_ENV`], else this
+//!   binary as `quarkd ptyd`) on
 //!   `run/ptyd.sock`, or reuses the one already listening, so worker
 //!   sessions outlive a daemon crash;
 //! - builds a [`Supervisor`] over the event log, treehouse worktrees
@@ -45,15 +46,16 @@ pub fn enabled() -> bool {
     std::env::var(ENV).is_ok_and(|v| v == "1")
 }
 
-/// The `quark-ptyd` binary to start.
-pub fn ptyd_path() -> PathBuf {
+/// The PTY supervisor to start: the program and the arguments before
+/// `--socket <path>`. [`PTYD_ENV`] names a `quark-ptyd` binary; otherwise
+/// this binary runs it as `quarkd ptyd`, so `cargo run -p quarkd` needs no
+/// second binary built.
+pub fn ptyd_command() -> (PathBuf, Vec<&'static str>) {
     if let Some(p) = std::env::var_os(PTYD_ENV) {
-        return PathBuf::from(p);
+        return (PathBuf::from(p), Vec::new());
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|d| d.join("quark-ptyd")))
-        .unwrap_or_else(|| PathBuf::from("quark-ptyd"))
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("quarkd"));
+    (exe, vec!["ptyd"])
 }
 
 /// A running native supervisor.
@@ -67,10 +69,10 @@ impl NativeSupervision {
     pub async fn start(config: &Config, log: Arc<dyn EventLog>) -> anyhow::Result<Self> {
         let host = crate::event_ingest::host();
         let socket = config.run_dir().join("ptyd.sock");
-        let ptyd = ptyd_path();
-        let sessions = PtyClient::start(&socket, &ptyd)
+        let (ptyd, args) = ptyd_command();
+        let sessions = PtyClient::start_with(&socket, &ptyd, &args)
             .await
-            .with_context(|| format!("starting {}", ptyd.display()))?;
+            .with_context(|| format!("starting the PTY supervisor ({})", ptyd.display()))?;
         let pool = crate::native_worktrees::pool(log.clone(), host.clone()).await;
         let worktrees: Arc<dyn WorktreeProvider> =
             Arc::new(TreehouseProvider::new(pool).with_events(log.clone(), host.clone()));
@@ -190,9 +192,11 @@ mod tests {
     }
 
     #[test]
-    fn ptyd_sits_next_to_quarkd_by_default() {
+    fn quarkd_runs_the_pty_supervisor_itself_by_default() {
         if std::env::var_os(PTYD_ENV).is_none() {
-            assert_eq!(ptyd_path().file_name().unwrap(), "quark-ptyd");
+            let (program, args) = ptyd_command();
+            assert_eq!(program, std::env::current_exe().unwrap());
+            assert_eq!(args, ["ptyd"]);
         }
     }
 }

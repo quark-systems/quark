@@ -18,6 +18,7 @@ To move an existing self-hosted Quark over:
 
 1. Let the tasks firstmate is running finish or cancel them: the native engine does not see firstmate's tasks.
 2. Stop quarkd, close firstmate's coordinator window for the Project on the `quark` tmux server, and start quarkd again with `--engine native`. The Project, its workspace and its repos stay; coordinator recovery starts a native coordinator for it.
+   quarkd starts the PTY supervisor that native workers run in (`quarkd ptyd`) itself; it keeps running after quarkd stops, so workers survive a restart.
 3. Keep `~/.quark/engine` (the firstmate clone) for seven days. If the native engine misbehaves, restart quarkd with `--engine firstmate` to go back.
 
 The verification gates (ADR-15) in `project.yaml`:

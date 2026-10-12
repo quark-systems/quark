@@ -47,7 +47,7 @@ The tests in `crates/quark-supervisor/tests/lifecycle.rs` drive each of these ag
 
 ## In quarkd
 
-Slice 4 cannot switch on before slices 1 to 3, so firstmate still spawns every worker and the native supervisor is opt-in: `QUARK_NATIVE_SUPERVISOR=1` makes quarkd start `quark-ptyd` (next to `quarkd`, or `QUARK_PTYD`) on `<home>/run/ptyd.sock`, build the supervisor over `events.db`, treehouse, `<home>/harnesses` and the host sandbox, recover, supervise, and serve the worker protocol under `/v1/worker`.
+Slice 4 cannot switch on before slices 1 to 3, so firstmate still spawns every worker and the native supervisor is opt-in: `QUARK_NATIVE_SUPERVISOR=1` makes quarkd start the PTY supervisor (itself as `quarkd ptyd`, or the `quark-ptyd` binary `QUARK_PTYD` names) on `<home>/run/ptyd.sock`, build the supervisor over `events.db`, treehouse, `<home>/harnesses` and the host sandbox, recover, supervise, and serve the worker protocol under `/v1/worker`.
 
 ## Not yet
 
