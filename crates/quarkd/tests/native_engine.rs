@@ -8,10 +8,17 @@ mod common;
 use std::sync::Arc;
 
 use common::{eventually, received, Env};
+use quark_core::fake::MemoryHosts;
+use quark_core::host::{Capacity, Health, Host, HostRegistry, Platform, RuntimeKind};
+use quark_dispatch::classify::{Answer, Classification};
+use quark_dispatch::{FixedQuota, Given, ProviderFamilies, Settings};
 use quark_sessions::pty::PtySupervisor;
-use quark_systems::TaskState;
+use quark_systems::{AgentConfig, DispatchStatus, TaskState};
 use quarkd::engine::native::NativeEngine;
-use quarkd::engine::{EngineAdapter, TaskControl, WorkspaceRef};
+use quarkd::engine::native_dispatch_engine::{DispatchParts, NativeDispatch};
+use quarkd::engine::{
+    EngineAdapter, EngineError, NewTask, StartOutcome, TaskControl, WorkspaceRef,
+};
 
 fn ws(env: &Env) -> WorkspaceRef {
     WorkspaceRef {
@@ -132,6 +139,204 @@ async fn unknown_tasks_and_unserved_operations_are_refused() {
     assert!(engine.answer(&ws, "no-colon", "x", "m").await.is_err());
     assert!(engine
         .merge_pull_request(&ws, "t", "https://github.com/o/r/pull/1", None)
+        .await
+        .is_err());
+    // Built without dispatch, it starts nothing.
+    let task = NewTask {
+        title: "t".into(),
+        brief: "b".into(),
+        repo: None,
+        agent: None,
+    };
+    assert!(engine.start_task(&ws, &task).await.is_err());
+    assert!(engine
+        .resolve_description(&ws, "b")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+const RULES: &str = r#"{"classifier":{"provider":"system1"},
+  "rules":[{"when":"anything","use":{"harness":"fake","effort":"low","pricing":"budget"}}],
+  "default":{"harness":"fake"}}"#;
+
+fn one_worker_host() -> Host {
+    Host {
+        id: "h".into(),
+        name: "h".into(),
+        runtime: RuntimeKind::Local,
+        platform: Platform {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+        },
+        capacity: Capacity {
+            cpus: 4,
+            memory_bytes: 8 << 30,
+            disk_bytes: 0,
+            max_workers: 1,
+        },
+        health: Health::Healthy,
+        projects: Vec::new(),
+        tasks: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn starts_tasks_through_native_dispatch() {
+    let env = Env::new();
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let hosts = Arc::new(MemoryHosts::default());
+    hosts.register(one_worker_host()).await.unwrap();
+    let answer = Classification::Answered {
+        answer: Answer {
+            choice: "rule_1".into(),
+            confidence: 0.9,
+            probabilities: Default::default(),
+            model: Some("jev-1".into()),
+            latency_ms: None,
+            input_tokens: None,
+            output_tokens: None,
+        },
+    };
+    let dispatch = NativeDispatch::open(
+        DispatchParts {
+            log: env.log(),
+            host: "h".into(),
+            hosts,
+            classifier: Arc::new(Given(answer)),
+            quota: Arc::new(FixedQuota(Some(Default::default()))),
+            families: ProviderFamilies::builtin(),
+            settings: Settings::default(),
+        },
+        sup.clone(),
+    )
+    .await
+    .unwrap();
+    let engine = NativeEngine::new(env.log(), sup.clone()).with_dispatch(dispatch.clone());
+    // The Project workspace, with its one repo under repos/.
+    let root = env.dir.path().join("ws");
+    std::fs::create_dir_all(root.join("repos")).unwrap();
+    std::os::unix::fs::symlink(&env.repo, root.join("repos/app")).unwrap();
+    let ws = WorkspaceRef {
+        project_id: "p".into(),
+        root: root.clone(),
+    };
+
+    // The rules land in the workspace; rules that do not parse are refused.
+    assert!(matches!(
+        engine.set_crew_dispatch(&ws, "{").await,
+        Err(EngineError::Invalid(_))
+    ));
+    engine.set_crew_dispatch(&ws, RULES).await.unwrap();
+    assert!(root.join("config/crew-dispatch.json").is_file());
+    let described = engine
+        .resolve_description(&ws, "Rename a variable.")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(described.status, DispatchStatus::Clear);
+    assert_eq!(described.profile.unwrap().harness, "fake");
+
+    // The rules pick the agent and the worker starts in its own worktree.
+    let fix = NewTask {
+        title: "Fix the parser".into(),
+        brief: "It drops trailing commas.".into(),
+        repo: None,
+        agent: None,
+    };
+    let s = engine.start_task(&ws, &fix).await.unwrap();
+    assert_eq!(s.task_id, "fix-the-parser");
+    assert!(
+        matches!(&s.outcome, StartOutcome::Started { harness, effort, .. }
+            if harness == "fake" && effort.as_deref() == Some("low")),
+        "{s:?}"
+    );
+    let (_, w) = sup.task(&"p".into(), &"fix-the-parser".into()).unwrap();
+    let wt = w.worktree.clone().unwrap();
+    assert_ne!(wt.path, env.repo);
+    assert_eq!(wt.branch, "quark/fix-the-parser");
+    let r = engine
+        .resolve_dispatch(&ws, "fix-the-parser", None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.status, DispatchStatus::Clear);
+    assert_eq!(r.rule.unwrap().id, "rule_1");
+    assert_eq!(r.classifier_model.as_deref(), Some("jev-1"));
+    assert_eq!(r.profile.unwrap().harness, "fake");
+
+    // The host takes one worker: the next task waits for it, and shows as
+    // queued.
+    let s2 = engine.start_task(&ws, &fix).await.unwrap();
+    assert_eq!(s2.task_id, "fix-the-parser-2");
+    let StartOutcome::Waiting { reason } = &s2.outcome else {
+        panic!("{s2:?}");
+    };
+    assert!(reason.contains("is full"), "{reason}");
+    let snap = engine.snapshot(&ws).await.unwrap();
+    let queued = snap
+        .tasks
+        .iter()
+        .find(|t| t.id == "fix-the-parser-2")
+        .unwrap();
+    assert_eq!(queued.state, TaskState::Queued);
+    assert_eq!(queued.title, "Fix the parser");
+
+    // A pool with no accounts escalates; the coordinator's pick goes on.
+    let pooled = NewTask {
+        title: "Write docs".into(),
+        brief: "Document the parser.".into(),
+        repo: Some("app".into()),
+        agent: Some(AgentConfig {
+            harness: "fake".into(),
+            model: None,
+            effort: None,
+            pool: Some("team".into()),
+        }),
+    };
+    let s3 = engine.start_task(&ws, &pooled).await.unwrap();
+    assert!(
+        matches!(&s3.outcome, StartOutcome::Escalated { reason } if reason.contains("team")),
+        "{s3:?}"
+    );
+    let pick = AgentConfig {
+        harness: "fake".into(),
+        model: None,
+        effort: Some("high".into()),
+        pool: None,
+    };
+    let s3 = engine
+        .choose_profile(&ws, "write-docs", &pick)
+        .await
+        .unwrap();
+    assert!(
+        matches!(&s3.outcome, StartOutcome::Waiting { .. }),
+        "{s3:?}"
+    );
+    let r = engine
+        .resolve_dispatch(&ws, "write-docs", None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.status, DispatchStatus::NotConsulted);
+    assert!(engine.choose_profile(&ws, "nope", &pick).await.is_err());
+
+    // When the first task ends, the oldest waiting one takes the host.
+    engine
+        .control(&ws, "fix-the-parser", &TaskControl::Cancel)
+        .await
+        .unwrap();
+    dispatch.place().await.unwrap();
+    assert!(sup.task(&"p".into(), &"fix-the-parser-2".into()).is_some());
+    assert!(sup.task(&"p".into(), &"write-docs".into()).is_none());
+    assert!(engine
+        .start_task(
+            &ws,
+            &NewTask {
+                repo: Some("other".into()),
+                ..fix
+            }
+        )
         .await
         .is_err());
 }

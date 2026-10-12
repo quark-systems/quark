@@ -476,6 +476,37 @@ impl Accounts {
         }))
     }
 
+    /// The accounts of `harness` (its id or engine name) as native dispatch
+    /// chooses among them, default first. Empty for a harness without
+    /// accounts. Nothing is leased.
+    pub async fn pool_accounts(&self, harness: &str) -> Result<Vec<quark_dispatch::PoolAccount>> {
+        let Some(h) = self.harnesses.resolve(harness).cloned() else {
+            return Ok(Vec::new());
+        };
+        let Some(var) = h.account_env() else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|a| a.harness == h.id())
+            .map(|a| quark_dispatch::PoolAccount {
+                ready: ready(&a),
+                env: match (&a.config_dir, a.default) {
+                    (Some(dir), false) => [(var.to_string(), dir.clone())].into(),
+                    _ => Default::default(),
+                },
+                id: a.id,
+                default: a.default,
+                pools: a.pools,
+                launchable: a.launchable,
+                remaining_percent: a.quota.remaining_percent,
+                active_tasks: a.active_tasks,
+            })
+            .collect())
+    }
+
     /// The account a task's worker moves to after its own reported a rate
     /// limit: the least busy ready account of `harness` in `pool`, or, with
     /// no pool named, in any pool the task's account is in. The task's own

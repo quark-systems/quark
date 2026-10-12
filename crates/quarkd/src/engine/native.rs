@@ -27,9 +27,11 @@ use quark_eventlog::TaskRecord;
 use quark_supervisor::{Relaunch, Supervisor, Worker};
 use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind};
 
+use super::native_dispatch_engine::{self, NativeDispatch};
 use super::{
-    EngineAdapter, EngineError, EngineSpawn, EngineTask, FleetSnapshot, Hold, SourceRepo,
-    StatusEntry, StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
+    EngineAdapter, EngineError, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold,
+    NewTask, SourceRepo, StatusEntry, StatusTail, TaskControl, TaskStart, WorkspacePlan,
+    WorkspaceRef,
 };
 
 /// `state_source` of every task this engine reports.
@@ -40,6 +42,7 @@ pub struct NativeEngine {
     log: Arc<dyn EventLog>,
     supervisor: Arc<Supervisor>,
     lines: WorkerLines,
+    dispatch: Option<Arc<NativeDispatch>>,
 }
 
 impl NativeEngine {
@@ -48,7 +51,20 @@ impl NativeEngine {
             log,
             supervisor,
             lines: WorkerLines::default(),
+            dispatch: None,
         }
+    }
+
+    /// Start tasks and resolve dispatch through `dispatch` (slice 5).
+    pub fn with_dispatch(mut self, dispatch: Arc<NativeDispatch>) -> Self {
+        self.dispatch = Some(dispatch);
+        self
+    }
+
+    fn dispatch(&self) -> Result<&NativeDispatch, EngineError> {
+        self.dispatch
+            .as_deref()
+            .map_or_else(|| Self::refuse("starting a task", "dispatch (slice 5)"), Ok)
     }
 
     pub fn supervisor(&self) -> &Arc<Supervisor> {
@@ -141,12 +157,16 @@ impl EngineAdapter for NativeEngine {
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
         self.catch_up().await?;
         let p = project(ws);
-        let tasks = self
+        let mut tasks: Vec<EngineTask> = self
             .tasks(ws)
             .await?
             .iter()
             .map(|(r, w)| engine_task(r, w, self.lines.last(&p, &w.task).as_ref()))
             .collect();
+        if let Some(d) = &self.dispatch {
+            let running = tasks.iter().map(|t| t.id.clone()).collect();
+            tasks.extend(d.queued(ws, &running).await?);
+        }
         Ok(FleetSnapshot { tasks })
     }
 
@@ -321,6 +341,57 @@ impl EngineAdapter for NativeEngine {
             "starting the coordinator",
             "the native coordinator (slice 6)",
         )
+    }
+
+    fn account_envs(&self) -> &'static [&'static str] {
+        native_dispatch_engine::ACCOUNT_ENVS
+    }
+
+    async fn start_task(
+        &self,
+        ws: &WorkspaceRef,
+        task: &NewTask,
+    ) -> Result<TaskStart, EngineError> {
+        self.dispatch()?.start(ws, task).await
+    }
+
+    async fn choose_profile(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        agent: &AgentConfig,
+    ) -> Result<TaskStart, EngineError> {
+        self.dispatch()?.choose(ws, task, agent).await
+    }
+
+    async fn resolve_dispatch(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        _: Option<&str>,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        match &self.dispatch {
+            Some(d) => d.resolution(ws, task).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn resolve_description(
+        &self,
+        ws: &WorkspaceRef,
+        description: &str,
+    ) -> Result<Option<EngineResolution>, EngineError> {
+        Ok(match &self.dispatch {
+            Some(d) => Some(d.describe(ws, description).await),
+            None => None,
+        })
+    }
+
+    async fn set_crew_dispatch(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        match &self.dispatch {
+            Some(d) => d.set_config(ws, config).await,
+            None => Ok(()),
+        }
     }
 }
 

@@ -6,9 +6,10 @@
 //!   engine adapter and the store: steering, answering, relaunching and
 //!   cancelling go to the engine; `ask_user`, `tell_user` and `remember`
 //!   become a decision, a coordinator chat message and a memory proposal in
-//!   the store. Starting a task, choosing a profile and acknowledging an
-//!   inbound message need native dispatch and channels, so they are refused
-//!   until those slices run.
+//!   the store. Starting a task and choosing its profile go to the engine's
+//!   dispatch ([`EngineAdapter::start_task`], served by the native engine);
+//!   acknowledging an inbound message needs the channels API, so it is
+//!   refused until that slice runs.
 
 use std::sync::Arc;
 
@@ -16,10 +17,13 @@ use async_trait::async_trait;
 use quark_coordinator::tools::Agent;
 use quark_coordinator::{Brain, Hands, ToolCall, Turn};
 use quark_core::{CoreError, ProjectId, Result};
-use quark_systems::{MemoryEvidence, MemorySource};
+use quark_systems::{AgentConfig, MemoryEvidence, MemorySource};
 
 use crate::chat::{ChatError, CoordinatorInput, Delivery};
-use crate::engine::{EngineAdapter, EngineError, EngineTask, TaskControl, WorkspaceRef};
+use crate::engine::{
+    EngineAdapter, EngineError, EngineTask, NewTask, StartOutcome, TaskControl, TaskStart,
+    WorkspaceRef,
+};
 use crate::store::{NewProposal, Store};
 
 /// Who the engine records as answering a worker for the coordinator.
@@ -131,6 +135,47 @@ fn relaunch(agent: Option<&Agent>, note: &str) -> TaskControl {
     }
 }
 
+fn agent_config(a: &Agent) -> AgentConfig {
+    AgentConfig {
+        harness: a.harness.clone(),
+        model: a.model.clone(),
+        effort: a.effort.clone(),
+        pool: None,
+    }
+}
+
+/// What the coordinator is told about a task it started or picked an
+/// agent for.
+fn started(s: &TaskStart) -> String {
+    let t = &s.task_id;
+    match &s.outcome {
+        StartOutcome::Started {
+            harness,
+            model,
+            effort,
+            account,
+        } => {
+            let mut agent = harness.clone();
+            if let Some(m) = model {
+                agent.push_str(&format!(" {m}"));
+            }
+            if let Some(e) = effort {
+                agent.push_str(&format!(" at {e} effort"));
+            }
+            if let Some(a) = account {
+                agent.push_str(&format!(" (account {a})"));
+            }
+            format!("Started {t} on {agent}.")
+        }
+        StartOutcome::Waiting { reason } => {
+            format!("Queued {t}: {reason}. It starts when a host has room.")
+        }
+        StartOutcome::Escalated { reason } => format!(
+            "Created {t}, but dispatch left its agent to you: {reason}. Pick one with choose_profile for task {t}."
+        ),
+    }
+}
+
 fn not_yet(what: &str, slice: &str) -> CoreError {
     CoreError::Unsupported(format!("{what} needs {slice}, which is not native yet"))
 }
@@ -226,9 +271,28 @@ impl Hands for EngineHands {
                 blocking(move || store.propose_memory(&pid, proposal)).await?;
                 Ok("Proposed for Project memory; the user reviews it.".into())
             }
-            ToolCall::StartTask { .. } => Err(not_yet("starting a task", "dispatch (slice 5)")),
-            ToolCall::ChooseProfile { .. } => {
-                Err(not_yet("choosing a profile", "dispatch (slice 5)"))
+            ToolCall::StartTask {
+                title,
+                brief,
+                repo,
+                agent,
+            } => {
+                let task = NewTask {
+                    title: title.clone(),
+                    brief: brief.clone(),
+                    repo: repo.clone(),
+                    agent: agent.as_ref().map(agent_config),
+                };
+                let start = self.engine.start_task(&ws, &task).await.map_err(core)?;
+                Ok(started(&start))
+            }
+            ToolCall::ChooseProfile { task, agent } => {
+                let start = self
+                    .engine
+                    .choose_profile(&ws, task.as_str(), &agent_config(agent))
+                    .await
+                    .map_err(core)?;
+                Ok(started(&start))
             }
             ToolCall::AckMessage { .. } => Err(not_yet(
                 "acknowledging a message",
@@ -452,17 +516,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_task_and_choose_profile_go_to_the_engines_dispatch() {
+        let (store, engine, p) = setup();
+        let hands = EngineHands::new(store, engine.clone());
+        let start = ToolCall::StartTask {
+            title: "Fix the parser".into(),
+            brief: "It drops trailing commas.".into(),
+            repo: Some("app".into()),
+            agent: None,
+        };
+        let out = hands.run(&p, &start).await.unwrap();
+        assert!(
+            out.starts_with("Created stub-1") && out.contains("choose_profile"),
+            "{out}"
+        );
+        let choose = ToolCall::ChooseProfile {
+            task: TaskId::from("stub-1"),
+            agent: Agent {
+                harness: "codex".into(),
+                model: Some("gpt-5.5".into()),
+                effort: Some("high".into()),
+            },
+        };
+        let out = hands.run(&p, &choose).await.unwrap();
+        assert_eq!(out, "Started stub-1 on codex gpt-5.5 at high effort.");
+        let writes = engine.writes();
+        assert!(matches!(
+            &writes[0],
+            StubWrite::StartTask { task } if task.repo.as_deref() == Some("app") && task.agent.is_none()
+        ));
+        assert!(matches!(
+            &writes[1],
+            StubWrite::ChooseProfile { task_id, agent } if task_id == "stub-1" && agent.harness == "codex"
+        ));
+
+        // An engine without dispatch refuses.
+        engine.fail_writes(Some("no"));
+        assert!(hands.run(&p, &start).await.is_err());
+    }
+
+    #[tokio::test]
     async fn what_needs_later_slices_is_refused() {
         let (store, engine, p) = setup();
         let hands = EngineHands::new(store, engine);
-        let start = ToolCall::StartTask {
-            title: "t".into(),
-            brief: "b".into(),
-            repo: None,
-            agent: None,
+        let ack = ToolCall::AckMessage {
+            channel: "slack".into(),
+            id: "m1".into(),
         };
         assert!(matches!(
-            hands.run(&p, &start).await,
+            hands.run(&p, &ack).await,
             Err(CoreError::Unsupported(_))
         ));
     }

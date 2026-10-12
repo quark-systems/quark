@@ -66,18 +66,11 @@ impl DispatchShadow {
                 ],
             );
         }
-        let (custom, _) = quark_harness::load_dir(&config.home.join("harnesses"));
-        let families = ProviderFamilies::from_manifests(
-            quark_harness::builtin()
-                .iter()
-                .map(|m| m.as_ref())
-                .chain(custom.iter()),
-        );
         Self {
             log,
             host: crate::event_ingest::host(),
             quota: Arc::new(quota),
-            families,
+            families: families(config),
         }
     }
 
@@ -144,6 +137,18 @@ impl DispatchShadow {
             Err(e) => tracing::warn!(error = %e, "could not record a dispatch divergence"),
         }
     }
+}
+
+/// Each harness's quota provider family: the built-in manifests and those
+/// in `<home>/harnesses`.
+pub fn families(config: &Config) -> ProviderFamilies {
+    let (custom, _) = quark_harness::load_dir(&config.home.join("harnesses"));
+    ProviderFamilies::from_manifests(
+        quark_harness::builtin()
+            .iter()
+            .map(|m| m.as_ref())
+            .chain(custom.iter()),
+    )
 }
 
 fn observed(r: &EngineResolution) -> Observed {

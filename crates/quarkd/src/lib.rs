@@ -114,11 +114,27 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     } else {
         None
     };
-    let mut engine: Arc<dyn EngineAdapter> = match (engine, &native) {
-        (EngineKind::Native, Some(n)) => Arc::new(engine::native::NativeEngine::new(
-            Arc::new(events.clone()),
-            n.supervisor.clone(),
-        )),
+    let native_engine = engine == EngineKind::Native;
+    // Native dispatch (slice 5) starts the native engine's tasks.
+    let dispatch = match &native {
+        Some(n) if native_engine => {
+            let parts = engine::native_dispatch_engine::DispatchParts::for_daemon(
+                &config,
+                Arc::new(events.clone()),
+            );
+            let d =
+                engine::native_dispatch_engine::NativeDispatch::open(parts, n.supervisor.clone())
+                    .await
+                    .context("starting native dispatch")?;
+            Some(d)
+        }
+        _ => None,
+    };
+    let mut engine: Arc<dyn EngineAdapter> = match (engine, &native, &dispatch) {
+        (EngineKind::Native, Some(n), Some(d)) => Arc::new(
+            engine::native::NativeEngine::new(Arc::new(events.clone()), n.supervisor.clone())
+                .with_dispatch(d.clone()),
+        ),
         _ => config::build_engine(engine, &config, store.clone(), tmux)?,
     };
     let dashboard_shadow = firstmate && dashboard_shadow::enabled();
@@ -167,6 +183,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         engine.account_envs(),
     ));
     let quota_task = tokio::spawn(accounts.clone().run(config.quota_refresh_interval));
+    let dispatch_task = dispatch.map(|d| {
+        d.set_accounts(Arc::new(engine::native_dispatch_engine::StoreAccounts(
+            accounts.clone(),
+        )));
+        d.run(engine::native_dispatch_engine::TICK)
+    });
     let failover = failover::Failover::new(
         store.clone(),
         engine.clone(),
@@ -192,7 +214,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         sessions.clone(),
         layout.command_workspace(),
     );
-    let (telemetry, pools_task) = if host_sources::enabled() || native_dispatch::enabled() {
+    // Admission control places the native engine's workers on registered,
+    // sampled hosts.
+    let (telemetry, pools_task) = if host_sources::enabled()
+        || native_dispatch::enabled()
+        || native_engine
+    {
         let workloads = host_sources::EngineWorkloads(host_view.clone());
         let telemetry =
             match native_dispatch::HostTelemetry::start(&config, log.clone(), workloads).await {
@@ -461,6 +488,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     }
     pr_task.abort();
     quota_task.abort();
+    if let Some(t) = dispatch_task {
+        t.abort();
+    }
     if let Some(n) = native {
         n.stop();
     }
