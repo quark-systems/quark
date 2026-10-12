@@ -52,6 +52,9 @@ pub struct Config {
     /// How long a cancelled worker gets to exit before its session is
     /// killed.
     pub exit_grace: Duration,
+    /// The home directory whose default agent config a worker uses when its
+    /// account names none ([`quark_harness::prepare_folder`]).
+    pub agent_home: Option<PathBuf>,
 }
 
 impl Config {
@@ -66,6 +69,7 @@ impl Config {
             stale_after: Duration::from_secs(15 * 60),
             max_recoveries: 2,
             exit_grace: Duration::from_secs(3),
+            agent_home: std::env::var_os("HOME").map(PathBuf::from),
         }
     }
 }
@@ -439,6 +443,16 @@ impl Supervisor {
         let brief_path = dir.join(launch::BRIEF_FILE);
         std::fs::write(&brief_path, &plan.brief).map_err(|e| io(&brief_path, e))?;
 
+        // Claude Code opens a new worktree on its trust question, where the
+        // brief's Enter means "No, exit".
+        if let Err(e) = quark_harness::prepare_folder(
+            &manifest,
+            &worktree.path,
+            &plan.env,
+            self.config.agent_home.as_deref(),
+        ) {
+            tracing::warn!(%project, %task, error = %e, "could not pre-trust the worker's worktree");
+        }
         let mut policy = a.policy.clone();
         for p in [&worktree.path, &dir] {
             if !policy.writable.contains(p) {

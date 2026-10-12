@@ -13,6 +13,7 @@
 pub mod account;
 pub mod host;
 pub mod launch;
+pub mod prepare;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
@@ -24,6 +25,7 @@ use quark_core::{CoreError, HarnessRegistry, Result};
 pub use account::{auth_status, config_dir};
 pub use host::{probe_version, resolve_bin, HostEnv};
 pub use launch::{argv, LaunchVars};
+pub use prepare::prepare_folder;
 
 /// The built-in manifests as `(file name, TOML)`, in display order.
 pub const BUILTIN_SOURCES: &[(&str, &str)] = &[

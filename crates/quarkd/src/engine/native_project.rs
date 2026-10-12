@@ -93,6 +93,9 @@ pub struct ProjectSetup {
     tokens: Tokens,
     base_url: String,
     roots: SessionRoots,
+    /// The home directory whose default Claude Code config the coordinator
+    /// uses when its account names none ([`quark_harness::prepare_folder`]).
+    agent_home: Option<PathBuf>,
     /// Coordinator starts take turns, so two never race for one window.
     starts: tokio::sync::Mutex<()>,
 }
@@ -110,6 +113,7 @@ impl ProjectSetup {
             manifests: Arc::new(manifests),
             base_url: base_url.into(),
             roots: SessionRoots::from_env(),
+            agent_home: std::env::var_os("HOME").map(PathBuf::from),
             starts: tokio::sync::Mutex::new(()),
         }
     }
@@ -122,6 +126,11 @@ impl ProjectSetup {
     /// Where coordinator conversations are looked for, before `resume`.
     pub fn with_roots(mut self, roots: SessionRoots) -> Self {
         self.roots = roots;
+        self
+    }
+
+    pub fn with_agent_home(mut self, home: impl Into<PathBuf>) -> Self {
+        self.agent_home = Some(home.into());
         self
     }
 
@@ -198,6 +207,17 @@ impl ProjectSetup {
                 ws.project_id
             )));
         }
+        // A first run in a new workspace would open on Claude Code's trust
+        // question, where Enter means "No, exit".
+        let env = launch_env(manifest, account_env, &ws.project_id);
+        if let Err(e) = quark_harness::prepare_folder(
+            manifest,
+            &ws.root,
+            &env.iter().cloned().collect(),
+            self.agent_home.as_deref(),
+        ) {
+            tracing::warn!(project = %ws.project_id, error = %e, "could not pre-trust the coordinator's workspace");
+        }
         let prompt_file = self.write_prompt(ws).await?;
         let token = self.tokens.get_or_create(&ws.project_id)?;
         install_claude(
@@ -208,7 +228,7 @@ impl ProjectSetup {
             name: window,
             argv: launch_argv(manifest, agent, &ws.root, &prompt_file, resume)?,
             cwd: Some(ws.root.clone()),
-            env: launch_env(manifest, account_env, &ws.project_id),
+            env,
         };
         let target = self
             .sessions
@@ -599,6 +619,7 @@ mod tests {
             claude: vec![dir.join("claude")],
             ..Default::default()
         })
+        .with_agent_home(dir.join("agent-home"))
     }
 
     fn agent(harness: &str) -> AgentConfig {
