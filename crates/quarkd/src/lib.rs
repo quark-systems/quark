@@ -254,17 +254,21 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
     // Coordinators come back after the tmux server is lost or a reboot.
     let recovery_task = (firstmate || native_engine).then(|| {
-        tokio::spawn(
-            recovery::CoordinatorRecovery::new(
-                store.clone(),
-                engine.clone(),
-                accounts.clone(),
-                sessions.clone(),
-                layout.command_workspace(),
-                layout.home.clone(),
-            )
-            .run(recovery::INTERVAL),
-        )
+        let recovery = recovery::CoordinatorRecovery::new(
+            store.clone(),
+            engine.clone(),
+            accounts.clone(),
+            sessions.clone(),
+            layout.command_workspace(),
+            layout.home.clone(),
+        );
+        // A Project created under firstmate has no native coordinator record.
+        let recovery = if native_engine {
+            recovery.adopting(engine::native_project::WINDOW_PREFIX)
+        } else {
+            recovery
+        };
+        tokio::spawn(recovery.run(recovery::INTERVAL))
     });
     let ingest = event_ingest::EventIngest::new(store.clone(), bridge);
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
