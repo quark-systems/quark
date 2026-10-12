@@ -32,6 +32,9 @@ pub const RULE_LABEL: &str = "standing-rule";
 /// Longest close reason written to Beads, in bytes.
 const MAX_REASON: usize = 1000;
 
+/// Longest bead title `bd` accepts (500 characters), held to in bytes.
+const MAX_TITLE: usize = 500;
+
 /// A decision bead as Quark needs it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionBead {
@@ -130,6 +133,10 @@ fn decision_beads(beads: Vec<Listed>, gates: &[Listed]) -> Vec<DecisionBead> {
 pub fn description(d: &Decision) -> String {
     let b: &DecisionBrief = &d.brief;
     let mut out = Vec::new();
+    if d.question.trim().len() > MAX_TITLE {
+        // The title was cut, so the whole question goes here.
+        out.push(d.question.trim().to_string());
+    }
     if let Some(c) = b.context.as_deref() {
         out.push(c.trim().to_string());
     }
@@ -209,15 +216,25 @@ fn bead_like(s: &str) -> bool {
 }
 
 fn reason(text: &str) -> String {
+    cut(text, MAX_REASON)
+}
+
+/// `text` trimmed and cut to at most `max` bytes, on a character.
+fn cut(text: &str, max: usize) -> String {
     let t = text.trim();
-    if t.len() <= MAX_REASON {
+    if t.len() <= max {
         return t.to_string();
     }
-    let mut end = MAX_REASON;
+    let mut end = max - '…'.len_utf8();
     while !t.is_char_boundary(end) {
         end -= 1;
     }
     format!("{}…", &t[..end])
+}
+
+/// A bead title for `text`: `bd` refuses titles over [`MAX_TITLE`].
+fn title(text: &str) -> String {
+    cut(text, MAX_TITLE)
 }
 
 impl Beads {
@@ -265,7 +282,7 @@ impl Beads {
                     "--type",
                     "decision",
                     "--title",
-                    &d.question,
+                    &title(&d.question),
                     "--description",
                     &desc,
                     "--external-ref",
@@ -277,7 +294,7 @@ impl Beads {
             .await?;
         let bead = created.id;
         if d.state == quark_systems::DecisionState::Open {
-            let title = format!("Waiting on D-{}: {}", d.number, d.question);
+            let title = title(&format!("Waiting on D-{}: {}", d.number, d.question));
             let gate: Created = self
                 .json(
                     &dir,
@@ -545,5 +562,14 @@ mod tests {
         let r = reason(&long);
         assert!(r.len() <= MAX_REASON + "…".len());
         assert!(r.ends_with('…'));
+    }
+
+    #[test]
+    fn long_questions_are_cut_for_the_title() {
+        assert_eq!(title(" Switch slice 2? "), "Switch slice 2?");
+        let long = "é".repeat(MAX_TITLE);
+        let t = title(&long);
+        assert!(t.len() <= MAX_TITLE);
+        assert!(t.ends_with('…'));
     }
 }
