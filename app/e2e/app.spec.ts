@@ -1077,3 +1077,24 @@ test("issue sync: a new project has its own Beads with no sync, until a rule tur
   await sync.getByTestId("sync-save").click();
   await expect(sync).toContainText("It is not synced with any issue tracker");
 });
+
+test("worker view: the work pane's edge drags wider, is remembered, and resets on double-click", async ({ page }) => {
+  await open(page, "#/p/quark/work");
+  await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
+  const pane = page.getByRole("complementary", { name: "Work" });
+  const before = (await pane.boundingBox())!.width;
+  const handle = (await page.getByTestId("pane-resizer").boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(handle.x - 300, handle.y + 200, { steps: 5 });
+  await page.mouse.up();
+  const wider = (await pane.boundingBox())!.width;
+  expect(wider).toBeGreaterThan(before + 250);
+  if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
+
+  await page.reload();
+  await expect.poll(async () => (await pane.boundingBox())!.width).toBeCloseTo(wider, -1);
+
+  await page.getByTestId("pane-resizer").dblclick();
+  await expect.poll(async () => (await pane.boundingBox())!.width).toBeCloseTo(before, -1);
+});

@@ -54,10 +54,11 @@ impl SessionFormat {
         SessionFormat::Pi,
     ];
 
-    /// The format a harness writes, by the harness name the engine reports.
+    /// The format a harness writes, by the harness name the engine reports:
+    /// firstmate's name or the native engine's manifest id.
     pub fn for_harness(harness: &str) -> Option<SessionFormat> {
         match harness {
-            "claude" => Some(SessionFormat::Claude),
+            "claude" | "claude-code" => Some(SessionFormat::Claude),
             "codex" => Some(SessionFormat::Codex),
             "pi" | "pi-signed" => Some(SessionFormat::Pi),
             _ => None,
@@ -252,6 +253,11 @@ mod tests {
         assert_eq!(
             SessionFormat::for_harness("codex"),
             Some(SessionFormat::Codex)
+        );
+        // The native engine reports Claude Code by its manifest id.
+        assert_eq!(
+            SessionFormat::for_harness("claude-code"),
+            Some(SessionFormat::Claude)
         );
         assert_eq!(SessionFormat::for_harness("pi"), Some(SessionFormat::Pi));
         assert_eq!(SessionFormat::for_harness("bob"), None);

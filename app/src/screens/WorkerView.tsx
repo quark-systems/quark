@@ -1,7 +1,7 @@
 // J4: one worker in one view. Its transcript and a box to message it in the middle; the work
 // pane on the right with its live terminal, changed files with their diff, its PR and why this
 // agent; cancel and relaunch in the header, and the coordinator dock under the conversation.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
 import { loadTranscript, refreshTask, useStore } from "../store";
@@ -25,6 +25,7 @@ export function WorkerView({ id }: { id: string }) {
   const [tab, setTab] = useState<"terminal" | "changes" | "pr" | "why">("terminal");
   const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
   const [missing, setMissing] = useState(false);
+  const [paneWidth, setPaneWidth] = useWorkPaneWidth();
 
   useEffect(() => {
     if (!task) refreshTask(id).catch(() => setMissing(true));
@@ -36,7 +37,7 @@ export function WorkerView({ id }: { id: string }) {
   const st = stateMeta(task.state);
 
   return (
-    <div className="screen worker">
+    <div className="screen worker" style={paneWidth ? { ["--work-pane-width" as string]: `${paneWidth}px` } : undefined}>
       <section className="worker-center">
         <div className="header worker-head">
           <StatusDot tone={taskTone(task.state)} label={TONE_LABEL[taskTone(task.state)]} />
@@ -62,6 +63,7 @@ export function WorkerView({ id }: { id: string }) {
         <Dock />
       </section>
       <aside className="worker-pane" aria-label="Work">
+        <PaneResizer width={paneWidth} onWidth={setPaneWidth} />
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === "terminal"} className={tab === "terminal" ? "on" : ""} onClick={() => setTab("terminal")}>Terminal</button>
           <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
@@ -75,6 +77,64 @@ export function WorkerView({ id }: { id: string }) {
         {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
       </aside>
     </div>
+  );
+}
+
+// ---- work pane width ----
+
+const PANE_WIDTH_KEY = "quark.workPaneWidth";
+const MIN_PANE = 360;
+const MIN_CENTER = 360;
+
+function useWorkPaneWidth(): [number | null, (w: number | null) => void] {
+  const [w, setW] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem(PANE_WIDTH_KEY));
+      return v >= MIN_PANE ? v : null;
+    } catch { return null; }
+  });
+  const set = useCallback((v: number | null) => {
+    setW(v);
+    try {
+      if (v == null) localStorage.removeItem(PANE_WIDTH_KEY);
+      else localStorage.setItem(PANE_WIDTH_KEY, String(Math.round(v)));
+    } catch { /* not remembered */ }
+  }, []);
+  return [w, set];
+}
+
+/** Drag the work pane's left edge to widen it; double-click to reset. The width is remembered. */
+function PaneResizer({ width, onWidth }: { width: number | null; onWidth: (w: number | null) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const clamp = (w: number) => {
+    const screen = ref.current?.closest(".worker")?.getBoundingClientRect();
+    const max = screen ? screen.width - MIN_CENTER : w;
+    return Math.max(MIN_PANE, Math.min(w, max));
+  };
+  const start = (e: ReactPointerEvent) => {
+    const pane = ref.current?.parentElement;
+    if (!pane) return;
+    e.preventDefault();
+    const right = pane.getBoundingClientRect().right;
+    const move = (ev: PointerEvent) => onWidth(clamp(right - ev.clientX));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.classList.remove("resizing");
+    };
+    document.body.classList.add("resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const key = (e: KeyboardEvent) => {
+    const cur = width ?? ref.current?.parentElement?.getBoundingClientRect().width ?? MIN_PANE;
+    if (e.key === "ArrowLeft") { e.preventDefault(); onWidth(clamp(cur + 40)); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); onWidth(clamp(cur - 40)); }
+  };
+  return (
+    <div ref={ref} className="pane-resizer" role="separator" aria-orientation="vertical" aria-label="Resize the work pane"
+      tabIndex={0} title="Drag to resize · double-click to reset" data-testid="pane-resizer"
+      onPointerDown={start} onDoubleClick={() => onWidth(null)} onKeyDown={key} />
   );
 }
 
