@@ -6,7 +6,8 @@
 //! is done, decision, blocked, failed, an inbound message and a failed rule.
 //! On top of that come the decisions other native subsystems leave to the
 //! coordinator: dispatch could not pick an agent, a spawn failed, a host has
-//! been unhealthy too long, or someone asked for a wake explicitly.
+//! been unhealthy too long, a pull request merged (work that waited on it
+//! can start), or someone asked for a wake explicitly.
 //! Everything else (progress, signals, steering, launches, transitions the
 //! engine made itself) never wakes it, which is where the token savings
 //! come from.
@@ -42,6 +43,8 @@ pub enum Need {
     Requested,
     /// The user answered a decision the coordinator raised.
     Answered,
+    /// A task's pull request merged, so work that waited on it can start.
+    Merged,
     /// An occasion a Project's away policy routes to the coordinator
     /// although the default does not (progress, paused, stale, a rule that
     /// fired).
@@ -76,6 +79,7 @@ impl Need {
             Need::HostUnhealthy => "host unhealthy",
             Need::Requested => "requested",
             Need::Answered => "answered",
+            Need::Merged => "merged",
             Need::Policy => "policy",
         }
     }
@@ -158,6 +162,20 @@ pub fn judgment(e: &Event, away: &AwayState) -> Option<WakeItem> {
             )),
             _ => None,
         };
+    }
+    // `quark_verify::kinds::MERGED`: the engine merged and closed the task
+    // itself, but only the coordinator knows what was waiting on it.
+    if kind == "verify.merged" {
+        let pr = e
+            .payload
+            .get("pull_request")
+            .and_then(|v| v.as_str())
+            .unwrap_or("its pull request");
+        return Some(item(
+            Need::Merged,
+            format!("{task_prefix}merged: {pr}. Start any work that was waiting on it."),
+            by_event(),
+        ));
     }
     if e.kind.prefix() == PREFIX {
         return match e.decode::<CoordinatorEvent>() {
@@ -373,6 +391,26 @@ mod tests {
         .unwrap();
         assert_eq!(r.need, Need::Requested);
         assert_eq!(r.summary, "rule nightly asks: check nightly");
+    }
+
+    #[test]
+    fn a_merged_pull_request_wakes() {
+        let away = AwayState::default();
+        let m = judgment(
+            &ev(
+                8,
+                Some("t1"),
+                "verify.merged",
+                json!({"pull_request": "https://x/pr/1", "repo": "o/r", "head": "abc", "method": "squash"}),
+            ),
+            &away,
+        )
+        .unwrap();
+        assert_eq!(m.need, Need::Merged);
+        assert_eq!(
+            m.summary,
+            "t1: merged: https://x/pr/1. Start any work that was waiting on it."
+        );
     }
 
     #[test]
