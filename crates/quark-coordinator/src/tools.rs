@@ -36,7 +36,9 @@ pub enum ToolCall {
     Task { task: TaskId },
     /// A skill's full text.
     LoadSkill { name: String },
-    /// Start a task. Dispatch picks the agent unless `agent` is given.
+    /// Start a task. Dispatch picks the agent unless `agent` is given;
+    /// `rule` is the dispatch rule the coordinator matched it to, resolved
+    /// in place of a classifier's answer.
     StartTask {
         title: String,
         brief: String,
@@ -44,6 +46,8 @@ pub enum ToolCall {
         repo: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<Agent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
     },
     /// Send a running worker a message.
     Steer { task: TaskId, text: String },
@@ -53,8 +57,15 @@ pub enum ToolCall {
         key: String,
         answer: String,
     },
-    /// Pick the agent for a task dispatch escalated.
-    ChooseProfile { task: TaskId, agent: Agent },
+    /// Pick the agent for a task dispatch escalated: the dispatch rule it
+    /// fits (`rule`), whose profile the rules then select, or an agent.
+    ChooseProfile {
+        task: TaskId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<Agent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
+    },
     /// Replace a task's worker in the same worktree.
     Relaunch {
         task: TaskId,
@@ -177,8 +188,15 @@ impl ToolCall {
         };
         match self {
             ToolCall::Fleet {} => Ok(()),
-            ToolCall::Task { task } | ToolCall::ChooseProfile { task, .. } => {
-                blank("task", task.as_str())
+            ToolCall::Task { task } => blank("task", task.as_str()),
+            ToolCall::ChooseProfile { task, agent, rule } => {
+                blank("task", task.as_str())?;
+                match (agent, rule) {
+                    (None, None) => Err("give `rule` or `agent`".into()),
+                    (Some(_), Some(_)) => Err("give `rule` or `agent`, not both".into()),
+                    (None, Some(r)) => blank("rule", r),
+                    (Some(_), None) => Ok(()),
+                }
             }
             ToolCall::LoadSkill { name } => blank("name", name),
             ToolCall::StartTask { title, brief, .. } => {
@@ -238,6 +256,13 @@ fn agent_schema() -> Value {
     })
 }
 
+fn rule_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "The Project dispatch rule the task fits: rule_N, the rule's name, or default when no listed rule applies."
+    })
+}
+
 fn object(props: Value, required: &[&str]) -> Value {
     json!({
         "type": "object",
@@ -253,12 +278,13 @@ pub fn catalog() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "start_task",
-            description: "Start a task. Write self-contained instructions: the user's ask in their words, scope, and what done looks like. Dispatch picks the agent unless you give one.",
+            description: "Start a task. Write self-contained instructions: the user's ask in their words, scope, and what done looks like. Dispatch picks the agent from the Project's dispatch rules; give `rule` when you already know which rule the task fits, and `agent` only when the user named one.",
             input_schema: object(
                 json!({
                     "title": text("A few words naming the task."),
                     "brief": text("The worker's instructions."),
                     "repo": text("The Project repo to work in, when there is more than one."),
+                    "rule": rule_schema(),
                     "agent": agent_schema()
                 }),
                 &["title", "brief"],
@@ -282,10 +308,10 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "choose_profile",
-            description: "Pick the agent for a task whose dispatch could not decide.",
+            description: "Pick the agent for a task whose dispatch could not decide. Give the dispatch rule the task fits as `rule`, and the rule's own profiles are selected; give `agent` instead only when the user named one or the rules cannot serve the task.",
             input_schema: object(
-                json!({"task": text("Task id."), "agent": agent_schema()}),
-                &["task", "agent"],
+                json!({"task": text("Task id."), "rule": rule_schema(), "agent": agent_schema()}),
+                &["task"],
             ),
         },
         ToolSpec {
@@ -402,9 +428,7 @@ mod tests {
             "start_task" => json!({"title": "t", "brief": "b", "agent": {"harness": "claude"}}),
             "steer" => json!({"task": "t1", "text": "x"}),
             "answer" => json!({"task": "t1", "key": "k", "answer": "a"}),
-            "choose_profile" => {
-                json!({"task": "t1", "agent": {"harness": "codex", "effort": "high"}})
-            }
+            "choose_profile" => json!({"task": "t1", "rule": "rule_2"}),
             "relaunch" => json!({"task": "t1", "note": "n"}),
             "cancel" => json!({"task": "t1", "reason": "r"}),
             "ask_user" => {

@@ -166,11 +166,29 @@ pub fn no_classifier() -> DispatchClassifier {
 }
 
 /// Who decides when the resolution's selected profile is used: the
-/// classifier, or the default rule its answer fell back to.
+/// classifier, the default rule its answer fell back to, or, with no
+/// classifier, the coordinator that matched the rule (or the default rule
+/// when there were no rules to match).
 pub fn decider(r: &EngineResolution) -> DispatchDecider {
-    match r.fallback {
-        Some(_) => DispatchDecider::DefaultRule,
-        None => DispatchDecider::Classifier,
+    match (&r.fallback, by_coordinator(r)) {
+        (Some(_), _) => DispatchDecider::DefaultRule,
+        (None, Some(true)) => DispatchDecider::Coordinator,
+        (None, Some(false)) => DispatchDecider::DefaultRule,
+        (None, None) => DispatchDecider::Classifier,
+    }
+}
+
+/// For a resolution made with no classifier: whether the coordinator
+/// matched its rule (`true`) or the default rule applied with no rules to
+/// match (`false`). `None` when a classifier was consulted.
+fn by_coordinator(r: &EngineResolution) -> Option<bool> {
+    if r.classifier_consulted || r.fallback.is_some() {
+        return None;
+    }
+    match r.notes.first().map(String::as_str) {
+        Some(n) if n.starts_with(quark_dispatch::COORDINATOR_MATCHED) => Some(true),
+        Some(n) if n == quark_dispatch::ONLY_DEFAULT => Some(false),
+        _ => None,
     }
 }
 
@@ -231,9 +249,15 @@ pub fn matched(r: &EngineResolution) -> String {
         },
         None => "a rule".into(),
     };
-    match r.confidence {
-        Some(c) => format!("The classifier matched {rule} at {c:.2} confidence."),
-        None => format!("The classifier matched {rule}."),
+    match (by_coordinator(r), r.confidence) {
+        (Some(true), _) => {
+            format!("No classifier is configured, so the coordinator matched {rule}.")
+        }
+        (Some(false), _) => {
+            "No classifier or rules are configured, so the default rule applied.".into()
+        }
+        (None, Some(c)) => format!("The classifier matched {rule} at {c:.2} confidence."),
+        (None, None) => format!("The classifier matched {rule}."),
     }
 }
 
@@ -374,6 +398,51 @@ mod tests {
             r.summary,
             "No classifier is configured (provider: none), so the coordinator picked claude."
         );
+    }
+
+    #[test]
+    fn with_no_classifier_the_coordinator_matches_the_rule() {
+        let mut matched = clear(("claude", Some("sonnet")));
+        matched.classifier_consulted = false;
+        matched.confidence = None;
+        matched.notes = vec![
+            format!("{} rule_2", quark_dispatch::COORDINATOR_MATCHED),
+            "rule matched".into(),
+        ];
+        let r = build(
+            "tsk_1",
+            "prj_1",
+            &spawn("claude", Some("sonnet")),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(matched.clone())),
+        );
+        assert_eq!(r.decided_by, DispatchDecider::Coordinator);
+        assert_eq!(r.rule.as_ref().unwrap().id, "rule_2");
+        assert_eq!(r.classifier.provider, "none");
+        assert_eq!(
+            r.summary,
+            "No classifier is configured, so the coordinator matched rule rule_2 \
+             (A trivial mechanical edit.). The resolution selected claude:sonnet."
+        );
+
+        // With no rules at all, the default rule applies on its own.
+        matched.notes = vec![quark_dispatch::ONLY_DEFAULT.into()];
+        matched.rule = Some(DispatchRule {
+            id: DEFAULT_RULE.into(),
+            when: None,
+        });
+        let r = build(
+            "tsk_1",
+            "prj_1",
+            &spawn("claude", Some("sonnet")),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(matched)),
+        );
+        assert_eq!(r.decided_by, DispatchDecider::DefaultRule);
+        assert_eq!(r.classifier.provider, "none");
+        assert!(r
+            .summary
+            .starts_with("No classifier or rules are configured"));
     }
 
     #[test]

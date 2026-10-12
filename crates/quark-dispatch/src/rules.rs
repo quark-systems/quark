@@ -210,6 +210,50 @@ impl DispatchConfig {
         let n: usize = id.strip_prefix("rule_")?.parse().ok()?;
         self.rules.get(n.checked_sub(1)?)
     }
+
+    /// The resolution's id for a rule the coordinator names: `rule_N`, a
+    /// rule's `name` (ignoring case), or `default`.
+    pub fn find_rule(&self, name: &str) -> Option<String> {
+        let name = name.trim();
+        if name.eq_ignore_ascii_case(crate::classify::DEFAULT_CHOICE) {
+            return Some(crate::classify::DEFAULT_CHOICE.into());
+        }
+        if self.rule(name).is_some() {
+            return Some(name.to_string());
+        }
+        self.rules
+            .iter()
+            .position(|r| {
+                r.name
+                    .as_deref()
+                    .is_some_and(|n| n.trim().eq_ignore_ascii_case(name))
+            })
+            .map(Self::rule_id)
+    }
+
+    /// The rules as the coordinator matches them when no classifier is
+    /// configured: each rule's id, name and condition, then the default.
+    pub fn menu(&self) -> String {
+        let mut out: Vec<String> = self
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let name = r
+                    .name
+                    .as_deref()
+                    .map(|n| format!(" ({n})"))
+                    .unwrap_or_default();
+                format!("{}{name}: {}", Self::rule_id(i), r.when.trim())
+            })
+            .collect();
+        out.push(format!(
+            "{}: {}",
+            crate::classify::DEFAULT_CHOICE,
+            crate::classify::DEFAULT_WHEN
+        ));
+        out.join("; ")
+    }
 }
 
 /// The classifier settings in effect.

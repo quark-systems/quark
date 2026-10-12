@@ -501,6 +501,15 @@ impl EngineAdapter for NativeEngine {
         self.dispatch()?.choose(ws, task, agent).await
     }
 
+    async fn choose_rule(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        rule: &str,
+    ) -> Result<TaskStart, EngineError> {
+        self.dispatch()?.choose_rule(ws, task, rule).await
+    }
+
     async fn resolve_dispatch(
         &self,
         ws: &WorkspaceRef,

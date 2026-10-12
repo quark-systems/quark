@@ -221,6 +221,11 @@ pub struct NewTask {
     pub repo: Option<String>,
     /// The agent to run it with; `None` lets dispatch resolve one.
     pub agent: Option<AgentConfig>,
+    /// The dispatch rule the coordinator matched it to (`rule_N`, a rule's
+    /// name, or `default`), resolved in place of a classifier's answer.
+    /// Ignored when `agent` is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
 }
 
 /// Where a task the engine was asked to start stands.
@@ -501,6 +506,18 @@ pub trait EngineAdapter: Send + Sync {
         Err(EngineError::Invalid(NO_DISPATCH.into()))
     }
 
+    /// Resolve the dispatch rule the coordinator matched an escalated task
+    /// to (`rule_N`, a rule's name, or `default`), and start it on the
+    /// profile that rule selects as [`EngineAdapter::start_task`] would.
+    async fn choose_rule(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+        _rule: &str,
+    ) -> Result<TaskStart, EngineError> {
+        Err(EngineError::Invalid(NO_DISPATCH.into()))
+    }
+
     /// Each running Project coordinator's tmux window target in the
     /// command-center workspace, keyed by Project id. Engines without
     /// coordinator windows have none.
@@ -594,6 +611,10 @@ pub enum StubWrite {
     ChooseProfile {
         task_id: String,
         agent: AgentConfig,
+    },
+    ChooseRule {
+        task_id: String,
+        rule: String,
     },
 }
 
@@ -980,6 +1001,28 @@ impl EngineAdapter for StubEngine {
         Ok(TaskStart {
             task_id: task_id.into(),
             outcome: stub_started(agent),
+        })
+    }
+
+    /// The rule's agent is `stub-<rule>`.
+    async fn choose_rule(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        rule: &str,
+    ) -> Result<TaskStart, EngineError> {
+        self.accept(StubWrite::ChooseRule {
+            task_id: task_id.into(),
+            rule: rule.into(),
+        })?;
+        Ok(TaskStart {
+            task_id: task_id.into(),
+            outcome: StartOutcome::Started {
+                harness: format!("stub-{rule}"),
+                model: None,
+                effort: None,
+                account: None,
+            },
         })
     }
 }

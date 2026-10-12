@@ -75,7 +75,7 @@ function RecordView({ r, latest, projectId }: { r: DispatchRecord; latest: boole
         </dd>
         <dt>Classifier</dt>
         <dd data-testid="why-classifier">
-          {r.classifier.provider === "none" ? <span className="faint">none (the coordinator picked)</span> : (
+          {r.classifier.provider === "none" ? <span className="faint">none ({r.decided_by === "default_rule" ? "the default rule applied" : "the coordinator picked"})</span> : (
             <>
               <span className="mono">{r.classifier.provider}</span>
               {r.classifier.model && <span className="mono"> · {r.classifier.model}</span>}

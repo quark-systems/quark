@@ -166,6 +166,7 @@ async fn unknown_tasks_and_unserved_operations_are_refused() {
         brief: "b".into(),
         repo: None,
         agent: None,
+        rule: None,
     };
     assert!(engine.start_task(&ws, &task).await.is_err());
     assert!(engine
@@ -276,6 +277,7 @@ async fn starts_tasks_through_native_dispatch() {
         brief: "It drops trailing commas.".into(),
         repo: None,
         agent: None,
+        rule: None,
     };
     let s = engine.start_task(&ws, &fix).await.unwrap();
     assert_eq!(s.task_id, "fix-the-parser");
@@ -326,6 +328,7 @@ async fn starts_tasks_through_native_dispatch() {
             effort: None,
             pool: Some("team".into()),
         }),
+        rule: None,
     };
     let s3 = engine.start_task(&ws, &pooled).await.unwrap();
     assert!(
