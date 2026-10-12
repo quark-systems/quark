@@ -2,7 +2,7 @@
 
 `quarkd --engine native` runs Quark with no firstmate checkout.
 The engine adapter is `crates/quarkd/src/engine/native.rs` (`NativeEngine`).
-It sits on the native supervisor (`quark-supervisor`, slice 4), native dispatch (`quark-dispatch`, slice 5) and the event log (slice 1).
+It sits on the native supervisor (`quark-supervisor`, slice 4), native verification (`quark-verify`, slice 2), native dispatch (`quark-dispatch`, slice 5) and the event log (slice 1).
 
 ## What it serves
 
@@ -13,6 +13,20 @@ It sits on the native supervisor (`quark-supervisor`, slice 4), native dispatch 
 | `send_message`, `answer`, `control` | `Supervisor::steer`, `answer`, `cancel`, `relaunch` |
 | `start_task`, `choose_profile` | `NativeDispatch` (`engine/native_dispatch_engine.rs`) over `quark_dispatch::Dispatcher` |
 | `resolve_dispatch`, `resolve_description`, `set_crew_dispatch` | the same, on the Project's rules |
+| `merge_pull_request` | `quark_verify::GuardedMerge` (below), then `Supervisor::complete` |
+| `set_standing_approval` | `verify.standing_approval` events, one per repo |
+| `set_gates`, `gate_evidence`, `gate_artifact` | `config/gates.json` (schema `fm.gates.v1`) and `verify/<task>/` under the Project workspace root |
+
+## Verification
+
+The slice 2 glue is `crates/quarkd/src/engine/native_verify.rs` (`NativeVerify`).
+A merge reads the pull request, rebases it onto its base branch's current tip in a scratch worktree under `verify/<task>/`, and runs the task's repo gates on the rebased head.
+A head that did not contain the tip is pushed rebased and refused until the forge's checks run on it, so a stale head never merges.
+The pull request's own checks must be green, then `NativeGuard` re-reads main: while main is red only a change that passes every failing check merges.
+The forge merges exactly the verified head, the merge is a `verify.merged` event, and the task is marked landed.
+A refusal is an engine command error that names the rule; the last run's gate evidence stays in `verify/<task>/evidence.json` with its logs.
+Nothing files the red-main episode's decision for a person yet, so a red main is overridden only by turning it green.
+
 
 ## Dispatch
 
@@ -45,7 +59,7 @@ Known gaps:
 
 - `dispatch.yaml` pools do not reach the rules yet: the compiled `crew-dispatch.json` leaves `pool` out because firstmate refuses it.
   A profile with a `pool` in the file, or a coordinator agent with one, is honored.
-- No red-main guard and no idle-worktree pruning: both come with native verification (slice 2) and the native worktree pool.
+- No red-main pause on new dispatch and no idle-worktree pruning yet.
 - Workers run as plain processes (`IsolationMode::Native`), as firstmate's do.
 - Native account choices are not recorded as account leases, so the Accounts view does not count them.
 
@@ -53,8 +67,6 @@ Known gaps:
 
 The native engine refuses the operations below, each with an error that names the missing part, until it is wired:
 
-- merge and standing approval (slice 2, `quark-verify`)
-- verification gates (slice 2)
 - adding a repo, creating a Project, and starting its coordinator (native Project setup and slice 6)
 - the inbox note (slice 7 channels)
 
@@ -62,7 +74,7 @@ The native engine refuses the operations below, each with an error that names th
 
 These steps remain, in order:
 
-1. Native merge, gates and standing approval (slice 2).
+1. File the red-main episode's decision as a hold, so a person can override a red main (slice 2).
 2. Native Project setup and coordinator start, with no firstmate home (slice 6); setup clones each source into `<root>/repos/<name>`.
 3. The inbox note through the channels API (slice 7).
 4. The worker terminal for PTY-backed workers (today `EngineTask::terminal` names only tmux windows).

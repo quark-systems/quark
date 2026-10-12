@@ -8,7 +8,9 @@
 //!   messages from the `worker.message` events the worker protocol records
 //!   ([`WorkerLines`]);
 //! - steering, answers and lifecycle control go to the native
-//!   [`Supervisor`] (slice 4).
+//!   [`Supervisor`] (slice 4);
+//! - merges, standing approval and the verification gates go to
+//!   [`NativeVerify`] (slice 2).
 //!
 //! Operations whose native slice is not wired here yet are refused with
 //! [`EngineError::Invalid`] naming the slice, never silently ignored.
@@ -25,9 +27,10 @@ use quark_core::{
 };
 use quark_eventlog::TaskRecord;
 use quark_supervisor::{Relaunch, Supervisor, Worker};
-use quark_systems::{AgentConfig, DeliveryPolicy, MergeMethod, TaskKind};
+use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind};
 
 use super::native_dispatch_engine::{self, NativeDispatch};
+use super::native_verify::NativeVerify;
 use super::{
     EngineAdapter, EngineError, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold,
     NewTask, SourceRepo, StatusEntry, StatusTail, TaskControl, TaskStart, WorkspacePlan,
@@ -43,11 +46,23 @@ pub struct NativeEngine {
     supervisor: Arc<Supervisor>,
     lines: WorkerLines,
     dispatch: Option<Arc<NativeDispatch>>,
+    verify: NativeVerify,
 }
 
 impl NativeEngine {
+    /// Reads and merges GitHub through `gh`.
     pub fn new(log: Arc<dyn EventLog>, supervisor: Arc<Supervisor>) -> Self {
+        Self::with_forge(log, supervisor, Arc::new(quark_verify::GhForge::default()))
+    }
+
+    pub fn with_forge(
+        log: Arc<dyn EventLog>,
+        supervisor: Arc<Supervisor>,
+        forge: Arc<dyn quark_verify::Forge>,
+    ) -> Self {
+        let host = supervisor.config().host.clone();
         Self {
+            verify: NativeVerify::new(forge, log.clone(), host),
             log,
             supervisor,
             lines: WorkerLines::default(),
@@ -65,6 +80,10 @@ impl NativeEngine {
         self.dispatch
             .as_deref()
             .map_or_else(|| Self::refuse("starting a task", "dispatch (slice 5)"), Ok)
+    }
+
+    pub fn verify(&self) -> &NativeVerify {
+        &self.verify
     }
 
     pub fn supervisor(&self) -> &Arc<Supervisor> {
@@ -147,7 +166,12 @@ impl EngineAdapter for NativeEngine {
 
     fn slices(&self) -> SliceSwitch {
         let mut s = SliceSwitch::new();
-        for slice in [Slice::EventLog, Slice::WorkerProtocol, Slice::Supervision] {
+        for slice in [
+            Slice::EventLog,
+            Slice::Verification,
+            Slice::WorkerProtocol,
+            Slice::Supervision,
+        ] {
             // Infallible for a fresh switch.
             let _ = s.set(slice, SliceMode::Native, "native engine");
         }
@@ -299,21 +323,44 @@ impl EngineAdapter for NativeEngine {
 
     async fn merge_pull_request(
         &self,
-        _: &WorkspaceRef,
-        _: &str,
-        _: &str,
-        _: Option<MergeMethod>,
+        ws: &WorkspaceRef,
+        task: &str,
+        url: &str,
+        method: Option<MergeMethod>,
     ) -> Result<(), EngineError> {
-        Self::refuse("merging", "verification (slice 2)")
+        self.verify
+            .merge(&self.supervisor, ws, &task_id(task)?, url, method)
+            .await
     }
 
     async fn set_standing_approval(
         &self,
-        _: &WorkspaceRef,
-        _: &[String],
-        _: bool,
+        ws: &WorkspaceRef,
+        repos: &[String],
+        on: bool,
     ) -> Result<(), EngineError> {
-        Self::refuse("standing approval", "verification (slice 2)")
+        self.verify.set_standing_approval(ws, repos, on).await
+    }
+
+    async fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
+        self.verify.set_gates(ws, config)
+    }
+
+    async fn gate_evidence(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+    ) -> Result<Option<Evidence>, EngineError> {
+        self.verify.gate_evidence(ws, &task_id(task)?)
+    }
+
+    fn gate_artifact(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        path: &str,
+    ) -> Result<PathBuf, EngineError> {
+        self.verify.gate_artifact(ws, &task_id(task)?, path)
     }
 
     async fn add_source(

@@ -22,6 +22,7 @@ An episode opens on the first red read and closes on the first green one; a pend
 |---|---|
 | `NativePipeline` | Runs a Project's gates (`checks`, `journeys`, `holdout`, from firstmate's `config/gates.json`, schema `fm.gates.v1`) on a head in a scratch worktree. `rebase_and_reverify` rebases onto `origin/<base>` first and reports a conflict instead of a verdict. It pushes the rebased head only when `push_rebased` is set. Holdout summaries name only the category and whether it passed. |
 | `NativeGuard` | `main_health`, `may_merge`, `may_dispatch` over live GitHub reads through `gh`. Episodes are `verify.red_main` events and are rebuilt by `restore()`. The caller files the episode's decision for a person and reports it with `decision_filed`; the answer comes back through `answer`. |
+| `GuardedMerge` | The native engine's merge: reads the pull request, runs `rebase_and_reverify` with `push_rebased`, requires the pull request's own checks green, asks `NativeGuard`, then merges exactly the verified head through the forge. A rebased head is pushed and refused until its checks run. Also records standing approval. |
 | `ShadowVerifier` | Slice 2's shadow, below. |
 
 ## Events
@@ -31,6 +32,8 @@ An episode opens on the first red read and closes on the first green one; a pend
 | `verify.red_main` | `EpisodeChange`: an episode opened, updated, closed, got its decision or its fix-main task |
 | `verify.override` | `Override`: a person answered a decision |
 | `verify.decision` | `GuardDecision`: one native merge or dispatch answer |
+| `verify.merged` | `Merged`: the native engine merged a pull request |
+| `verify.standing_approval` | `StandingApproval`: green pull requests for a repo merge without asking, or stop doing so |
 | `verify.shadow` | `ShadowCheck`: one firstmate decision checked in shadow mode |
 | `shadow.divergence` | `Divergence` for slice `verification` |
 

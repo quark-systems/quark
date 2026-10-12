@@ -273,6 +273,26 @@ async fn rebase_and_run(
     })
 }
 
+/// Where a pipeline made with `scratch` writes its gate logs. Holdout
+/// output is never written there.
+pub fn logs_dir(scratch: &Path) -> PathBuf {
+    scratch.join("logs")
+}
+
+/// The log file name of check `name` run on `head`.
+pub fn check_log(head: &str, name: &str) -> String {
+    format!("{}-check-{}.log", short(head), safe(name))
+}
+
+/// The prefix of every journeys log file of `head`: setup, app and run.
+pub fn journeys_log_prefix(head: &str) -> String {
+    format!("{}-journeys", short(head))
+}
+
+fn short(head: &str) -> &str {
+    &head[..head.len().min(12)]
+}
+
 /// Run every declared gate on `dir`, stopping at the first failure.
 async fn run_gates(t: &PipelineTarget, dir: &Path, head: &str, scratch: &Path) -> Vec<StageResult> {
     let gates = &t.gates;
@@ -283,7 +303,7 @@ async fn run_gates(t: &PipelineTarget, dir: &Path, head: &str, scratch: &Path) -
             summary: format!("no gates are configured for {}", t.repo_name),
         }];
     }
-    let logs = scratch.join("logs");
+    let logs = logs_dir(scratch);
     let _ = tokio::fs::create_dir_all(&logs).await;
     let mut stages = Vec::new();
 
@@ -291,11 +311,7 @@ async fn run_gates(t: &PipelineTarget, dir: &Path, head: &str, scratch: &Path) -
         let mut parts = Vec::new();
         let mut passed = true;
         for c in &gates.checks {
-            let log = logs.join(format!(
-                "{}-check-{}.log",
-                &head[..head.len().min(12)],
-                safe(&c.name)
-            ));
+            let log = logs.join(check_log(head, &c.name));
             let out = run(&c.run, dir, &[], timeout(c.timeout_s), Some(&log)).await;
             parts.push(format!("{}: {}", c.name, out.describe()));
             if !out.ok() {
@@ -352,14 +368,14 @@ async fn journeys(
         Some(d) => dir.join(d),
         None => dir.to_path_buf(),
     };
-    let short = &head[..head.len().min(12)];
+    let short = journeys_log_prefix(head);
     if let Some(setup) = &j.setup {
         let out = run(
             setup,
             &cwd,
             &[],
             DEFAULT_TIMEOUT,
-            Some(&logs.join(format!("{short}-journeys-setup.log"))),
+            Some(&logs.join(format!("{short}-setup.log"))),
         )
         .await;
         if !out.ok() {
@@ -381,11 +397,7 @@ async fn journeys(
             None,
         );
     }
-    let app = match App::start(
-        &j.start,
-        &cwd,
-        &logs.join(format!("{short}-journeys-app.log")),
-    ) {
+    let app = match App::start(&j.start, &cwd, &logs.join(format!("{short}-app.log"))) {
         Ok(a) => a,
         Err(e) => return (fail(format!("could not start the app: {e}")), None),
     };
@@ -416,7 +428,7 @@ async fn journeys(
         &cwd,
         &env,
         timeout(j.timeout_s),
-        Some(&logs.join(format!("{short}-journeys.log"))),
+        Some(&logs.join(format!("{short}.log"))),
     )
     .await;
     (

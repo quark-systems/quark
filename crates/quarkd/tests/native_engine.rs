@@ -340,3 +340,124 @@ async fn starts_tasks_through_native_dispatch() {
         .await
         .is_err());
 }
+
+fn sha(dir: &std::path::Path, rev: &str) -> String {
+    common::git(dir, &["rev-parse", rev]).trim().to_string()
+}
+
+#[tokio::test]
+async fn merges_through_the_gates_and_the_guard_then_lands_the_task() {
+    use quark_systems::GateState;
+    use quark_verify::health::CheckRun;
+    use quark_verify::{FakeForge, PullHead, PullState};
+
+    let env = Env::new();
+    let origin = env.dir.path().join("origin.git");
+    common::git(
+        env.dir.path(),
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    common::git(
+        &env.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    common::git(&env.repo, &["push", "-q", "origin", "main"]);
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let forge = Arc::new(FakeForge::new());
+    let engine = NativeEngine::with_forge(env.log(), sup.clone(), forge.clone());
+    let ws = ws(&env);
+
+    // Gates are fm.gates.v1, keyed by the repo's directory name.
+    assert!(engine.set_gates(&ws, r#"{"schema":"x"}"#).await.is_err());
+    let gates = r#"{"schema":"fm.gates.v1","repos":{"repo":{"checks":[{"name":"test","run":"test -f file.txt"}]}}}"#;
+    engine.set_gates(&ws, gates).await.unwrap();
+    assert!(engine.gate_evidence(&ws, "t1").await.unwrap().is_none());
+
+    // The worker commits, pushes its branch and opens pull request 7.
+    sup.spawn(env.request("t1")).await.unwrap();
+    engine.send_message(&ws, "t1", "commit").await.unwrap();
+    eventually("a commit", async || {
+        sha(&env.repo, "quark/t1") != sha(&env.repo, "main")
+    })
+    .await;
+    common::git(&env.repo, &["push", "-q", "origin", "quark/t1"]);
+    engine.send_message(&ws, "t1", "ship it").await.unwrap();
+    eventually("review", async || {
+        state(&engine, &ws, "t1").await == TaskState::InReview
+    })
+    .await;
+    let url = "https://github.com/o/r/pull/7";
+    let (main, head) = (sha(&env.repo, "main"), sha(&env.repo, "quark/t1"));
+    let green = || vec![CheckRun::new(1, "ci", "completed", Some("success"))];
+    forge.set_tip("o/r", "main", &main);
+    forge.set_checks(&main, green(), vec![]);
+    forge.set_behind(&main, &head, 0);
+    forge.set_pull(
+        "o/r",
+        7,
+        PullHead {
+            sha: head.clone(),
+            branch: "quark/t1".into(),
+            base: "main".into(),
+            state: PullState::Open,
+        },
+    );
+
+    // Only the pull request the task opened.
+    let other = engine
+        .merge_pull_request(&ws, "t1", "https://github.com/o/r/pull/8", None)
+        .await;
+    assert!(other.is_err());
+
+    // Its checks are still running: refused, but the gates ran and passed.
+    forge.set_checks(
+        &head,
+        vec![CheckRun::new(1, "ci", "in_progress", None)],
+        vec![],
+    );
+    let refused = engine.merge_pull_request(&ws, "t1", url, None).await;
+    let message = refused.unwrap_err().to_string();
+    assert!(message.contains("still running"), "{message}");
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::InReview);
+    let e = engine.gate_evidence(&ws, "t1").await.unwrap().unwrap();
+    assert_eq!(
+        (e.state, e.head_sha.as_deref()),
+        (GateState::Passed, Some(head.as_str()))
+    );
+    let artifact = e.gates[0].cases[0].artifacts[0].id.clone();
+    assert!(engine
+        .gate_artifact(&ws, "t1", &artifact)
+        .unwrap()
+        .is_file());
+    assert!(engine.gate_artifact(&ws, "t1", "../evidence.json").is_err());
+    assert!(engine.gate_artifact(&ws, "t1", "logs/other.log").is_err());
+
+    // Green: it merges exactly the verified head and the task lands.
+    forge.set_checks(&head, green(), vec![]);
+    engine
+        .merge_pull_request(&ws, "t1", url, None)
+        .await
+        .unwrap();
+    let merged = vec![(
+        "o/r".to_string(),
+        7,
+        head.clone(),
+        quark_verify::MergeMethod::Squash,
+    )];
+    assert_eq!(forge.merges(), merged);
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::Done);
+    // Merging again is a no-op.
+    engine
+        .merge_pull_request(&ws, "t1", url, None)
+        .await
+        .unwrap();
+    assert_eq!(forge.merges(), merged);
+
+    engine
+        .set_standing_approval(&ws, &["repo".to_string()], true)
+        .await
+        .unwrap();
+    let approvals = engine.verify().standing_approvals(&ws).await.unwrap();
+    assert_eq!(approvals.len(), 1);
+    assert!(approvals[0].on);
+}
