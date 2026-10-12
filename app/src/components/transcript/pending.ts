@@ -12,6 +12,9 @@ export interface PendingMessage {
 /** The largest entry id in `items`, or 0. */
 export const lastId = (items: TranscriptItem[]) => items.reduce((m, i) => Math.max(m, i.id), 0);
 
+/** Text compared without its spacing: a terminal can turn line breaks into \r or re-wrap them. */
+const same = (a: string) => a.replace(/\s+/g, " ").trim();
+
 /**
  * The pending messages the log has not recorded yet. A user entry records the
  * oldest pending message with the same text that was sent before it arrived, so
@@ -23,7 +26,8 @@ export function stillPending(pending: PendingMessage[], items: TranscriptItem[])
   const left = [...pending];
   for (const item of [...items].sort((a, b) => a.id - b.id)) {
     if (item.role !== "user") continue;
-    const i = left.findIndex((p) => item.id > p.after && p.text === item.text.trim());
+    const text = same(item.text);
+    const i = left.findIndex((p) => item.id > p.after && same(p.text) === text);
     if (i >= 0) left.splice(i, 1);
   }
   return left.length === pending.length ? pending : left;
