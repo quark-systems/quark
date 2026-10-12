@@ -492,6 +492,90 @@ async fn merges_through_the_gates_and_the_guard_then_lands_the_task() {
     assert!(approvals[0].on);
 }
 
+#[tokio::test]
+async fn a_red_main_becomes_a_hold_that_merge_anyway_overrides() {
+    use quark_verify::health::CheckRun;
+    use quark_verify::{FakeForge, PullHead, PullState};
+
+    let env = Env::new();
+    let origin = env.dir.path().join("origin.git");
+    common::git(
+        env.dir.path(),
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    common::git(
+        &env.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    common::git(&env.repo, &["push", "-q", "origin", "main"]);
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let forge = Arc::new(FakeForge::new());
+    let engine = NativeEngine::with_forge(env.log(), sup.clone(), forge.clone());
+    let ws = ws(&env);
+
+    sup.spawn(env.request("t1")).await.unwrap();
+    engine.send_message(&ws, "t1", "commit").await.unwrap();
+    eventually("a commit", async || {
+        sha(&env.repo, "quark/t1") != sha(&env.repo, "main")
+    })
+    .await;
+    common::git(&env.repo, &["push", "-q", "origin", "quark/t1"]);
+    engine.send_message(&ws, "t1", "ship it").await.unwrap();
+    eventually("review", async || {
+        state(&engine, &ws, "t1").await == TaskState::InReview
+    })
+    .await;
+    let url = "https://github.com/o/r/pull/7";
+    let (main, head) = (sha(&env.repo, "main"), sha(&env.repo, "quark/t1"));
+    forge.set_tip("o/r", "main", &main);
+    forge.set_checks(
+        &main,
+        vec![CheckRun::new(1, "ci", "completed", Some("failure"))],
+        vec![],
+    );
+    // Its own checks are absent: not red, but it does not fix main.
+    forge.set_checks(&head, vec![], vec![]);
+    forge.set_behind(&main, &head, 0);
+    forge.set_pull(
+        "o/r",
+        7,
+        PullHead {
+            sha: head.clone(),
+            branch: "quark/t1".into(),
+            base: "main".into(),
+            state: PullState::Open,
+        },
+    );
+
+    let refused = engine.merge_pull_request(&ws, "t1", url, None).await;
+    assert!(refused.unwrap_err().to_string().contains("main is red"));
+    let holds = engine.holds(&ws).await.unwrap();
+    let hold = holds
+        .iter()
+        .find(|h| h.id.starts_with("red-main:"))
+        .expect("a red-main hold");
+    assert!(hold.question.contains("Main is red"), "{}", hold.question);
+    assert!(hold.task_id.is_none());
+
+    // Only "merge anyway" overrides.
+    assert!(engine.answer(&ws, &hold.id, "wait", "matt").await.is_err());
+    engine
+        .answer(&ws, &hold.id, "Merge anyway", "matt")
+        .await
+        .unwrap();
+    assert!(!engine
+        .holds(&ws)
+        .await
+        .unwrap()
+        .iter()
+        .any(|h| h.id.starts_with("red-main:")));
+    engine
+        .merge_pull_request(&ws, "t1", url, None)
+        .await
+        .unwrap();
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::Done);
+}
+
 fn tmux_installed() -> bool {
     std::process::Command::new("tmux")
         .arg("-V")

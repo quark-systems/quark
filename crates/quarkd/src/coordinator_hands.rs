@@ -102,11 +102,23 @@ impl Brain for InputBrain {
 pub struct EngineHands {
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
+    channels: Option<Arc<quark_triggers::Engine>>,
 }
 
 impl EngineHands {
     pub fn new(store: Arc<Store>, engine: Arc<dyn EngineAdapter>) -> Self {
-        Self { store, engine }
+        Self {
+            store,
+            engine,
+            channels: None,
+        }
+    }
+
+    /// Acknowledge channel messages through `channels` (slice 7), when it
+    /// runs.
+    pub fn with_channels(mut self, channels: Option<Arc<quark_triggers::Engine>>) -> Self {
+        self.channels = channels;
+        self
     }
 
     async fn tasks(&self, ws: &WorkspaceRef) -> Result<Vec<EngineTask>> {
@@ -294,10 +306,13 @@ impl Hands for EngineHands {
                     .map_err(core)?;
                 Ok(started(&start))
             }
-            ToolCall::AckMessage { .. } => Err(not_yet(
-                "acknowledging a message",
-                "the channels API (slice 7)",
-            )),
+            ToolCall::AckMessage { channel, id } => {
+                let channels = self.channels.as_ref().ok_or_else(|| {
+                    not_yet("acknowledging a message", "the channels API (slice 7)")
+                })?;
+                channels.ack(project, channel, id, ANSWERED_BY).await?;
+                Ok(format!("Acknowledged {channel} message {id}."))
+            }
             // The coordinator answers it from the Project's prompt.
             ToolCall::LoadSkill { .. } => Err(CoreError::Invalid(
                 "load_skill is answered by the coordinator".into(),
@@ -553,6 +568,44 @@ mod tests {
         // An engine without dispatch refuses.
         engine.fail_writes(Some("no"));
         assert!(hands.run(&p, &start).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ack_message_marks_the_inbox_message_handled() {
+        let (store, engine, p) = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(quark_eventlog::SqliteEventLog::open(dir.path().join("e.db")).unwrap());
+        let channels = Arc::new(
+            quark_triggers::Engine::open(
+                log,
+                quark_core::HostId::from("h"),
+                quark_triggers::Mode::Native,
+                Arc::new(quark_triggers::NoEffects),
+                Arc::new(quark_triggers::Processes),
+            )
+            .await
+            .unwrap(),
+        );
+        let note = quark_triggers::Inbound::note("user", "ship the docs too");
+        let id = note.id.clone();
+        channels.receive(&p, note).await.unwrap();
+        let hands = EngineHands::new(store, engine).with_channels(Some(channels.clone()));
+        let ack = ToolCall::AckMessage {
+            channel: "inbox".into(),
+            id: id.clone(),
+        };
+        hands.run(&p, &ack).await.unwrap();
+        assert!(channels.inbox(&p).await.is_empty());
+        // Again is a no-op; an unknown message is not found.
+        hands.run(&p, &ack).await.unwrap();
+        let unknown = ToolCall::AckMessage {
+            channel: "inbox".into(),
+            id: "nope".into(),
+        };
+        assert!(matches!(
+            hands.run(&p, &unknown).await,
+            Err(CoreError::NotFound(_))
+        ));
     }
 
     #[tokio::test]

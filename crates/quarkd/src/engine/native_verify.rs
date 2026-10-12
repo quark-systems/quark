@@ -129,6 +129,38 @@ impl NativeVerify {
         }
     }
 
+    /// The Project's red-main episode waiting on a person, as its decision
+    /// id and the question: whether to merge anyway while main is red.
+    pub async fn red_main_question(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Option<(String, String)>, EngineError> {
+        self.merge.restore().await.map_err(core)?;
+        let guard = self.merge.guard();
+        let Some(ep) = guard.episode(project) else {
+            return Ok(None);
+        };
+        let Some(decision) = ep.decision.filter(|d| !guard.is_answered(d)) else {
+            return Ok(None);
+        };
+        let short: String = ep.commit.chars().take(12).collect();
+        Ok(Some((
+            decision,
+            format!(
+                "Main is red at {short} (failing: {}). Merges wait until it is green. \
+                 Merge anyway until then?",
+                ep.checks.join(", ")
+            ),
+        )))
+    }
+
+    /// A person answered the red-main decision: merges go ahead until main
+    /// is green again.
+    pub async fn override_red_main(&self, decision: &str) -> Result<(), EngineError> {
+        self.merge.restore().await.map_err(core)?;
+        self.merge.guard().answer(decision).await.map_err(core)
+    }
+
     /// Standing approval is recorded per repo in the event log.
     pub async fn set_standing_approval(
         &self,
