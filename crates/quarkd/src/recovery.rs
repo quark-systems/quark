@@ -22,6 +22,11 @@
 //! is never touched, whatever runs in it: only a missing window is proof
 //! the agent is gone, so recovery never starts a second coordinator.
 //! Worker windows are the coordinator's to recover once it is back.
+//!
+//! [`CoordinatorRecovery::adopting`] also starts the coordinator of a ready
+//! Project the engine has no record of, when no window of the engine's
+//! coordinator name is listed. The native engine uses it, so a Project
+//! created under firstmate gets a native coordinator after the switch.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -58,6 +63,9 @@ pub struct CoordinatorRecovery {
     /// Quark's home, where each Project's Beads database lives.
     home: PathBuf,
     attempts: Mutex<HashMap<String, Backoff>>,
+    /// The coordinator window name prefix for Projects with no record; see
+    /// [`CoordinatorRecovery::adopting`].
+    adopt: Option<String>,
 }
 
 impl CoordinatorRecovery {
@@ -77,7 +85,15 @@ impl CoordinatorRecovery {
             command,
             home,
             attempts: Mutex::new(HashMap::new()),
+            adopt: None,
         }
+    }
+
+    /// Also start the coordinator of a ready Project the engine has no
+    /// record of, unless a window named `<prefix><Project id>` is listed.
+    pub fn adopting(mut self, prefix: &str) -> Self {
+        self.adopt = Some(prefix.to_string());
+        self
     }
 
     pub async fn run(self, interval: Duration) {
@@ -136,13 +152,29 @@ impl CoordinatorRecovery {
             }
         };
         for project in ready {
-            let Some(target) = recorded.get(&project.id) else {
-                continue;
+            let target = match (recorded.get(&project.id), &self.adopt) {
+                (Some(target), _) => {
+                    if listed.contains(target) {
+                        continue;
+                    }
+                    target.clone()
+                }
+                (None, Some(prefix)) => {
+                    let window = format!("{prefix}{}", project.id);
+                    let up = listed
+                        .iter()
+                        .any(|t| t.split_once(':').is_some_and(|(_, w)| w == window));
+                    if up {
+                        continue;
+                    }
+                    window
+                }
+                (None, None) => continue,
             };
-            if listed.contains(target) || !self.due(&project.id) {
+            if !self.due(&project.id) {
                 continue;
             }
-            let ok = self.relaunch(&project, target).await;
+            let ok = self.relaunch(&project, &target).await;
             self.record(&project.id, ok);
         }
     }

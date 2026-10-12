@@ -105,6 +105,7 @@ Another harness is refused with an error that says so.
 
 With `--engine native`, the native coordinator (slice 6) always runs, in Native wiring (`InputBrain` and `EngineHands`), whatever `QUARK_ENGINE_SLICES` and `QUARK_NATIVE_COORDINATOR` say.
 Coordinator recovery runs for the native engine as it does for firstmate.
+It also adopts a ready Project with no coordinator record, such as one firstmate created, and starts its coordinator unless a `coordinator-<Project id>` window is already up.
 
 ## Channels and the inbox
 

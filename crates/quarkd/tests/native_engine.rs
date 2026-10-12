@@ -27,7 +27,7 @@ use quark_transcript::SessionRoots;
 use quarkd::accounts::{Accounts, StubQuota};
 use quarkd::engine::native::NativeEngine;
 use quarkd::engine::native_dispatch_engine::{DispatchParts, NativeDispatch};
-use quarkd::engine::native_project::ProjectSetup;
+use quarkd::engine::native_project::{ProjectSetup, WINDOW_PREFIX};
 use quarkd::engine::{
     EngineAdapter, EngineError, NewTask, SourceRepo, StartOutcome, TaskControl, WorkspacePlan,
     WorkspaceRef,
@@ -725,6 +725,58 @@ async fn creates_a_project_and_recovers_its_coordinator_with_no_firstmate() {
         .unwrap()
         .iter()
         .any(|p| p.target == target));
+
+    // A ready Project with no coordinator record (one firstmate created) is
+    // left alone by plain recovery, and gets a coordinator when adopting.
+    let other = store
+        .create_project(CreateProject {
+            name: "q".into(),
+            agent_config: Some(agent.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    let other_root = layout.workspace(&other.id);
+    std::fs::create_dir_all(&other_root).unwrap();
+    store
+        .set_project_status(
+            &other.id,
+            ProjectStatus::Ready,
+            None,
+            Some(&other_root.display().to_string()),
+            None,
+        )
+        .unwrap();
+    recovery.pass().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(starts(dir, 2).await.len(), 2);
+    let adopting = CoordinatorRecovery::new(
+        store.clone(),
+        engine.clone(),
+        Arc::new(Accounts::new(
+            store.clone(),
+            Arc::new(HarnessRegistry::builtin()),
+            Arc::new(StubQuota::new()),
+            engine.account_envs(),
+        )),
+        sessions.clone(),
+        command.clone(),
+        layout.home.clone(),
+    )
+    .adopting(WINDOW_PREFIX);
+    adopting.pass().await;
+    assert_eq!(starts(dir, 3).await.len(), 3);
+    let other_target = format!("quark:coordinator-{}", other.id);
+    assert_eq!(
+        engine
+            .coordinator_terminals(&command)
+            .await
+            .unwrap()
+            .get(&other.id),
+        Some(&other_target)
+    );
+    adopting.pass().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(starts(dir, 3).await.len(), 3);
 
     sessions.detach_all();
     server.kill().await;

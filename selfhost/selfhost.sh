@@ -6,7 +6,8 @@
 #
 # First installs treehouse 3.1.2 when this machine has no 3.x at or above it
 # (selfhost/treehouse.sh). Then, against a running quarkd (default
-# http://127.0.0.1:7380, or $QUARKD_URL), using the firstmate engine:
+# http://127.0.0.1:7380, or $QUARKD_URL), which should run the native engine
+# (quarkd --engine native; a daemon on another engine gets a warning):
 #   1. creates the Project "Quark" from project.json (quark and firstmate),
 #      or reuses it when one with that name exists, and waits until it is
 #      ready (a failed one is retried once);
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --daemon) DAEMON=${2:?--daemon needs a URL}; shift 2 ;;
     --holdout) HOLDOUT=${2:?--holdout needs a directory}; shift 2 ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -75,7 +76,8 @@ api() {
   rm -f "$out"
 }
 
-api GET /v1/health >/dev/null
+ENGINE=$(api GET /v1/health | jq -r '.engine // "unknown"')
+[ "$ENGINE" = native ] || say "warning: quarkd runs the $ENGINE engine, not native (quarkd --engine native)"
 NAME=$(jq -r .name "$HERE/project.json")
 
 # 1. The Project.
