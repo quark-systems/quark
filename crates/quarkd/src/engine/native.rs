@@ -43,6 +43,27 @@ use super::{
 /// `state_source` of every task this engine reports.
 pub const SOURCE: &str = "native";
 const REPLAY_BATCH: usize = 512;
+/// The task part of the red-main decision's hold id, `red-main:<decision>`.
+/// Task ids never contain this exact word followed by a colon.
+pub const RED_MAIN: &str = "red-main";
+/// The answer that overrides the red-main guardrail.
+pub const MERGE_ANYWAY: &str = "merge anyway";
+
+fn red_main_brief() -> quark_systems::DecisionBrief {
+    quark_systems::DecisionBrief {
+        context: Some(
+            "Merges wait while main is red, except a change that fixes it. \
+             Overriding lets every green, verified pull request merge until main is green again."
+                .into(),
+        ),
+        options: vec![quark_systems::DecisionOption {
+            label: MERGE_ANYWAY.into(),
+            consequence: Some("Green pull requests merge until main is green.".into()),
+        }],
+        asked_by: Some("merge guard".into()),
+        ..Default::default()
+    }
+}
 
 pub struct NativeEngine {
     log: Arc<dyn EventLog>,
@@ -242,6 +263,16 @@ impl EngineAdapter for NativeEngine {
                 });
             }
         }
+        if let Some((decision, question)) = self.verify.red_main_question(&p).await? {
+            holds.push(Hold {
+                id: format!("{RED_MAIN}:{decision}"),
+                task_id: None,
+                question,
+                answer: None,
+                answered_by: None,
+                brief: red_main_brief(),
+            });
+        }
         Ok(holds)
     }
 
@@ -268,6 +299,17 @@ impl EngineAdapter for NativeEngine {
         let (task, key) = hold_id
             .split_once(':')
             .ok_or_else(|| EngineError::Invalid(format!("hold id {hold_id} is not task:key")))?;
+        if task == RED_MAIN {
+            // Only an explicit "merge anyway" overrides the guardrail;
+            // waiting needs nothing, so the question stays until main is
+            // green.
+            if !answer.trim().to_lowercase().starts_with(MERGE_ANYWAY) {
+                return Err(EngineError::Invalid(format!(
+                    "answer \"{MERGE_ANYWAY}\" to override a red main; it clears when main is green"
+                )));
+            }
+            return self.verify.override_red_main(key).await;
+        }
         self.supervisor
             .answer(&project(ws), &task_id(task)?, key, answer)
             .await

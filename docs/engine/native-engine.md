@@ -27,7 +27,8 @@ A head that did not contain the tip is pushed rebased and refused until the forg
 The pull request's own checks must be green, then `NativeGuard` re-reads main: while main is red only a change that passes every failing check merges.
 The forge merges exactly the verified head, the merge is a `verify.merged` event, and the task is marked landed.
 A refusal is an engine command error that names the rule; the last run's gate evidence stays in `verify/<task>/evidence.json` with its logs.
-Nothing files the red-main episode's decision for a person yet, so a red main is overridden only by turning it green.
+A merge a red main refuses files the episode's decision once, and it shows as a hold `red-main:<decision>` with no task.
+Answering it `merge anyway` overrides the guardrail until main is green again; any other answer is refused and the hold stays.
 
 ## Dispatch
 
@@ -86,21 +87,22 @@ Another harness is refused with an error that says so.
 With `--engine native`, the native coordinator (slice 6) always runs, in Native wiring (`InputBrain` and `EngineHands`), whatever `QUARK_ENGINE_SLICES` and `QUARK_NATIVE_COORDINATOR` say.
 Coordinator recovery runs for the native engine as it does for firstmate.
 
+## Channels and the inbox
+
+With `--engine native`, the slice 7 engine (`native_triggers.rs`) always runs in native mode: the user's inbox note and plug-in channel messages land as `channel.received` events, wake the coordinator, and the coordinator's `ack_message` tool marks them handled.
+
 ## Still refused
 
 The native engine refuses the operations below, each with an error that names the missing part, until it is wired:
 
-- the inbox note (slice 7 channels)
 - coordinators on harnesses other than Claude Code
 
 ## Getting off firstmate
 
 These steps remain, in order:
 
-1. File the red-main episode's decision as a hold, so a person can override a red main (slice 2).
-2. Coordinators on other harnesses: their tool and turn-end hook wiring.
-3. The inbox note through the channels API (slice 7).
-4. The worker terminal for PTY-backed workers (today `EngineTask::terminal` names only tmux windows).
-5. `verify-quark` journeys run with `--engine native`.
-6. Self-hosting starts quarkd with `--engine native`.
-7. Retire the firstmate adapter, the ingest bridge, and the shadows (slice 10).
+1. Coordinators on other harnesses: their tool and turn-end hook wiring.
+2. The worker terminal for PTY-backed workers (today `EngineTask::terminal` names only tmux windows).
+3. `verify-quark` journeys run with `--engine native`.
+4. Self-hosting starts quarkd with `--engine native`.
+5. Retire the firstmate adapter, the ingest bridge, and the shadows (slice 10).

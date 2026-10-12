@@ -271,9 +271,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         )
         .run(config.refresh_interval),
     );
-    let (triggers, triggers_task) = if native_triggers::enabled() {
-        let mode = if engine.slices().mode(quark_core::Slice::SubCoordinators)
-            == quark_core::SliceMode::Native
+    // The native engine has no firstmate inbox to mirror: its own channels
+    // and away policy act.
+    let (triggers, triggers_task) = if native_triggers::enabled() || native_engine {
+        let mode = if native_engine
+            || engine.slices().mode(quark_core::Slice::SubCoordinators)
+                == quark_core::SliceMode::Native
         {
             quark_triggers::Mode::Native
         } else {
@@ -312,10 +315,10 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                     store.clone(),
                     chat_input.clone(),
                 )),
-                hands: Arc::new(coordinator_hands::EngineHands::new(
-                    store.clone(),
-                    engine.clone(),
-                )),
+                hands: Arc::new(
+                    coordinator_hands::EngineHands::new(store.clone(), engine.clone())
+                        .with_channels(triggers.clone()),
+                ),
                 base_url: format!("http://{}", config.listen),
             }
         } else {

@@ -126,7 +126,8 @@ impl GuardedMerge {
         &self.guard
     }
 
-    async fn restore(&self) -> Result<()> {
+    /// Rebuild the guard from the log, once.
+    pub async fn restore(&self) -> Result<()> {
         self.restored
             .get_or_try_init(|| self.guard.restore())
             .await
@@ -238,6 +239,15 @@ impl GuardedMerge {
             },
         );
         if let Permit::Deny { reason } = self.guard.may_merge(&change, &verdict).await? {
+            // A red main asks a person once per episode whether to override.
+            if let Some(ep) = self.guard.episode(&req.project) {
+                if ep.decision.is_none() {
+                    let short: String = ep.commit.chars().take(12).collect();
+                    self.guard
+                        .decision_filed(&req.project, &format!("red-main-{short}"))
+                        .await?;
+                }
+            }
             return Ok(Landing::refused(Some(verdict), reason));
         }
         self.forge
@@ -547,6 +557,37 @@ mod tests {
         assert!(r.merge.guard().episode(&"p".into()).is_some());
 
         r.forge.set_checks(&head, vec![ci("success")], vec![]);
+        let l = r.land("true").await;
+        assert_eq!(l.outcome, Outcome::Merged { head });
+    }
+
+    #[tokio::test]
+    async fn a_red_main_asks_once_and_an_answer_overrides_it() {
+        let r = Repo::new();
+        let (main, head) = (r.origin_sha("main"), r.origin_sha("b"));
+        r.forge.set_checks(&main, vec![ci("failure")], vec![]);
+        r.forge.set_checks(&head, vec![], vec![]);
+        let l = r.land("true").await;
+        assert!(refusal(&l).starts_with("main is red"), "{l:?}");
+        let decision = r
+            .merge
+            .guard()
+            .episode(&"p".into())
+            .and_then(|e| e.decision)
+            .unwrap();
+        assert!(decision.starts_with("red-main-"), "{decision}");
+        // Refused again: still one decision.
+        r.land("true").await;
+        let again = r.merge.guard().episode(&"p".into()).unwrap().decision;
+        assert_eq!(again.as_deref(), Some(decision.as_str()));
+
+        // A daemon restart finds the Project's episode before any merge.
+        let restarted = GuardedMerge::new(r.forge.clone(), r.log.clone(), "h".into());
+        restarted.restore().await.unwrap();
+        assert!(restarted.guard().episode(&"p".into()).is_some());
+        assert!(!restarted.guard().is_answered(&decision));
+
+        r.merge.guard().answer(&decision).await.unwrap();
         let l = r.land("true").await;
         assert_eq!(l.outcome, Outcome::Merged { head });
     }

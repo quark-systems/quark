@@ -115,6 +115,16 @@ impl NativeGuard {
                 match e.kind.as_str() {
                     kinds::RED_MAIN => {
                         let c: EpisodeChange = e.decode()?;
+                        // The Project's target, so its open episode is found
+                        // again before its next merge.
+                        self.targets
+                            .lock()
+                            .unwrap()
+                            .entry(e.project.clone())
+                            .or_insert_with(|| Target {
+                                repo: c.repo.clone(),
+                                branch: c.branch.clone(),
+                            });
                         let mut eps = self.episodes.lock().unwrap();
                         match c.episode {
                             Some(ep) => {
@@ -157,6 +167,11 @@ impl NativeGuard {
             .unwrap()
             .get(&(t.repo, t.branch))
             .cloned()
+    }
+
+    /// Whether a person has answered `decision`.
+    pub fn is_answered(&self, decision: &str) -> bool {
+        self.answered.lock().unwrap().contains(decision)
     }
 
     /// Record the decision filed for the open episode.
