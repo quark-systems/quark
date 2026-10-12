@@ -228,8 +228,21 @@ fn persona_text(pack: &PersonaPack) -> Option<String> {
             pack.vocabulary.join(", ")
         ));
     }
-    (!parts.is_empty()).then(|| parts.join("\n\n"))
+    if parts.is_empty() {
+        return None;
+    }
+    // A coordinator keeps its conversation when the persona is switched, and
+    // would otherwise go on in the voice its earlier turns were written in.
+    parts.push(if pack.address.is_some() {
+        SWITCHED.to_string()
+    } else {
+        format!("{SWITCHED} Do not address the user by a title.")
+    });
+    Some(parts.join("\n\n"))
 }
+
+/// Closes the persona layer: this persona wins over an earlier one's habits.
+const SWITCHED: &str = "This is the Project's persona now. If earlier turns of this conversation used another persona's voice, role names or way of addressing the user, drop them.";
 
 /// A repo's instructions file and text: `AGENTS.md`, else a `CLAUDE.md`
 /// that is more than a pointer to `AGENTS.md`, else the Project repo's
@@ -504,8 +517,13 @@ mod tests {
         // The plain pack only asks for plain writing.
         assert_eq!(
             plain.layers[1].text,
-            "Write plainly and concisely. No metaphors, no role-play."
+            format!(
+                "Write plainly and concisely. No metaphors, no role-play.\n\n{SWITCHED} Do not address the user by a title."
+            )
         );
+        // A pack that names the user keeps its own form of address.
+        let named = persona_text(&pack("nautical")).unwrap();
+        assert!(named.ends_with(SWITCHED));
         // A pack with nothing to say adds no layer.
         let none = LayeredPrompt::build(&Sources::default());
         assert_eq!(none.layers.len(), 1);
