@@ -19,6 +19,7 @@ discovery = "the /model picker in Claude Code"
 argv = ["claude", "--dangerously-skip-permissions"]
 optional = [["--model", "{model}"], ["--effort", "{effort}"]]
 prompt_via = "paste"
+resume = ["--continue"]
 
 # macOS keeps the login in the keychain, so a missing file proves nothing.
 [account]

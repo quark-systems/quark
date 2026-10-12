@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use quark_core::harness::HarnessManifest;
 use quark_core::isolation::ProcessSpec;
 use quark_core::session::{SessionBackend, SessionId, SessionInfo, SessionSpec, TermSize};
 use quark_core::worker::WorkerEnvelope;
@@ -67,6 +68,21 @@ impl Config {
             exit_grace: Duration::from_secs(3),
         }
     }
+}
+
+/// Whether a harness has a conversation to continue in a directory, read
+/// from the harness's own session logs. With one, a worker the supervisor
+/// recovers continues its conversation (the manifest's `launch.resume`)
+/// instead of starting over.
+pub trait Conversations: Send + Sync {
+    /// `env` is the worker's extra environment, which may point the harness
+    /// at an account's config directory.
+    fn exists(
+        &self,
+        manifest: &HarnessManifest,
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+    ) -> bool;
 }
 
 /// A new task for the supervisor.
@@ -136,6 +152,7 @@ pub struct Supervisor {
     isolation: Arc<dyn Isolation>,
     recorder: Arc<Recorder>,
     config: Config,
+    conversations: Option<Arc<dyn Conversations>>,
     locks: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
     watches: Mutex<HashMap<Key, Watch>>,
     handling: tokio::sync::Mutex<Seq>,
@@ -171,10 +188,18 @@ impl Supervisor {
             isolation,
             recorder,
             config,
+            conversations: None,
             locks: Mutex::default(),
             watches: Mutex::default(),
             handling: tokio::sync::Mutex::new(handled),
         })
+    }
+
+    /// Recovered workers continue their conversation when `conversations`
+    /// finds one and the harness can resume.
+    pub fn with_conversations(mut self, conversations: Arc<dyn Conversations>) -> Self {
+        self.conversations = Some(conversations);
+        self
     }
 
     /// The worker protocol's recorder, bound to this supervisor's tasks, for
@@ -330,7 +355,8 @@ impl Supervisor {
                 self.record(project, task, SupervisorEvent::Worktree { worktree: wt })
                     .await?;
             }
-            self.launch(project, task, Cause::Spawn, None, None).await
+            self.launch(project, task, Cause::Spawn, None, None, false)
+                .await
         }
         .await;
         if let Err(e) = &result {
@@ -355,6 +381,7 @@ impl Supervisor {
         cause: Cause,
         note: Option<&str>,
         over: Option<&Relaunch>,
+        resume: bool,
     ) -> Result<Generation> {
         let w = self.worker(project, task)?;
         let a = &w.assignment;
@@ -407,6 +434,7 @@ impl Supervisor {
             steers: &steers,
             extra_env: &env,
             urls: self.config.worker_urls.as_ref(),
+            resume,
         })?;
         let brief_path = dir.join(launch::BRIEF_FILE);
         std::fs::write(&brief_path, &plan.brief).map_err(|e| io(&brief_path, e))?;
@@ -489,7 +517,7 @@ impl Supervisor {
             .lock()
             .unwrap()
             .remove(&(project.clone(), task.clone()));
-        tracing::info!(%project, %task, %generation, harness = %manifest.id, ?cause, "worker launched");
+        tracing::info!(%project, %task, %generation, harness = %manifest.id, ?cause, resume, "worker launched");
         self.worker(project, task)?
             .current
             .ok_or_else(|| CoreError::Backend("launched generation not recorded".into()))
@@ -739,7 +767,7 @@ impl Supervisor {
                 .and_then(|()| self.live(project, task));
         }
         let note = Some(relaunch.note.as_str()).filter(|n| !n.trim().is_empty());
-        self.launch(project, task, Cause::Relaunch, note, Some(&relaunch))
+        self.launch(project, task, Cause::Relaunch, note, Some(&relaunch), false)
             .await
     }
 
@@ -1079,14 +1107,36 @@ impl Supervisor {
                 .transition(project, task, TaskEvent::Failed { reason })
                 .await;
         }
+        let resume = self.resumable(w);
+        let what = if resume {
+            "the same conversation, resumed"
+        } else {
+            "a new session"
+        };
         let note = format!(
-            "Your previous session {how}. This is a new session in the same worktree, which \
+            "Your previous session {how}. This is {what} in the same worktree, which \
              still has all of your work: check `git status` and the log, then carry on."
         );
-        self.launch(project, task, Cause::Recover, Some(&note), None)
+        self.launch(project, task, Cause::Recover, Some(&note), None, resume)
             .await?;
         t.recovered += 1;
         Ok(())
+    }
+
+    /// Whether the worker's next generation can continue its conversation:
+    /// its harness resumes, and has logged a conversation in the worktree.
+    fn resumable(&self, w: &Worker) -> bool {
+        let (Some(conversations), Some(worktree)) = (&self.conversations, &w.worktree) else {
+            return false;
+        };
+        let harness = w
+            .current
+            .as_ref()
+            .map_or(&w.assignment.harness, |g| &g.harness);
+        self.manifests.resolve(harness).is_some_and(|m| {
+            !m.launch.resume.is_empty()
+                && conversations.exists(m, &worktree.path, &w.assignment.env)
+        })
     }
 
     async fn check_stale(&self, key: &Key, g: &Generation) -> Result<usize> {

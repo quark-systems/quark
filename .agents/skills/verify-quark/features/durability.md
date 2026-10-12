@@ -1,14 +1,14 @@
 # Durability
 
-Quark keeps a person's work through the failures a laptop sees: the daemon crashing, the tmux server its agents run on going away, a reboot, and sleep. After each, every Project, task and decision is still there, the event stream continues where a client left off, the app reconnects on its own, every agent is running again (the same process, or a relaunch that resumes its conversation), and new work can still start.
-These journeys check that from outside (the `/v1` API, the event stream, the terminals and the app), so they never depend on which engine runs. They run against the bash engine today and are the switch-on bar for every native slice: a slice moves from shadow to native only when they pass with it.
+Quark keeps a person's work through the failures a laptop sees: the daemon crashing, the tmux server its agents run on going away, a reboot, and sleep. After each, every Project, task and decision is still there, the event stream continues where a client left off, the app reconnects on its own, every agent (coordinator and worker) is running again (the same process, or a relaunch that resumes its conversation), and new work can still start.
+These journeys check that from outside (the `/v1` API, the event stream, the terminals and the app), so they never depend on which engine runs. They are the switch-on bar for the native engine (`--engine native`), and ran against the bash engine before it.
 
 ## Sub-features
 
 - `dur-sleep`: every process the run started is stopped for 20s, then continued. Nothing restarts, nothing changes state, the app reconnects.
-- `dur-daemon-crash`: the daemon is killed with SIGKILL and started again on the same home. State and the event stream continue, agents keep running untouched, the app reconnects, and a new Project provisions.
-- `dur-tmux-loss`: the tmux server is killed with SIGKILL while the daemon keeps running. The daemon keeps answering, every agent is back and resumed, state is unchanged, and a new Project provisions.
-- `dur-reboot`: the daemon, the tmux server and every agent are killed at once, then only the daemon is started, as a login would. Every agent is back and resumed, state and events continue, the app reconnects, and a new Project provisions.
+- `dur-daemon-crash`: the daemon is killed with SIGKILL and started again on the same home. State and the event stream continue, agents keep running untouched, the app reconnects, and a new Project provisions and runs a task.
+- `dur-tmux-loss`: the tmux server is killed with SIGKILL while the daemon keeps running. The daemon keeps answering, every agent is back (the same process for a worker outside tmux) or resumed, state is unchanged, and a new Project provisions and runs a task.
+- `dur-reboot`: the daemon, the tmux server, the PTY supervisor (`quark-ptyd`) and every agent are killed at once, then only the daemon is started, as a login would. Every agent is back and resumed, state and events continue, the app reconnects, and a new Project provisions and runs a task.
 
 ## How to get to it (user POV)
 
@@ -21,10 +21,10 @@ These journeys check that from outside (the `/v1` API, the event stream, the ter
 
 Preconditions:
 
-- A firstmate checkout to test with (`--engine-dir`), or the stub engine for the daemon-only checks.
+- The native engine needs nothing beyond this checkout and treehouse 3.1.2 or later (worker worktrees; `selfhost/treehouse.sh` installs it). The firstmate engine needs a firstmate checkout (`--engine-dir`). The stub engine runs the daemon-only checks.
 - No run needs to be up: each journey launches its own run and cleans it up, because a disruption leaves its run unusable for the next one.
 
-- **Run all four.** Run `$Q journey durability -- --engine firstmate --engine-dir <firstmate checkout> --harness fake`. Each journey provisions a Project from a local fixture repo, records its agent terminals, the state and `last_seq`, opens the board in the app, disrupts the run, and checks recovery. Every check prints `PASS`, `FAIL` or `SKIP` with its reason; the command exits non-zero on any `FAIL`.
+- **Run all four.** Run `$Q journey durability -- --engine native --harness fake` (or `-- --engine firstmate --engine-dir <firstmate checkout> --harness fake`). Each journey provisions a Project from a local fixture repo, records its agent terminals, starts a worker through the coordinator's `start_task` tool when the engine serves one and records the pid that answers a steer, records the state and `last_seq`, opens the board in the app, disrupts the run, and checks recovery. Every check prints `PASS`, `FAIL` or `SKIP` with its reason; the command exits non-zero on any `FAIL`.
 - **One journey.** Add `--only sleep`, `--only daemon-crash`, `--only tmux-loss` or `--only reboot` (repeatable). `--recovery <secs>` changes how long agents and the app get to come back (default 60).
 - **Daemon checks only.** Without launch args the journeys use the stub engine: state, events, app and new work are checked, and agent checks are skipped because the stub opens no agents.
 - **By hand.** On a run of your own, `$Q sleep <secs>`, `$Q crash daemon|tmux|host` and `$Q restart` are the same disruptions; `$Q agents` prints the fake harness's start journal.
@@ -38,13 +38,16 @@ What each check reads:
 | state | Projects (id, name, status, goal), their tasks (id, state, title) and decisions (id, state) read back identical |
 | events | replaying from the `last_seq` seen before returns only later seqs, each once and in order, and `last_seq` never goes back |
 | agents | each agent terminal listed before is listed again and echoes a typed line within the recovery bound; with the fake harness, it is the same pid (sleep, daemon crash) or a new pid whose start asked to resume (tmux loss, reboot) |
+| workers | each worker started before answers a steer sent through `/v1/tasks/<id>/messages` within the recovery bound (the fake harness reports the line with its pid, read back as the task's `state_note`): the same pid (sleep, daemon crash), or the same or a new pid whose start asked to resume (tmux loss, reboot) |
 | app | the board left open across the disruption shows `connected` again without a reload |
-| new work | a Project created afterwards reaches `ready` |
+| new work | a Project created afterwards reaches `ready`, and a task started in it runs and answers a steer |
 
 ## Gotchas
 
-- The fake harness (`--harness fake`) puts `bin/fake-agent` on the daemon's PATH as `claude` and `codex` and gives the tmux server a profile-free shell, so a login profile cannot put the real CLIs back first. It draws its pid on screen, echoes typed lines, and journals each start with whether it was asked to resume (`--resume`, `--continue`). It is not an LLM, so a fake coordinator dispatches no tasks: with it, the journeys follow the coordinator agent only. Worker tasks are followed whenever the Project has them (a signed-in harness), since the checks cover every terminal the Project lists.
+- The fake harness (`--harness fake`) puts `bin/fake-agent` on the daemon's PATH as `claude` and `codex` and gives the tmux server a profile-free shell, so a login profile cannot put the real CLIs back first. It draws its pid on screen, echoes typed lines, journals each start with whether it was asked to resume (`--resume`, `--continue`), and keeps a Claude Code conversation log under the run's private `CLAUDE_CONFIG_DIR`, which the engine looks for before resuming. It is not an LLM, so it dispatches nothing itself: with the native engine the journey calls the coordinator's `start_task` tool over its MCP route (the URL in the Project workspace's `.mcp.json`) as the coordinator agent would; with the firstmate engine the worker checks are skipped.
+- Native workers run in `quark-ptyd`'s sessions, not on tmux, so a lost tmux server leaves them running; `crash host`, `sleep` and `cleanup` act on `quark-ptyd` and its sessions too. Their terminals are not listed under `/v1/projects/<id>/terminals` yet, so workers are followed through steering, not the terminal.
 - With a real harness the agent checks still require each terminal back and answering, but cannot tell a resumed agent from a fresh one, and say so.
 - `crash host` cannot clear `/tmp` or reset the clock, and the app server and Chromium stay up so the app can be read afterwards, as a person reopening it would.
 - `sleep` stops processes with SIGSTOP; wall-clock time moves on as it does after a real sleep, but the kernel's monotonic clock does too, which a real suspend does not advance.
+- Native engine, first run (quark `c5f8945`): everything passed except the reboot, where a lost worker was relaunched as a fresh conversation; the supervisor now resumes a recovered worker's conversation when its harness logged one (`launch.resume` in the manifest). All 33 checks pass since.
 - Baseline on the bash engine (quark `4baf291`, firstmate `d27e89b`): sleep and daemon crash passed; after a tmux loss nothing relaunched the coordinator and new Projects failed until the daemon restarted, and after a reboot nothing relaunched existing coordinators. quarkd's coordinator recovery (`crates/quarkd/src/recovery.rs`) now starts a lost tmux server again and relaunches each ready Project's missing coordinator with `fm-spawn.sh --secondmate --continue`, which needs the quark-systems firstmate fork with that flag.

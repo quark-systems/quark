@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# journey-native: the native engine end to end (features/native-engine.md).
+# One run of quarkd --engine native with the fake harness and no firstmate
+# checkout anywhere. The journey creates a Project from a local git repo,
+# has its coordinator start a task through the coordinator's own start_task
+# tool (the fake harness is no LLM, so the journey makes the tool call a
+# coordinator agent would), sees the worker on the board, steers it from
+# the app, answers its decision from the decisions inbox, cancels it and
+# relaunches it from the worker view, reading every outcome back through
+# /v1 and the worker's own answers.
+#
+#   quark-verify journey native [--keep] [-- <launch args>]
+#
+# Launch args are added to `--engine native --harness fake`. Every check
+# prints one line, PASS, FAIL or SKIP (with the unmet prerequisite). The
+# summary lands in $QUARK_VERIFY_HOME/journeys/ and the evidence in the
+# run's evidence/native/. Exits 1 when any check fails. Needs tmux 3.2+, jq,
+# git and treehouse 3.1.2 or later (the native supervisor takes worker
+# worktrees from it; selfhost/treehouse.sh installs it).
+set -uo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+Q=${QV_HELPER:-$here/quark-verify}
+base=${QUARK_VERIFY_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/quark-verify}
+
+keep=0 launch_args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --keep) keep=1; shift ;;
+    --) shift; launch_args=("$@"); break ;;
+    *) echo "journey-native: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$base/journeys"
+summary=$base/journeys/native-$stamp.txt
+fails=0 journey=native ev=""
+say() {
+  echo "$*"; echo "$*" >>"$summary"
+  [ -z "$ev" ] || echo "$*" >>"$ev/result.txt"
+}
+pass() { say "PASS $journey: $*"; }
+fail() { say "FAIL $journey: $*"; fails=$((fails + 1)); }
+skip() { say "SKIP $journey: $*"; }
+finish() {
+  echo
+  echo "summary: $(grep -c '^PASS' "$summary") passed, $(grep -c '^FAIL' "$summary") failed, $(grep -c '^SKIP' "$summary") skipped ($summary)"
+  [ "$fails" -eq 0 ]
+  exit
+}
+
+missing=""
+for t in tmux jq git curl treehouse; do command -v "$t" >/dev/null || missing+=" $t"; done
+if [ -n "$missing" ]; then
+  skip "everything: not installed:$missing (treehouse: selfhost/treehouse.sh)"
+  finish
+fi
+
+api() { "$Q" api "$@" 2>/dev/null; }
+browser() { "$Q" browser "$@" >/dev/null 2>&1; }
+wait_for() { # secs cmd... ; true once cmd succeeds
+  local deadline=$((SECONDS + $1)); shift
+  until "$@"; do [ $SECONDS -lt "$deadline" ] || return 1; sleep 1; done
+}
+
+run_id=$stamp-native
+export QUARK_VERIFY_RUN=$run_id
+echo "== native (run $run_id)"
+if ! "$Q" launch --run "$run_id" --engine native --harness fake ${launch_args[@]+"${launch_args[@]}"} \
+  >/dev/null 2>"$base/journeys/launch-$run_id.log"; then
+  fail "launch failed (log $base/journeys/launch-$run_id.log)"
+  finish
+fi
+# shellcheck disable=SC2329 # run by the EXIT trap
+cleanup() { [ "$keep" = 1 ] || "$Q" cleanup >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+eval "$("$Q" env)"
+ev=$QV_EVIDENCE/native; mkdir -p "$ev"
+say "---- native: run $run_id, build $QV_COMMIT, daemon $QV_MODE, engine $QV_ENGINE, harness $QV_HARNESS"
+
+# --- The engine, with no firstmate -------------------------------------------
+
+if api GET /v1/health | jq -e '.engine == "native"' >/dev/null; then
+  pass "daemon: /v1/health reports the native engine"
+else
+  fail "daemon: /v1/health reports $(api GET /v1/health | jq -c '.engine')"
+fi
+if [ ! -e "$QV_HOME/engine" ] && ! grep -q -- '--engine-dir' "$base/$run_id/instance/quarkd.sh"; then
+  pass "daemon: started with no firstmate checkout (no engine dir in its home or command)"
+else
+  fail "daemon: the run has a firstmate checkout ($QV_HOME/engine)"
+fi
+
+# --- A Project from a local git repo -----------------------------------------
+
+fixture=$base/$run_id/instance/fixture
+mkdir -p "$fixture"
+git init -q --bare -b main "$fixture/repo.git"
+git -C "$fixture" clone -q repo.git work 2>/dev/null
+echo "# Native fixture" >"$fixture/work/README.md"
+git -C "$fixture/work" add README.md
+git -C "$fixture/work" -c user.name=quark-verify -c user.email=verify@quark.invalid commit -q -m "Native fixture"
+git -C "$fixture/work" push -q origin main 2>/dev/null
+
+project=$(api POST /v1/projects "$(jq -nc --arg r "$fixture/repo.git" \
+  '{name: "Native journey", goal: "Run Quark with no firstmate", repos: [{url: $r}],
+    agent_config: {harness: "claude-code", effort: "low"}, delivery: "direct"}')" | jq -r '.id // empty')
+if [ -z "$project" ] ||
+  ! wait_for 120 bash -c "'$Q' api GET /v1/projects/$project 2>/dev/null | jq -e '.status != \"provisioning\"' >/dev/null" ||
+  ! api GET "/v1/projects/$project" | jq -e '.status == "ready"' >/dev/null; then
+  fail "project: did not provision ($(api GET "/v1/projects/$project" | jq -r '.status_detail // "no id"' | tail -1))"
+  finish
+fi
+ws=$(api GET "/v1/projects/$project" | jq -r '.workspace_path')
+api GET "/v1/projects/$project" >"$ev/project.json"
+if [ -d "$ws/repos/repo/.git" ] && [ -f "$ws/repos/repo/README.md" ] && [ ! -e "$ws/bin/fm-spawn.sh" ] && [ ! -e "$ws/AGENTS.md" ]; then
+  pass "project: ready from the local repo, cloned into its workspace with no firstmate home ($ws)"
+else
+  fail "project: the workspace $ws does not hold the cloned repo, or holds a firstmate home"
+fi
+# Plain role names, so the app's labels read the same for every persona.
+api PUT "/v1/projects/$project/persona" '{"persona": "plain"}' >/dev/null
+
+coordinator_terminal() { api GET "/v1/projects/$project/terminals" | jq -r '.[] | select(.role == "coordinator") | .id' | head -1; }
+wait_for 20 bash -c "[ -n \"\$('$Q' api GET /v1/projects/$project/terminals 2>/dev/null | jq -r '.[] | select(.role == \"coordinator\") | .id')\" ]"
+coordinator=$(coordinator_terminal)
+# The terminal's screen, as text.
+screen() {
+  api POST "/v1/terminals/$1/snapshot" |
+    jq -r '[.. | objects | select(has("data_b64")) | .data_b64][0] // empty' | base64 -d 2>/dev/null
+}
+# Type a line into a terminal and wait for the agent to echo it.
+answers() { # terminal-id word
+  api POST "/v1/terminals/$1/input" "{\"data_b64\":\"$(printf '%s\r' "$2" | base64)\"}" >/dev/null || return 1
+  for _ in $(seq 1 25); do
+    screen "$1" | grep -q "got $2" && return 0
+    sleep 0.2
+  done
+  return 1
+}
+if [ -n "$coordinator" ]; then
+  if answers "$coordinator" "coordinator$RANDOM"; then
+    pass "coordinator: its terminal is listed ($coordinator) and its agent answers typed input"
+  else
+    fail "coordinator: its terminal is listed ($coordinator) but its agent does not answer typed input"
+  fi
+  screen "$coordinator" >"$ev/coordinator-screen.txt"
+else
+  fail "coordinator: the Project lists no coordinator terminal"
+fi
+
+# The Project's Work tab is its board.
+"$Q" browser open "#/p/$project/work" >/dev/null 2>&1
+browser wait --testid connection --contains connected --timeout 15000
+"$Q" browser screenshot --path native/01-board.png >/dev/null 2>&1 || true
+
+# --- The coordinator starts a task -------------------------------------------
+
+mcp=$(jq -r '.mcpServers["quark-coordinator"].url // empty' "$ws/.mcp.json" 2>/dev/null)
+rpc() { # json-rpc body ; prints the response
+  curl -s -X POST -H 'content-type: application/json' "$mcp" -d "$1"
+}
+title="Add a greeting to the README"
+if [ -z "$mcp" ]; then
+  fail "coordinator: the workspace's .mcp.json names no quark-coordinator server"
+  finish
+fi
+rpc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' >"$ev/tools.json"
+if jq -e '[.result.tools[].name] | index("start_task")' "$ev/tools.json" >/dev/null; then
+  pass "coordinator: its MCP route lists the start_task tool"
+else
+  fail "coordinator: its MCP route does not list start_task (see $ev/tools.json)"
+fi
+rpc "$(jq -nc --arg t "$title" '{jsonrpc: "2.0", id: 2, method: "tools/call", params: {name: "start_task",
+  arguments: {title: $t, brief: "Add one line greeting the reader to README.md, then report done.",
+              agent: {harness: "claude-code", effort: "low"}}}}')" >"$ev/start_task.json"
+if jq -e '.result.isError == false' "$ev/start_task.json" >/dev/null; then
+  pass "coordinator: start_task answered: $(jq -r '.result.content[0].text' "$ev/start_task.json")"
+else
+  fail "coordinator: start_task failed: $(jq -c '.result // .error' "$ev/start_task.json")"
+  finish
+fi
+
+task_json() { api GET "/v1/projects/$project/tasks" | jq -c --arg t "$title" '.[] | select(.title == $t)'; }
+if wait_for 60 bash -c "'$Q' api GET /v1/projects/$project/tasks 2>/dev/null | jq -e --arg t '$title' 'any(.[]; .title == \$t and .state == \"running\")' >/dev/null"; then
+  task=$(task_json | jq -r .id)
+  pass "board: $task is running on $(task_json | jq -r '.harness') in branch $(task_json | jq -r '.branch')"
+else
+  fail "board: the task is not running 60s after start_task ($(task_json))"
+  finish
+fi
+if browser wait --testid col-running --contains "$title" --timeout 20000; then
+  pass "app: the board shows the worker's card in Running"
+else
+  fail "app: the board's Running column does not show \"$title\""
+fi
+"$Q" browser screenshot --path native/02-running.png >/dev/null 2>&1 || true
+
+# --- Steering, from the worker view ------------------------------------------
+
+# The fake harness reports a `QV-STATUS <line>` it is sent as a status line,
+# with {pid} replaced by its own pid, so the task's state note shows which
+# process got the message.
+note() { api GET "/v1/tasks/$task" | jq -r '.state_note // empty'; }
+note_pid() { # word secs ; prints the pid once the note reads "<word> pid <n>"
+  local n
+  for _ in $(seq 1 "$2"); do
+    n=$(note)
+    case $n in "$1 pid "*) echo "${n##* }"; return 0 ;; esac
+    sleep 1
+  done
+  return 1
+}
+worker_alive() { kill -0 "$1" 2>/dev/null; }
+
+word=steered$RANDOM
+browser click --testid task-card --has-text "$title"
+if browser wait --label "Message the worker" --timeout 15000 &&
+  browser fill --label "Message the worker" --value "QV-STATUS working: $word pid {pid}" &&
+  browser click --role button --name Send &&
+  browser wait --role status --contains "Delivered to the worker's inbox"; then
+  pass "app: the worker view sent the message (\"Delivered to the worker's inbox\")"
+else
+  fail "app: steering from the worker view did not confirm delivery"
+fi
+"$Q" browser screenshot --path native/03-steered.png >/dev/null 2>&1 || true
+if pid1=$(note_pid "$word" 30); then
+  pass "steer: the worker (pid $pid1) got the message and reported it back"
+else
+  fail "steer: the worker never reported the message (state note: $(note))"
+  pid1=""
+fi
+
+# --- A decision, answered from the inbox -------------------------------------
+
+question="REST or gRPC for the greeting service?"
+api POST "/v1/tasks/$task/messages" "$(jq -nc --arg q "QV-STATUS needs-decision [key=api-shape]: $question" '{text: $q}')" >/dev/null
+decision=""
+if wait_for 30 bash -c "'$Q' api GET /v1/decisions 2>/dev/null | jq -e --arg q '$question' 'any(.[]; .question == \$q and .state == \"open\")' >/dev/null"; then
+  decision=$(api GET /v1/decisions | jq -r --arg q "$question" '.[] | select(.question == $q) | .id' | head -1)
+  pass "decision: the worker's question is open ($decision), and the task is $(api GET "/v1/tasks/$task" | jq -r .state)"
+else
+  fail "decision: the worker's question never opened a decision"
+fi
+if [ -n "$decision" ]; then
+  "$Q" browser open "#/inbox" >/dev/null 2>&1
+  if browser click --testid decision-row --has-text "REST or gRPC" &&
+    browser wait --text "$question" &&
+    browser press r &&
+    browser fill --label "Answering as" --value verify &&
+    browser fill --label Answer --exact --value "REST, keep it simple." &&
+    browser press Control+Enter --label Answer --exact &&
+    wait_for 15 bash -c "'$Q' api GET /v1/decisions 2>/dev/null | jq -e --arg d '$decision' 'any(.[]; .id == \$d and .state == \"answered\")' >/dev/null"; then
+    pass "app: answered from the decisions inbox ($(api GET /v1/decisions | jq -r --arg d "$decision" '.[] | select(.id == $d) | "answered by \(.answered_by): \(.answer)"'))"
+  else
+    fail "app: answering from the decisions inbox did not record an answer"
+  fi
+  "$Q" browser screenshot --path native/04-answered.png >/dev/null 2>&1 || true
+  if wait_for 30 bash -c "[ \"\$('$Q' api GET /v1/tasks/$task 2>/dev/null | jq -r '.state_note')\" = 'answered api-shape: REST, keep it simple.' ]"; then
+    pass "decision: the worker received the answer and carries on (task $(api GET "/v1/tasks/$task" | jq -r .state))"
+  else
+    fail "decision: the worker never acknowledged the answer (state $(api GET "/v1/tasks/$task" | jq -r .state), note: $(note))"
+  fi
+fi
+
+# --- Cancel and relaunch, from the worker view -------------------------------
+
+"$Q" browser open "#/t/$task" >/dev/null 2>&1
+if browser click --testid cancel && browser click --testid confirm-cancel &&
+  wait_for 30 bash -c "'$Q' api GET /v1/tasks/$task 2>/dev/null | jq -e '.state != \"running\" and .state != \"needs_decision\"' >/dev/null"; then
+  pass "app: cancel stopped the task (state $(api GET "/v1/tasks/$task" | jq -r .state))"
+else
+  fail "app: cancel did not stop the task (state $(api GET "/v1/tasks/$task" | jq -r .state))"
+fi
+if [ -n "$pid1" ]; then
+  if wait_for 15 bash -c "! kill -0 $pid1 2>/dev/null"; then
+    pass "cancel: the worker's process (pid $pid1) has exited"
+  else
+    fail "cancel: the worker's process (pid $pid1) is still running"
+  fi
+fi
+"$Q" browser screenshot --path native/05-cancelled.png >/dev/null 2>&1 || true
+
+if browser click --testid relaunch &&
+  wait_for 30 bash -c "'$Q' api GET /v1/tasks/$task 2>/dev/null | jq -e '.state == \"running\"' >/dev/null"; then
+  pass "app: relaunch started the task again (state running)"
+else
+  fail "app: relaunch did not start the task again (state $(api GET "/v1/tasks/$task" | jq -r .state))"
+fi
+word=relaunched$RANDOM
+api POST "/v1/tasks/$task/messages" "$(jq -nc --arg t "QV-STATUS working: $word pid {pid}" '{text: $t}')" >/dev/null
+if pid2=$(note_pid "$word" 30); then
+  if [ -n "$pid1" ] && [ "$pid2" = "$pid1" ]; then
+    fail "relaunch: the same process (pid $pid2) answered; no new worker started"
+  elif worker_alive "$pid2"; then
+    pass "relaunch: a new worker (pid ${pid1:-?} -> $pid2) in the same worktree answers a steer"
+  else
+    fail "relaunch: the worker that answered (pid $pid2) is not running"
+  fi
+else
+  fail "relaunch: the relaunched worker never answered a steer (note: $(note))"
+fi
+"$Q" browser screenshot --path native/06-relaunched.png >/dev/null 2>&1 || true
+
+# --- Evidence ----------------------------------------------------------------
+
+api GET "/v1/tasks/$task/events" >"$ev/task-events.json"
+api GET /v1/decisions >"$ev/decisions.json"
+"$Q" events --since 0 --for 2 >"$ev/events.jsonl" 2>/dev/null
+"$Q" capture native/agents -- "$Q" agents >/dev/null 2>&1 || true
+if jq -e 'select(.kind == "task.created")' "$ev/events.jsonl" >/dev/null 2>&1 ||
+  grep -q '"task\.' "$ev/events.jsonl"; then
+  pass "events: the stream carries the task's events ($(grep -c . "$ev/events.jsonl") frames)"
+else
+  fail "events: the stream carries no task events (frames in $ev/events.jsonl)"
+fi
+finish

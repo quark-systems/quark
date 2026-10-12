@@ -40,6 +40,22 @@ esac
 
 echo "fake-agent $name pid $$ ($([ "$resumed" = true ] && echo resumed || echo fresh))"
 
+# Claude Code logs each conversation under
+# $CLAUDE_CONFIG_DIR/projects/<cwd with every non-alphanumeric as ->/<id>.jsonl,
+# and an engine looks there before asking it to continue one. The fake keeps
+# that log too, only when the run gave it a private config directory.
+if [ "$name" = claude ] && [ -n "${QV_AGENT_JOURNAL:-}" ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  log_dir=$CLAUDE_CONFIG_DIR/projects/$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')
+  mkdir -p "$log_dir"
+  # shellcheck disable=SC2012 # the logs are named by uuid
+  log=$(ls -t "$log_dir"/*.jsonl 2>/dev/null | head -1)
+  if [ "$resumed" = false ] || [ -z "$log" ]; then
+    log=$log_dir/$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "fake-$$-$(date +%s)").jsonl
+  fi
+  printf '{"type":"system","subtype":"fake-agent","pid":%s,"cwd":%s,"resumed":%s}\n' \
+    "$$" "$(json_str "$PWD")" "$resumed" >>"$log"
+fi
+
 # A firstmate worker: the engine wrote Claude Code hooks into the worktree
 # and named the status file and steering inbox in the launch brief (the last
 # argument). The agent then keeps the engine's turn bookkeeping the way
@@ -48,6 +64,8 @@ echo "fake-agent $name pid $$ ($([ "$resumed" = true ] && echo resumed || echo f
 hooks=.claude/settings.local.json brief=""
 [ $# -gt 0 ] && brief=${!#}
 status_file=$(printf '%s' "$brief" | grep -o ">> '[^']*\.status'" | head -1 | sed "s/^>> '//; s/'$//")
+# A native worker is told its status file in its environment.
+[ -n "$status_file" ] || status_file=${QUARK_STATUS_FILE:-}
 # shellcheck disable=SC2016 # the backquotes are literal brief text
 inbox=$(printf '%s' "$brief" | grep -o 'steering inbox is `[^`]*`' | head -1 | sed 's/^steering inbox is `//; s/`$//')
 
@@ -72,6 +90,8 @@ hook Stop
 # Claude Code's empty composer is a bare `❯` row; the engine reads it before
 # typing into the agent (an exit, a steer).
 while IFS= read -r -p '❯ ' line; do
+  # Text the engine pastes arrives inside bracketed-paste markers.
+  line=${line//$'\e[200~'/}; line=${line//$'\e[201~'/}
   # Claude Code's /exit ends the session, as the engine's exit control types it.
   if [ "$line" = /exit ]; then
     hook SessionEnd
@@ -81,9 +101,15 @@ while IFS= read -r -p '❯ ' line; do
   echo "fake-agent: got ${line}"
   ack_inbox
   # A scripted worker turn: `QV-STATUS <line>` appends <line> to the task's
-  # status file, as a worker reports (journey-shadows drives these).
+  # status file, as a worker reports (the journeys drive these), with
+  # `{pid}` replaced by this process's pid so a journey can tell which
+  # process answered. An answer the engine relays (`Answer to [<key>]:
+  # <answer>`) is acknowledged the same way, as a worker carrying on would.
   case $line in
-    "QV-STATUS "*) [ -n "$status_file" ] && printf '%s\n' "${line#QV-STATUS }" >>"$status_file" ;;
+    "QV-STATUS "*) [ -n "$status_file" ] && printf '%s\n' "${line#QV-STATUS }" | sed "s/{pid}/$$/g" >>"$status_file" ;;
+    "Answer to ["*"]: "*)
+      key=${line#Answer to \[}; key=${key%%\]*}
+      [ -n "$status_file" ] && printf 'working: answered %s: %s\n' "$key" "${line#*\]: }" >>"$status_file" ;;
   esac
   hook Stop
 done
