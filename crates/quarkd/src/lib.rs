@@ -99,8 +99,28 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     shadows::record_daemon_started(&events, event_ingest::host()).await;
     let bridge = quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host());
     let firstmate = engine == EngineKind::Firstmate;
-    let mut engine: Arc<dyn EngineAdapter> =
-        config::build_engine(engine, &config, store.clone(), tmux)?;
+    // The native engine is the native supervisor: it must run.
+    let native = if engine == EngineKind::Native || native::enabled() {
+        match native::NativeSupervision::start(&config, Arc::new(events.clone())).await {
+            Ok(n) => Some(n),
+            Err(e) if engine == EngineKind::Native => {
+                return Err(e.context("starting the native engine's supervisor"))
+            }
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "native supervisor not started");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut engine: Arc<dyn EngineAdapter> = match (engine, &native) {
+        (EngineKind::Native, Some(n)) => Arc::new(engine::native::NativeEngine::new(
+            Arc::new(events.clone()),
+            n.supervisor.clone(),
+        )),
+        _ => config::build_engine(engine, &config, store.clone(), tmux)?,
+    };
     let dashboard_shadow = firstmate && dashboard_shadow::enabled();
     if firstmate {
         // Slice 1 in shadow: the fleet is read back from the event log too.
@@ -207,17 +227,6 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             .run(recovery::INTERVAL),
         )
     });
-    let native = if native::enabled() {
-        match native::NativeSupervision::start(&config, Arc::new(events.clone())).await {
-            Ok(n) => Some(n),
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "native supervisor not started");
-                None
-            }
-        }
-    } else {
-        None
-    };
     let ingest = event_ingest::EventIngest::new(store.clone(), bridge);
     let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
     let usage_task = tokio::spawn(

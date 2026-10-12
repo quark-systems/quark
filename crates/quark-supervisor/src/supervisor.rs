@@ -197,6 +197,22 @@ impl Supervisor {
         Some((record, self.fleet.get(project, task)?))
     }
 
+    /// Every task of `project` the supervisor has a worker for, caught up
+    /// with the log first, ordered by task id.
+    pub async fn tasks(&self, project: &ProjectId) -> Result<Vec<(TaskRecord, Worker)>> {
+        self.refresh().await?;
+        let states = self.ledger.states();
+        let mut out: Vec<_> = self
+            .fleet
+            .all()
+            .into_iter()
+            .filter(|w| &w.project == project)
+            .filter_map(|w| Some((states.get(project, &w.task)?, w)))
+            .collect();
+        out.sort_by(|a, b| a.1.task.cmp(&b.1.task));
+        Ok(out)
+    }
+
     fn state(&self, project: &ProjectId, task: &TaskId) -> TaskState {
         self.ledger.states().state(project, task)
     }

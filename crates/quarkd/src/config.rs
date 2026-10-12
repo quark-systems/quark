@@ -72,6 +72,9 @@ pub enum EngineKind {
     Stub,
     /// Real firstmate homes, read with scripts from the pinned engine checkout.
     Firstmate,
+    /// quarkd's own engine: the native supervisor over the event log, with
+    /// no firstmate checkout ([`crate::engine::native`]).
+    Native,
 }
 
 /// `tmux` is the `TMUX` value engine scripts run with, when the daemon has
@@ -89,6 +92,8 @@ pub fn build_engine(
             FirstmateEngine::new(config.engine_root(), Arc::new(StoreCallLog { store }))
                 .with_tmux(tmux),
         )),
+        // Needs the running supervisor; `serve` builds it.
+        EngineKind::Native => anyhow::bail!("the native engine is built by serve"),
     }
 }
 

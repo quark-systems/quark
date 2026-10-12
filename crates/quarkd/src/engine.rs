@@ -21,6 +21,7 @@
 pub mod eventlog;
 pub mod firstmate;
 pub mod liveness;
+pub mod native;
 pub mod shadow;
 
 use std::collections::HashMap;
