@@ -261,12 +261,12 @@ impl PoolReporter {
 }
 
 /// Repo clones in a workspace: each git checkout directly under
-/// `<root>/projects/`.
+/// `<root>/projects/` (firstmate) or `<root>/repos/` (native).
 fn clones(root: &Path) -> Vec<PathBuf> {
-    let Ok(dir) = std::fs::read_dir(root.join("projects")) else {
-        return Vec::new();
-    };
-    let mut out: Vec<PathBuf> = dir
+    let mut out: Vec<PathBuf> = ["projects", crate::engine::native_project::REPOS_DIR]
+        .iter()
+        .filter_map(|d| std::fs::read_dir(root.join(d)).ok())
+        .flatten()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.join(".git").exists())

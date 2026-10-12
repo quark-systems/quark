@@ -5,20 +5,36 @@
 #[path = "../../quark-supervisor/tests/common/mod.rs"]
 mod common;
 
+use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use common::{eventually, received, Env};
 use quark_core::fake::MemoryHosts;
 use quark_core::host::{Capacity, Health, Host, HostRegistry, Platform, RuntimeKind};
 use quark_dispatch::classify::{Answer, Classification};
 use quark_dispatch::{FixedQuota, Given, ProviderFamilies, Settings};
+use quark_harness::ManifestRegistry;
 use quark_sessions::pty::PtySupervisor;
-use quark_systems::{AgentConfig, DispatchStatus, TaskState};
+use quark_systems::{
+    AgentConfig, CreateProject, DeliveryPolicy, DispatchStatus, ProjectStatus, TaskState,
+};
+use quark_transcript::SessionRoots;
+use quarkd::accounts::{Accounts, StubQuota};
 use quarkd::engine::native::NativeEngine;
 use quarkd::engine::native_dispatch_engine::{DispatchParts, NativeDispatch};
+use quarkd::engine::native_project::ProjectSetup;
 use quarkd::engine::{
-    EngineAdapter, EngineError, NewTask, StartOutcome, TaskControl, WorkspaceRef,
+    EngineAdapter, EngineError, NewTask, SourceRepo, StartOutcome, TaskControl, WorkspacePlan,
+    WorkspaceRef,
 };
+use quarkd::harness::HarnessRegistry;
+use quarkd::provision::Layout;
+use quarkd::recovery::CoordinatorRecovery;
+use quarkd::sessions::Sessions;
+use quarkd::store::Store;
 
 fn ws(env: &Env) -> WorkspaceRef {
     WorkspaceRef {
@@ -154,6 +170,20 @@ async fn unknown_tasks_and_unserved_operations_are_refused() {
         .await
         .unwrap()
         .is_none());
+    // Without Project setup, creating a Project is refused.
+    let source = SourceRepo {
+        name: "repo".into(),
+        url: env.repo.display().to_string(),
+    };
+    assert!(engine
+        .add_source(&ws.root, &source, DeliveryPolicy::Gated)
+        .await
+        .is_err());
+    assert!(engine
+        .coordinator_terminals(&ws.root)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 const RULES: &str = r#"{"classifier":{"provider":"system1"},
@@ -460,4 +490,155 @@ async fn merges_through_the_gates_and_the_guard_then_lands_the_task() {
     let approvals = engine.verify().standing_approvals(&ws).await.unwrap();
     assert_eq!(approvals.len(), 1);
     assert!(approvals[0].on);
+}
+
+fn tmux_installed() -> bool {
+    std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// Claude Code replaced by a script that logs each start, then waits.
+fn fake_claude(dir: &Path) -> Arc<ManifestRegistry> {
+    let script = dir.join("fake-claude");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho \"start $*\" | head -c 200 >> '{}'\necho >> '{0}'\nexec sleep 600\n",
+            dir.join("starts").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut m = (**ManifestRegistry::builtin().get("claude-code").unwrap()).clone();
+    m.launch.argv = vec![script.display().to_string()];
+    Arc::new(ManifestRegistry::with([m]))
+}
+
+async fn starts(dir: &Path, want: usize) -> Vec<String> {
+    for _ in 0..100 {
+        let text = std::fs::read_to_string(dir.join("starts")).unwrap_or_default();
+        let lines: Vec<String> = text
+            .lines()
+            .filter(|l| l.starts_with("start"))
+            .map(str::to_string)
+            .collect();
+        if lines.len() >= want {
+            return lines;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the coordinator did not start {want} times");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn creates_a_project_and_recovers_its_coordinator_with_no_firstmate() {
+    if !tmux_installed() {
+        eprintln!("tmux is not installed; skipping");
+        return;
+    }
+    let env = Env::new();
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let dir = env.dir.path();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let sessions = Sessions::new("tmux", dir.join("run"), store.clone()).unwrap();
+    let server = sessions.server().unwrap().clone();
+    let layout = Layout::new(dir.join("home"));
+    let setup = ProjectSetup::new(sessions.clone(), layout.clone(), "http://127.0.0.1:1")
+        .with_manifests(fake_claude(dir))
+        .with_roots(SessionRoots {
+            claude: vec![dir.join("claude")],
+            ..Default::default()
+        });
+    let engine = Arc::new(NativeEngine::new(env.log(), sup).with_project_setup(Arc::new(setup)));
+    let agent = AgentConfig {
+        harness: "claude-code".into(),
+        model: None,
+        effort: None,
+        pool: None,
+    };
+    let project = store
+        .create_project(CreateProject {
+            name: "p".into(),
+            agent_config: Some(agent.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    let command = layout.command_workspace();
+    let source = SourceRepo {
+        name: "repo".into(),
+        url: env.repo.display().to_string(),
+    };
+
+    // Provisioning's steps, through the adapter.
+    engine
+        .add_source(&command, &source, DeliveryPolicy::Gated)
+        .await
+        .unwrap();
+    let plan = WorkspacePlan {
+        project_id: project.id.clone(),
+        name: "p".into(),
+        goal: None,
+        sources: vec![source],
+        root: layout.workspace(&project.id),
+        user_memory: None,
+    };
+    let root = engine.seed_workspace(&command, &plan).await.unwrap();
+    assert!(root.join("repos/repo/README").is_file());
+    let ws = WorkspaceRef {
+        project_id: project.id.clone(),
+        root: root.clone(),
+    };
+    engine
+        .start_coordinator(&command, &ws, &agent, &[], false)
+        .await
+        .unwrap();
+    assert_eq!(starts(dir, 1).await.len(), 1);
+    let target = format!("quark:coordinator-{}", project.id);
+    assert_eq!(
+        engine.coordinator_terminals(&command).await.unwrap(),
+        HashMap::from([(project.id.clone(), target.clone())])
+    );
+    store
+        .set_project_status(
+            &project.id,
+            ProjectStatus::Ready,
+            None,
+            Some(&root.display().to_string()),
+            None,
+        )
+        .unwrap();
+
+    // Recovery leaves a running coordinator alone, and starts a lost one
+    // again: fresh, since it never logged a conversation to resume.
+    let accounts = Arc::new(Accounts::new(
+        store.clone(),
+        Arc::new(HarnessRegistry::builtin()),
+        Arc::new(StubQuota::new()),
+        engine.account_envs(),
+    ));
+    let recovery = CoordinatorRecovery::new(
+        store.clone(),
+        engine.clone(),
+        accounts,
+        sessions.clone(),
+        command.clone(),
+        layout.home.clone(),
+    );
+    recovery.pass().await;
+    assert_eq!(starts(dir, 1).await.len(), 1);
+    server.kill().await;
+    recovery.pass().await;
+    let all = starts(dir, 2).await;
+    assert!(!all[1].contains("--continue"), "{}", all[1]);
+    assert!(server
+        .list_panes()
+        .await
+        .unwrap()
+        .iter()
+        .any(|p| p.target == target));
+
+    sessions.detach_all();
+    server.kill().await;
 }

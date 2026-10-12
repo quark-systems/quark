@@ -17,6 +17,8 @@ It sits on the native supervisor (`quark-supervisor`, slice 4), native verificat
 | `set_standing_approval` | `verify.standing_approval` events, one per repo |
 | `set_gates`, `gate_evidence`, `gate_artifact` | `config/gates.json` (schema `fm.gates.v1`) and `verify/<task>/` under the Project workspace root |
 
+| `add_source`, `seed_workspace`, `start_coordinator`, `coordinator_terminals` | `ProjectSetup` (`engine/native_project.rs`) |
+
 ## Verification
 
 The slice 2 glue is `crates/quarkd/src/engine/native_verify.rs` (`NativeVerify`).
@@ -26,7 +28,6 @@ The pull request's own checks must be green, then `NativeGuard` re-reads main: w
 The forge merges exactly the verified head, the merge is a `verify.merged` event, and the task is marked landed.
 A refusal is an engine command error that names the rule; the last run's gate evidence stays in `verify/<task>/evidence.json` with its logs.
 Nothing files the red-main episode's decision for a person yet, so a red main is overridden only by turning it green.
-
 
 ## Dispatch
 
@@ -63,19 +64,41 @@ Known gaps:
 - Workers run as plain processes (`IsolationMode::Native`), as firstmate's do.
 - Native account choices are not recorded as account leases, so the Accounts view does not count them.
 
+## Project setup and the coordinator
+
+Creating a Project needs no firstmate home and no `AGENTS.md` persona.
+
+- `add_source` clones the repo into the command-center workspace at `<command>/repos/<name>`.
+  Adding it again with the same URL is a no-op; another URL under the same name is refused.
+  The delivery policy stays on the Project in the store.
+- `seed_workspace` claims the Project workspace (`.quark/workspace.json`) and clones each source into `<workspace>/repos/<name>`, from the command center's copy when there is one, with `origin` set to the source URL.
+  Seeding again for the same Project checks what is there; a directory claimed by another Project, or any non-empty directory without a claim, is refused.
+- `start_coordinator` renders the coordinator's layered prompt (built-in, persona, the Project repo's `instructions.md` and memory, each code repo's instructions, skills; `quark-coordinator` and `quark-persona`) into `.quark/coordinator.md`.
+  It installs the coordinator's MCP route and turn-end hook into the workspace (`.mcp.json`, `.claude/settings.local.json`, as the native coordinator's pass does), then starts the harness in the `coordinator-<Project id>` window of quarkd's tmux server, in the workspace, under the account's variables.
+  The prompt reaches the agent as its system prompt (`--append-system-prompt`, read from the file by `sh` because a tmux command cannot carry it), so it takes effect at the next start when it changes.
+  With `resume`, the agent continues its latest conversation in the workspace (`--continue`); with no logged conversation the start is refused, and recovery starts the coordinator fresh.
+  A coordinator whose window is up is not started a second time.
+- Each start is recorded in `<command>/coordinators/<Project id>.json`; `coordinator_terminals` reads those records, so the app's coordinator terminal and chat, and coordinator recovery (`recovery.rs`), find the window after a daemon restart.
+
+Only Claude Code coordinators start so far: its tools and turn-end hook are the ones wired.
+Another harness is refused with an error that says so.
+
+With `--engine native`, the native coordinator (slice 6) always runs, in Native wiring (`InputBrain` and `EngineHands`), whatever `QUARK_ENGINE_SLICES` and `QUARK_NATIVE_COORDINATOR` say.
+Coordinator recovery runs for the native engine as it does for firstmate.
+
 ## Still refused
 
 The native engine refuses the operations below, each with an error that names the missing part, until it is wired:
 
-- adding a repo, creating a Project, and starting its coordinator (native Project setup and slice 6)
 - the inbox note (slice 7 channels)
+- coordinators on harnesses other than Claude Code
 
 ## Getting off firstmate
 
 These steps remain, in order:
 
 1. File the red-main episode's decision as a hold, so a person can override a red main (slice 2).
-2. Native Project setup and coordinator start, with no firstmate home (slice 6); setup clones each source into `<root>/repos/<name>`.
+2. Coordinators on other harnesses: their tool and turn-end hook wiring.
 3. The inbox note through the channels API (slice 7).
 4. The worker terminal for PTY-backed workers (today `EngineTask::terminal` names only tmux windows).
 5. `verify-quark` journeys run with `--engine native`.

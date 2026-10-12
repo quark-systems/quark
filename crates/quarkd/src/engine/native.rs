@@ -11,6 +11,8 @@
 //!   [`Supervisor`] (slice 4);
 //! - merges, standing approval and the verification gates go to
 //!   [`NativeVerify`] (slice 2).
+//! - adding a repo, seeding a Project workspace and starting its
+//!   coordinator go to [`ProjectSetup`], when the engine has one.
 //!
 //! Operations whose native slice is not wired here yet are refused with
 //! [`EngineError::Invalid`] naming the slice, never silently ignored.
@@ -30,6 +32,7 @@ use quark_supervisor::{Relaunch, Supervisor, Worker};
 use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind};
 
 use super::native_dispatch_engine::{self, NativeDispatch};
+use super::native_project::ProjectSetup;
 use super::native_verify::NativeVerify;
 use super::{
     EngineAdapter, EngineError, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold,
@@ -47,6 +50,8 @@ pub struct NativeEngine {
     lines: WorkerLines,
     dispatch: Option<Arc<NativeDispatch>>,
     verify: NativeVerify,
+    /// Project setup and coordinator start; refused without it.
+    project: Option<Arc<ProjectSetup>>,
 }
 
 impl NativeEngine {
@@ -67,6 +72,7 @@ impl NativeEngine {
             supervisor,
             lines: WorkerLines::default(),
             dispatch: None,
+            project: None,
         }
     }
 
@@ -84,6 +90,12 @@ impl NativeEngine {
 
     pub fn verify(&self) -> &NativeVerify {
         &self.verify
+    }
+
+    /// Creates Projects and starts their coordinators with `setup`.
+    pub fn with_project_setup(mut self, setup: Arc<ProjectSetup>) -> Self {
+        self.project = Some(setup);
+        self
     }
 
     pub fn supervisor(&self) -> &Arc<Supervisor> {
@@ -363,31 +375,59 @@ impl EngineAdapter for NativeEngine {
         self.verify.gate_artifact(ws, &task_id(task)?, path)
     }
 
+    /// Delivery is the Project's own setting in the store; the clone does
+    /// not carry it.
     async fn add_source(
         &self,
-        _: &Path,
-        _: &SourceRepo,
+        command: &Path,
+        source: &SourceRepo,
         _: DeliveryPolicy,
     ) -> Result<(), EngineError> {
-        Self::refuse("adding a repo", "native Project setup")
+        match &self.project {
+            Some(p) => p.add_source(command, source).await,
+            None => Self::refuse("adding a repo", "native Project setup"),
+        }
     }
 
-    async fn seed_workspace(&self, _: &Path, _: &WorkspacePlan) -> Result<PathBuf, EngineError> {
-        Self::refuse("creating a Project", "native Project setup")
+    async fn seed_workspace(
+        &self,
+        command: &Path,
+        plan: &WorkspacePlan,
+    ) -> Result<PathBuf, EngineError> {
+        match &self.project {
+            Some(p) => p.seed_workspace(command, plan).await,
+            None => Self::refuse("creating a Project", "native Project setup"),
+        }
     }
 
     async fn start_coordinator(
         &self,
-        _: &Path,
-        _: &WorkspaceRef,
-        _: &AgentConfig,
-        _: &[(String, String)],
-        _: bool,
+        command: &Path,
+        ws: &WorkspaceRef,
+        agent: &AgentConfig,
+        account_env: &[(String, String)],
+        resume: bool,
     ) -> Result<(), EngineError> {
-        Self::refuse(
-            "starting the coordinator",
-            "the native coordinator (slice 6)",
-        )
+        match &self.project {
+            Some(p) => {
+                p.start_coordinator(command, ws, agent, account_env, resume)
+                    .await
+            }
+            None => Self::refuse(
+                "starting the coordinator",
+                "the native coordinator (slice 6)",
+            ),
+        }
+    }
+
+    async fn coordinator_terminals(
+        &self,
+        command: &Path,
+    ) -> Result<HashMap<String, String>, EngineError> {
+        match &self.project {
+            Some(p) => p.coordinator_terminals(command),
+            None => Ok(HashMap::new()),
+        }
     }
 
     fn account_envs(&self) -> &'static [&'static str] {

@@ -23,6 +23,7 @@ pub mod firstmate;
 pub mod liveness;
 pub mod native;
 pub mod native_dispatch_engine;
+pub mod native_project;
 pub mod native_verify;
 pub mod shadow;
 
