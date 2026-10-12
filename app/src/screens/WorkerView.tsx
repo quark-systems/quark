@@ -1,6 +1,6 @@
-// J4: one worker in one view. Its transcript and a box to message it in the middle; the work
-// pane on the right with its live terminal, changed files with their diff, its PR and why this
-// agent; cancel and relaunch in the header, and the coordinator dock under the conversation.
+// J4: one worker in one view. Its live terminal and a box to message it in the middle; the work
+// pane on the right with its transcript, changed files with their diff, its PR and why this
+// agent; cancel and relaunch in the header, and the coordinator dock under the terminal.
 import { KeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
@@ -22,7 +22,7 @@ export function WorkerView({ id }: { id: string }) {
   const project = useStore((s) => (task ? s.projects[task.project_id] : undefined));
   const connected = useStore((s) => s.connected);
   const activity = useStore((s) => s.taskActivity[id] ?? 0);
-  const [tab, setTab] = useState<"terminal" | "changes" | "pr" | "why">("terminal");
+  const [tab, setTab] = useState<"transcript" | "changes" | "pr" | "why">("transcript");
   const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
   const [missing, setMissing] = useState(false);
   const [paneWidth, setPaneWidth] = useWorkPaneWidth();
@@ -57,21 +57,20 @@ export function WorkerView({ id }: { id: string }) {
           <Controls taskId={id} active={isActive(task.state)} />
         </div>
         {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
-        <TranscriptPanel taskId={id} />
+        <TerminalPanel taskId={id} taskState={task.state} />
         <SteerBox taskId={id} />
-        {/* The dock sits under the worker's own conversation; the work pane runs the full height. */}
+        {/* The dock sits under the worker's own terminal; the work pane runs the full height. */}
         <Dock />
       </section>
       <aside className="worker-pane" aria-label="Work">
         <PaneResizer width={paneWidth} onWidth={setPaneWidth} />
         <div className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === "terminal"} className={tab === "terminal" ? "on" : ""} onClick={() => setTab("terminal")}>Terminal</button>
+          <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}>Transcript</button>
           <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
           {(pr || task.pull_request_url) && <button role="tab" aria-selected={tab === "pr"} className={tab === "pr" ? "on" : ""} onClick={() => setTab("pr")}>PR</button>}
           <button role="tab" aria-selected={tab === "why"} className={tab === "why" ? "on" : ""} onClick={() => setTab("why")}>Why this agent</button>
         </div>
-        {/* The terminal stays mounted so its emulator keeps its screen while another tab shows. */}
-        <div className="tab-body" hidden={tab !== "terminal"}><TerminalPanel taskId={id} taskState={task.state} /></div>
+        {tab === "transcript" && <div className="tab-body"><TranscriptPanel taskId={id} /></div>}
         {tab === "changes" && <div className="tab-body"><ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} /></div>}
         {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
         {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}

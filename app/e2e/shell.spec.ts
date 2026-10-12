@@ -157,25 +157,25 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   await expect(page).toHaveURL(/#\/prs$/);
 });
 
-test("worker view: transcript in the middle, Terminal, Changes, PR and Why this agent in the work pane", async ({ page }) => {
+test("worker view: terminal in the middle, Transcript, Changes, PR and Why this agent in the work pane", async ({ page }) => {
   await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "OpenAPI check in CI" }).click();
   await expect(page).toHaveURL(/#\/t\//);
 
-  // The center is the conversation with the worker; the work pane opens on its terminal.
-  await expect(page.locator(".worker-center").getByTestId("transcript")).toBeVisible();
+  // The center is the worker's live terminal and a box to message it; the work pane opens on its transcript.
+  await expect(page.locator(".worker-center").getByTestId("terminal")).toBeVisible();
   await expect(page.locator(".worker-center").getByLabel("Message the worker")).toBeVisible();
-  // The dock sits under the worker's conversation, not under the work pane.
+  // The dock sits under the worker's terminal, not under the work pane.
   await expect(page.locator(".worker-center").getByTestId("dock")).toBeVisible();
   const pane = page.getByRole("complementary", { name: "Work" });
-  await expect(pane.getByRole("tab")).toHaveText(["Terminal", "Changes", "PR", "Why this agent"]);
-  await expect(pane.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
-  await expect(pane.getByTestId("terminal")).toBeVisible();
+  await expect(pane.getByRole("tab")).toHaveText(["Transcript", "Changes", "PR", "Why this agent"]);
+  await expect(pane.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");
+  await expect(pane.getByTestId("transcript")).toBeVisible();
 
   // PR: the worker's PR in brief, opening its full view.
   await pane.getByRole("tab", { name: "PR" }).click();
   await expect(pane.getByTestId("worker-pr")).toContainText("#2");
-  await expect(pane.getByTestId("terminal")).toBeHidden();
+  await expect(pane.getByTestId("transcript")).toBeHidden();
 
   // Why this agent links to the dispatch rules it was picked by.
   await pane.getByRole("tab", { name: "Why this agent" }).click();
