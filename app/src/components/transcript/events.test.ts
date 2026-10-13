@@ -66,6 +66,7 @@ describe("engineEvent", () => {
 
   it("reads an engine note as one quiet line", () => {
     expect(engineEvent("Engine note: Project memory: a new memory was added to the Project's Beads as `k`. The entry:\n\n  Rebase first")).toMatchObject({ kind: "engine", title: "Project memory updated" });
+    expect(engineEvent("Engine note: the user set this Project's persona to Plain. It applies from your next message on.")?.title).toBe("Persona changed");
     expect(engineEvent("Engine note: something else")?.title).toBe("Engine note");
   });
 
