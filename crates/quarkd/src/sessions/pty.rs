@@ -14,6 +14,9 @@
 //! request, or after old output was pruned, opens a fresh attach: the old
 //! stream stops forwarding first, so the new snapshot holds everything it
 //! had not sent and nothing is sent twice.
+//! A stream that breaks while the program still runs (the supervisor was
+//! busy, a frame was cut short) is opened again after a short pause, with a
+//! new snapshot, so the terminal does not sit silent until the next sync.
 //!
 //! A relaunched worker runs in a new session; the engine names it, and the
 //! terminal switches to it with a snapshot. When the program exits the
@@ -337,8 +340,28 @@ impl PtyHub {
     }
 }
 
+/// How many times in a row a stream that broke is opened again before the
+/// terminal is dropped for the next sync to pick up.
+const PUMP_RETRIES: u32 = 20;
+
+/// The pause before opening a broken stream again.
+const PUMP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How one attempt to stream a session ended.
+enum Pumped {
+    /// The program is gone: the session is not attached again.
+    Exited,
+    /// The terminal moved to another stream, or the hub is gone.
+    Replaced,
+    /// The supervisor could not be reached or the stream broke off;
+    /// `streamed` when it had delivered output first.
+    Broken { streamed: bool },
+}
+
 /// Streams one session into the terminal's events until the session ends
-/// or the terminal moves to another stream.
+/// or the terminal moves to another stream. A stream that breaks while the
+/// program lives is opened again here: nothing else would until the next
+/// sync, and the terminal would sit silent in between.
 async fn pump(
     hub: Weak<PtyHub>,
     backend: Arc<dyn SessionBackend>,
@@ -347,47 +370,77 @@ async fn pump(
     epoch: u64,
     mut done: Option<oneshot::Sender<Event>>,
 ) {
-    let end = |exited: bool| {
-        if let Some(hub) = hub.upgrade() {
-            hub.ended(&terminal_id, epoch, exited);
+    let mut failures = 0;
+    let exited = loop {
+        match pump_once(&hub, &backend, &terminal_id, &session, epoch, &mut done).await {
+            Pumped::Exited => break true,
+            Pumped::Replaced => return,
+            Pumped::Broken { streamed } => {
+                failures = if streamed { 1 } else { failures + 1 };
+                if failures > PUMP_RETRIES {
+                    break false;
+                }
+                tokio::time::sleep(PUMP_RETRY_DELAY).await;
+            }
         }
     };
+    if let Some(hub) = hub.upgrade() {
+        hub.ended(&terminal_id, epoch, exited);
+    }
+}
+
+/// One attach: the session's snapshot, then its output.
+async fn pump_once(
+    hub: &Weak<PtyHub>,
+    backend: &Arc<dyn SessionBackend>,
+    terminal_id: &str,
+    session: &SessionId,
+    epoch: u64,
+    done: &mut Option<oneshot::Sender<Event>>,
+) -> Pumped {
     let info = match backend.list().await {
-        Ok(all) => all.into_iter().find(|s| s.id == session),
+        Ok(all) => all.into_iter().find(|s| s.id == *session),
         Err(e) => {
             tracing::debug!(terminal = %terminal_id, error = %e, "listing PTY sessions failed");
-            return end(false);
+            return Pumped::Broken { streamed: false };
         }
     };
     let Some(info) = info.filter(|i| i.alive) else {
-        return end(true);
+        return Pumped::Exited;
     };
-    if let Some(hub) = hub.upgrade() {
-        hub.set_title(&terminal_id, epoch, info.name);
+    match hub.upgrade() {
+        Some(hub) => hub.set_title(terminal_id, epoch, info.name),
+        None => return Pumped::Replaced,
     }
     // The size the snapshot is drawn at; the stream does not carry it.
-    let size = backend.snapshot(&session).await.ok().map(|s| s.size);
-    let mut stream = match backend.attach(&session).await {
+    let size = backend.snapshot(session).await.ok().map(|s| s.size);
+    let mut stream = match backend.attach(session).await {
         Ok(s) => s,
+        Err(CoreError::NotFound(_)) => return Pumped::Exited,
         Err(e) => {
             tracing::debug!(terminal = %terminal_id, error = %e, "PTY attach failed");
-            return end(matches!(e, CoreError::NotFound(_)));
+            return Pumped::Broken { streamed: false };
         }
     };
     let mut kind = TerminalChunkKind::Snapshot;
     while let Some(out) = stream.next().await {
-        let Some(hub) = hub.upgrade() else { return };
+        let Some(hub) = hub.upgrade() else {
+            return Pumped::Replaced;
+        };
         match out {
             Output::Bytes { data } => {
-                if !hub.emit(&terminal_id, epoch, kind, data, size, done.take()) {
-                    return;
+                if !hub.emit(terminal_id, epoch, kind, data, size, done.take()) {
+                    return Pumped::Replaced;
                 }
                 kind = TerminalChunkKind::Output;
             }
-            Output::Exited { .. } => return hub.ended(&terminal_id, epoch, true),
+            Output::Exited { .. } => return Pumped::Exited,
         }
     }
-    end(false);
+    tracing::debug!(terminal = %terminal_id, "PTY stream broke off; opening it again");
+    Pumped::Broken {
+        streamed: kind == TerminalChunkKind::Output,
+    }
 }
 
 /// A PTY supervisor error as a session error.
@@ -402,6 +455,111 @@ fn session_error(e: CoreError) -> SessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use quark_core::session::{OutputStream, SessionInfo, SessionSpec, Snapshot};
+
+    /// Yields its chunks, then breaks off or stays open.
+    struct Script {
+        chunks: std::vec::IntoIter<Vec<u8>>,
+        stay: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl OutputStream for Script {
+        async fn next(&mut self) -> Option<Output> {
+            if let Some(data) = self.chunks.next() {
+                return Some(Output::Bytes { data });
+            }
+            if self.stay {
+                std::future::pending::<()>().await;
+            }
+            None
+        }
+    }
+
+    /// One live session whose first attach fails, whose second breaks off
+    /// after its repaint, and whose third stays open.
+    #[derive(Default)]
+    struct Flaky {
+        attaches: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionBackend for Flaky {
+        fn name(&self) -> &'static str {
+            "flaky"
+        }
+        async fn create(&self, _: &SessionSpec) -> quark_core::Result<SessionInfo> {
+            Err(CoreError::Unsupported("not in this test".into()))
+        }
+        async fn attach(&self, _: &SessionId) -> quark_core::Result<Box<dyn OutputStream>> {
+            let script = |chunk: &str, stay| -> Box<dyn OutputStream> {
+                Box::new(Script {
+                    chunks: vec![chunk.as_bytes().to_vec()].into_iter(),
+                    stay,
+                })
+            };
+            match self.attaches.fetch_add(1, Ordering::SeqCst) {
+                0 => Err(CoreError::Backend("the supervisor is busy".into())),
+                1 => Ok(script("one", false)),
+                _ => Ok(script("two", true)),
+            }
+        }
+        async fn input(&self, _: &SessionId, _: &[u8]) -> quark_core::Result<()> {
+            Ok(())
+        }
+        async fn resize(&self, _: &SessionId, _: TermSize) -> quark_core::Result<()> {
+            Ok(())
+        }
+        async fn snapshot(&self, _: &SessionId) -> quark_core::Result<Snapshot> {
+            Ok(Snapshot {
+                size: TermSize::default(),
+                bytes: Vec::new(),
+            })
+        }
+        async fn kill(&self, _: &SessionId) -> quark_core::Result<()> {
+            Ok(())
+        }
+        async fn list(&self) -> quark_core::Result<Vec<SessionInfo>> {
+            Ok(vec![SessionInfo {
+                id: SessionId("pty-1".into()),
+                name: "worker".into(),
+                task: None,
+                alive: true,
+                exit_code: None,
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_breaks_is_opened_again() {
+        let (sink, rx) = std::sync::mpsc::channel();
+        let backend = Arc::new(Flaky::default());
+        let hub = PtyHub::new(backend.clone(), sink);
+        hub.sync("p1", vec![("t1".into(), SessionId("pty-1".into()))]);
+
+        let mut got = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while got.len() < 2 && tokio::time::Instant::now() < deadline {
+            while let Ok(chunk) = rx.try_recv() {
+                got.push((chunk.kind, String::from_utf8(chunk.data).unwrap()));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // Each attach starts from a snapshot, and no attempt was given up on.
+        assert_eq!(
+            got,
+            [
+                (TerminalChunkKind::Snapshot, "one".to_string()),
+                (TerminalChunkKind::Snapshot, "two".to_string())
+            ]
+        );
+        assert_eq!(backend.attaches.load(Ordering::SeqCst), 3);
+        assert!(hub.owns("t1"), "the terminal stayed attached");
+        hub.detach();
+    }
 
     #[test]
     fn endpoints_name_pty_sessions_only() {
