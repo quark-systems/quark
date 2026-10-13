@@ -729,10 +729,16 @@ async fn pty_floods_are_pruned_to_a_snapshot() {
     let mut last_line = Vec::new();
     let mut snapshots = 0;
     loop {
-        let event = tokio::time::timeout_at(deadline, rx.recv())
-            .await
-            .expect("flood finished")
-            .unwrap();
+        let event = match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(event) => event.unwrap(),
+            // Say what the terminal was doing, so a timeout can be told from
+            // a stream that stopped.
+            Err(_) => panic!(
+                "the flood's last line never arrived: {snapshots} snapshots, terminal listed: {}, last bytes: {:?}",
+                sessions.get(task).is_ok(),
+                String::from_utf8_lossy(&last_line)
+            ),
+        };
         if let Some((out, bytes)) = output(&event) {
             if out.terminal_id == task {
                 snapshots += usize::from(out.kind == TerminalChunkKind::Snapshot);
