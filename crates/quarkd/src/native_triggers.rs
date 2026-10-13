@@ -27,7 +27,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use quark_core::{CoreError, EventLog, NewEvent, ProjectId, TaskId};
 use quark_systems::{EventType, Notice, NoticeItem, NoticeKind};
-use quark_triggers::{Channel, CommandChannel, Effects, Engine, Item, Mode, NoEffects, Processes};
+use quark_triggers::{
+    Channel, CommandChannel, Effects, Engine, Item, Mode, NoEffects, Occasion, Processes,
+};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex;
 
@@ -268,6 +270,7 @@ impl Effects for DaemonEffects {
         &self,
         project: &ProjectId,
         task: Option<&TaskId>,
+        occasion: Occasion,
         note: &str,
     ) -> quark_core::Result<()> {
         self.post(Notice {
@@ -275,6 +278,7 @@ impl Effects for DaemonEffects {
             kind: NoticeKind::Now,
             text: note.to_string(),
             task_id: task.map(|t| t.to_string()),
+            occasion: Some(crate::api::automation::occasion_out(occasion)),
             items: Vec::new(),
         })
         .await
@@ -301,6 +305,7 @@ impl Effects for DaemonEffects {
                 format!("{n} update{s} since the last digest")
             },
             task_id: None,
+            occasion: None,
             items: items
                 .iter()
                 .map(|i| NoticeItem {
@@ -487,7 +492,7 @@ mod tests {
         let p = ProjectId::new(pid.clone());
         effects.wake(&p, None, "check the nightly").await.unwrap();
         effects
-            .notify(&p, Some(&TaskId::from("t1")), "t1: done")
+            .notify(&p, Some(&TaskId::from("t1")), Occasion::Done, "t1: done")
             .await
             .unwrap();
         effects
@@ -512,6 +517,7 @@ mod tests {
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].payload["text"], "t1: done");
         assert_eq!(notices[0].payload["kind"], "now");
+        assert_eq!(notices[0].payload["occasion"], "done");
         assert_eq!(
             messages(&stub),
             [("t1".to_string(), "rebase please".to_string())]

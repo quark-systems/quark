@@ -1853,6 +1853,11 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (p === "/mock/pr-comments" && req.method === "GET") return send(res, 200, prComments);
+  // Post an automation update (`notice.posted`), as quarkd's trigger engine does, so tests can drive Since you looked.
+  if (p === "/mock/notice" && req.method === "POST") {
+    const n = await readJson(req);
+    return send(res, 200, emit("notice.posted", n, n.project_id));
+  }
   // Unknown route: an empty 404, like axum's default, which the app reads as "not available yet".
   res.writeHead(404, cors);
   res.end();

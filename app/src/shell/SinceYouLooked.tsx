@@ -9,10 +9,11 @@ import { ago, workerNamed } from "../util";
 import { SectionLabel, StatusDot, taskTone } from "../ui";
 import { lastSeen, summarize } from "../screens/dashboard/summary";
 import { useAttention } from "./NextAttention";
+import { describeUpdate } from "./updates";
 
 type Posted = Notice & { seq: number; ts: string };
 
-/** One update: a link to the worker it is about, or a digest that opens to list what waited. */
+/** One update: which worker, what happened and the detail, linking to the worker; or a digest that opens to list what waited. */
 function Update({ notice: n }: { notice: Posted }) {
   const tasks = useStore((s) => s.tasks);
   const [open, setOpen] = useState(false);
@@ -37,9 +38,20 @@ function Update({ notice: n }: { notice: Posted }) {
       </div>
     );
   }
+  const v = describeUpdate(n, task?.title);
+  const body = (
+    <>
+      <StatusDot tone={v.tone} label={v.label} />
+      <span className="since-body">
+        <span className="since-head"><b>{v.label}</b>{v.who && <> · {v.who}</>}</span>
+        {v.detail && <span className="since-detail md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(v.detail) }} />}
+      </span>
+      {when}
+    </>
+  );
   return task
-    ? <a className="since-item since-update" href={href({ name: "task", id: task.id })} data-testid="since-update"><StatusDot tone={taskTone(task.state)} />{text}{when}</a>
-    : <div className="since-item since-update plain" data-testid="since-update"><StatusDot tone="idle" label="Update" />{text}{when}</div>;
+    ? <a className="since-item since-update" href={href({ name: "task", id: task.id })} title={n.text} data-testid="since-update">{body}</a>
+    : <div className="since-item since-update plain" title={n.text} data-testid="since-update">{body}</div>;
 }
 
 const KIND = { decision: "decision", pr: "check failed", worker: "worker stuck" } as const;

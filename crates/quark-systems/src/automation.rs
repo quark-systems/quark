@@ -167,6 +167,9 @@ pub struct Notice {
     /// The task it is about, for `now`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// What happened, for `now`: the app words and colors the update by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occasion: Option<AwayOccasion>,
     /// What a digest or return brief carries, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<NoticeItem>,

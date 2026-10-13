@@ -184,3 +184,22 @@ test("worker view: terminal in the middle, Transcript, Changes, PR and Why this 
   await edit.click();
   await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
 });
+
+test("updates: each says what happened, which worker, and the detail in plain words", async ({ page, request }) => {
+  await open(page, "#/p/quark");
+  await expect(page.getByTestId("connection")).toContainText("connected");
+  const tasks = await (await request.get("http://127.0.0.1:7392/v1/projects/quark/tasks")).json();
+  const ci = tasks.find((t: { title: string }) => t.title === "OpenAPI check in CI");
+  await request.post("http://127.0.0.1:7392/mock/notice", {
+    data: { project_id: "quark", kind: "now", text: `${ci.id}: done PR quark#2 checks green`, task_id: ci.id, occasion: "done" },
+  });
+  await request.post("http://127.0.0.1:7392/mock/notice", {
+    data: { project_id: "quark", kind: "now", text: "m6-self-host-install: blocked: needs a DNS record", task_id: "m6-self-host-install" },
+  });
+  const items = page.getByTestId("since-updates").getByTestId("since-update");
+  await expect(items.nth(0)).toContainText("Blocked · M6 self host install");
+  await expect(items.nth(0)).toContainText("needs a DNS record");
+  await expect(items.nth(1)).toContainText("Finished · OpenAPI check in CI");
+  await expect(items.nth(1)).toContainText("PR quark#2 checks green");
+  await expect(items.nth(1).getByRole("img", { name: "Finished" })).toBeVisible();
+});
