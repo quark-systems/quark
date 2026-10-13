@@ -1215,10 +1215,11 @@ impl Store {
             let mut out = Vec::new();
             for row in rows {
                 let (id, entry) = row?;
-                out.push(TranscriptItem {
-                    id,
-                    entry: serde_json::from_str(&entry)?,
-                });
+                let entry: quark_systems::TranscriptEntry = serde_json::from_str(&entry)?;
+                if recorded_compaction_summary(&entry) {
+                    continue;
+                }
+                out.push(TranscriptItem { id, entry });
             }
             Ok(out)
         })
@@ -1704,6 +1705,19 @@ pub(crate) fn later(a: &str, b: Option<&str>) -> bool {
         None => true,
         Some(b) => time::OffsetDateTime::parse(b, &Rfc3339).is_ok_and(|b| a > b),
     }
+}
+
+/// How Claude Code opens the summary it leaves after compacting a
+/// conversation.
+const COMPACTION_SUMMARY: &str =
+    "This session is being continued from a previous conversation that ran out of context.";
+
+/// Whether `entry` is a compaction summary recorded before the transcript
+/// reader left them out: the harness's note to itself, never shown as a
+/// message.
+fn recorded_compaction_summary(entry: &quark_systems::TranscriptEntry) -> bool {
+    entry.role == quark_systems::TranscriptRole::User
+        && entry.text.trim_start().starts_with(COMPACTION_SUMMARY)
 }
 
 /// Opens a decision for `hold` (answered at once when the hold already
@@ -2225,5 +2239,23 @@ mod tests {
         assert_eq!(stored.chosen.account.as_deref(), Some("acc_2"));
         assert!(store.record_dispatch(&record, "s1.1.1").unwrap().is_none());
         assert_eq!(store.list_dispatch("tsk_1").unwrap(), vec![stored]);
+    }
+
+    #[test]
+    fn recorded_compaction_summaries_are_left_out_of_transcripts() {
+        let entry = |role: &str, text: &str| -> quark_systems::TranscriptEntry {
+            serde_json::from_value(serde_json::json!({
+                "role": role, "text": text, "tool_name": null, "tool_call_id": null,
+                "is_error": false, "truncated": false, "ts": null
+            }))
+            .unwrap()
+        };
+        let summary = format!("{COMPACTION_SUMMARY} The summary below covers the earlier portion.");
+        assert!(recorded_compaction_summary(&entry("user", &summary)));
+        assert!(!recorded_compaction_summary(&entry("assistant", &summary)));
+        assert!(!recorded_compaction_summary(&entry(
+            "user",
+            "Merge #12 when green"
+        )));
     }
 }
