@@ -58,8 +58,14 @@ pub trait Effects: Send + Sync {
     /// action. Occasions are not woken through here; the coordinator
     /// applies the away policy's `wake` column to them itself.
     async fn wake(&self, project: &ProjectId, task: Option<&TaskId>, note: &str) -> Result<()>;
-    /// Tell the user now.
-    async fn notify(&self, project: &ProjectId, task: Option<&TaskId>, note: &str) -> Result<()>;
+    /// Tell the user now about `occasion`.
+    async fn notify(
+        &self,
+        project: &ProjectId,
+        task: Option<&TaskId>,
+        occasion: Occasion,
+        note: &str,
+    ) -> Result<()>;
     /// Send the user a digest. `returning` marks the brief for a user who
     /// just came back, which also carries what was held.
     async fn digest(&self, project: &ProjectId, items: &[Item], returning: bool) -> Result<()>;
@@ -75,7 +81,7 @@ impl Effects for NoEffects {
     async fn wake(&self, _: &ProjectId, _: Option<&TaskId>, _: &str) -> Result<()> {
         Err(CoreError::Unsupported("shadow mode does not act".into()))
     }
-    async fn notify(&self, _: &ProjectId, _: Option<&TaskId>, _: &str) -> Result<()> {
+    async fn notify(&self, _: &ProjectId, _: Option<&TaskId>, _: Occasion, _: &str) -> Result<()> {
         Err(CoreError::Unsupported("shadow mode does not act".into()))
     }
     async fn digest(&self, _: &ProjectId, _: &[Item], _: bool) -> Result<()> {
@@ -669,7 +675,7 @@ impl Engine {
         if route.user == Reach::Notify {
             if let Err(err) = self
                 .effects
-                .notify(&e.project, e.task.as_ref(), summary)
+                .notify(&e.project, e.task.as_ref(), occasion, summary)
                 .await
             {
                 tracing::warn!(project = %e.project, error = %err, "could not notify the user");

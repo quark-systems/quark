@@ -39,7 +39,13 @@ impl Effects for Recorder {
         self.0.lock().unwrap().push(format!("wake[{t}] {note}"));
         Ok(())
     }
-    async fn notify(&self, _: &ProjectId, _: Option<&TaskId>, note: &str) -> Result<()> {
+    async fn notify(
+        &self,
+        _: &ProjectId,
+        _: Option<&TaskId>,
+        _: Occasion,
+        note: &str,
+    ) -> Result<()> {
         self.0.lock().unwrap().push(format!("notify {note}"));
         Ok(())
     }

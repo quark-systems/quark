@@ -38,7 +38,12 @@ export interface ProjectAutomation {
 /** Something the automation engine told you (a `notice.posted` event): one update now, or a digest of what waited. */
 export type NoticeKind = "now" | "digest" | "return";
 export interface NoticeItem { occasion: AwayOccasion; summary: string; task_id?: string | null; at: string }
-export interface Notice { project_id: string; kind: NoticeKind; text: string; task_id?: string | null; items?: NoticeItem[] }
+export interface Notice {
+  project_id: string; kind: NoticeKind; text: string; task_id?: string | null;
+  /** What happened, for `now` updates. Older updates carry none. */
+  occasion?: AwayOccasion | null;
+  items?: NoticeItem[];
+}
 
 const base = (p: string) => `/v1/projects/${enc(p)}`;
 export const automationApi = {

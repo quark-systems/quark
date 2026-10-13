@@ -8646,6 +8646,17 @@
           "kind": {
             "$ref": "#/components/schemas/NoticeKind"
           },
+          "occasion": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AwayOccasion",
+                "description": "What happened, for `now`: the app words and colors the update by it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "project_id": {
             "type": "string"
           },

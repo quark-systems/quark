@@ -77,6 +77,12 @@ button.since-item { width: 100%; font: inherit; text-align: left; cursor: pointe
 .since-digest { list-style: none; margin: 6px 0 0; padding: 0 0 0 28px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; line-height: 1.45; color: var(--fg-dim); overflow-wrap: anywhere; }
 .since-digest a { color: inherit; text-decoration: none; }
 .since-digest a:hover { color: var(--fg); text-decoration: underline; }
+.since-update:not(button) { align-items: flex-start; }
+.since-update:not(button) .ui-dot, .since-update:not(button) .since-kind { margin-top: 4px; }
+.since-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.since-head { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-dim); }
+.since-head b { font-weight: 600; color: var(--fg); }
+.since-detail { font-size: 12px; color: var(--fg-faint); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .since-item.needs { border-color: color-mix(in srgb, var(--tone-needs-you) 40%, transparent); background: color-mix(in srgb, var(--tone-needs-you) 8%, var(--background)); }
 .since-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .since-kind { flex: none; max-width: 40%; font-size: 12px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
