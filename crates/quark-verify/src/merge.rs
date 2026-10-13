@@ -86,7 +86,12 @@ pub struct Merged {
     pub pull_request: String,
     pub repo: String,
     pub head: String,
+    /// The default when [`Merged::outside`]: the forge does not say.
     pub method: MergeMethod,
+    /// Merged on the forge, not by this guarded merge (a person pressed
+    /// merge, or the worker merged its own pull request).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outside: bool,
 }
 
 /// Payload of a [`kinds::STANDING_APPROVAL`] event: whether green pull
@@ -258,6 +263,7 @@ impl GuardedMerge {
             repo,
             head: change.head.clone(),
             method: req.method,
+            outside: false,
         };
         let event = NewEvent::typed(
             self.host.clone(),
@@ -274,6 +280,38 @@ impl GuardedMerge {
             verdict: Some(verdict),
             outcome: Outcome::Merged { head: change.head },
         })
+    }
+
+    /// Record a merge that happened on the forge, outside [`Self::land`],
+    /// so whoever waits on [`kinds::MERGED`] hears of it. Returns false,
+    /// recording nothing, when the forge does not report it merged.
+    pub async fn record_outside(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+        pull_request: &str,
+    ) -> Result<bool> {
+        let (repo, number) = parse_pull_url(pull_request)?;
+        let pull = self.forge.pull_request(&repo, number).await?;
+        if pull.state != PullState::Merged {
+            return Ok(false);
+        }
+        let merged = Merged {
+            pull_request: pull_request.to_string(),
+            repo,
+            head: pull.sha,
+            method: MergeMethod::default(),
+            outside: true,
+        };
+        let event = NewEvent::typed(
+            self.host.clone(),
+            project.clone(),
+            Some(task.clone()),
+            kinds::MERGED,
+            &merged,
+        )?;
+        self.log.append(event).await?;
+        Ok(true)
     }
 
     /// Record standing approval for each of `repos` in `project`.

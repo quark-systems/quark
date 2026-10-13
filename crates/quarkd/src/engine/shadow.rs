@@ -751,6 +751,17 @@ impl EngineAdapter for ShadowEngine {
             .await
     }
 
+    async fn pull_request_merged(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        self.acting(Slice::Verification)
+            .pull_request_merged(ws, task_id, url)
+            .await
+    }
+
     async fn set_standing_approval(
         &self,
         ws: &WorkspaceRef,

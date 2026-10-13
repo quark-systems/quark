@@ -358,6 +358,21 @@ pub trait EngineAdapter: Send + Sync {
         method: Option<MergeMethod>,
     ) -> Result<(), EngineError>;
 
+    /// The forge reports the pull request at `url`, which `task_id` opened,
+    /// merged outside the engine's guarded merge: by a person on the forge,
+    /// or by the worker itself. The engine marks the task landed and tells
+    /// whoever waits on the merge, as its own merge does. Repeating it is a
+    /// no-op, and so is a task the engine no longer has. Engines that watch
+    /// the forge themselves (firstmate's merge poll) need nothing here.
+    async fn pull_request_merged(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+        _url: &str,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
+
     /// Set whether green pull requests for the workspace's `repos` merge
     /// without asking a person (standing approval).
     async fn set_standing_approval(
@@ -592,6 +607,10 @@ pub enum StubWrite {
         task_id: String,
         url: String,
         method: Option<MergeMethod>,
+    },
+    PullRequestMerged {
+        task_id: String,
+        url: String,
     },
     StandingApproval {
         repos: Vec<String>,
@@ -854,6 +873,18 @@ impl EngineAdapter for StubEngine {
             task_id: task_id.into(),
             url: url.into(),
             method,
+        })
+    }
+
+    async fn pull_request_merged(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::PullRequestMerged {
+            task_id: task_id.into(),
+            url: url.into(),
         })
     }
 

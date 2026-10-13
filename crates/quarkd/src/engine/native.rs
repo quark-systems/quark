@@ -395,6 +395,17 @@ impl EngineAdapter for NativeEngine {
             .await
     }
 
+    async fn pull_request_merged(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        self.verify
+            .merged_outside(&self.supervisor, ws, &task_id(task)?, url)
+            .await
+    }
+
     async fn set_standing_approval(
         &self,
         ws: &WorkspaceRef,

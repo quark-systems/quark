@@ -32,7 +32,7 @@ An episode opens on the first red read and closes on the first green one; a pend
 | `verify.red_main` | `EpisodeChange`: an episode opened, updated, closed, got its decision or its fix-main task |
 | `verify.override` | `Override`: a person answered a decision |
 | `verify.decision` | `GuardDecision`: one native merge or dispatch answer |
-| `verify.merged` | `Merged`: the native engine merged a pull request |
+| `verify.merged` | `Merged`: a task's pull request merged; `outside` when it merged on the forge (a person, or its worker) and the PR center told the engine |
 | `verify.standing_approval` | `StandingApproval`: green pull requests for a repo merge without asking, or stop doing so |
 | `verify.shadow` | `ShadowCheck`: one firstmate decision checked in shadow mode |
 | `shadow.divergence` | `Divergence` for slice `verification` |
