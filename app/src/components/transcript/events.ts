@@ -55,7 +55,8 @@ export function engineEvent(text: string): EngineEvent | null {
   if (t.startsWith("Engine note: ")) {
     const what = t.slice("Engine note: ".length);
     const title = /^Project memory:/.test(what) ? "Project memory updated"
-      : /^Memory shared by every Project:/.test(what) ? "Shared memory updated" : "Engine note";
+      : /^Memory shared by every Project:/.test(what) ? "Shared memory updated"
+      : /^the user set this Project's persona to /.test(what) ? "Persona changed" : "Engine note";
     return { kind: "engine", title, raw };
   }
 

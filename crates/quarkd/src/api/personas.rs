@@ -14,6 +14,7 @@ use quark_systems::{
 };
 
 use super::{db, ApiError, AppState};
+use crate::engine::WorkspaceRef;
 
 fn source(state: &AppState) -> FilePersonas {
     FilePersonas::new(state.layout.home.clone())
@@ -159,16 +160,55 @@ pub async fn set_project(
     Json(input): Json<SetProjectPersona>,
 ) -> Result<Json<ProjectPersona>, ApiError> {
     let pid = id.clone();
-    db(&state, move |s| s.get_project(&pid)).await?;
+    let project = db(&state, move |s| s.get_project(&pid)).await?;
     let src = source(&state);
-    Ok(Json(
-        blocking(move || {
-            src.set_project(&id, input.persona.as_deref())
-                .map_err(api_error)?;
-            project_persona(&src, id)
-        })
-        .await?,
-    ))
+    let (shown, note) = blocking(move || {
+        let before = src.resolve(&id).map_err(api_error)?.pack;
+        src.set_project(&id, input.persona.as_deref())
+            .map_err(api_error)?;
+        let after = src.resolve(&id).map_err(api_error)?.pack;
+        Ok((project_persona(&src, id)?, switch_note(&before, &after)))
+    })
+    .await?;
+    if let Some(root) = project.workspace_path {
+        // In the background: the choice is what counts, and a coordinator
+        // without a live session reads its persona when it next starts.
+        let chat = state.chat.clone();
+        let ws = WorkspaceRef {
+            project_id: project.id,
+            root: root.into(),
+        };
+        tokio::spawn(async move {
+            if let Err(e) = chat.send(&ws, &note).await {
+                tracing::info!(project = %ws.project_id, error = %e, "coordinator not told about its persona");
+            }
+        });
+    }
+    Ok(Json(shown))
+}
+
+/// What a coordinator is told when the user picks its Project's persona. Its
+/// prompt carries the pack too, but a conversation written in another voice
+/// outweighs the prompt, so the switch is also said where the coordinator
+/// reads it last: in the conversation, naming what to stop.
+fn switch_note(before: &PersonaPack, after: &PersonaPack) -> String {
+    let mut what = format!(
+        "the user set this Project's persona to {}. It applies from your next message on, \
+         whatever voice your earlier messages used.",
+        after.name
+    );
+    if !after.voice.trim().is_empty() {
+        what.push(' ');
+        what.push_str(after.voice.trim());
+    }
+    match (&after.address, &before.address) {
+        (Some(a), _) => what.push_str(&format!(" Address the user as \"{a}\".")),
+        (None, Some(b)) => what.push_str(&format!(
+            " Stop addressing the user as \"{b}\": use no title or nickname at all."
+        )),
+        (None, None) => what.push_str(" Address the user with no title or nickname at all."),
+    }
+    crate::chat::engine_note(&what, "")
 }
 
 #[derive(utoipa::OpenApi)]
@@ -185,4 +225,34 @@ pub(super) fn router() -> axum::Router<AppState> {
             "/v1/projects/{id}/persona",
             get(get_project).put(set_project),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pack(name: &str, address: Option<&str>, voice: &str) -> PersonaPack {
+        PersonaPack {
+            id: name.to_lowercase(),
+            name: name.into(),
+            address: address.map(str::to_string),
+            voice: voice.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_switch_names_the_address_to_stop_or_start() {
+        let nautical = pack("Nautical", Some("captain"), "Speak like a first mate.");
+        let plain = pack("Plain", None, "Write plainly.");
+        assert_eq!(
+            switch_note(&nautical, &plain),
+            "Engine note: the user set this Project's persona to Plain. It applies from your next message on, \
+             whatever voice your earlier messages used. Write plainly. \
+             Stop addressing the user as \"captain\": use no title or nickname at all."
+        );
+        assert!(switch_note(&plain, &nautical).ends_with("Address the user as \"captain\"."));
+        assert!(switch_note(&plain, &plain)
+            .ends_with("Address the user with no title or nickname at all."));
+    }
 }
