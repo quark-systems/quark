@@ -305,9 +305,18 @@ fn newest_log(roots: &SessionRoots, cwd: &Path) -> Option<(PathBuf, SessionForma
         })
 }
 
+/// Marks Quark's `bd prime` hook, so a later pass replaces its own.
+const PRIME_MARK: &str = "# quark:bd-prime";
+
+/// Injects the Project's Beads memories at session start. `BEADS_DIR` is in
+/// the coordinator's environment; without `bd`, or without a database yet,
+/// it prints nothing.
+const PRIME_HOOK: &str = "bd prime --memories-only 2>/dev/null || true # quark:bd-prime";
+
 /// Configure the Claude Code coordinator running in `root` to reach quarkd:
 /// [`SERVER_NAME`] as an approved HTTP MCP server in `.mcp.json`, and a
-/// `Stop` hook POSTing to the turn-end URL in `.claude/settings.local.json`.
+/// `Stop` hook POSTing to the turn-end URL in `.claude/settings.local.json`,
+/// beside a `SessionStart` hook that injects the Project's Beads memories.
 /// Everything else in both files is kept, and a previous Quark hook is
 /// replaced, so it is safe to run on every pass. Returns whether a file
 /// changed.
@@ -335,6 +344,17 @@ pub fn install_claude(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bo
         let groups = stop.as_array_mut().expect("array");
         groups.retain(|g| !g.to_string().contains(&format!("{PREFIX}/")));
         groups.push(json!({ "hooks": [{ "type": "command", "command": command }] }));
+        // Beads' own session-start hook, as `bd setup` would add it: the
+        // Project's memories (standing rules among them) reach the
+        // coordinator when its session starts, resumes or is compacted. Only
+        // the memories: how a coordinator uses Beads is in its prompt.
+        let start = &mut v["hooks"]["SessionStart"];
+        if !start.is_array() {
+            *start = json!([]);
+        }
+        let groups = start.as_array_mut().expect("array");
+        groups.retain(|g| !g.to_string().contains(PRIME_MARK));
+        groups.push(json!({ "hooks": [{ "type": "command", "command": PRIME_HOOK }] }));
     })?;
     Ok(changed)
 }
@@ -544,5 +564,10 @@ mod tests {
         let stop = read()["hooks"]["Stop"].as_array().unwrap().clone();
         assert_eq!(stop.len(), 2);
         assert!(stop[1].to_string().contains("tok2"));
+        // Beads' memories are injected at session start, by one hook however often this runs.
+        let start = read()["hooks"]["SessionStart"].as_array().unwrap().clone();
+        assert_eq!(start.len(), 1);
+        assert_eq!(start[0]["hooks"][0]["command"], PRIME_HOOK);
+        assert!(PRIME_HOOK.contains(PRIME_MARK));
     }
 }
