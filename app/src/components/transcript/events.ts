@@ -51,6 +51,13 @@ export function engineEvent(text: string): EngineEvent | null {
 
   const native = nativeWake(t);
   if (native) return { ...native, raw };
+  // `ENGINE_NOTE` in quarkd's chat.rs: the engine telling the coordinator something outside a wake.
+  if (t.startsWith("Engine note: ")) {
+    const what = t.slice("Engine note: ".length);
+    const title = /^Project memory:/.test(what) ? "Project memory updated"
+      : /^Memory shared by every Project:/.test(what) ? "Shared memory updated" : "Engine note";
+    return { kind: "engine", title, raw };
+  }
 
   const reminder = tagBody(t, "system-reminder");
   const notification = tagBody(t, "task-notification");
@@ -101,10 +108,14 @@ const ECHO = /^(merged|done|asks|pick an agent|could not start|blocked|failed):\
 /** A native engine wake (`Turn::briefing` in quark-coordinator): a count line, then `- [need] summary` rows. */
 function nativeWake(t: string): Omit<EngineEvent, "raw"> | null {
   if (!/^Wake \S+: \d+ items? needs? your judgment\./.test(t)) return null;
-  const items = t.split("\n").flatMap((l) => {
-    const m = /^- \[([^\]]+)\] (.*)$/.exec(l.trim());
-    return m ? [wakeItem(m[1], m[2])] : [];
-  });
+  // Items start at the margin; indented lines continue the item above (`inset` in quark-coordinator).
+  const rows: [need: string, summary: string][] = [];
+  for (const l of t.split("\n").slice(1)) {
+    const m = /^- \[([^\]]+)\] (.*)$/.exec(l);
+    if (m) rows.push([m[1], m[2]]);
+    else if (rows.length && l.trim()) rows[rows.length - 1][1] += "\n" + l.trim();
+  }
+  const items = rows.map(([need, summary]) => wakeItem(need, summary));
   if (!items.length) return { kind: "wake", title: "Project event" };
   const [one] = items;
   const title = items.length === 1
@@ -115,7 +126,7 @@ function nativeWake(t: string): Omit<EngineEvent, "raw"> | null {
 
 function wakeItem(need: string, summary: string): WakeItem {
   const [label, tone] = NEEDS[need] ?? [need[0].toUpperCase() + need.slice(1), "idle"];
-  const m = /^([a-z0-9][a-z0-9-]*): (.*)$/.exec(summary);
+  const m = /^([a-z0-9][a-z0-9-]*): ([\s\S]*)$/.exec(summary);
   const text = (m ? m[2] : summary).replace(ECHO, "").replace(/ Start any work that was waiting on it\.$/, "").replace(/\.$/, "");
   return { need, label, tone, worker: m?.[1], text };
 }

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// The built-in prompt.
 pub const BUILTIN: &str = include_str!("../prompts/coordinator.md");
 /// Bumped whenever [`BUILTIN`] changes meaning.
-pub const BUILTIN_REVISION: u32 = 2;
+pub const BUILTIN_REVISION: u32 = 3;
 
 /// Most bytes taken from one repo's instructions.
 pub const MAX_INSTRUCTIONS_BYTES: usize = 48 * 1024;
@@ -236,7 +236,7 @@ fn persona_text(pack: &PersonaPack) -> Option<String> {
     parts.push(if pack.address.is_some() {
         SWITCHED.to_string()
     } else {
-        format!("{SWITCHED} Do not address the user by a title.")
+        format!("{SWITCHED} Do not address the user by a title or nickname, even where your earlier messages did.")
     });
     Some(parts.join("\n\n"))
 }
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(
             plain.layers[1].text,
             format!(
-                "Write plainly and concisely. No metaphors, no role-play.\n\n{SWITCHED} Do not address the user by a title."
+                "Write plainly and concisely. No metaphors, no role-play.\n\n{SWITCHED} Do not address the user by a title or nickname, even where your earlier messages did."
             )
         );
         // A pack that names the user keeps its own form of address.
