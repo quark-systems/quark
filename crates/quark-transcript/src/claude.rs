@@ -2,7 +2,8 @@
 //! `type`. `user` and `assistant` lines carry an Anthropic Messages API
 //! `message`; everything else (attachments, summaries, snapshots, queue
 //! operations) is bookkeeping. Sidechain lines belong to subagents and meta
-//! lines are harness-injected context, so both are skipped. Text the person
+//! lines are harness-injected context, so both are skipped, and so is the
+//! summary a compaction leaves in place of the earlier conversation. Text the person
 //! pasted reaches the log wrapped in `<pasted_content id="..">` tags, which
 //! are dropped so the entry reads as what they sent.
 
@@ -16,7 +17,9 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
         return Vec::new();
     }
     let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
-    if flag("isSidechain") || flag("isMeta") {
+    // A compaction writes its summary of the earlier conversation as a user
+    // line: the harness's note to itself, not something anyone sent.
+    if flag("isSidechain") || flag("isMeta") || flag("isCompactSummary") {
         return Vec::new();
     }
     let ts = str_at(v, "timestamp");
@@ -103,6 +106,18 @@ fn unwrap_pasted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_compaction_summary_is_not_a_message() {
+        let line = |extra: &str| {
+            serde_json::from_str::<Value>(&format!(
+                r#"{{"type":"user"{extra},"timestamp":"2026-10-13T19:09:11Z","message":{{"role":"user","content":"This session is being continued from a previous conversation."}}}}"#
+            ))
+            .unwrap()
+        };
+        assert!(parse(&line(r#","isCompactSummary":true"#)).is_empty());
+        assert_eq!(parse(&line("")).len(), 1);
+    }
 
     #[test]
     fn pasted_text_reads_as_sent() {

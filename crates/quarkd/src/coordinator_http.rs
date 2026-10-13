@@ -329,6 +329,9 @@ pub fn install_claude(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bo
         urls.hooks
     );
     changed |= edit_json(&root.join(".claude/settings.local.json"), |v| {
+        // A suggested next prompt would sit in the coordinator's input as if
+        // someone had typed it, and nobody types there but the engine.
+        v["promptSuggestionEnabled"] = json!(false);
         let approved = &mut v["enabledMcpjsonServers"];
         if !approved.is_array() {
             *approved = json!([]);
@@ -551,6 +554,7 @@ mod tests {
         let s = read();
         assert_eq!(s["permissions"]["allow"][0], "Bash(ls)");
         assert_eq!(s["enabledMcpjsonServers"], json!([SERVER_NAME]));
+        assert_eq!(s["promptSuggestionEnabled"], json!(false));
         let stop = s["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2);
         assert_eq!(stop[0]["hooks"][0]["command"], "mine");
