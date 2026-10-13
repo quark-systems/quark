@@ -281,24 +281,25 @@ fn tell_coordinator(
     entry: &MemoryEntry,
     for_repo: bool,
 ) {
-    let mut text = match &entry.beads_key {
+    let mut what = match &entry.beads_key {
         Some(key) => format!(
             "Project memory: a new memory was added to the Project's Beads as `{key}` \
-             (`bd recall {key}`). Apply it from your next plan on:\n\n{}",
-            entry.text
+             (`bd recall {key}`). Apply it from your next plan on."
         ),
         None => format!(
             "Project memory: a new entry was accepted and committed to the Project repo at project/{}. \
-             Read it and apply it from your next plan on:\n\n{}",
-            entry.path, entry.text
+             Read it and apply it from your next plan on.",
+            entry.path
         ),
     };
     if for_repo {
-        text.push_str(
-            "\n\nThe user wants anyone who works in the repo to know this too: \
+        what.push_str(
+            " The user wants anyone who works in the repo to know this too: \
              start a worker to add it to the AGENTS.md of the repo it is about, in a pull request.",
         );
     }
+    what.push_str(" The entry:");
+    let text = crate::chat::engine_note(&what, &entry.text);
     let chat = state.chat.clone();
     tokio::spawn(async move {
         let ws = WorkspaceRef { project_id, root };
@@ -499,10 +500,13 @@ pub async fn promote(
 /// background: the file is what counts, and a coordinator without a live
 /// session is not told.
 fn tell_coordinators(state: &AppState, entry: &UserMemoryEntry) {
-    let text = format!(
-        "Memory shared by every Project: a new entry landed at {}. \
-         Read it and apply it from your next plan on:\n\n{}",
-        entry.path, entry.text
+    let text = crate::chat::engine_note(
+        &format!(
+            "Memory shared by every Project: a new entry landed at {}. \
+             Read it and apply it from your next plan on. The entry:",
+            entry.path
+        ),
+        &entry.text,
     );
     let state = state.clone();
     tokio::spawn(async move {

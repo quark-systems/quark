@@ -51,6 +51,13 @@ export function engineEvent(text: string): EngineEvent | null {
 
   const native = nativeWake(t);
   if (native) return { ...native, raw };
+  // `ENGINE_NOTE` in quarkd's chat.rs: the engine telling the coordinator something outside a wake.
+  if (t.startsWith("Engine note: ")) {
+    const what = t.slice("Engine note: ".length);
+    const title = /^Project memory:/.test(what) ? "Project memory updated"
+      : /^Memory shared by every Project:/.test(what) ? "Shared memory updated" : "Engine note";
+    return { kind: "engine", title, raw };
+  }
 
   const reminder = tagBody(t, "system-reminder");
   const notification = tagBody(t, "task-notification");

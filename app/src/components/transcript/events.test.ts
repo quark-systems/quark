@@ -64,6 +64,11 @@ describe("engineEvent", () => {
     expect(engineEvent("Wake me at 7: 1 item needs your judgment?")).toBeNull();
   });
 
+  it("reads an engine note as one quiet line", () => {
+    expect(engineEvent("Engine note: Project memory: a new memory was added to the Project's Beads as `k`. The entry:\n\n  Rebase first")).toMatchObject({ kind: "engine", title: "Project memory updated" });
+    expect(engineEvent("Engine note: something else")?.title).toBe("Engine note");
+  });
+
   it("leaves what a person typed alone, even next to engine tags", () => {
     expect(engineEvent("Merge #12 when it is green")).toBeNull();
     expect(engineEvent("why does it say <system-reminder>?")).toBeNull();
