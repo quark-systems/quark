@@ -71,3 +71,8 @@ const md = new Marked({
 export function renderMarkdown(src: string): string {
   return md.parse(src, { async: false }) as string;
 }
+
+/** Markdown for one line of text: emphasis, code and links, with no paragraph around it. */
+export function renderMarkdownInline(src: string): string {
+  return md.parseInline(src, { async: false }) as string;
+}

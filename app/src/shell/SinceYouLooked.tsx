@@ -1,13 +1,46 @@
 // The Conversation tab's right column: what changed since you last looked, what needs you,
 // open PRs and recent decisions in this project. It only reads: the Overview tab marks things read.
 import React, { useEffect, useMemo, useState } from "react";
-import { api, OverviewDigest } from "../api";
+import { api, Notice, OverviewDigest } from "../api";
+import { renderMarkdownInline } from "../markdown";
 import { href } from "../nav";
 import { useStore } from "../store";
-import { ago } from "../util";
-import { SectionLabel, StatusDot } from "../ui";
+import { ago, workerNamed } from "../util";
+import { SectionLabel, StatusDot, taskTone } from "../ui";
 import { lastSeen, summarize } from "../screens/dashboard/summary";
 import { useAttention } from "./NextAttention";
+
+type Posted = Notice & { seq: number; ts: string };
+
+/** One update: a link to the worker it is about, or a digest that opens to list what waited. */
+function Update({ notice: n }: { notice: Posted }) {
+  const tasks = useStore((s) => s.tasks);
+  const [open, setOpen] = useState(false);
+  const task = n.task_id ? workerNamed(tasks, n.task_id) : undefined;
+  const text = <span className="since-title md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(n.text) }} />;
+  const when = <span className="since-kind" title={n.ts}>{ago(n.ts)}</span>;
+  if (n.items?.length) {
+    return (
+      <div className="since-update" data-testid="since-update">
+        <button className="since-item" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <StatusDot tone="idle" label="Digest" />{text}{when}
+        </button>
+        {open && (
+          <ul className="since-digest">
+            {n.items.map((i, k) => {
+              const t = i.task_id ? workerNamed(tasks, i.task_id) : undefined;
+              const line = <span className="md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(i.summary) }} />;
+              return <li key={k}>{t ? <a href={href({ name: "task", id: t.id })}>{line}</a> : line}</li>;
+            })}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  return task
+    ? <a className="since-item since-update" href={href({ name: "task", id: task.id })} data-testid="since-update"><StatusDot tone={taskTone(task.state)} />{text}{when}</a>
+    : <div className="since-item since-update plain" data-testid="since-update"><StatusDot tone="idle" label="Update" />{text}{when}</div>;
+}
 
 const KIND = { decision: "decision", pr: "check failed", worker: "worker stuck" } as const;
 
@@ -61,13 +94,8 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
       </section>
       {notices.length > 0 && (
         <section data-testid="since-updates">
-          <SectionLabel right={<a href={href({ name: "automation", project: pid })}>Automation</a>}>Updates</SectionLabel>
-          {notices.map((n) => (
-            <div key={n.seq} className="since-item since-update">
-              <span className="since-title" title={n.items?.map((i) => i.summary).join("\n") || n.text}>{n.text}</span>
-              <span className="since-kind" title={n.ts}>{ago(n.ts)}</span>
-            </div>
-          ))}
+          <SectionLabel right={<a href={href({ name: "automation", project: pid })} title="Choose what you hear about and how">Choose updates</a>}>Updates</SectionLabel>
+          {notices.map((n) => <Update key={n.seq} notice={n} />)}
         </section>
       )}
       {recent.length > 0 && (

@@ -397,7 +397,9 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 .inbox-detail { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
 .decision { padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; max-width: 820px; }
 .d-context { font-size: 12px; }
-.d-question { font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.d-brief { color: var(--fg-dim); }
+.d-brief > :last-child { margin-bottom: 0; }
+.d-question { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
 .d-answer { border-left: 2px solid var(--green); padding-left: 10px; }
 .d-answer .who { font: 11px var(--mono); color: var(--fg-dim); margin-bottom: 4px; }
 .d-answer .text { white-space: pre-wrap; overflow-wrap: anywhere; }

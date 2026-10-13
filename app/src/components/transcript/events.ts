@@ -8,11 +8,26 @@ import type { Step } from "./turns";
 
 export type EventKind = "wake" | "background" | "engine" | "warning";
 
+/** One thing a wake asks the coordinator to judge. */
+export interface WakeItem {
+  /** Why it woke the coordinator, as the engine names it: `merged`, `done`, `decision`. */
+  need: string;
+  /** The need in the app's words. */
+  label: string;
+  /** How the row reads at a glance. */
+  tone: "busy" | "needs-you" | "ready" | "failed" | "idle";
+  /** The worker it is about, by the engine's name for it. */
+  worker?: string;
+  text: string;
+}
+
 /** An engine message, said in plain words; `raw` is what the session recorded. */
 export interface EngineEvent {
   kind: EventKind;
   title: string;
   raw: string;
+  /** What a native wake lists, one row each. */
+  items?: WakeItem[];
 }
 
 /** firstmate's operational-input prefix: U+2063 then `FIRSTMATE_OP: ` (bin/fm-operational-input.sh). */
@@ -33,6 +48,9 @@ export function engineEvent(text: string): EngineEvent | null {
   const op = OP.exec(t);
   // A task's instructions are meant to be read, so they stay a message.
   if (op && op[1] !== "launch-brief") return { kind: "engine", title: OP_TITLES[op[1]] ?? "Engine message", raw };
+
+  const native = nativeWake(t);
+  if (native) return { ...native, raw };
 
   const reminder = tagBody(t, "system-reminder");
   const notification = tagBody(t, "task-notification");
@@ -59,6 +77,50 @@ export function engineEvent(text: string): EngineEvent | null {
   }
   return { kind: "engine", title: "Engine note", raw };
 }
+
+/** The needs a native wake names (`Need::as_str` in quark-coordinator), in the app's words. */
+const NEEDS: Record<string, [label: string, tone: WakeItem["tone"]]> = {
+  decision: ["Question", "needs-you"],
+  blocked: ["Blocked", "needs-you"],
+  failed: ["Failed", "failed"],
+  done: ["Finished", "ready"],
+  merged: ["Merged", "ready"],
+  message: ["Message", "busy"],
+  answered: ["You answered", "busy"],
+  requested: ["Requested", "busy"],
+  "rule failed": ["Rule failed", "failed"],
+  "pick an agent": ["Pick an agent", "needs-you"],
+  "spawn failed": ["Could not start", "failed"],
+  "host unhealthy": ["Host unhealthy", "failed"],
+  policy: ["Update", "idle"],
+};
+
+/** What the engine repeats after a worker's name, which the label already says. */
+const ECHO = /^(merged|done|asks|pick an agent|could not start|blocked|failed):\s*/;
+
+/** A native engine wake (`Turn::briefing` in quark-coordinator): a count line, then `- [need] summary` rows. */
+function nativeWake(t: string): Omit<EngineEvent, "raw"> | null {
+  if (!/^Wake \S+: \d+ items? needs? your judgment\./.test(t)) return null;
+  const items = t.split("\n").flatMap((l) => {
+    const m = /^- \[([^\]]+)\] (.*)$/.exec(l.trim());
+    return m ? [wakeItem(m[1], m[2])] : [];
+  });
+  if (!items.length) return { kind: "wake", title: "Project event" };
+  const [one] = items;
+  const title = items.length === 1
+    ? `${one.label}: ${one.worker ?? clip(one.text, 80)}`
+    : `${items.length} things for the coordinator`;
+  return { kind: "wake", title, items };
+}
+
+function wakeItem(need: string, summary: string): WakeItem {
+  const [label, tone] = NEEDS[need] ?? [need[0].toUpperCase() + need.slice(1), "idle"];
+  const m = /^([a-z0-9][a-z0-9-]*): (.*)$/.exec(summary);
+  const text = (m ? m[2] : summary).replace(ECHO, "").replace(/ Start any work that was waiting on it\.$/, "").replace(/\.$/, "");
+  return { need, label, tone, worker: m?.[1], text };
+}
+
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
 /** A firstmate watcher wake, from the Stop hook's message (bin/fm-claude-stop-autoarm.sh). */
 function watcherWake(body: string): Omit<EngineEvent, "raw"> | null {

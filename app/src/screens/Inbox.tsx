@@ -2,6 +2,7 @@
 //
 // Keys: j/k or ↑/↓ move, Enter or r answers, ⌘/Ctrl+Enter sends, Esc leaves the answer box,
 // o and a switch between open and answered, t opens the decision's task.
+import { renderMarkdown } from "../markdown";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, Decision, DecisionState, NotAvailable } from "../api";
 import { go, href } from "../nav";
@@ -149,13 +150,14 @@ function DecisionDetail({ d, answerBox, onAnswered }: {
         <span className="faint"> · asked {ago(d.opened_at)}</span>
         <span className="faint"> · </span><a href={href({ name: "decisions", project: d.project_id, id: d.id })}>Open in the log</a>
       </div>
-      <div className="d-question">{d.question}</div>
+      <div className="d-question md" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.question) }} />
+      {d.brief?.context && <div className="d-brief md" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.brief.context) }} />}
       {d.state !== "open" ? (
         <div className="d-answer" data-testid="decision-answer">
           <div className="who">
             Answered{d.answered_by ? <> by <b>{d.answered_by}</b></> : ""}{d.answered_at ? <> · {ago(d.answered_at)}</> : ""}
           </div>
-          <div className="text">{d.answer}</div>
+          <div className="text md" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.answer ?? "") }} />
         </div>
       ) : unavailable ? (
         <Unavailable what="Answering decisions" endpoint={`POST /v1/decisions/${d.id}:answer`} />
