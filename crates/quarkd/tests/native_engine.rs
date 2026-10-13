@@ -499,6 +499,69 @@ async fn merges_through_the_gates_and_the_guard_then_lands_the_task() {
 }
 
 #[tokio::test]
+async fn a_merge_made_on_the_forge_lands_the_task_and_is_recorded() {
+    use quark_core::Seq;
+    use quark_verify::{FakeForge, PullHead, PullState};
+
+    let env = Env::new();
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let forge = Arc::new(FakeForge::new());
+    let log = env.log();
+    let engine = NativeEngine::with_forge(log.clone(), sup.clone(), forge.clone());
+    let ws = ws(&env);
+    sup.spawn(env.request("t1")).await.unwrap();
+    engine.send_message(&ws, "t1", "ship it").await.unwrap();
+    eventually("review", async || {
+        state(&engine, &ws, "t1").await == TaskState::InReview
+    })
+    .await;
+    let url = "https://github.com/o/r/pull/7";
+    let pull = |state| PullHead {
+        sha: "abc".into(),
+        branch: "quark/t1".into(),
+        base: "main".into(),
+        state,
+    };
+    let merges = async || {
+        log.read(Seq::ZERO, 10_000)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind.as_str() == quark_verify::kinds::MERGED)
+            .collect::<Vec<_>>()
+    };
+
+    // Not merged on the forge yet, or another pull request: nothing.
+    forge.set_pull("o/r", 7, pull(PullState::Open));
+    engine.pull_request_merged(&ws, "t1", url).await.unwrap();
+    engine
+        .pull_request_merged(&ws, "t1", "https://github.com/o/r/pull/8")
+        .await
+        .unwrap();
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::InReview);
+    assert!(merges().await.is_empty());
+
+    // Someone merged it on GitHub: the task lands and the coordinator's
+    // merge event is recorded, once.
+    forge.set_pull("o/r", 7, pull(PullState::Merged));
+    engine.pull_request_merged(&ws, "t1", url).await.unwrap();
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::Done);
+    engine.pull_request_merged(&ws, "t1", url).await.unwrap();
+    engine
+        .merge_pull_request(&ws, "t1", url, None)
+        .await
+        .unwrap();
+    let recorded = merges().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].payload["pull_request"], url);
+    assert_eq!(recorded[0].payload["outside"], true);
+    assert!(forge.merges().is_empty());
+
+    // A task the engine does not have is left alone.
+    engine.pull_request_merged(&ws, "gone", url).await.unwrap();
+}
+
+#[tokio::test]
 async fn a_red_main_becomes_a_hold_that_merge_anyway_overrides() {
     use quark_verify::health::CheckRun;
     use quark_verify::{FakeForge, PullHead, PullState};

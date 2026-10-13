@@ -377,6 +377,21 @@ impl Store {
         })
     }
 
+    /// Merged pull requests that a task owns, for telling the engine of
+    /// merges made outside it.
+    pub fn merged_with_task(&self) -> Result<Vec<PrOwner>> {
+        let ids: Vec<String> = self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id FROM pull_requests
+                 WHERE state = 'merged' AND task_id IS NOT NULL
+                 ORDER BY created_at, id",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })?;
+        ids.iter().map(|id| self.pull_request_owner(id)).collect()
+    }
+
     /// Open pull requests of Projects with standing approval that are ready
     /// to merge: not a draft, mergeable, every check passed and no review
     /// holding them.

@@ -44,7 +44,7 @@ The slice 2 glue is `crates/quarkd/src/engine/native_verify.rs` (`NativeVerify`)
 A merge reads the pull request, rebases it onto its base branch's current tip in a scratch worktree under `verify/<task>/`, and runs the task's repo gates on the rebased head.
 A head that did not contain the tip is pushed rebased and refused until the forge's checks run on it, so a stale head never merges.
 The pull request's own checks must be green, then `NativeGuard` re-reads main: while main is red only a change that passes every failing check merges.
-The forge merges exactly the verified head, the merge is a `verify.merged` event, and the task is marked landed.
+The forge merges exactly the verified head, the merge is a `verify.merged` event, and the task is marked landed. A pull request merged on the forge instead (a person pressing merge on GitHub, or the worker merging its own) is seen by the PR center, which tells the engine: the task is marked landed and the same event is recorded with `outside: true`, so the coordinator still wakes for it.
 A refusal is an engine command error that names the rule; the last run's gate evidence stays in `verify/<task>/evidence.json` with its logs.
 A merge a red main refuses files the episode's decision once, and it shows as a hold `red-main:<decision>` with no task.
 Answering it `merge anyway` overrides the guardrail until main is green again; any other answer is refused and the hold stays.

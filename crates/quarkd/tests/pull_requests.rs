@@ -571,3 +571,38 @@ async fn a_merged_pull_request_moves_its_task_to_done_live() {
         TaskState::Done
     );
 }
+
+#[tokio::test]
+async fn a_merge_made_outside_the_engine_is_handed_to_it_once() {
+    let h = harness().await;
+    let told = |h: &Harness| {
+        h.engine
+            .writes()
+            .into_iter()
+            .filter(|w| matches!(w, StubWrite::PullRequestMerged { .. }))
+            .count()
+    };
+    h.forge
+        .set(URL, forge_pr(PullRequestState::Open, CheckStatus::Success));
+    h.center.refresh().await;
+    assert_eq!(told(&h), 0);
+
+    // Merged on GitHub: the engine is told, and a failed call is retried.
+    let mut merged = forge_pr(PullRequestState::Merged, CheckStatus::Success);
+    merged.merged_at = Some("2026-10-02T17:00:00Z".into());
+    h.forge.set(URL, merged);
+    h.engine.fail_writes(Some("busy"));
+    h.center.refresh().await;
+    assert_eq!(told(&h), 0);
+    h.engine.fail_writes(None);
+    h.center.refresh().await;
+    assert_eq!(
+        h.engine.writes().last(),
+        Some(&StubWrite::PullRequestMerged {
+            task_id: "ship-pr-center".into(),
+            url: URL.into(),
+        })
+    );
+    h.center.refresh().await;
+    assert_eq!(told(&h), 1);
+}

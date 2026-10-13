@@ -117,9 +117,15 @@ impl NativeVerify {
             (None, _) => {}
         }
         match landing.outcome {
-            Outcome::Merged { .. } | Outcome::AlreadyMerged => {
+            Outcome::Merged { .. } => {
                 if record.state != TaskState::Done {
                     supervisor.complete(&project, task).await.map_err(core)?;
+                }
+                Ok(())
+            }
+            Outcome::AlreadyMerged => {
+                if record.state != TaskState::Done {
+                    self.land_outside(supervisor, &project, task, url).await?;
                 }
                 Ok(())
             }
@@ -127,6 +133,55 @@ impl NativeVerify {
                 Err(EngineError::Command(format!("merge refused: {reason}")))
             }
         }
+    }
+
+    /// The forge reports `url` merged outside [`Self::merge`]: mark the task
+    /// landed and record the merge, so the coordinator wakes for it as it
+    /// does for its own merges. A task that is gone, already finished, or
+    /// that opened another pull request is left alone.
+    pub async fn merged_outside(
+        &self,
+        supervisor: &Supervisor,
+        ws: &WorkspaceRef,
+        task: &TaskId,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        let project = ProjectId::new(ws.project_id.clone());
+        let Some((record, _)) = supervisor
+            .tasks(&project)
+            .await
+            .map_err(core)?
+            .into_iter()
+            .find(|(_, w)| &w.task == task)
+        else {
+            return Ok(());
+        };
+        if matches!(record.state, TaskState::Done | TaskState::Failed)
+            || record.pull_request.as_deref().is_some_and(|pr| pr != url)
+        {
+            return Ok(());
+        }
+        self.land_outside(supervisor, &project, task, url).await
+    }
+
+    /// Record the merge first: a lost completion is retried, a lost record
+    /// would leave the coordinator waiting.
+    async fn land_outside(
+        &self,
+        supervisor: &Supervisor,
+        project: &ProjectId,
+        task: &TaskId,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        if self
+            .merge
+            .record_outside(project, task, url)
+            .await
+            .map_err(core)?
+        {
+            supervisor.complete(project, task).await.map_err(core)?;
+        }
+        Ok(())
     }
 
     /// The Project's red-main episode waiting on a person, as its decision

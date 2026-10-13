@@ -8,6 +8,10 @@
 //! Each refresh also reads the owning task's verification gate results
 //! (ADR-15) into the pull request's `evidence`.
 //!
+//! A pull request merged outside the engine (on the forge, or by its own
+//! worker) is handed to the engine once per daemon run, so the task lands
+//! and the coordinator hears of the merge.
+//!
 //! Standing approval: for each Project that has it on, every open pull
 //! request that is mergeable, green and not held by a review is merged
 //! through the engine's guarded merge. Each head commit is tried once, so a
@@ -29,6 +33,8 @@ pub struct PrCenter {
     forge: Arc<dyn Forge>,
     /// `(pull request id, head sha)` pairs standing approval already tried.
     attempted: Mutex<HashSet<(String, String)>>,
+    /// Merged pull requests the engine has been told of.
+    told: Mutex<HashSet<String>>,
 }
 
 impl PrCenter {
@@ -38,6 +44,7 @@ impl PrCenter {
             engine,
             forge,
             attempted: Mutex::default(),
+            told: Mutex::default(),
         }
     }
 
@@ -65,7 +72,44 @@ impl PrCenter {
                 tracing::debug!(pr = %t.url, error = %e, "gate evidence not refreshed");
             }
         }
+        self.merged_outside().await;
         self.standing_approval().await;
+    }
+
+    /// Tells the engine of each merged pull request it has not heard of
+    /// from here. The engine ignores merges it made or already knows, so
+    /// this only matters for merges made outside it; a failed call is
+    /// retried next pass.
+    async fn merged_outside(&self) {
+        let store = self.store.clone();
+        let merged = match tokio::task::spawn_blocking(move || store.merged_with_task()).await {
+            Ok(Ok(m)) => m,
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "listing merged pull requests failed");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "merged pull request listing panicked");
+                return;
+            }
+        };
+        for owner in merged {
+            let pr = &owner.pull_request;
+            if self.told.lock().unwrap().contains(&pr.id) {
+                continue;
+            }
+            let Ok((ws, task)) = owner_target(&owner) else {
+                continue;
+            };
+            match self.engine.pull_request_merged(&ws, &task, &pr.url).await {
+                Ok(()) => {
+                    self.told.lock().unwrap().insert(pr.id.clone());
+                }
+                Err(e) => {
+                    tracing::warn!(pr = %pr.url, error = %e, "engine not told of a merge")
+                }
+            }
+        }
     }
 
     /// Reads the owning task's gate results into the pull request.
