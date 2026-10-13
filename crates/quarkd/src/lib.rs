@@ -344,6 +344,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .await
         {
             Ok(c) => {
+                let c = c.with_sessions(sessions.clone());
                 let routes = coordinator_http::router(
                     c.coordinator(),
                     c.tokens(),
