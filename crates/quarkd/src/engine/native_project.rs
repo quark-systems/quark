@@ -282,7 +282,7 @@ impl ProjectSetup {
         tokio::task::spawn_blocking(move || {
             let (prompt, _) = crate::native_coordinator::build_prompt(&layout, &pid, &root)
                 .map_err(|e| EngineError::Invalid(format!("the coordinator's prompt: {e}")))?;
-            let text = fit(prompt.render(), MAX_SYSTEM_PROMPT);
+            let text = prompt_text(&prompt);
             let path = root.join(STATE_DIR).join(PROMPT_FILE);
             write_atomic(&path, text.as_bytes())?;
             Ok(path)
@@ -354,6 +354,12 @@ fn roots_for(roots: &SessionRoots, account_env: &[(String, String)]) -> SessionR
         roots.claude.insert(0, PathBuf::from(dir));
     }
     roots
+}
+
+/// `prompt` as a coordinator is launched with it, which is also what
+/// [`PROMPT_FILE`] holds for the one that is running.
+pub fn prompt_text(prompt: &quark_coordinator::LayeredPrompt) -> String {
+    fit(prompt.render(), MAX_SYSTEM_PROMPT)
 }
 
 /// `text` cut at `max` bytes on a character boundary, with a note.

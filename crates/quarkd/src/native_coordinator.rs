@@ -15,13 +15,18 @@
 //! - native, points a Claude Code coordinator at its tools and turn-end hook
 //!   ([`crate::coordinator_http::install_claude`]), wakes it through the
 //!   [`Brain`] and runs its calls through the [`Hands`]
-//!   ([`crate::coordinator_hands`]).
+//!   ([`crate::coordinator_hands`]);
+//! - native, closes the window of a coordinator that was launched with an
+//!   older prompt, once it is between turns. A harness reads its system
+//!   prompt at launch only, so a persona, instruction or memory change
+//!   reaches a running coordinator when coordinator recovery
+//!   ([`crate::recovery`]) starts it again in its conversation.
 //!
 //! See `docs/engine/coordinator.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use quark_coordinator::{
     Brain, Config, Coordinator, Hands, LayeredPrompt, Mode, NoBrain, NoHands, Sources,
@@ -31,8 +36,15 @@ use quark_persona::FilePersonas;
 use quark_transcript::{locate, SessionFormat, SessionRoots};
 
 use crate::coordinator_http::{install_claude, CoordinatorUrls, Tokens};
+use crate::engine::native_project::{prompt_text, PROMPT_FILE, STATE_DIR, WINDOW_PREFIX};
 use crate::provision::Layout;
+use crate::sessions::Sessions;
 use crate::store::Store;
+
+/// How long a coordinator's conversation must have been still before it is
+/// started again on a new prompt: a turn the user began has no wake to show
+/// it is open.
+const QUIET: Duration = Duration::from_secs(60);
 
 /// Set to `0` to turn the slice 6 coordinator off.
 pub const ENV: &str = "QUARK_NATIVE_COORDINATOR";
@@ -62,6 +74,7 @@ pub struct NativeCoordinator {
     roots: SessionRoots,
     tokens: Tokens,
     base_url: Option<String>,
+    sessions: Option<Sessions>,
 }
 
 impl NativeCoordinator {
@@ -97,7 +110,15 @@ impl NativeCoordinator {
             layout,
             roots,
             base_url,
+            sessions: None,
         })
+    }
+
+    /// Where coordinators run, so one on an older prompt can be started
+    /// again.
+    pub fn with_sessions(mut self, sessions: Sessions) -> Self {
+        self.sessions = Some(sessions);
+        self
     }
 
     /// The coordinator, for its routes.
@@ -128,6 +149,10 @@ impl NativeCoordinator {
                 tokio::task::spawn_blocking(move || build_prompt(&layout, &pid, &ws)).await?;
             match built {
                 Ok((prompt, persona)) => {
+                    if self.base_url.is_some() {
+                        self.retire_stale(&id, &workspace, &prompt_text(&prompt))
+                            .await;
+                    }
                     if let Err(e) = self.coordinator.set_prompt(&id, prompt, &persona).await {
                         tracing::warn!(project = %id, error = %e, "slice 6 prompt not recorded");
                     }
@@ -165,6 +190,55 @@ impl NativeCoordinator {
         Ok(())
     }
 
+    /// Close the window of a coordinator that was launched with a prompt
+    /// other than `current`, when it is between turns. Coordinator recovery
+    /// starts it again, in its conversation, on `current`.
+    async fn retire_stale(&self, id: &ProjectId, workspace: &Path, current: &str) {
+        let Some(sessions) = &self.sessions else {
+            return;
+        };
+        // Written at each launch; missing before the first one.
+        let Ok(launched) = std::fs::read_to_string(workspace.join(STATE_DIR).join(PROMPT_FILE))
+        else {
+            return;
+        };
+        if launched == current {
+            return;
+        }
+        if self.coordinator.open_turn(id).await.is_some()
+            || !self.coordinator.pending(id).await.is_empty()
+        {
+            return;
+        }
+        let transcript = locate(SessionFormat::Claude, workspace, &self.roots);
+        if !still(transcript.as_deref(), SystemTime::now()) {
+            return;
+        }
+        let Ok(server) = sessions.server() else {
+            return;
+        };
+        let window = format!("{WINDOW_PREFIX}{id}");
+        let Ok(panes) = server.list_panes().await else {
+            return;
+        };
+        let Some(target) = panes
+            .into_iter()
+            .map(|p| p.target)
+            .find(|t| t.split_once(':').is_some_and(|(_, w)| w == window))
+        else {
+            // Not running: its next launch reads the current prompt.
+            return;
+        };
+        match server.run(&["kill-window", "-t", &target]).await {
+            Ok(_) => {
+                tracing::info!(project = %id, "coordinator prompt changed; starting it again")
+            }
+            Err(e) => {
+                tracing::warn!(project = %id, error = %e, "could not close a coordinator on an old prompt")
+            }
+        }
+    }
+
     /// Point the Project's coordinator at its tools and turn-end hook. Only
     /// Claude Code coordinators are configured so far.
     fn install(
@@ -191,6 +265,18 @@ impl NativeCoordinator {
             }
         }
     }
+}
+
+/// Whether the conversation at `transcript` has been still for [`QUIET`].
+/// One that cannot be read counts as still.
+fn still(transcript: Option<&Path>, now: SystemTime) -> bool {
+    let Some(modified) = transcript
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+    else {
+        return true;
+    };
+    now.duration_since(modified).is_ok_and(|d| d >= QUIET)
 }
 
 /// The Project's layered prompt from its workspace, with the id of the
@@ -333,5 +419,19 @@ mod tests {
         ] {
             assert!(prompt.contains(want), "{want} missing from the prompt");
         }
+    }
+
+    #[test]
+    fn a_conversation_is_still_once_it_has_been_quiet() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, "{}").unwrap();
+        let now = SystemTime::now();
+        // Just written: a turn may be under way.
+        assert!(!still(Some(&path), now));
+        assert!(still(Some(&path), now + QUIET + Duration::from_secs(1)));
+        // Nothing to read is nothing to interrupt.
+        assert!(still(None, now));
+        assert!(still(Some(&dir.path().join("missing")), now));
     }
 }
