@@ -46,6 +46,20 @@ describe("engineEvent", () => {
     expect(engineEvent("\u2063FIRSTMATE_OP: v1 launch-brief: do the thing")).toBeNull();
   });
 
+  it("reads a native wake as one row per thing it brings", () => {
+    const one = engineEvent("Wake prj_1#7: 1 item needs your judgment. Act through your tools and end your turn when nothing more needs you.\n- [merged] m2-import: merged: https://github.com/o/r/pull/15. Start any work that was waiting on it.\n");
+    expect(one).toMatchObject({ kind: "wake", title: "Merged: m2-import" });
+    expect(one?.items).toEqual([{ need: "merged", label: "Merged", tone: "ready", worker: "m2-import", text: "https://github.com/o/r/pull/15" }]);
+
+    const two = engineEvent("Wake prj_1#8: 2 items need your judgment. Act through your tools and end your turn when nothing more needs you.\n- [decision] m3-reader: asks: v14 or v15?\n- [answered] msanchez answered your question gaps: Merge, then follow up\n");
+    expect(two?.title).toBe("2 things for the coordinator");
+    expect(two?.items?.map((i) => [i.label, i.tone, i.worker, i.text])).toEqual([
+      ["Question", "needs-you", "m3-reader", "v14 or v15?"],
+      ["You answered", "busy", undefined, "msanchez answered your question gaps: Merge, then follow up"],
+    ]);
+    expect(engineEvent("Wake me at 7: 1 item needs your judgment?")).toBeNull();
+  });
+
   it("leaves what a person typed alone, even next to engine tags", () => {
     expect(engineEvent("Merge #12 when it is green")).toBeNull();
     expect(engineEvent("why does it say <system-reminder>?")).toBeNull();

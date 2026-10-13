@@ -36,3 +36,8 @@ export function saveUser(name: string) {
 export function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+/** The worker the engine calls `name` (its branch is `quark/<name>`), when the app knows it. */
+export function workerNamed<T extends { id: string; branch?: string | null }>(tasks: Record<string, T>, name: string): T | undefined {
+  return tasks[name] ?? Object.values(tasks).find((t) => t.branch === name || t.branch?.endsWith("/" + name));
+}

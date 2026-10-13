@@ -3,8 +3,11 @@
 // UserMessageBlock, TurnDuration and CopyTurnButton (https://github.com/hardbeat920/monocode, MIT).
 import { memo, useMemo, useState } from "react";
 import type { TranscriptItem } from "../../api";
-import { renderMarkdown } from "../../markdown";
-import { ago } from "../../util";
+import { renderMarkdown, renderMarkdownInline } from "../../markdown";
+import { href } from "../../nav";
+import { useStore } from "../../store";
+import { StatusDot } from "../../ui";
+import { ago, workerNamed } from "../../util";
 import { rise, useTranscript } from "./context";
 import type { EngineEvent } from "./events";
 import { useCopy, useElapsed, useNow } from "./hooks";
@@ -36,6 +39,7 @@ const EVENT_ICON: Record<EngineEvent["kind"], string> = { wake: "event", backgro
 function EventRow({ event, id }: { event: EngineEvent; id: number }) {
   const { freshAfter } = useTranscript();
   const [open, setOpen] = useState(false);
+  if (event.items) return <WakeCard event={event} id={id} />;
   return (
     <div className={"tx-event tx-event-" + event.kind + rise(id, freshAfter)} data-testid="engine-event">
       <button className="tx-event-row" aria-expanded={open} onClick={() => setOpen(!open)} title="What the engine sent">
@@ -43,6 +47,42 @@ function EventRow({ event, id }: { event: EngineEvent; id: number }) {
         <span className="tx-event-title">{event.title}</span>
         <Icon kind={open ? "chevron-down" : "chevron-right"} />
       </button>
+      {open && <pre className="tx-detail">{event.raw.trim()}</pre>}
+    </div>
+  );
+}
+
+/** What woke the coordinator: one row per thing, each opening the worker it is about. */
+function WakeCard({ event, id }: { event: EngineEvent; id: number }) {
+  const { freshAfter } = useTranscript();
+  const tasks = useStore((s) => s.tasks);
+  const [open, setOpen] = useState(false);
+  const items = event.items ?? [];
+  return (
+    <div className={"tx-wake" + rise(id, freshAfter)} data-testid="engine-wake">
+      <button className="tx-wake-head" aria-expanded={open} onClick={() => setOpen(!open)} title="What the engine sent">
+        <Icon kind="event" />
+        <span>Woke the coordinator</span>
+        <Icon kind={open ? "chevron-down" : "chevron-right"} />
+      </button>
+      <ul className="tx-wake-items">
+        {items.map((item, i) => {
+          const task = item.worker ? workerNamed(tasks, item.worker) : undefined;
+          const html = renderMarkdownInline(item.text);
+          return (
+            <li key={i} className="tx-wake-item">
+              <StatusDot tone={item.tone} label={item.label} />
+              <span className="tx-wake-need">{item.label}</span>
+              <span className="tx-wake-text">
+                {item.worker && (task
+                  ? <a className="tx-wake-worker" href={href({ name: "task", id: task.id })}>{task.title}</a>
+                  : <span className="tx-wake-worker">{item.worker}</span>)}
+                {item.text && <span className="md" dangerouslySetInnerHTML={{ __html: html }} />}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
       {open && <pre className="tx-detail">{event.raw.trim()}</pre>}
     </div>
   );

@@ -1,6 +1,7 @@
 // One decision card in three sizes: `inline` in a conversation (one tap answers), `full`
 // in the Decisions tab (options with consequences, a reason, a standing rule), and `phone`
 // (a compact card with the first two options). See GLOSSARY.md, "Asking and answering".
+import { renderMarkdown, renderMarkdownInline } from "../markdown";
 import React, { useState } from "react";
 import { api, Decision, DecisionOption, NotAvailable } from "../api";
 import { href } from "../nav";
@@ -163,8 +164,8 @@ function FullCard({ d, send, answerBox, ...status }: {
       {d.state === "acted" ? null : <DecisionProgress d={d} />}
       <div className="dc-head">
         {d.state === "open" ? <DecisionMeta d={d} /> : <LogTags d={d} />}
-        <h2 className="dc-q">{d.question}</h2>
-        {d.brief?.context && <p className="dc-context">{d.brief.context}</p>}
+        <h2 className="dc-q md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(d.question) }} />
+        {d.brief?.context && <div className="dc-context md" data-testid="decision-context" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.brief.context) }} />}
       </div>
       {d.state === "open"
         ? <AnswerForm d={d} send={send} answerBox={answerBox} {...status} />
@@ -198,7 +199,7 @@ function AnswerForm({ d, send, answerBox, ...status }: {
               <input type="radio" name={`opt-${d.id}`} checked={pick === o.label} onChange={() => setPick(o.label)} />
               <span className="dc-option-text">
                 <span className="dc-option-label">{o.label}{isRecommended(d, o) && <span className="dc-badge">Recommended</span>}</span>
-                {o.consequence && <span className="dc-consequence">{o.consequence}</span>}
+                {o.consequence && <span className="dc-consequence md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(o.consequence) }} />}
                 {isRecommended(d, o) && d.brief?.recommended_why && <span className="dc-why">Why: {d.brief.recommended_why}</span>}
               </span>
             </label>
@@ -295,9 +296,9 @@ function LogEntry({ d }: { d: Decision }) {
     <div className="dc-log" data-testid="decision-answer">
       <dl className="dc-dl">
         <dt>Asked</dt><dd>by {askedBy(d, tasks)}, {ago(d.opened_at)}</dd>
-        <dt>Answer</dt><dd>{d.answer ?? <span className="faint">Answered outside Quark</span>}</dd>
+        <dt>Answer</dt><dd>{d.answer ? <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.answer) }} /> : <span className="faint">Answered outside Quark</span>}</dd>
         {d.answered_by && <><dt>By</dt><dd>Answered by {d.answered_by}{via && <>, {via}</>}{d.answered_at && <> · {ago(d.answered_at)}</>}</dd></>}
-        {d.answer_why && <><dt>Why</dt><dd>{d.answer_why}</dd></>}
+        {d.answer_why && <><dt>Why</dt><dd><div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.answer_why) }} /></dd></>}
         <dt>What happened</dt><dd>{d.outcome ?? <span className="faint">{d.state === "answered" ? "Waiting for the asker to act on it." : "Not recorded."}</span>}</dd>
         {under && <><dt>Under rule</dt><dd>{underFrom
           ? <a href={href({ name: "decisions", project: underFrom.project_id, id: underFrom.id })}>{decisionLabel(underFrom)}</a>
