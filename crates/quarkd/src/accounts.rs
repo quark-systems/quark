@@ -139,8 +139,44 @@ impl QuotaReader for QuotaAxi {
         } else {
             stdout.as_str()
         };
-        Err(failure_detail(text))
+        let detail = failure_detail(text);
+        if detail.contains("unknown argument: --profile-only") {
+            return Err(too_old(self.version().await.as_deref()));
+        }
+        Err(detail)
     }
+}
+
+impl QuotaAxi {
+    /// `quota-axi --version`, when it answers.
+    async fn version(&self) -> Option<String> {
+        let run = tokio::process::Command::new(&self.bin)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        let out = tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .ok()?
+            .ok()?;
+        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !v.is_empty()).then_some(v)
+    }
+}
+
+/// The oldest quota-axi with `--profile-only`.
+pub const QUOTA_AXI_MIN_VERSION: &str = "0.1.44";
+
+/// What a quota-axi without `--profile-only` reports, with the fix.
+fn too_old(version: Option<&str>) -> String {
+    let which = match version {
+        Some(v) => format!("quota-axi {v} is too old"),
+        None => "this quota-axi is too old".into(),
+    };
+    format!(
+        "{which}: reading an account's quota needs {QUOTA_AXI_MIN_VERSION} or newer. \
+         Run `quota-axi update` and refresh."
+    )
 }
 
 /// A quota reader for tests: canned output per config directory, and a log
@@ -851,6 +887,16 @@ mod tests {
             failure_detail("error: \"unknown argument: --profile-only\"\ncode: X\n"),
             "unknown argument: --profile-only"
         );
+    }
+
+    #[test]
+    fn an_old_quota_axi_says_how_to_fix_it() {
+        assert_eq!(
+            too_old(Some("0.1.40")),
+            "quota-axi 0.1.40 is too old: reading an account's quota needs 0.1.44 or newer. \
+             Run `quota-axi update` and refresh."
+        );
+        assert!(too_old(None).starts_with("this quota-axi is too old"));
     }
 
     #[test]

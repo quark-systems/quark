@@ -36,9 +36,12 @@ pub enum ToolCall {
     Task { task: TaskId },
     /// A skill's full text.
     LoadSkill { name: String },
-    /// Start a task. Dispatch picks the agent unless `agent` is given;
+    /// Start a task. Dispatch picks the agent from the Project's rules;
     /// `rule` is the dispatch rule the coordinator matched it to, resolved
-    /// in place of a classifier's answer.
+    /// in place of a classifier's answer. `agent` stays only so calls
+    /// logged before it was refused still read: [`ToolCall::parse`] refuses
+    /// it, because a coordinator naming an agent here skipped the rules on
+    /// every task.
     StartTask {
         title: String,
         brief: String,
@@ -199,9 +202,18 @@ impl ToolCall {
                 }
             }
             ToolCall::LoadSkill { name } => blank("name", name),
-            ToolCall::StartTask { title, brief, .. } => {
+            ToolCall::StartTask {
+                title,
+                brief,
+                agent,
+                ..
+            } => {
                 blank("title", title)?;
-                blank("brief", brief)
+                blank("brief", brief)?;
+                match agent {
+                    Some(_) => Err(START_TASK_AGENT.into()),
+                    None => Ok(()),
+                }
             }
             ToolCall::Steer { task, text } => {
                 blank("task", task.as_str())?;
@@ -233,6 +245,13 @@ impl ToolCall {
         }
     }
 }
+
+/// Why `start_task` refuses an `agent`, and what to do instead.
+pub const START_TASK_AGENT: &str =
+    "start_task takes no `agent`: dispatch picks the agent from the \
+     Project's dispatch rules. Give the rule the task fits as `rule`, or leave it out and dispatch \
+     asks you when it needs a pick. Name an agent only when the user asked for one: start the task \
+     without it, then give it to choose_profile when dispatch asks, or relaunch the task on it.";
 
 /// A tool as listed to the coordinator.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -278,14 +297,13 @@ pub fn catalog() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "start_task",
-            description: "Start a task. Write self-contained instructions: the user's ask in their words, scope, and what done looks like. Dispatch picks the agent from the Project's dispatch rules; give `rule` when you already know which rule the task fits, and `agent` only when the user named one.",
+            description: "Start a task. Write self-contained instructions: the user's ask in their words, scope, and what done looks like. Dispatch picks the agent from the Project's dispatch rules; give `rule` when you already know which rule the task fits.",
             input_schema: object(
                 json!({
                     "title": text("A few words naming the task."),
                     "brief": text("The worker's instructions."),
                     "repo": text("The Project repo to work in, when there is more than one."),
-                    "rule": rule_schema(),
-                    "agent": agent_schema()
+                    "rule": rule_schema()
                 }),
                 &["title", "brief"],
             ),
@@ -425,7 +443,7 @@ mod tests {
     #[test]
     fn every_listed_tool_parses_and_round_trips() {
         let args = |name: &str| match name {
-            "start_task" => json!({"title": "t", "brief": "b", "agent": {"harness": "claude"}}),
+            "start_task" => json!({"title": "t", "brief": "b", "rule": "rule_1"}),
             "steer" => json!({"task": "t1", "text": "x"}),
             "answer" => json!({"task": "t1", "key": "k", "answer": "a"}),
             "choose_profile" => json!({"task": "t1", "rule": "rule_2"}),
@@ -463,6 +481,17 @@ mod tests {
         assert!(ToolCall::parse("steer", &json!({"task": "t1", "text": "  "})).is_err());
         assert!(ToolCall::parse("steer", &json!({"task": "t1"})).is_err());
         assert!(ToolCall::parse("fleet", &json!({"extra": 1})).is_err());
+        // Naming an agent at the start skipped the dispatch rules.
+        assert_eq!(
+            ToolCall::parse(
+                "start_task",
+                &json!({"title": "t", "brief": "b", "agent": {"harness": "claude", "model": "opus"}})
+            ),
+            Err(START_TASK_AGENT.to_string())
+        );
+        // A call logged before that still reads.
+        let logged = json!({"tool": "start_task", "title": "t", "brief": "b", "agent": {"harness": "claude"}});
+        assert!(serde_json::from_value::<ToolCall>(logged).is_ok());
         assert!(ToolCall::parse("fleet", &Value::Null).is_ok());
     }
 }
