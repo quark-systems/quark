@@ -169,7 +169,7 @@ pub trait Harness: Send + Sync {
     }
 
     /// The `quota-axi --provider` name that reads one account's quota with
-    /// `--profile-only`, when quota-axi supports the harness.
+    /// its config directory, when quota-axi supports the harness.
     fn quota_provider(&self) -> Option<&str> {
         None
     }

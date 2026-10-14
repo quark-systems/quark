@@ -101,7 +101,7 @@ A `404` with an `ErrorBody` is a real "not found".
   "Start a worker" sends the coordinator `Start a worker on <id>: <title>` through its chat, and waits while anything in `blocked_by_issues` is open.
   New issue opens a side chat: the first message is `POST .../issue-drafts`, later ones `POST /v1/issue-drafts/{id}/messages`; the coordinator's drafts arrive as `issue_draft.updated`, and an open draft reopens with the drawer. `:accept` sends the drafts as edited in the app, with `start_worker` for "Create and start a worker", and the screen selects the first created issue.
 - **Accounts (ADR-11).** The Accounts screen lists `GET /v1/accounts` grouped by harness, the harness's default account first, each with its credential health (`health`, from the harness adapter) and latest quota (`quota`); `account.quota_changed` replaces one account's `quota` live.
-  "Refresh quota" calls `GET /v1/accounts?refresh=true`, which reads every account's quota (one `quota-axi --provider claude|codex --profile-only` call each) before answering.
+  "Refresh quota" calls `GET /v1/accounts?refresh=true`, which reads every account's quota (one `quota-axi --provider claude|codex --json` call each, the account variable naming its directory except for the default account) before answering.
   Adding an account sends `harness`, an absolute `config_dir`, an optional `label` and `pools`; only harnesses with an `account_env` take one, and the form shows the login line (`CLAUDE_CONFIG_DIR=<dir> claude`).
   The new account's quota is `pending` until its `account.quota_changed` arrives.
   `409 conflict` means the directory is already an account (or the harness's default); removing answers `409` for a default account or one a running task uses.

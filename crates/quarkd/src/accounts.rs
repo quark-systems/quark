@@ -13,8 +13,11 @@
 //! variable on the engine call. Workers the coordinator starts inherit its
 //! account through the engine.
 //!
-//! Quota comes from `quota-axi --provider claude|codex --profile-only`, one
-//! call per account, and changes stream as `account.quota_changed`.
+//! Quota comes from `quota-axi --provider claude|codex --json`, one call per
+//! account with the account variable naming its directory (unset for the
+//! default account), and changes stream as `account.quota_changed`. Not
+//! `--profile-only`: it reads only a credential file, and Claude Code on
+//! macOS keeps its credentials in the Keychain.
 
 use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
@@ -87,13 +90,16 @@ pub struct Lease {
 /// Reads one account's quota.
 #[async_trait]
 pub trait QuotaReader: Send + Sync {
-    /// Runs `quota-axi --provider <provider> --profile-only --json` with
-    /// `env_var` set to `config_dir` and returns its stdout.
+    /// Runs `quota-axi --provider <provider> --json` with `env_var` set to
+    /// `config_dir` (left as the daemon's own for the `default` account,
+    /// since setting it changes which Keychain item Claude Code uses) and
+    /// returns its report.
     async fn read(
         &self,
         provider: &str,
         env_var: &str,
         config_dir: &Path,
+        default: bool,
     ) -> std::result::Result<String, String>;
 }
 
@@ -118,10 +124,14 @@ impl QuotaReader for QuotaAxi {
         provider: &str,
         env_var: &str,
         config_dir: &Path,
+        default: bool,
     ) -> std::result::Result<String, String> {
-        let run = tokio::process::Command::new(&self.bin)
-            .args(["--provider", provider, "--profile-only", "--json"])
-            .env(env_var, config_dir)
+        let mut cmd = tokio::process::Command::new(&self.bin);
+        cmd.args(["--provider", provider, "--json"]);
+        if !default {
+            cmd.env(env_var, config_dir);
+        }
+        let run = cmd
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .output();
@@ -130,7 +140,8 @@ impl QuotaReader for QuotaAxi {
             .map_err(|_| format!("quota-axi timed out after {}s", QUOTA_TIMEOUT.as_secs()))?
             .map_err(|e| format!("could not run {}: {e}", self.bin.display()))?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-        if out.status.success() {
+        // A failed provider still prints its report, with the reason.
+        if out.status.success() || serde_json::from_str::<QuotaReport>(&stdout).is_ok() {
             return Ok(stdout);
         }
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -139,44 +150,8 @@ impl QuotaReader for QuotaAxi {
         } else {
             stdout.as_str()
         };
-        let detail = failure_detail(text);
-        if detail.contains("unknown argument: --profile-only") {
-            return Err(too_old(self.version().await.as_deref()));
-        }
-        Err(detail)
+        Err(failure_detail(text))
     }
-}
-
-impl QuotaAxi {
-    /// `quota-axi --version`, when it answers.
-    async fn version(&self) -> Option<String> {
-        let run = tokio::process::Command::new(&self.bin)
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output();
-        let out = tokio::time::timeout(Duration::from_secs(10), run)
-            .await
-            .ok()?
-            .ok()?;
-        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (out.status.success() && !v.is_empty()).then_some(v)
-    }
-}
-
-/// The oldest quota-axi with `--profile-only`.
-pub const QUOTA_AXI_MIN_VERSION: &str = "0.1.44";
-
-/// What a quota-axi without `--profile-only` reports, with the fix.
-fn too_old(version: Option<&str>) -> String {
-    let which = match version {
-        Some(v) => format!("quota-axi {v} is too old"),
-        None => "this quota-axi is too old".into(),
-    };
-    format!(
-        "{which}: reading an account's quota needs {QUOTA_AXI_MIN_VERSION} or newer. \
-         Run `quota-axi update` and refresh."
-    )
 }
 
 /// A quota reader for tests: canned output per config directory, and a log
@@ -185,7 +160,7 @@ fn too_old(version: Option<&str>) -> String {
 pub struct StubQuota {
     readings:
         std::sync::Mutex<std::collections::HashMap<PathBuf, std::result::Result<String, String>>>,
-    calls: std::sync::Mutex<Vec<(String, String, PathBuf)>>,
+    calls: std::sync::Mutex<Vec<(String, String, PathBuf, bool)>>,
 }
 
 impl StubQuota {
@@ -198,8 +173,8 @@ impl StubQuota {
         self.readings.lock().unwrap().insert(config_dir.into(), out);
     }
 
-    /// Reads so far, as `(provider, variable, config_dir)`.
-    pub fn calls(&self) -> Vec<(String, String, PathBuf)> {
+    /// Reads so far, as `(provider, variable, config_dir, default)`.
+    pub fn calls(&self) -> Vec<(String, String, PathBuf, bool)> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -211,11 +186,13 @@ impl QuotaReader for StubQuota {
         provider: &str,
         env_var: &str,
         config_dir: &Path,
+        default: bool,
     ) -> std::result::Result<String, String> {
         self.calls.lock().unwrap().push((
             provider.into(),
             env_var.into(),
             config_dir.to_path_buf(),
+            default,
         ));
         self.readings
             .lock()
@@ -597,7 +574,7 @@ impl Accounts {
     }
 
     /// Reads quota for every account of a harness quota-axi supports, or
-    /// only `only`, one `--profile-only` call per account, and stores each
+    /// only `only`, one quota-axi call per account, and stores each
     /// reading. Changed readings stream as `account.quota_changed`.
     pub async fn refresh_quota(&self, only: Option<&str>) -> Result<()> {
         for account in self.list().await? {
@@ -615,7 +592,11 @@ impl Accounts {
                     QuotaState::Error,
                     Some("the account has no config directory".into()),
                 ),
-                Some(dir) => match self.quota.read(provider, var, Path::new(dir)).await {
+                Some(dir) => match self
+                    .quota
+                    .read(provider, var, Path::new(dir), account.default)
+                    .await
+                {
                     Ok(json) => parse_quota(provider, &json),
                     Err(detail) => AccountQuota::empty(QuotaState::Error, Some(detail)),
                 },
@@ -751,9 +732,12 @@ struct WindowReport {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StateReport {
     status: Option<String>,
     error: Option<String>,
+    /// The command that fixes it, such as a one-time Keychain grant.
+    remedy_command: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -820,7 +804,13 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
             resets_at: w.resets_at.clone(),
         })
         .collect();
-    let error = p.state.as_ref().and_then(|s| s.error.clone());
+    let error = p.state.as_ref().and_then(|s| {
+        let error = s.error.clone()?;
+        Some(match &s.remedy_command {
+            Some(fix) => format!("{error}; run `{fix}` once"),
+            None => error,
+        })
+    });
     let detail = match remaining {
         Some(_) => error,
         None => error
@@ -890,13 +880,18 @@ mod tests {
     }
 
     #[test]
-    fn an_old_quota_axi_says_how_to_fix_it() {
-        assert_eq!(
-            too_old(Some("0.1.40")),
-            "quota-axi 0.1.40 is too old: reading an account's quota needs 0.1.44 or newer. \
-             Run `quota-axi update` and refresh."
+    fn a_failed_reading_says_why_and_how_to_fix_it() {
+        let q = parse_quota(
+            "claude",
+            r#"{"schemaVersion":5,"providers":[{"provider":"claude","windows":[],
+                "state":{"status":"unavailable","stale":false,"error":"Keychain access required",
+                  "reason":"keychain_access_required","remedyCommand":"quota-axi --allow-keychain-prompt"}}]}"#,
         );
-        assert!(too_old(None).starts_with("this quota-axi is too old"));
+        assert_eq!(q.state, QuotaState::Unavailable);
+        assert_eq!(
+            q.detail.as_deref(),
+            Some("Keychain access required; run `quota-axi --allow-keychain-prompt` once")
+        );
     }
 
     #[test]

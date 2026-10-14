@@ -316,18 +316,19 @@ async fn quota_is_read_once_per_account_and_changes_stream() {
     assert!(list[0]["quota"]["checked_at"].is_string());
     assert_eq!(list[1]["quota"]["remaining_percent"], 90.0);
 
-    // One profile-only read per account, pointed at its own directory.
+    // One read per account, pointed at its own directory; the default
+    // account's leaves the variable alone.
     let calls = s.quota.calls();
     let reads: Vec<_> = calls
         .iter()
-        .map(|(p, v, d)| (p.as_str(), v.as_str(), d.clone()))
+        .map(|(p, v, d, def)| (p.as_str(), v.as_str(), d.clone(), *def))
         .collect();
     assert_eq!(
         reads,
         [
-            ("claude", "CLAUDE_CONFIG_DIR", PathBuf::from(&work)),
-            ("claude", "CLAUDE_CONFIG_DIR", default_dir.clone()),
-            ("claude", "CLAUDE_CONFIG_DIR", PathBuf::from(&work)),
+            ("claude", "CLAUDE_CONFIG_DIR", PathBuf::from(&work), false),
+            ("claude", "CLAUDE_CONFIG_DIR", default_dir.clone(), true),
+            ("claude", "CLAUDE_CONFIG_DIR", PathBuf::from(&work), false),
         ]
     );
     // The default account's first reading and nothing for the unchanged one.
@@ -338,7 +339,7 @@ async fn quota_is_read_once_per_account_and_changes_stream() {
     assert_eq!(quota_events(&s.store).len(), 2);
     s.quota.set(&work, reading("claude", 0.0));
     s.quota
-        .set(&default_dir, Err("unknown argument: --profile-only".into()));
+        .set(&default_dir, Err("quota-axi timed out after 60s".into()));
     s.accounts.refresh_quota(None).await.unwrap();
     let events = quota_events(&s.store);
     assert_eq!(events.len(), 4);
@@ -346,7 +347,7 @@ async fn quota_is_read_once_per_account_and_changes_stream() {
     assert_eq!(events[2]["quota"]["state"], "error");
     assert_eq!(
         events[2]["quota"]["detail"],
-        "unknown argument: --profile-only"
+        "quota-axi timed out after 60s"
     );
     assert_eq!(events[3]["quota"]["remaining_percent"], 0.0);
 }

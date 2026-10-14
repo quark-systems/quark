@@ -1167,7 +1167,7 @@ function addAccount(a) {
   return account;
 }
 
-// Like quarkd's one quota-axi --profile-only read per account, then account.quota_changed.
+// Like quarkd's one quota-axi read per account, then account.quota_changed.
 function readQuota(account, reading) {
   account.quota = reading;
   emit("account.quota_changed", { account_id: account.id, harness: account.harness, quota: reading });
