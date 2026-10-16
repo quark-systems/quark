@@ -1,5 +1,5 @@
-// One pull request: diff with line comments for the owning worker, and the verification
-// evidence (ADR-15), on the left; gates, checks, reviews and the Project's standing approval on
+// One pull request: its description and conversation (quark-atn), the diff with line comments
+// for the owning worker, and the verification evidence (ADR-15), on the left; gates, checks, reviews and the Project's standing approval on
 // the right; approve and merge in the header.
 import React, { useEffect, useMemo, useState } from "react";
 import { api, ApiError, Evidence, NotAvailable, PullRequest } from "../api";
@@ -7,7 +7,8 @@ import { href } from "../nav";
 import { refreshPullRequest, setPullRequest, useStore } from "../store";
 import { ago, errText } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
-import { DiffView, LineComment, OnComment } from "../components/diff/DiffView";
+import { DiffFocus, DiffView, LineComment, OnComment } from "../components/diff/DiffView";
+import { DiffTarget, PrConversation } from "../components/PrConversation";
 import { StandingApproval } from "../components/StandingApproval";
 import { EvidencePanel, EvidenceSummary } from "../components/Evidence";
 import { Unavailable } from "../components/Unavailable";
@@ -21,7 +22,12 @@ export function PullRequestView({ id }: { id: string }) {
   const [status, setStatus] = useState<"loading" | "ok" | "missing" | "unavailable" | "error">(pr ? "ok" : "loading");
   const [err, setErr] = useState<string | null>(null);
   const [comments, setComments] = useState<LineComment[]>([]);
-  const [tab, setTab] = useState<"diff" | "evidence">("diff");
+  const [tab, setTab] = useState<"overview" | "diff" | "evidence">("overview");
+  const [focus, setFocus] = useState<DiffFocus | null>(null);
+  const openLine = (t: DiffTarget) => {
+    setFocus((f) => ({ ...t, n: (f?.n ?? 0) + 1 }));
+    setTab("diff");
+  };
 
   // Refetch on open and whenever a check, review or partial PR event names this PR.
   useEffect(() => {
@@ -73,15 +79,20 @@ export function PullRequestView({ id }: { id: string }) {
       <div className="screen pr-detail">
         <section className="pr-diff">
           <div className="tabs" role="tablist">
+            <button role="tab" aria-selected={tab === "overview"} className={tab === "overview" ? "on" : ""} onClick={() => setTab("overview")}>Overview</button>
             <button role="tab" aria-selected={tab === "diff"} className={tab === "diff" ? "on" : ""} onClick={() => setTab("diff")}>Diff</button>
             <button role="tab" aria-selected={tab === "evidence"} className={tab === "evidence" ? "on" : ""} onClick={() => setTab("evidence")}
               data-testid="tab-evidence">
               Evidence{pr.evidence && <EvidenceBadge ev={pr.evidence} />}
             </button>
           </div>
-          {/* Both stay mounted so the diff, its scroll and open comment boxes survive a tab switch. */}
+          {/* All stay mounted so the diff, its scroll and open comment boxes survive a tab switch. */}
+          <div className="tab-body" hidden={tab !== "overview"}>
+            <PrConversation pr={pr} onOpenLine={openLine} />
+          </div>
           <div className="tab-body" hidden={tab !== "diff"}>
-            <DiffPanel pr={pr} comments={comments} onComment={pr.state === "merged" || pr.state === "closed" ? undefined : onComment} />
+            <DiffPanel pr={pr} comments={comments} focus={focus}
+              onComment={pr.state === "merged" || pr.state === "closed" ? undefined : onComment} />
             {pr.state !== "merged" && pr.state !== "closed" && <PrCommentBox onSend={(text) => comment({ text })} />}
           </div>
           <div className="tab-body" hidden={tab !== "evidence"}>
@@ -156,7 +167,9 @@ function PrActions({ pr }: { pr: PullRequest }) {
 
 // ---- diff ----
 
-function DiffPanel({ pr, comments, onComment }: { pr: PullRequest; comments: LineComment[]; onComment?: OnComment }) {
+function DiffPanel({ pr, comments, onComment, focus }: {
+  pr: PullRequest; comments: LineComment[]; onComment?: OnComment; focus?: DiffFocus | null;
+}) {
   const [files, setFiles] = useState<DiffFile[] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
@@ -182,7 +195,7 @@ function DiffPanel({ pr, comments, onComment }: { pr: PullRequest; comments: Lin
       {status === "loading" && <div className="empty">Loading the diff…</div>}
       {truncated && <div className="state-note">This diff was cut at the daemon's size limit.</div>}
       {onComment && files && files.length > 0 && <div className="faint small-text diff-hint">Click a line number to comment for the worker.</div>}
-      {files && files.length > 0 && <DiffView files={files} comments={comments} onComment={onComment} />}
+      {files && files.length > 0 && <DiffView files={files} comments={comments} onComment={onComment} focus={focus} />}
       {files && !files.length && <div className="empty">No textual changes.</div>}
     </div>
   );
