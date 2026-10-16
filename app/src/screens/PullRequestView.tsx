@@ -4,6 +4,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, ApiError, Evidence, NotAvailable, PullRequest } from "../api";
 import { href } from "../nav";
+import { externalLink } from "../links";
 import { refreshPullRequest, setPullRequest, useStore } from "../store";
 import { ago, errText } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
@@ -64,7 +65,7 @@ export function PullRequestView({ id }: { id: string }) {
         <span className="faint">/</span>
         <h1 className="ellipsis" title={prTitle(pr)}>{prTitle(pr)}</h1>
         <span className={"pill " + st.cls} data-testid="pr-state">{st.label}</span>
-        <a className="pill mono" href={pr.url} target="_blank" rel="noreferrer">{pr.repo}#{pr.number}</a>
+        <a className="pill mono" {...externalLink(pr.url)} data-testid="pr-forge-link">{pr.repo}#{pr.number}</a>
         <span className="spacer" />
         <PrActions pr={pr} />
       </div>
