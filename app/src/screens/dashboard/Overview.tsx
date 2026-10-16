@@ -4,6 +4,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, DigestItem, DigestKind, NotAvailable, ProjectOverview, PulseState, TaskPulse } from "../../api";
 import { href } from "../../nav";
+import { externalLink } from "../../links";
 import { useStore } from "../../store";
 import { ago, errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
@@ -208,7 +209,7 @@ function Highlight({ h }: { h: DigestItem }) {
       <div className="ov-main">
         <div className="ov-line">
           <TaskName taskId={h.task_id} title={h.title} engineTask={h.engine_task} />
-          {h.url && <a className="ov-link mono" href={h.url} target="_blank" rel="noreferrer">{prLabel(h.url)}</a>}
+          {h.url && <a className="ov-link mono" {...externalLink(h.url)}>{prLabel(h.url)}</a>}
         </div>
         {h.text && <div className="ov-note dim" title={h.text}>{h.text}</div>}
       </div>

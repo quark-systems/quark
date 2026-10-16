@@ -4,6 +4,7 @@
 import { KeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
+import { externalLink } from "../links";
 import { loadTranscript, refreshTask, useStore } from "../store";
 import { attach, getTerm, resetTerm, TermHandle } from "../terminal";
 import { ago, errText, isActive, stateMeta } from "../util";
@@ -53,7 +54,7 @@ export function WorkerView({ id }: { id: string }) {
           {task.harness && (
             <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}{task.model && <span className="faint"> · {task.model}</span>}</span>
           )}
-          {task.pull_request_url && <a className="pill green" href={task.pull_request_url} target="_blank" rel="noreferrer">pull request</a>}
+          {task.pull_request_url && <a className="pill green" {...externalLink(task.pull_request_url)} data-testid="worker-pr-link">pull request</a>}
           <Controls taskId={id} active={isActive(task.state)} />
         </div>
         {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}

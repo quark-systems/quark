@@ -356,6 +356,23 @@ test("PR view opens on the rendered description, then comments, reviews and inli
   await expect(page.getByTestId("pr-no-comments")).toHaveText("No comments or reviews yet.");
 });
 
+test("the PR's GitHub links open in the default browser through the desktop shell", async ({ page }) => {
+  // Stand in for the desktop shell's opener; the app hands it the PR's address.
+  await page.addInitScript(() => {
+    (window as any).__opened = [];
+    (window as any).__quarkOpenUrl = async (u: string) => { (window as any).__opened.push(u); };
+  });
+  const opened = () => page.evaluate(() => (window as any).__opened);
+  await open(page, "#/pr/pr-2");
+  await page.getByTestId("pr-forge-link").click();
+  await expect.poll(opened).toEqual(["https://github.com/quark-systems/quark/pull/15"]);
+  await open(page, "#/p/quark/work");
+  await page.getByTestId("task-card").filter({ hasText: "OpenAPI check in CI" }).click();
+  await page.getByTestId("worker-pr-link").click();
+  await expect.poll(async () => (await opened()).at(-1)).toBe("https://github.com/quark-systems/quark/pull/2");
+  expect(page.context().pages()).toHaveLength(1);
+});
+
 test("PR center: verification evidence with failing journeys, screenshots and traces", async ({ page }) => {
   await open(page, "#/pr/pr-2");
   const summary = page.getByTestId("pr-evidence");
