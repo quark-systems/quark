@@ -7,7 +7,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    ErrorBody, MergePullRequest, PullRequest, PullRequestComment, PullRequestDiff, PullRequestState,
+    ErrorBody, MergePullRequest, PrConversation, PullRequest, PullRequestComment, PullRequestDiff,
+    PullRequestState,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -128,6 +129,28 @@ pub async fn diff(
         patch,
         truncated,
     }))
+}
+
+/// The pull request's conversation as last read from its forge, oldest
+/// first: comments, and reviews with the inline threads each started.
+/// `comment.updated` and `review.updated` say when it changed.
+#[utoipa::path(
+    get,
+    path = "/v1/pull-requests/{id}/comments",
+    tag = "pull-requests",
+    params(("id" = String, Path, description = "Pull request id")),
+    responses(
+        (status = 200, body = PrConversation),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<PrConversation>, ApiError> {
+    Ok(Json(
+        db(&state, move |s| s.pull_request_conversation(&id)).await?,
+    ))
 }
 
 /// Send a review comment to the worker that owns the pull request.
@@ -361,7 +384,7 @@ pub async fn artifact(
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
 #[openapi(
-    paths(list, get, diff, comment, merge, artifact),
+    paths(list, get, diff, conversation, comment, merge, artifact),
     components(schemas(
         quark_systems::PullRequestState,
         quark_systems::Mergeability,
@@ -371,6 +394,9 @@ pub async fn artifact(
         quark_systems::ReviewState,
         quark_systems::CheckUpdated,
         quark_systems::ReviewUpdated,
+        quark_systems::CommentUpdated,
+        quark_systems::PrCommentKind,
+        quark_systems::PrEntryKind,
         quark_systems::DiffSide,
         quark_systems::MergeMethod,
         quark_systems::GateState,
@@ -382,7 +408,7 @@ pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.
 pub(super) fn router() -> axum::Router<AppState> {
-    use axum::routing::{get, post};
+    use axum::routing::get;
     axum::Router::new()
         .route("/v1/pull-requests", get(list))
         // POST serves the custom method `/v1/pull-requests/{id}:merge`.
@@ -392,5 +418,8 @@ pub(super) fn router() -> axum::Router<AppState> {
             "/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}",
             get(artifact),
         )
-        .route("/v1/pull-requests/{id}/comments", post(comment))
+        .route(
+            "/v1/pull-requests/{id}/comments",
+            get(conversation).post(comment),
+        )
 }

@@ -43,6 +43,9 @@ const transcripts = new Map(); // task id -> TranscriptEntry[]
 const terms = new Map(); // task id -> { cols, rows, screen: string, line: string }
 const diffOf = new Map(); // task id -> unified diff text
 const pulls = new Map(); // PR id -> PullRequest
+// Each PR's comments on the forge (PrComment[]), as quarkd syncs them (quark-ual): on the conversation,
+// and inline in a review. GET /v1/pull-requests/{id}/comments groups them as quarkd does.
+const forgeComments = new Map(); // PR id -> PrComment[]
 const pullDiffs = new Map(); // PR id -> unified diff text
 const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
@@ -141,6 +144,37 @@ function taskBrief(task) {
     pull_request_url: task.pull_request_url,
   };
 }
+
+/** quarkd's conversation order: comments, and reviews with the inline threads each started. */
+function conversationOf(pr) {
+  const all = forgeComments.get(pr.id) ?? [];
+  const inline = all.filter((c) => c.kind === "inline");
+  const byId = new Map(inline.map((c) => [c.id, c]));
+  const rootOf = (c) => { let at = c; for (let i = 0; at.in_reply_to && byId.has(at.in_reply_to) && i <= inline.length; i++) at = byId.get(at.in_reply_to); return at; };
+  const threads = [];
+  for (const c of inline) {
+    const root = rootOf(c);
+    let t = threads.find((x) => x.id === root.id);
+    if (!t) threads.push(t = { id: root.id, path: root.path ?? "", line: root.line ?? null, original_line: root.original_line ?? null, side: root.side ?? "new", commit: root.commit ?? null, outdated: root.line == null, comments: [] });
+    t.comments.push(c);
+  }
+  threads.forEach((t) => t.comments.sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? "")));
+  const entries = all.filter((c) => c.kind === "conversation").map((c) => ({ kind: "comment", at: c.created_at, comment: c, review: null, threads: [] }));
+  const placed = new Set();
+  for (const r of pr.reviews) {
+    const started = threads.filter((t) => t.comments[0]?.review_id === r.id);
+    started.forEach((t) => placed.add(t.id));
+    const repliesOnly = !r.body.trim() && !started.length && r.state === "commented" && inline.some((c) => c.review_id === r.id);
+    if (!repliesOnly) entries.push({ kind: "review", at: r.submitted_at ?? null, comment: null, review: r, threads: started });
+  }
+  for (const t of threads) if (!placed.has(t.id)) entries.push({ kind: "thread", at: t.comments[0]?.created_at ?? null, comment: null, review: null, threads: [t] });
+  entries.sort((a, b) => (a.at == null) - (b.at == null) || (a.at ?? "").localeCompare(b.at ?? ""));
+  return { pull_request_id: pr.id, entries };
+}
+const forgeComment = (id, kind, author, body, created_at, extra = {}) => ({
+  id, kind, author, body, created_at, updated_at: created_at, url: null, review_id: null, path: null, line: null,
+  original_line: null, side: null, commit: null, in_reply_to: null, ...extra,
+});
 
 function addTask(projectId, t, { silent = false } = {}) {
   const task = {
@@ -895,7 +929,7 @@ function seed() {
     const repo = project.repos[0].url.replace(/^https:\/\/github.com\//, "").replace(/\.git$/, "");
     const pr = {
       id, project_id: project.id, task_id: task?.id ?? null, provider: "github", repo, author: "quark-bot", state: "open",
-      head_sha: "9f1e2d3c4b", mergeable: "mergeable", checks_state: "passing", review_decision: "review_required",
+      head_sha: "9f1e2d3c4b", mergeable: "mergeable", checks_state: "passing", review_decision: "review_required", body: "",
       checks: [], reviews: [], evidence: null, opened_at: minutesAgo(120), updated_at: minutesAgo(10),
       merged_at: null, closed_at: null, synced_at: minutesAgo(1), sync_error: null, ...extra,
     };
@@ -949,6 +983,7 @@ function seed() {
   const inReview = [...tasks.values()].find((t) => t.title === "OpenAPI check in CI");
   PR("pr-1", quark, inReview, {
     number: 2, title: "OpenAPI check in CI", head_ref: "quark/openapi-check", base_ref: "main", diff: DIFFS[0],
+    body: "Fails CI when `api/openapi.json` is stale, so the app's types never drift from the daemon.",
     checks: [ok("CI / rust"), ok("CI / desktop-app")], updated_at: minutesAgo(40), evidence: evidence("pr-1", false),
   });
   PR("pr-2", quark, b, {
@@ -956,7 +991,22 @@ function seed() {
     checks: [ok("CI / rust"), { name: "CI / desktop-app", status: "failure", conclusion: "timed_out", details_url: null }], checks_state: "failing",
     review_decision: "changes_requested", updated_at: minutesAgo(6), evidence: evidence("pr-2", true),
     reviews: [{ id: "r-1", author: "mattsanchez", state: "changes_requested", body: "Resize should debounce; the pane flickers.", submitted_at: minutesAgo(15), commit: "9f1e2d3c4b" }],
+    body: [
+      "Drives worker terminals through tmux **control mode** instead of polling `capture-pane`.", "",
+      "## What changed", "- `ControlClient` keeps one control-mode client per worker.",
+      "- Panes are never sized below `MIN_COLS` x `MIN_ROWS`.", "",
+      "## How it was tested", "```sh", "cargo test -p quarkd workers::tmux", "```", "",
+      "Closes #14.",
+    ].join("\n"),
   });
+  forgeComments.set("pr-2", [
+    forgeComment("IC-1", "conversation", "quark-bot", "Gates are running on `9f1e2d3`; journeys next.", minutesAgo(30)),
+    forgeComment("RC-1", "inline", "mattsanchez", "Why 20? Most TUIs need 40 columns before they wrap sensibly.", minutesAgo(15),
+      { review_id: "r-1", path: "crates/quarkd/src/workers/tmux.rs", line: 10, original_line: 10, side: "new", commit: "9f1e2d3c4b" }),
+    forgeComment("RC-2", "inline", "quark-bot", "20 is tmux's own floor; I'll raise it to 40 with a note.", minutesAgo(12),
+      { review_id: "r-3", path: "crates/quarkd/src/workers/tmux.rs", line: 10, original_line: 10, side: "new", commit: "9f1e2d3c4b", in_reply_to: "RC-1" }),
+  ]);
+  pulls.get("pr-2").reviews.push({ id: "r-3", author: "quark-bot", state: "commented", body: "", submitted_at: minutesAgo(12), commit: "9f1e2d3c4b" });
   PR("pr-3", site, null, {
     number: 41, title: "Pricing page on the new grid", head_ref: "quark/pricing-grid", base_ref: "main", diff: DIFFS[3],
     state: "draft", checks: [{ name: "build", status: "pending", started_at: minutesAgo(2) }], checks_state: "pending", review_decision: "none",
@@ -1880,6 +1930,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": a.content_type, ...cors });
       return res.end(a.body);
     }
+    if (rest === "/comments" && req.method === "GET") return send(res, 200, conversationOf(pr));
     if (rest === "/comments" && req.method === "POST") {
       const b = await readJson(req);
       if (!b?.text?.trim()) return invalid(res, "text is required");
@@ -1903,6 +1954,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (p === "/mock/pr-comments" && req.method === "GET") return send(res, 200, prComments);
+  // Someone comments on the forge (quark-ual): the next sync records it and emits `comment.updated`.
+  if ((r = m(/^\/mock\/pull-requests\/([^/]+)\/forge-comments$/)) && req.method === "POST") {
+    const pr = pulls.get(decodeURIComponent(r[1]));
+    if (!pr) return notFound(res);
+    const b = await readJson(req);
+    const c = forgeComment(b.id ?? nextId("IC"), b.kind ?? "conversation", b.author ?? "mattsanchez", b.body ?? "", now(), b);
+    forgeComments.set(pr.id, [...(forgeComments.get(pr.id) ?? []), c]);
+    emit("comment.updated", { pull_request_id: pr.id, task_id: pr.task_id, comment: c, deleted: false }, pr.project_id);
+    return send(res, 200, c);
+  }
   // Post an automation update (`notice.posted`), as quarkd's trigger engine does, so tests can drive Since you looked.
   if (p === "/mock/notice" && req.method === "POST") {
     const n = await readJson(req);

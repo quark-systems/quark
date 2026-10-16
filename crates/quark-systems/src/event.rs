@@ -41,6 +41,10 @@ pub enum EventType {
     /// A review appeared or changed; payload is a [`ReviewUpdated`](crate::ReviewUpdated).
     #[serde(rename = "review.updated")]
     ReviewUpdated,
+    /// A pull request comment appeared, changed or was deleted; payload is a
+    /// [`CommentUpdated`](crate::CommentUpdated).
+    #[serde(rename = "comment.updated")]
+    CommentUpdated,
     /// A worker was dispatched; payload is a [`DispatchRecord`](crate::DispatchRecord)(crate::DispatchRecord).
     #[serde(rename = "dispatch.recorded")]
     DispatchRecorded,
@@ -74,7 +78,7 @@ pub enum EventType {
 }
 
 impl EventType {
-    pub const ALL: [EventType; 23] = [
+    pub const ALL: [EventType; 24] = [
         EventType::ProjectUpdated,
         EventType::TaskCreated,
         EventType::TaskStateChanged,
@@ -89,6 +93,7 @@ impl EventType {
         EventType::PrUpdated,
         EventType::CheckUpdated,
         EventType::ReviewUpdated,
+        EventType::CommentUpdated,
         EventType::DispatchRecorded,
         EventType::AccountQuotaChanged,
         EventType::MemoryProposed,
@@ -116,6 +121,7 @@ impl EventType {
             EventType::PrUpdated => "pr.updated",
             EventType::CheckUpdated => "check.updated",
             EventType::ReviewUpdated => "review.updated",
+            EventType::CommentUpdated => "comment.updated",
             EventType::DispatchRecorded => "dispatch.recorded",
             EventType::AccountQuotaChanged => "account.quota_changed",
             EventType::MemoryProposed => "memory.proposed",

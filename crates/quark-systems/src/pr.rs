@@ -234,6 +234,10 @@ pub struct PullRequest {
     pub number: u64,
     /// Absent until the forge has been read.
     pub title: Option<String>,
+    /// The description, Markdown; empty when it has none, absent until the
+    /// forge has been read.
+    #[serde(default)]
+    pub body: Option<String>,
     /// Forge login of the author.
     pub author: Option<String>,
     pub state: PullRequestState,
@@ -298,6 +302,109 @@ pub enum DiffSide {
     New,
     /// The base version (removed lines).
     Old,
+}
+
+/// Where on a pull request a comment was left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrCommentKind {
+    /// On the conversation, not on a line.
+    Conversation,
+    /// On a line of the diff, in a review.
+    Inline,
+}
+
+/// One comment on a pull request, as the forge last reported it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PrComment {
+    /// The forge's comment id.
+    pub id: String,
+    pub kind: PrCommentKind,
+    /// Forge login of the author.
+    pub author: Option<String>,
+    /// Markdown.
+    pub body: String,
+    pub created_at: Option<String>,
+    /// Later than `created_at` once the comment was edited.
+    pub updated_at: Option<String>,
+    /// The comment on the forge.
+    pub url: Option<String>,
+    /// Inline: the review it was left in (a `Review.id`).
+    pub review_id: Option<String>,
+    /// Inline: the file, as it appears in the diff.
+    pub path: Option<String>,
+    /// Inline: the line on `side` in the current diff; absent once the line
+    /// is gone from it (outdated).
+    pub line: Option<u64>,
+    /// Inline: the line on `side` in the diff the comment was left on.
+    pub original_line: Option<u64>,
+    pub side: Option<DiffSide>,
+    /// Inline: the commit the comment was left on.
+    pub commit: Option<String>,
+    /// Inline: the comment this one replies to.
+    pub in_reply_to: Option<String>,
+}
+
+/// Payload of `comment.updated`: one comment that appeared, changed or was
+/// deleted on the forge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CommentUpdated {
+    pub pull_request_id: String,
+    pub task_id: Option<String>,
+    pub comment: PrComment,
+    /// The comment is gone from the forge.
+    #[serde(default)]
+    pub deleted: bool,
+}
+
+/// Inline comments on one line, oldest first: the first starts the thread
+/// and the rest reply to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PrThread {
+    /// The first comment's id.
+    pub id: String,
+    pub path: String,
+    /// The line in the current diff; absent when outdated.
+    pub line: Option<u64>,
+    pub original_line: Option<u64>,
+    pub side: DiffSide,
+    pub commit: Option<String>,
+    /// The line is gone from the current diff.
+    pub outdated: bool,
+    pub comments: Vec<PrComment>,
+}
+
+/// What one entry of a pull request's conversation is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrEntryKind {
+    /// A comment on the conversation: `comment`.
+    Comment,
+    /// A review: `review`, with the inline threads it started in `threads`.
+    Review,
+    /// An inline thread whose review the forge did not list: `threads`
+    /// holds it alone.
+    Thread,
+}
+
+/// One entry of a pull request's conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PrConversationEntry {
+    pub kind: PrEntryKind,
+    /// When it was posted; entries are in this order.
+    pub at: Option<String>,
+    pub comment: Option<PrComment>,
+    pub review: Option<Review>,
+    #[serde(default)]
+    pub threads: Vec<PrThread>,
+}
+
+/// A pull request's conversation as last read from its forge, oldest
+/// first: comments, and reviews with their inline threads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PrConversation {
+    pub pull_request_id: String,
+    pub entries: Vec<PrConversationEntry>,
 }
 
 /// A review comment for the worker that owns the pull request. It is

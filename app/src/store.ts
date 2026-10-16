@@ -30,7 +30,7 @@ export interface AppState {
   pullRequests: Record<string, PullRequest>;
   /** Whether the daemon serves the PR center; null until the first load answers. */
   prsAvailable: boolean | null;
-  /** Count of `pr.updated`, `check.updated` and `review.updated` events per PR, so views can refetch it. */
+  /** Count of `pr.updated`, `check.updated`, `review.updated` and `comment.updated` events per PR, so views can refetch it. */
   prActivity: Record<string, number>;
   /** Accounts per harness by id, in the daemon's order (`order`). */
   accounts: Record<string, Account>;
@@ -127,6 +127,7 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
         prActivity: { ...s.prActivity, [p.id]: (s.prActivity[p.id] ?? 0) + 1 },
       };
     }
+    case "comment.updated":
     case "check.updated":
     case "review.updated": {
       // Merge the one check or review into a loaded PR; views also refetch it for the rolled-up states.
