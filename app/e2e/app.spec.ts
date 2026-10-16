@@ -196,6 +196,37 @@ test("worker view: why this agent, live on relaunch and kept after the task ends
   await expect(why.getByTestId("why-summary")).toContainText("the coordinator picked claude-code");
 });
 
+test("the Brief tab shows the issue a worker was started for and the brief it received", async ({ page }) => {
+  await open(page, "#/p/quark/work");
+  await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
+  await page.getByRole("tab", { name: "Brief" }).click();
+  const brief = page.getByTestId("worker-brief");
+  const issue = brief.getByTestId("brief-issue");
+  await expect(issue).toContainText("qk-30");
+  await expect(issue).toContainText("Event stream resyncs slow clients from the store");
+  await expect(issue).toContainText("bug · P1");
+  await expect(issue.getByRole("link", { name: "#47" })).toHaveAttribute("href", "https://github.com/quark-systems/quark/issues/47");
+  await expect(brief.getByTestId("brief-intent")).toContainText("When a client lags, resync it from the store");
+  await expect(brief.getByTestId("brief-spec").locator("li")).toHaveCount(4);
+  await expect(brief.getByTestId("brief-spec").locator("code").first()).toHaveText("resync");
+  await expect(brief.getByTestId("brief-dispatch")).toContainText("by the coordinator");
+  await expect(brief.getByTestId("brief-dispatch")).toContainText("Checked by the verification gate before its PR opens");
+  await expect(brief.getByTestId("brief-dispatch")).toContainText("Asks you before merging");
+  await brief.getByTestId("brief-launch").locator("summary").click();
+  await expect(brief.getByTestId("brief-launch")).toContainText("Current worker role contract");
+  // The issue opens in the project's Issues tab.
+  await issue.getByRole("link", { name: "qk-30" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-30$/);
+
+  // A finished worker without an issue or a brief says so.
+  await open(page, "#/p/quark/work");
+  await page.getByTestId("task-card").filter({ hasText: "Daemon skeleton" }).click();
+  await page.getByRole("tab", { name: "Brief" }).click();
+  await expect(brief.getByTestId("brief-no-issue")).toHaveText("No issue: this worker was not started for one.");
+  await expect(brief.getByTestId("brief-none")).toHaveText("No brief recorded for this worker.");
+  await expect(brief.getByTestId("brief-dispatch")).toContainText("by the coordinator");
+});
+
 test("a queued task explains that it has no terminal or changes yet", async ({ page }) => {
   await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Harness registry trait" }).click();
