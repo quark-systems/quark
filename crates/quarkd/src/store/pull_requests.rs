@@ -7,8 +7,9 @@
 
 use base64::Engine as _;
 use quark_systems::{
-    Check, CheckStatus, CheckUpdated, ChecksState, EventType, Evidence, Mergeability, PullRequest,
-    PullRequestState, Review, ReviewDecision, ReviewState, ReviewUpdated,
+    Check, CheckStatus, CheckUpdated, ChecksState, CommentUpdated, DiffSide, EventType, Evidence,
+    Mergeability, PrComment, PrCommentKind, PrConversation, PrConversationEntry, PrEntryKind,
+    PrThread, PullRequest, PullRequestState, Review, ReviewDecision, ReviewState, ReviewUpdated,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde::de::DeserializeOwned;
@@ -43,7 +44,7 @@ pub struct PrOwner {
 const PR_COLUMNS: &str = "id, project_id, task_id, url, provider, repo, number, title, author, \
     state, head_ref, base_ref, head_sha, mergeable, checks_state, review_decision, additions, \
     deletions, changed_files, opened_at, updated_at, merged_at, closed_at, synced_at, sync_error, \
-    evidence";
+    evidence, body";
 
 impl Store {
     /// Records a pull request row for every task that reports one, links it
@@ -133,7 +134,7 @@ impl Store {
                      base_ref = ?6, head_sha = ?7, mergeable = ?8, checks_state = ?9,
                      review_decision = ?10, additions = ?11, deletions = ?12,
                      changed_files = ?13, opened_at = ?14, updated_at = ?15, merged_at = ?16,
-                     closed_at = ?17, synced_at = ?18, sync_error = NULL
+                     closed_at = ?17, synced_at = ?18, sync_error = NULL, body = ?19
                  WHERE id = ?1",
                 params![
                     id,
@@ -154,6 +155,7 @@ impl Store {
                     pr.merged_at,
                     pr.closed_at,
                     now_rfc3339(),
+                    pr.body,
                 ],
             )?;
 
@@ -244,6 +246,10 @@ impl Store {
                         review: review.clone(),
                     })?,
                 )?;
+            }
+
+            if let Some(comments) = &pr.comments {
+                apply_comments(tx, events, &old, comments)?;
             }
 
             let new = get_pr(tx, id)?;
@@ -349,6 +355,16 @@ impl Store {
 
     pub fn get_pull_request(&self, id: &str) -> Result<PullRequest> {
         self.read(|c| get_pr(c, id))
+    }
+
+    /// A pull request's conversation in order: its comments, and its
+    /// reviews with the inline threads each started.
+    pub fn pull_request_conversation(&self, id: &str) -> Result<PrConversation> {
+        self.read(|c| {
+            let pr = get_pr(c, id)?;
+            let comments = load_comments(c, id)?;
+            Ok(conversation(id, pr.reviews, comments))
+        })
     }
 
     /// A pull request and where its owning task lives in the engine.
@@ -493,6 +509,212 @@ fn load_children(c: &Connection, pr: &mut PullRequest) -> Result<()> {
     Ok(())
 }
 
+/// Records the forge's comments: new and edited ones are written and emit
+/// `comment.updated`; ones gone from the forge are deleted and emit it with
+/// `deleted`.
+fn apply_comments(
+    tx: &Transaction,
+    events: &mut Vec<quark_systems::Event>,
+    pr: &PullRequest,
+    comments: &[PrComment],
+) -> Result<()> {
+    let old = load_comments(tx, &pr.id)?;
+    let emit = |events: &mut Vec<quark_systems::Event>, comment: &PrComment, deleted: bool| {
+        append_event(
+            tx,
+            events,
+            Some(&pr.project_id),
+            EventType::CommentUpdated,
+            serde_json::to_value(CommentUpdated {
+                pull_request_id: pr.id.clone(),
+                task_id: pr.task_id.clone(),
+                comment: comment.clone(),
+                deleted,
+            })?,
+        )
+    };
+    for gone in old
+        .iter()
+        .filter(|o| !comments.iter().any(|c| c.id == o.id))
+    {
+        tx.execute(
+            "DELETE FROM pr_comments WHERE pull_request_id = ?1 AND id = ?2",
+            params![pr.id, gone.id],
+        )?;
+        emit(events, gone, true)?;
+    }
+    for c in comments {
+        if old.iter().any(|o| o == c) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO pr_comments (pull_request_id, id, kind, author, body, created_at,
+                 updated_at, url, review_id, path, line, original_line, side, commit_sha,
+                 in_reply_to)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+             ON CONFLICT (pull_request_id, id) DO UPDATE SET kind = excluded.kind,
+                 author = excluded.author, body = excluded.body,
+                 created_at = excluded.created_at, updated_at = excluded.updated_at,
+                 url = excluded.url, review_id = excluded.review_id, path = excluded.path,
+                 line = excluded.line, original_line = excluded.original_line,
+                 side = excluded.side, commit_sha = excluded.commit_sha,
+                 in_reply_to = excluded.in_reply_to",
+            params![
+                pr.id,
+                c.id,
+                enum_str(&c.kind)?,
+                c.author,
+                c.body,
+                c.created_at,
+                c.updated_at,
+                c.url,
+                c.review_id,
+                c.path,
+                c.line.map(|n| n as i64),
+                c.original_line.map(|n| n as i64),
+                c.side.as_ref().map(enum_str).transpose()?,
+                c.commit,
+                c.in_reply_to,
+            ],
+        )?;
+        emit(events, c, false)?;
+    }
+    Ok(())
+}
+
+fn load_comments(c: &Connection, pr: &str) -> Result<Vec<PrComment>> {
+    let mut stmt = c.prepare(
+        "SELECT id, kind, author, body, created_at, updated_at, url, review_id, path, line,
+             original_line, side, commit_sha, in_reply_to
+         FROM pr_comments WHERE pull_request_id = ?1 ORDER BY created_at, id",
+    )?;
+    let rows = stmt.query_map([pr], |r| {
+        Ok(PrComment {
+            id: r.get(0)?,
+            kind: parse_enum(&r.get::<_, String>(1)?).unwrap_or(PrCommentKind::Conversation),
+            author: r.get(2)?,
+            body: r.get(3)?,
+            created_at: r.get(4)?,
+            updated_at: r.get(5)?,
+            url: r.get(6)?,
+            review_id: r.get(7)?,
+            path: r.get(8)?,
+            line: r.get::<_, Option<i64>>(9)?.map(|n| n as u64),
+            original_line: r.get::<_, Option<i64>>(10)?.map(|n| n as u64),
+            side: r.get::<_, Option<String>>(11)?.and_then(|s| parse_enum(&s)),
+            commit: r.get(12)?,
+            in_reply_to: r.get(13)?,
+        })
+    })?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
+/// Orders a pull request's reviews and comments into its conversation.
+/// Inline comments are grouped into threads by the comment they reply to,
+/// and each thread goes with the review its first comment was left in.
+pub fn conversation(id: &str, reviews: Vec<Review>, comments: Vec<PrComment>) -> PrConversation {
+    let (inline, plain): (Vec<_>, Vec<_>) = comments
+        .into_iter()
+        .partition(|c| c.kind == PrCommentKind::Inline);
+    let known: std::collections::HashSet<&str> = inline.iter().map(|c| c.id.as_str()).collect();
+    // A reply's thread is the first comment up its chain the forge still has.
+    let root_of = |c: &PrComment| -> String {
+        let mut at = c;
+        let mut seen = 0;
+        while let Some(parent) = at.in_reply_to.as_deref().filter(|p| known.contains(p)) {
+            at = inline.iter().find(|x| x.id == parent).expect("known");
+            seen += 1;
+            if seen > inline.len() {
+                break;
+            }
+        }
+        at.id.clone()
+    };
+    let mut threads: Vec<PrThread> = Vec::new();
+    for c in &inline {
+        let root = root_of(c);
+        match threads.iter_mut().find(|t| t.id == root) {
+            Some(t) => t.comments.push(c.clone()),
+            None => {
+                let first = inline.iter().find(|x| x.id == root).unwrap_or(c);
+                threads.push(PrThread {
+                    id: root.clone(),
+                    path: first.path.clone().unwrap_or_default(),
+                    line: first.line,
+                    original_line: first.original_line,
+                    side: first.side.unwrap_or(DiffSide::New),
+                    commit: first.commit.clone(),
+                    outdated: first.line.is_none(),
+                    comments: vec![c.clone()],
+                });
+            }
+        }
+    }
+    for t in &mut threads {
+        t.comments
+            .sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
+    }
+
+    let mut entries: Vec<PrConversationEntry> = Vec::new();
+    for c in plain {
+        entries.push(PrConversationEntry {
+            kind: PrEntryKind::Comment,
+            at: c.created_at.clone(),
+            comment: Some(c),
+            review: None,
+            threads: vec![],
+        });
+    }
+    let mut placed: std::collections::HashSet<String> = Default::default();
+    for r in reviews {
+        let started: Vec<PrThread> = threads
+            .iter()
+            .filter(|t| t.comments.first().and_then(|c| c.review_id.as_deref()) == Some(&r.id))
+            .cloned()
+            .collect();
+        // A review that only holds replies to other threads says nothing
+        // of its own.
+        let replies_only = r.body.trim().is_empty()
+            && started.is_empty()
+            && r.state == ReviewState::Commented
+            && threads
+                .iter()
+                .flat_map(|t| &t.comments)
+                .any(|c| c.review_id.as_deref() == Some(&r.id));
+        placed.extend(started.iter().map(|t| t.id.clone()));
+        if replies_only {
+            continue;
+        }
+        entries.push(PrConversationEntry {
+            kind: PrEntryKind::Review,
+            at: r.submitted_at.clone(),
+            comment: None,
+            review: Some(r),
+            threads: started,
+        });
+    }
+    for t in threads.into_iter().filter(|t| !placed.contains(&t.id)) {
+        entries.push(PrConversationEntry {
+            kind: PrEntryKind::Thread,
+            at: t.comments.first().and_then(|c| c.created_at.clone()),
+            comment: None,
+            review: None,
+            threads: vec![t],
+        });
+    }
+    // Undated entries (a pending review) go last.
+    entries.sort_by(|a, b| match (&a.at, &b.at) {
+        (Some(x), Some(y)) => x.cmp(y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    PrConversation {
+        pull_request_id: id.to_string(),
+        entries,
+    }
+}
+
 fn pr_from_row(r: &Row) -> rusqlite::Result<PullRequest> {
     let count = |i: usize| -> rusqlite::Result<Option<u64>> {
         Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
@@ -506,6 +728,7 @@ fn pr_from_row(r: &Row) -> rusqlite::Result<PullRequest> {
         repo: r.get(5)?,
         number: r.get::<_, i64>(6)? as u64,
         title: r.get(7)?,
+        body: r.get(26)?,
         author: r.get(8)?,
         state: PullRequestState::parse(&r.get::<_, String>(9)?).unwrap_or(PullRequestState::Open),
         head_ref: r.get(10)?,
@@ -591,9 +814,106 @@ mod tests {
         (store, p.id)
     }
 
+    fn inline(id: &str, review: &str, reply_to: Option<&str>, at: &str) -> PrComment {
+        PrComment {
+            id: id.into(),
+            kind: PrCommentKind::Inline,
+            author: Some("rev".into()),
+            body: format!("comment {id}"),
+            created_at: Some(at.into()),
+            updated_at: Some(at.into()),
+            url: None,
+            review_id: Some(review.into()),
+            path: Some("src/a.rs".into()),
+            line: Some(7),
+            original_line: Some(7),
+            side: Some(DiffSide::New),
+            commit: Some("abc".into()),
+            in_reply_to: reply_to.map(str::to_string),
+        }
+    }
+
+    fn review(id: &str, state: ReviewState, body: &str, at: &str) -> Review {
+        Review {
+            id: id.into(),
+            author: Some("rev".into()),
+            state,
+            body: body.into(),
+            submitted_at: Some(at.into()),
+            commit: Some("abc".into()),
+        }
+    }
+
+    #[test]
+    fn the_conversation_groups_inline_comments_into_threads_under_their_review() {
+        let plain = PrComment {
+            kind: PrCommentKind::Conversation,
+            review_id: None,
+            path: None,
+            line: None,
+            original_line: None,
+            side: None,
+            commit: None,
+            ..inline("c1", "", None, "2026-10-02T09:00:00Z")
+        };
+        let mut lost = inline("t9", "r_gone", None, "2026-10-02T12:00:00Z");
+        lost.line = None;
+        let conv = conversation(
+            "pr_1",
+            vec![
+                review(
+                    "r1",
+                    ReviewState::ChangesRequested,
+                    "Two things.",
+                    "2026-10-02T10:00:00Z",
+                ),
+                // Only a reply to r1's thread: not an entry of its own.
+                review("r2", ReviewState::Commented, "", "2026-10-02T11:00:00Z"),
+                review("r3", ReviewState::Approved, "", "2026-10-02T13:00:00Z"),
+            ],
+            vec![
+                plain,
+                inline("t1", "r1", None, "2026-10-02T10:00:00Z"),
+                inline("t2", "r1", None, "2026-10-02T10:00:01Z"),
+                inline("t1b", "r2", Some("t1"), "2026-10-02T11:00:00Z"),
+                lost,
+            ],
+        );
+        let kinds: Vec<_> = conv.entries.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                PrEntryKind::Comment,
+                PrEntryKind::Review,
+                PrEntryKind::Thread,
+                PrEntryKind::Review
+            ]
+        );
+        let r1 = &conv.entries[1];
+        assert_eq!(r1.review.as_ref().unwrap().id, "r1");
+        assert_eq!(r1.threads.len(), 2);
+        let ids: Vec<_> = r1.threads[0]
+            .comments
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(ids, ["t1", "t1b"]);
+        assert_eq!(
+            (r1.threads[0].path.as_str(), r1.threads[0].line),
+            ("src/a.rs", Some(7))
+        );
+        assert!(conv.entries[2].threads[0].outdated);
+        assert_eq!(
+            conv.entries[3].review.as_ref().unwrap().state,
+            ReviewState::Approved
+        );
+    }
+
     fn forge_pr(check: CheckStatus) -> ForgePr {
         ForgePr {
             title: "PR center".into(),
+            body: String::new(),
+            comments: None,
             author: Some("claude".into()),
             state: PullRequestState::Open,
             head_ref: Some("f".into()),

@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_systems::{
-    Check, CheckStatus, ChecksState, ForgeRepository, Mergeability, PullRequestState, Review,
-    ReviewDecision, ReviewState,
+    Check, CheckStatus, ChecksState, DiffSide, ForgeRepository, Mergeability, PrComment,
+    PrCommentKind, PullRequestState, Review, ReviewDecision, ReviewState,
 };
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
@@ -26,7 +26,8 @@ pub const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
 const GH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fields read with `gh pr view --json`.
-const GH_FIELDS: &str = "number,title,state,isDraft,author,headRefName,baseRefName,headRefOid,\
+const GH_FIELDS: &str =
+    "number,title,body,state,isDraft,author,headRefName,baseRefName,headRefOid,\
 mergeable,reviewDecision,additions,deletions,changedFiles,createdAt,updatedAt,mergedAt,\
 closedAt,statusCheckRollup,reviews";
 
@@ -77,6 +78,8 @@ impl PrRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForgePr {
     pub title: String,
+    /// The description, Markdown; empty when it has none.
+    pub body: String,
     pub author: Option<String>,
     pub state: PullRequestState,
     pub head_ref: Option<String>,
@@ -93,6 +96,9 @@ pub struct ForgePr {
     pub closed_at: Option<String>,
     pub checks: Vec<Check>,
     pub reviews: Vec<Review>,
+    /// Every comment, on the conversation and inline; `None` when they were
+    /// not read, which keeps the ones recorded.
+    pub comments: Option<Vec<PrComment>>,
 }
 
 impl ForgePr {
@@ -255,6 +261,125 @@ impl GhForge {
     }
 }
 
+impl GhForge {
+    /// Every comment on the pull request at `url`: its conversation
+    /// comments and its inline review comments, through the REST API. The
+    /// reviews are read too, to name each inline comment's review by the id
+    /// `gh pr view` gives it.
+    async fn comments(&self, url: &str) -> Result<Vec<PrComment>, ForgeError> {
+        let r = PrRef::parse(url).ok_or_else(|| ForgeError::Parse(url.into()))?;
+        let page = |path: String| {
+            let host = r.host.clone();
+            async move {
+                let (out, cut) = self
+                    .run(
+                        &["api", "--hostname", &host, "--paginate", &path],
+                        16 * 1024 * 1024,
+                    )
+                    .await?;
+                if cut {
+                    return Err(ForgeError::Parse("answer too large".into()));
+                }
+                Ok(out)
+            }
+        };
+        let base = format!("repos/{}", r.repo);
+        let issue = page(format!("{base}/issues/{}/comments?per_page=100", r.number)).await?;
+        let inline = page(format!("{base}/pulls/{}/comments?per_page=100", r.number)).await?;
+        let reviews = page(format!("{base}/pulls/{}/reviews?per_page=100", r.number)).await?;
+        parse_gh_comments(&issue, &inline, &reviews)
+    }
+}
+
+/// A comment as the REST API reports it, on the conversation or inline.
+#[derive(Deserialize)]
+struct RestComment {
+    id: u64,
+    node_id: Option<String>,
+    user: Option<GhLogin>,
+    #[serde(default)]
+    body: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    html_url: Option<String>,
+    // Inline only.
+    pull_request_review_id: Option<u64>,
+    path: Option<String>,
+    line: Option<u64>,
+    original_line: Option<u64>,
+    side: Option<String>,
+    commit_id: Option<String>,
+    in_reply_to_id: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RestReview {
+    id: u64,
+    node_id: Option<String>,
+}
+
+/// Concatenated pages of one REST list.
+fn rest_pages<T: serde::de::DeserializeOwned>(out: &[u8]) -> Result<Vec<T>, ForgeError> {
+    let mut items = Vec::new();
+    for page in serde_json::Deserializer::from_slice(out).into_iter::<Vec<T>>() {
+        items.extend(page.map_err(|e| ForgeError::Parse(e.to_string()))?);
+    }
+    Ok(items)
+}
+
+/// Parses the REST lists of a pull request's conversation comments, inline
+/// comments and reviews (each `gh api --paginate` output) into comments.
+/// Comment ids are the forge's node ids; an inline comment's `review_id` is
+/// its review's node id, as `gh pr view` names reviews.
+pub fn parse_gh_comments(
+    issue: &[u8],
+    inline: &[u8],
+    reviews: &[u8],
+) -> Result<Vec<PrComment>, ForgeError> {
+    let reviews: HashMap<u64, String> = rest_pages::<RestReview>(reviews)?
+        .into_iter()
+        .filter_map(|r| Some((r.id, r.node_id?)))
+        .collect();
+    let inline: Vec<RestComment> = rest_pages(inline)?;
+    let node_of: HashMap<u64, String> = inline
+        .iter()
+        .map(|c| (c.id, c.node_id.clone().unwrap_or_else(|| c.id.to_string())))
+        .collect();
+    let comment = |c: RestComment, kind: PrCommentKind| PrComment {
+        id: c.node_id.unwrap_or_else(|| c.id.to_string()),
+        kind,
+        author: c.user.map(|u| u.login),
+        body: c.body.unwrap_or_default(),
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+        url: c.html_url,
+        review_id: c
+            .pull_request_review_id
+            .map(|r| reviews.get(&r).cloned().unwrap_or_else(|| r.to_string())),
+        path: c.path,
+        line: c.line,
+        original_line: c.original_line,
+        side: c.side.as_deref().map(|s| match s {
+            "LEFT" => DiffSide::Old,
+            _ => DiffSide::New,
+        }),
+        commit: c.commit_id,
+        in_reply_to: c
+            .in_reply_to_id
+            .map(|r| node_of.get(&r).cloned().unwrap_or_else(|| r.to_string())),
+    };
+    let mut out: Vec<PrComment> = rest_pages::<RestComment>(issue)?
+        .into_iter()
+        .map(|c| comment(c, PrCommentKind::Conversation))
+        .collect();
+    out.extend(
+        inline
+            .into_iter()
+            .map(|c| comment(c, PrCommentKind::Inline)),
+    );
+    Ok(out)
+}
+
 #[async_trait]
 impl Forge for GhForge {
     async fn pull_request(&self, url: &str) -> Result<ForgePr, ForgeError> {
@@ -265,7 +390,13 @@ impl Forge for GhForge {
         if cut {
             return Err(ForgeError::Parse("answer too large".into()));
         }
-        parse_gh_view(&out)
+        let mut pr = parse_gh_view(&out)?;
+        // Comments are a second read: a failure keeps the ones recorded.
+        match self.comments(url).await {
+            Ok(c) => pr.comments = Some(c),
+            Err(e) => tracing::debug!(pr = url, error = %e, "pull request comments not read"),
+        }
+        Ok(pr)
     }
 
     async fn diff(&self, url: &str) -> Result<(String, bool), ForgeError> {
@@ -394,6 +525,8 @@ pub fn file_patch(patch: &str, path: &str) -> Option<String> {
 #[serde(rename_all = "camelCase")]
 struct GhView {
     title: String,
+    #[serde(default)]
+    body: Option<String>,
     state: String,
     #[serde(default)]
     is_draft: bool,
@@ -514,6 +647,7 @@ pub fn parse_gh_view(bytes: &[u8]) -> Result<ForgePr, ForgeError> {
         .collect();
     Ok(ForgePr {
         title: v.title,
+        body: v.body.unwrap_or_default(),
         author: v.author.map(|a| a.login),
         state,
         head_ref: v.head_ref_name,
@@ -530,6 +664,7 @@ pub fn parse_gh_view(bytes: &[u8]) -> Result<ForgePr, ForgeError> {
         closed_at: v.closed_at,
         checks,
         reviews,
+        comments: None,
     })
 }
 
@@ -596,6 +731,41 @@ mod tests {
         assert_eq!(repos[0].ssh_url, "git@github.com:a/one.git");
         assert!(repos[0].private && repos[0].description.is_none());
         assert!(parse_gh_repos(b"{").is_err());
+    }
+
+    #[test]
+    fn parses_rest_comments_and_links_them_to_reviews() {
+        let issue =
+            br#"[{"id": 1, "node_id": "IC_1", "user": {"login": "matt"}, "body": "Looks good",
+            "created_at": "2026-10-02T10:00:00Z", "updated_at": "2026-10-02T11:00:00Z",
+            "html_url": "https://github.com/a/b/pull/1#issuecomment-1"}]
+            [{"id": 2, "node_id": "IC_2", "user": null, "body": null}]"#;
+        let inline = br#"[{"id": 10, "node_id": "RC_10", "user": {"login": "rev"}, "body": "Why?",
+            "pull_request_review_id": 100, "path": "src/a.rs", "line": 7, "original_line": 5,
+            "side": "RIGHT", "commit_id": "abc", "created_at": "2026-10-02T10:30:00Z"},
+            {"id": 11, "node_id": "RC_11", "user": {"login": "matt"}, "body": "Because.",
+            "pull_request_review_id": 101, "path": "src/a.rs", "line": null, "original_line": 5,
+            "side": "LEFT", "in_reply_to_id": 10}]"#;
+        let reviews = br#"[{"id": 100, "node_id": "PRR_100"}]"#;
+        let c = parse_gh_comments(issue, inline, reviews).unwrap();
+        assert_eq!(c.len(), 4);
+        assert_eq!(
+            (c[0].id.as_str(), c[0].kind, c[0].author.as_deref()),
+            ("IC_1", PrCommentKind::Conversation, Some("matt"))
+        );
+        assert_eq!(c[0].updated_at.as_deref(), Some("2026-10-02T11:00:00Z"));
+        assert_eq!((c[1].body.as_str(), c[1].author.as_deref()), ("", None));
+        assert_eq!(c[2].kind, PrCommentKind::Inline);
+        assert_eq!(c[2].review_id.as_deref(), Some("PRR_100"));
+        assert_eq!((c[2].line, c[2].side), (Some(7), Some(DiffSide::New)));
+        assert_eq!(c[3].in_reply_to.as_deref(), Some("RC_10"));
+        assert_eq!(
+            c[3].review_id.as_deref(),
+            Some("101"),
+            "an unlisted review keeps its number"
+        );
+        assert_eq!((c[3].line, c[3].side), (None, Some(DiffSide::Old)));
+        assert!(parse_gh_comments(b"{", b"", b"").is_err());
     }
 
     #[test]

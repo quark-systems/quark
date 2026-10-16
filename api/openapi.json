@@ -3427,6 +3427,44 @@
       }
     },
     "/v1/pull-requests/{id}/comments": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "The pull request's conversation as last read from its forge, oldest\nfirst: comments, and reviews with the inline threads each started.\n`comment.updated` and `review.updated` say when it changed.",
+        "operationId": "conversation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrConversation"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "pull-requests"
@@ -5555,6 +5593,32 @@
           "none"
         ]
       },
+      "CommentUpdated": {
+        "type": "object",
+        "description": "Payload of `comment.updated`: one comment that appeared, changed or was\ndeleted on the forge.",
+        "required": [
+          "pull_request_id",
+          "comment"
+        ],
+        "properties": {
+          "comment": {
+            "$ref": "#/components/schemas/PrComment"
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "The comment is gone from the forge."
+          },
+          "pull_request_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ConfigIssue": {
         "type": "object",
         "description": "One problem with an agent config.",
@@ -7038,6 +7102,7 @@
           "pr.updated",
           "check.updated",
           "review.updated",
+          "comment.updated",
           "dispatch.recorded",
           "account.quota_changed",
           "memory.proposed",
@@ -8976,6 +9041,248 @@
           }
         }
       },
+      "PrComment": {
+        "type": "object",
+        "description": "One comment on a pull request, as the forge last reported it.",
+        "required": [
+          "id",
+          "kind",
+          "body"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Forge login of the author."
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown."
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inline: the commit the comment was left on."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "The forge's comment id."
+          },
+          "in_reply_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inline: the comment this one replies to."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PrCommentKind"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Inline: the line on `side` in the current diff; absent once the line\nis gone from it (outdated).",
+            "minimum": 0
+          },
+          "original_line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Inline: the line on `side` in the diff the comment was left on.",
+            "minimum": 0
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inline: the file, as it appears in the diff."
+          },
+          "review_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inline: the review it was left in (a `Review.id`)."
+          },
+          "side": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DiffSide"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Later than `created_at` once the comment was edited."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The comment on the forge."
+          }
+        }
+      },
+      "PrCommentKind": {
+        "type": "string",
+        "description": "Where on a pull request a comment was left.",
+        "enum": [
+          "conversation",
+          "inline"
+        ]
+      },
+      "PrConversation": {
+        "type": "object",
+        "description": "A pull request's conversation as last read from its forge, oldest\nfirst: comments, and reviews with their inline threads.",
+        "required": [
+          "pull_request_id",
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrConversationEntry"
+            }
+          },
+          "pull_request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PrConversationEntry": {
+        "type": "object",
+        "description": "One entry of a pull request's conversation.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was posted; entries are in this order."
+          },
+          "comment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PrComment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PrEntryKind"
+          },
+          "review": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Review"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrThread"
+            }
+          }
+        }
+      },
+      "PrEntryKind": {
+        "type": "string",
+        "description": "What one entry of a pull request's conversation is.",
+        "enum": [
+          "comment",
+          "review",
+          "thread"
+        ]
+      },
+      "PrThread": {
+        "type": "object",
+        "description": "Inline comments on one line, oldest first: the first starts the thread\nand the rest reply to it.",
+        "required": [
+          "id",
+          "path",
+          "side",
+          "outdated",
+          "comments"
+        ],
+        "properties": {
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrComment"
+            }
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "The first comment's id."
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The line in the current diff; absent when outdated.",
+            "minimum": 0
+          },
+          "original_line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "outdated": {
+            "type": "boolean",
+            "description": "The line is gone from the current diff."
+          },
+          "path": {
+            "type": "string"
+          },
+          "side": {
+            "$ref": "#/components/schemas/DiffSide"
+          }
+        }
+      },
       "Project": {
         "type": "object",
         "description": "A Project: a goal-driven workspace that owns tasks, decisions and PRs.",
@@ -9514,6 +9821,13 @@
               "string",
               "null"
             ]
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The description, Markdown; empty when it has none, absent until the\nforge has been read."
           },
           "changed_files": {
             "type": [

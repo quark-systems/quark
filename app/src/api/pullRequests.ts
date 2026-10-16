@@ -39,7 +39,10 @@ export interface Evidence {
 }
 export interface PullRequest {
   id: string; project_id: string; task_id?: string | null; url: string; provider: string; repo: string; number: number;
-  title?: string | null; author?: string | null; state: PullRequestState;
+  title?: string | null;
+  /** The description, Markdown; empty when it has none, absent until the forge has been read. */
+  body?: string | null;
+  author?: string | null; state: PullRequestState;
   head_ref?: string | null; base_ref?: string | null; head_sha?: string | null;
   mergeable: Mergeability; checks_state: ChecksState; review_decision: ReviewDecision;
   additions?: number | null; deletions?: number | null; changed_files?: number | null;
@@ -49,6 +52,32 @@ export interface PullRequest {
 }
 export interface CheckUpdated { pull_request_id: string; task_id?: string | null; head_sha?: string | null; check: Check }
 export interface ReviewUpdated { pull_request_id: string; task_id?: string | null; review: Review }
+/** Where a comment was left: on the conversation, or inline on a line of the diff (in a review). */
+export type PrCommentKind = "conversation" | "inline";
+export interface PrComment {
+  id: string; kind: PrCommentKind; author?: string | null;
+  /** Markdown. */
+  body: string;
+  created_at?: string | null;
+  /** Later than `created_at` once edited. */
+  updated_at?: string | null;
+  url?: string | null;
+  /** Inline only: the review it was left in, its file and line on `side`, the commit, and the comment it replies to. */
+  review_id?: string | null; path?: string | null;
+  /** Absent once the line is gone from the current diff (outdated). */
+  line?: number | null; original_line?: number | null; side?: DiffSide | null; commit?: string | null; in_reply_to?: string | null;
+}
+export interface CommentUpdated { pull_request_id: string; task_id?: string | null; comment: PrComment; deleted: boolean }
+/** Inline comments on one line, oldest first. */
+export interface PrThread {
+  id: string; path: string; line?: number | null; original_line?: number | null; side: DiffSide; commit?: string | null;
+  outdated: boolean; comments: PrComment[];
+}
+export type PrEntryKind = "comment" | "review" | "thread";
+export interface PrConversationEntry {
+  kind: PrEntryKind; at?: string | null; comment?: PrComment | null; review?: Review | null; threads: PrThread[];
+}
+export interface PrConversation { pull_request_id: string; entries: PrConversationEntry[] }
 export interface PullRequestDiff { pull_request_id: string; path?: string | null; patch: string; truncated: boolean }
 export type DiffSide = "new" | "old";
 export interface PullRequestComment { text: string; path?: string | null; line?: number | null; side?: DiffSide | null }
@@ -58,6 +87,8 @@ export const pullRequestsApi = {
   pullRequests: () => req<PullRequest[]>("GET", "/v1/pull-requests"),
   pullRequest: (id: string) => req<PullRequest>("GET", `/v1/pull-requests/${enc(id)}`),
   pullRequestDiff: (id: string) => req<PullRequestDiff>("GET", `/v1/pull-requests/${enc(id)}/diff`),
+  /** The conversation as last read from the forge, oldest first; `comment.updated` and `review.updated` say when it changed. */
+  pullRequestConversation: (id: string) => req<PrConversation>("GET", `/v1/pull-requests/${enc(id)}/comments`),
   /** Delivered to the PR's owning worker as a steering message; not posted on the forge. */
   commentPullRequest: (id: string, c: PullRequestComment) => req<void>("POST", `/v1/pull-requests/${enc(id)}/comments`, c),
   /** The engine's guarded merge; 409 `merge_refused` unless open, green and conflict-free. */

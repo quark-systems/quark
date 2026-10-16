@@ -26,6 +26,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Testing dispatch rules | `POST /v1/projects/{id}/dispatch:test` with `description` | quark#24 |
 | Dispatch rule editor | `GET/PUT /v1/projects/{id}/dispatch`; an optional `draft` on `dispatch:test` | quark#25 |
 | Persona packs | `GET /v1/personas`, `PUT /v1/personas/default`, `GET/PUT /v1/projects/{id}/persona` | N10 |
+| PR conversation | `PullRequest.body`, `GET /v1/pull-requests/{id}/comments` (`PrConversation`), `comment.updated` events | quark-ual |
 | PR center | `GET /v1/pull-requests`, `GET /v1/pull-requests/{id}`, `/diff`, `POST .../{id}/comments`, `POST .../{id}:merge`, `PATCH /v1/projects/{id}` `{standing_approval}`, `pr.updated`, `check.updated`, `review.updated` events; `GET .../{id}/evidence/artifacts/{artifact_id}` | quark#16, quark#20 |
 | Project settings | `GET/PATCH /v1/projects/{id}/settings` (`ProjectSettings`, `UpdateProjectSettings`) | D1 Dashboard: Settings |
 | Project metrics | `GET /v1/projects/{id}/metrics?days=` (`ProjectMetrics`) | D3 Dashboard: Metrics |
@@ -80,7 +81,11 @@ A `404` with an `ErrorBody` is a real "not found".
 - **Cancel and relaunch** answer `204` after the engine confirms, which can take tens of seconds, so the app sets no client timeout.
 - **PR center.** The list loads every PR once and keeps it current from `pr.updated` (a whole PR); `check.updated` and `review.updated` are merged into a loaded PR, which is then refetched for its rolled-up `checks_state` and `review_decision`.
   A check for another `head_sha` than the PR's is ignored.
-  Line comments send `path`, `line` and `side` (`new` unless the line was deleted) and go to the owning worker, not the forge; the app keeps what it sent on screen, since the daemon does not list them.
+  Line comments send `path`, `line` and `side` (`new` unless the line was deleted) and go to the owning worker, not the forge; the app keeps what it sent on screen until the comment reaches the forge (the worker posts it) and the conversation lists it like any other.
+- **PR conversation (quark-ual).** `PullRequest.body` is the description in Markdown (`""` when it has none, `null` until the forge has been read); it changes through `pr.updated`.
+  `GET /v1/pull-requests/{id}/comments` answers a `PrConversation`: `entries` oldest first, each a `comment` on the conversation, a `review` with the inline `threads` it started, or a `thread` whose review the forge did not list.
+  A thread groups inline comments by the comment they reply to and carries its `path`, `line` and `side`; `outdated` threads have no `line` in the current diff. A review that only replies to other threads is not an entry of its own. Comments keep their `author`, `created_at` and `updated_at` (later once edited).
+  `comment.updated` (`CommentUpdated`, with `deleted: true` when it is gone from the forge) and `review.updated` say the conversation changed; the app refetches it. The daemon reads the forge on its PR timer, so a new comment shows within one refresh.
   "Approve and merge" is the one approval action: it is disabled for what the engine's guarded merge refuses (draft, closed, conflicting, checks failing or running), asks for a second click when changes were requested, and shows a `409 merge_refused` message as returned.
 - **Verification evidence (ADR-15).** `PullRequest.evidence` carries the gates (repo checks, Playwright journeys, holdout tests), each with its cases and their artifacts; it changes through `pr.updated`.
   The side panel shows one line per gate; the Evidence tab shows every case, failures first and expanded, with screenshots inline (click to enlarge), videos playable, and traces opened in trace.playwright.dev or downloaded.

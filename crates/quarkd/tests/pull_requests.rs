@@ -7,8 +7,9 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
 use quark_systems::{
-    Check, CheckStatus, CreateProject, EventType, MergeMethod, Mergeability, ProjectStatus,
-    PullRequestState, RepoSource, ReviewDecision, TaskKind, TaskState,
+    Check, CheckStatus, CreateProject, DiffSide, EventType, MergeMethod, Mergeability, PrComment,
+    PrCommentKind, ProjectStatus, PullRequestState, RepoSource, Review, ReviewDecision,
+    ReviewState, TaskKind, TaskState,
 };
 use quarkd::api::{self, AppState};
 use quarkd::chat::RecordingInput;
@@ -117,6 +118,8 @@ async fn harness() -> Harness {
 fn forge_pr(state: PullRequestState, check: CheckStatus) -> ForgePr {
     ForgePr {
         title: "PR center".into(),
+        body: String::new(),
+        comments: None,
         author: Some("claude".into()),
         state,
         head_ref: Some("claude/pr-center".into()),
@@ -220,6 +223,124 @@ async fn lists_pull_requests_with_checks_and_reviews() {
     let types = event_types(&h.store);
     assert!(types.contains(&EventType::PrUpdated));
     assert!(types.contains(&EventType::CheckUpdated));
+}
+
+#[tokio::test]
+async fn the_body_and_conversation_sync_from_the_forge_live() {
+    let h = harness().await;
+    let mut pr = forge_pr(PullRequestState::Open, CheckStatus::Success);
+    pr.body = "## What\nResync slow clients.".into();
+    pr.reviews = vec![Review {
+        id: "PRR_1".into(),
+        author: Some("rev".into()),
+        state: ReviewState::ChangesRequested,
+        body: "One thing.".into(),
+        submitted_at: Some("2026-10-02T16:20:00Z".into()),
+        commit: Some("abc123".into()),
+    }];
+    let comment = |id: &str, body: &str| PrComment {
+        id: id.into(),
+        kind: PrCommentKind::Conversation,
+        author: Some("matt".into()),
+        body: body.into(),
+        created_at: Some("2026-10-02T16:15:00Z".into()),
+        updated_at: Some("2026-10-02T16:15:00Z".into()),
+        url: None,
+        review_id: None,
+        path: None,
+        line: None,
+        original_line: None,
+        side: None,
+        commit: None,
+        in_reply_to: None,
+    };
+    let line = PrComment {
+        id: "RC_1".into(),
+        kind: PrCommentKind::Inline,
+        review_id: Some("PRR_1".into()),
+        path: Some("src/a.rs".into()),
+        line: Some(3),
+        original_line: Some(3),
+        side: Some(DiffSide::New),
+        created_at: Some("2026-10-02T16:20:00Z".into()),
+        ..comment("RC_1", "Rename this.")
+    };
+    pr.comments = Some(vec![comment("IC_1", "Nice."), line]);
+    h.forge.set(URL, pr.clone());
+    h.center.refresh().await;
+
+    let (_, list) = call(&h.app, "GET", "/v1/pull-requests", None).await;
+    let id = list[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(list[0]["body"], "## What\nResync slow clients.");
+    let (status, conv) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/pull-requests/{id}/comments"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = conv["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["kind"], "comment");
+    assert_eq!(entries[0]["comment"]["body"], "Nice.");
+    assert_eq!(entries[1]["kind"], "review");
+    assert_eq!(entries[1]["review"]["state"], "changes_requested");
+    assert_eq!(entries[1]["threads"][0]["path"], "src/a.rs");
+    assert_eq!(entries[1]["threads"][0]["line"], 3);
+    assert_eq!(
+        entries[1]["threads"][0]["comments"][0]["body"],
+        "Rename this."
+    );
+    let types = event_types(&h.store);
+    assert_eq!(
+        types
+            .iter()
+            .filter(|t| **t == EventType::CommentUpdated)
+            .count(),
+        2
+    );
+
+    // An edit and a deletion each stream; an unchanged read emits nothing.
+    let mut edited = pr.clone();
+    edited.comments = Some(vec![PrComment {
+        updated_at: Some("2026-10-02T17:00:00Z".into()),
+        ..comment("IC_1", "Nice, thanks.")
+    }]);
+    h.forge.set(URL, edited);
+    h.center.refresh().await;
+    h.center.refresh().await;
+    let comment_events: Vec<_> = h
+        .store
+        .events_after(0, 1000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.event_type == EventType::CommentUpdated)
+        .collect();
+    assert_eq!(comment_events.len(), 4);
+    assert_eq!(comment_events[2].payload["deleted"], true);
+    assert_eq!(comment_events[2].payload["comment"]["id"], "RC_1");
+    assert_eq!(
+        comment_events[3].payload["comment"]["body"],
+        "Nice, thanks."
+    );
+
+    // A read that could not get the comments keeps the recorded ones.
+    let mut unread = pr.clone();
+    unread.comments = None;
+    h.forge.set(URL, unread);
+    h.center.refresh().await;
+    let (_, conv) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/pull-requests/{id}/comments"),
+        None,
+    )
+    .await;
+    assert_eq!(conv["entries"][0]["comment"]["body"], "Nice, thanks.");
+
+    let (status, _) = call(&h.app, "GET", "/v1/pull-requests/pr_nope/comments", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
