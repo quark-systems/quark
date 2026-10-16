@@ -1,6 +1,6 @@
 // J4: one worker in one view. Its live terminal and a box to message it in the middle; the work
-// pane on the right with its transcript, changed files with their diff, its PR and why this
-// agent; cancel and relaunch in the header, and the coordinator dock under the terminal.
+// pane on the right with its transcript, changed files with their diff, its PR, the brief it
+// was dispatched with and why this agent; cancel and relaunch in the header, and the coordinator dock under the terminal.
 import { KeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
@@ -13,6 +13,7 @@ import { FileDiff } from "../components/diff/DiffView";
 import { Unavailable } from "../components/Unavailable";
 import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
+import { WorkerBrief } from "../components/WorkerBrief";
 import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 import { useLabels } from "../persona";
 import { Dock } from "../shell/Dock";
@@ -23,7 +24,7 @@ export function WorkerView({ id }: { id: string }) {
   const project = useStore((s) => (task ? s.projects[task.project_id] : undefined));
   const connected = useStore((s) => s.connected);
   const activity = useStore((s) => s.taskActivity[id] ?? 0);
-  const [tab, setTab] = useState<"transcript" | "changes" | "pr" | "why">("transcript");
+  const [tab, setTab] = useState<"transcript" | "changes" | "pr" | "brief" | "why">("transcript");
   const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
   const [missing, setMissing] = useState(false);
   const [paneWidth, setPaneWidth] = useWorkPaneWidth();
@@ -69,11 +70,13 @@ export function WorkerView({ id }: { id: string }) {
           <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}>Transcript</button>
           <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
           {(pr || task.pull_request_url) && <button role="tab" aria-selected={tab === "pr"} className={tab === "pr" ? "on" : ""} onClick={() => setTab("pr")}>PR</button>}
+          <button role="tab" aria-selected={tab === "brief"} className={tab === "brief" ? "on" : ""} onClick={() => setTab("brief")}>Brief</button>
           <button role="tab" aria-selected={tab === "why"} className={tab === "why" ? "on" : ""} onClick={() => setTab("why")}>Why this agent</button>
         </div>
         {tab === "transcript" && <div className="tab-body"><TranscriptPanel taskId={id} /></div>}
         {tab === "changes" && <div className="tab-body"><ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} /></div>}
         {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
+        {tab === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
         {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
       </aside>
     </div>
