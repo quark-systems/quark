@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use quark_systems::{
     Check, CheckStatus, ChecksState, DiffSide, ForgeRepository, Mergeability, PrComment,
-    PrCommentKind, PullRequestState, Review, ReviewDecision, ReviewState,
+    PrCommentKind, PrFileSide, PullRequestState, Review, ReviewDecision, ReviewState,
 };
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
@@ -149,6 +149,26 @@ pub trait Forge: Send + Sync {
     /// through its organizations, most recently pushed first.
     /// `refresh` skips any recently cached answer.
     async fn repositories(&self, refresh: bool) -> Result<Vec<ForgeRepository>, ForgeError>;
+
+    /// The bytes of `path` on one side of the pull request at `url`: the
+    /// head at `head_sha`, or the base where the head branched from
+    /// `base_ref`. At most `max` bytes, and whether it was cut there;
+    /// `None` when the file does not exist on that side.
+    async fn file(
+        &self,
+        url: &str,
+        file: &FileRef<'_>,
+        max: usize,
+    ) -> Result<Option<(Vec<u8>, bool)>, ForgeError>;
+}
+
+/// One version of one file of a pull request.
+#[derive(Debug, Clone, Copy)]
+pub struct FileRef<'a> {
+    pub path: &'a str,
+    pub side: PrFileSide,
+    pub head_sha: &'a str,
+    pub base_ref: &'a str,
 }
 
 /// A repository list and when gh answered it.
@@ -291,6 +311,18 @@ impl GhForge {
     }
 }
 
+/// Percent-encodes one path segment or ref for a REST path.
+fn path_escape(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// A comment as the REST API reports it, on the conversation or inline.
 #[derive(Deserialize)]
 struct RestComment {
@@ -407,6 +439,74 @@ impl Forge for GhForge {
         Ok((String::from_utf8_lossy(&out).into_owned(), cut))
     }
 
+    async fn file(
+        &self,
+        url: &str,
+        file: &FileRef<'_>,
+        max: usize,
+    ) -> Result<Option<(Vec<u8>, bool)>, ForgeError> {
+        Self::github(url)?;
+        let r = PrRef::parse(url).ok_or_else(|| ForgeError::Parse(url.into()))?;
+        let sha = match file.side {
+            PrFileSide::Head => file.head_sha.to_string(),
+            PrFileSide::Base => {
+                let path = format!(
+                    "repos/{}/compare/{}...{}",
+                    r.repo,
+                    path_escape(file.base_ref),
+                    file.head_sha
+                );
+                let (out, _) = self
+                    .run(
+                        &[
+                            "api",
+                            "--hostname",
+                            &r.host,
+                            &path,
+                            "--jq",
+                            ".merge_base_commit.sha",
+                        ],
+                        4096,
+                    )
+                    .await?;
+                let sha = String::from_utf8_lossy(&out).trim().to_string();
+                if sha.is_empty() {
+                    return Err(ForgeError::Parse("no merge base".into()));
+                }
+                sha
+            }
+        };
+        let path = format!(
+            "repos/{}/contents/{}?ref={sha}",
+            r.repo,
+            file.path
+                .split('/')
+                .map(path_escape)
+                .collect::<Vec<_>>()
+                .join("/")
+        );
+        let res = self
+            .run(
+                &[
+                    "api",
+                    "--hostname",
+                    &r.host,
+                    "-H",
+                    "Accept: application/vnd.github.raw",
+                    &path,
+                ],
+                max,
+            )
+            .await;
+        match res {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(ForgeError::Command(m)) if m.contains("Not Found") || m.contains("HTTP 404") => {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     async fn repositories(&self, refresh: bool) -> Result<Vec<ForgeRepository>, ForgeError> {
         if !refresh {
             if let Some((at, repos)) = &*self.repos.lock().unwrap() {
@@ -444,6 +544,7 @@ pub struct StubForge {
     diffs: Mutex<HashMap<String, String>>,
     reads: Mutex<Vec<String>>,
     repos: Mutex<Option<Vec<ForgeRepository>>>,
+    files: Mutex<HashMap<(String, String, PrFileSide), Vec<u8>>>,
 }
 
 impl StubForge {
@@ -463,6 +564,14 @@ impl StubForge {
     /// were missing.
     pub fn set_repositories(&self, repos: Vec<ForgeRepository>) {
         *self.repos.lock().unwrap() = Some(repos);
+    }
+
+    /// `path`'s bytes on `side` of the pull request at `url`.
+    pub fn set_file(&self, url: &str, path: &str, side: PrFileSide, bytes: &[u8]) {
+        self.files
+            .lock()
+            .unwrap()
+            .insert((url.into(), path.into(), side), bytes.to_vec());
     }
 
     /// URLs read with [`Forge::pull_request`], oldest first.
@@ -491,6 +600,21 @@ impl Forge for StubForge {
             .cloned()
             .map(|d| (d, false))
             .ok_or_else(|| ForgeError::Command(format!("no pull request at {url}")))
+    }
+
+    async fn file(
+        &self,
+        url: &str,
+        file: &FileRef<'_>,
+        max: usize,
+    ) -> Result<Option<(Vec<u8>, bool)>, ForgeError> {
+        let files = self.files.lock().unwrap();
+        Ok(files
+            .get(&(url.to_string(), file.path.to_string(), file.side))
+            .map(|b| {
+                let cut = b.len() > max;
+                (b[..b.len().min(max)].to_vec(), cut)
+            }))
     }
 
     async fn repositories(&self, _refresh: bool) -> Result<Vec<ForgeRepository>, ForgeError> {

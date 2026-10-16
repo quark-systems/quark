@@ -3656,6 +3656,101 @@
         }
       }
     },
+    "/v1/pull-requests/{id}/files": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "The bytes of a file the pull request changes, before (`base`) or after\n(`head`) the change, read from the forge. Images are served with their\ncontent type; everything else as an attachment. Every answer carries\n`nosniff` and a sandboxing CSP, so an SVG cannot run script.",
+        "operationId": "file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "A file the pull request changes, as named on that side of its diff\n(a renamed file's old path for `base`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "side",
+            "in": "query",
+            "description": "`head` (default) or `base`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/PrFileSide"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's bytes",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown pull request, a file it does not change, or no such file on that side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The pull request has not been read from the forge yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too_large`: over the size cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The forge could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/pull-requests/{id}:merge": {
       "post": {
         "tags": [
@@ -9225,6 +9320,14 @@
           "comment",
           "review",
           "thread"
+        ]
+      },
+      "PrFileSide": {
+        "type": "string",
+        "description": "Which version of a pull request's file.",
+        "enum": [
+          "base",
+          "head"
         ]
       },
       "PrThread": {

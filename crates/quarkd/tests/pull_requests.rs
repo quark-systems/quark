@@ -8,7 +8,7 @@ use axum::Router;
 use http_body_util::BodyExt;
 use quark_systems::{
     Check, CheckStatus, CreateProject, DiffSide, EventType, MergeMethod, Mergeability, PrComment,
-    PrCommentKind, ProjectStatus, PullRequestState, RepoSource, Review, ReviewDecision,
+    PrCommentKind, PrFileSide, ProjectStatus, PullRequestState, RepoSource, Review, ReviewDecision,
     ReviewState, TaskKind, TaskState,
 };
 use quarkd::api::{self, AppState};
@@ -341,6 +341,86 @@ async fn the_body_and_conversation_sync_from_the_forge_live() {
 
     let (status, _) = call(&h.app, "GET", "/v1/pull-requests/pr_nope/comments", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_changed_files_bytes_are_served_for_either_side() {
+    let h = harness().await;
+    h.forge
+        .set(URL, forge_pr(PullRequestState::Open, CheckStatus::Success));
+    h.forge.set_diff(
+        URL,
+        "diff --git a/img/logo.png b/img/logo.png\nindex 1..2 100644\n\
+         Binary files a/img/logo.png and b/img/logo.png differ\n\
+         diff --git a/big.gif b/big.gif\nnew file mode 100644\nBinary files /dev/null and b/big.gif differ\n\
+         diff --git a/data.bin b/data.bin\nBinary files a/data.bin and b/data.bin differ\n",
+    );
+    h.forge
+        .set_file(URL, "img/logo.png", PrFileSide::Head, b"\x89PNG-new");
+    h.forge
+        .set_file(URL, "img/logo.png", PrFileSide::Base, b"\x89PNG-old");
+    h.forge.set_file(
+        URL,
+        "big.gif",
+        PrFileSide::Head,
+        &vec![0u8; quarkd::api::pull_requests::MAX_FILE_BYTES + 1],
+    );
+    h.forge
+        .set_file(URL, "data.bin", PrFileSide::Head, b"\x00\x01");
+    h.center.refresh().await;
+    let (_, list) = call(&h.app, "GET", "/v1/pull-requests", None).await;
+    let id = list[0]["id"].as_str().unwrap().to_string();
+
+    let get = |q: String| {
+        let app = h.app.clone();
+        let id = id.clone();
+        async move {
+            let req = Request::builder()
+                .uri(format!("/v1/pull-requests/{id}/files?{q}"))
+                .body(Body::empty())
+                .unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.into_body().collect().await.unwrap().to_bytes();
+            (status, headers, body)
+        }
+    };
+    let (status, headers, body) = get("path=img/logo.png".into()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(headers["content-security-policy"], "sandbox");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(&body[..], b"\x89PNG-new");
+    let (_, _, body) = get("path=img/logo.png&side=base".into()).await;
+    assert_eq!(&body[..], b"\x89PNG-old");
+
+    // Not an image: an attachment.
+    let (status, headers, _) = get("path=data.bin".into()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "application/octet-stream");
+    assert!(headers["content-disposition"]
+        .to_str()
+        .unwrap()
+        .starts_with("attachment"));
+
+    // Over the cap, missing on that side, unchanged, or not a repository path.
+    let (status, _, body) = get("path=big.gif".into()).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(String::from_utf8_lossy(&body).contains("too_large"));
+    let (status, _, _) = get("path=big.gif&side=base".into()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = get("path=src/other.png".into()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    for bad in [
+        "path=../img/logo.png",
+        "path=/etc/passwd",
+        "path=",
+        "path=img//logo.png",
+    ] {
+        let (status, _, _) = get(bad.into()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
 }
 
 #[tokio::test]

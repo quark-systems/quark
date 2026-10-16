@@ -10,6 +10,7 @@ import { ago, errText } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
 import { DiffFocus, DiffView, LineComment, OnComment } from "../components/diff/DiffView";
 import { DiffTarget, PrConversation } from "../components/PrConversation";
+import { FileSource } from "../components/diff/ImageDiff";
 import { StandingApproval } from "../components/StandingApproval";
 import { EvidencePanel, EvidenceSummary } from "../components/Evidence";
 import { Unavailable } from "../components/Unavailable";
@@ -176,6 +177,14 @@ function DiffPanel({ pr, comments, onComment, focus }: {
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
 
+  const source = useMemo<FileSource>(() => ({
+    url: (path, side) => api.pullRequestFileUrl(pr.id, path, side),
+    // GitHub shows the head version at its commit; the base one is on the PR's files page.
+    external: (path, side) => pr.provider !== "github" ? null
+      : side === "head" && pr.head_sha ? `https://github.com/${pr.repo}/blob/${pr.head_sha}/${path.split("/").map(encodeURIComponent).join("/")}`
+      : `${pr.url}/files`,
+  }), [pr.id, pr.provider, pr.repo, pr.head_sha, pr.url]);
+
   // The diff only changes with the head commit.
   useEffect(() => {
     let live = true;
@@ -196,7 +205,7 @@ function DiffPanel({ pr, comments, onComment, focus }: {
       {status === "loading" && <div className="empty">Loading the diff…</div>}
       {truncated && <div className="state-note">This diff was cut at the daemon's size limit.</div>}
       {onComment && files && files.length > 0 && <div className="faint small-text diff-hint">Click a line number to comment for the worker.</div>}
-      {files && files.length > 0 && <DiffView files={files} comments={comments} onComment={onComment} focus={focus} />}
+      {files && files.length > 0 && <DiffView files={files} comments={comments} onComment={onComment} focus={focus} source={source} />}
       {files && !files.length && <div className="empty">No textual changes.</div>}
     </div>
   );
