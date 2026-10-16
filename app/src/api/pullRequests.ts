@@ -94,6 +94,9 @@ export const pullRequestsApi = {
   /** The engine's guarded merge; 409 `merge_refused` unless open, green and conflict-free. */
   mergePullRequest: (id: string, method?: MergeMethod) =>
     req<PullRequest>("POST", `/v1/pull-requests/${enc(id)}:merge`, method ? { method } : {}),
+  /** Absolute URL of one version of a file the PR changes; images come with their content type. */
+  pullRequestFileUrl: (id: string, path: string, side: "base" | "head") =>
+    `${daemonUrl()}/v1/pull-requests/${enc(id)}/files?path=${enc(path)}&side=${side}`,
   /** Absolute URL of an evidence artifact; the daemon sends it relative to itself. */
   artifactUrl: (prId: string, a: EvidenceArtifact) =>
     /^https?:\/\//.test(a.url) ? a.url

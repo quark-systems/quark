@@ -7,8 +7,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    ErrorBody, MergePullRequest, PrConversation, PullRequest, PullRequestComment, PullRequestDiff,
-    PullRequestState,
+    ErrorBody, MergePullRequest, PrConversation, PrFileSide, PullRequest, PullRequestComment,
+    PullRequestDiff, PullRequestState,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -304,6 +304,145 @@ pub async fn merge(
     Ok(Json(merged))
 }
 
+/// Largest file served from a pull request, in bytes.
+pub const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PullRequestFileQuery {
+    /// A file the pull request changes, as named on that side of its diff
+    /// (a renamed file's old path for `base`).
+    pub path: String,
+    /// `head` (default) or `base`.
+    pub side: Option<PrFileSide>,
+}
+
+/// The bytes of a file the pull request changes, before (`base`) or after
+/// (`head`) the change, read from the forge. Images are served with their
+/// content type; everything else as an attachment. Every answer carries
+/// `nosniff` and a sandboxing CSP, so an SVG cannot run script.
+#[utoipa::path(
+    get,
+    path = "/v1/pull-requests/{id}/files",
+    tag = "pull-requests",
+    params(("id" = String, Path, description = "Pull request id"), PullRequestFileQuery),
+    responses(
+        (status = 200, description = "The file's bytes", content_type = "application/octet-stream"),
+        (status = 400, body = ErrorBody),
+        (status = 404, description = "Unknown pull request, a file it does not change, or no such file on that side", body = ErrorBody),
+        (status = 409, description = "The pull request has not been read from the forge yet", body = ErrorBody),
+        (status = 413, description = "`too_large`: over the size cap", body = ErrorBody),
+        (status = 502, description = "The forge could not be read", body = ErrorBody)
+    )
+)]
+pub async fn file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<PullRequestFileQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::{header, HeaderValue};
+    use axum::response::IntoResponse;
+
+    let path = q.path.trim();
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains(['\n', '\r', '\0'])
+        || path
+            .split('/')
+            .any(|s| s.is_empty() || s == "." || s == "..")
+    {
+        return Err(ApiError::invalid(
+            "path is not a file path in the repository",
+        ));
+    }
+    let side = q.side.unwrap_or(PrFileSide::Head);
+    let pr = db(&state, move |s| s.get_pull_request(&id)).await?;
+    let (Some(head_sha), Some(base_ref)) = (pr.head_sha.as_deref(), pr.base_ref.as_deref()) else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not_synced",
+            "the pull request has not been read from the forge yet",
+        ));
+    };
+    let (patch, _) = state.forge.diff(&pr.url).await.map_err(forge_error)?;
+    if forge::file_patch(&patch, path).is_none() {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("the pull request does not change {path}"),
+        ));
+    }
+    let r = forge::FileRef {
+        path,
+        side,
+        head_sha,
+        base_ref,
+    };
+    let (bytes, cut) = state
+        .forge
+        .file(&pr.url, &r, MAX_FILE_BYTES)
+        .await
+        .map_err(forge_error)?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("{path} does not exist on the {side:?} side").to_lowercase(),
+            )
+        })?;
+    if cut {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "too_large",
+            format!(
+                "{path} is larger than {} MB",
+                MAX_FILE_BYTES / (1024 * 1024)
+            ),
+        ));
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let (content_type, disposition) = match image_type(path) {
+        Some(t) => (t, "inline"),
+        None => ("application/octet-stream", "attachment"),
+    };
+    let disposition = format!(
+        "{disposition}; filename=\"{}\"",
+        name.replace(['"', '\\', '\r', '\n'], "_")
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("inline")),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// The content type of an image file the app shows, by extension.
+pub fn image_type(path: &str) -> Option<&'static str> {
+    let ext = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => return None,
+    })
+}
+
 /// One file a verification gate produced: a Playwright trace, a screenshot,
 /// a video, a log or a report, as listed in the pull request's `evidence`.
 ///
@@ -384,7 +523,7 @@ pub async fn artifact(
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
 #[openapi(
-    paths(list, get, diff, conversation, comment, merge, artifact),
+    paths(list, get, diff, file, conversation, comment, merge, artifact),
     components(schemas(
         quark_systems::PullRequestState,
         quark_systems::Mergeability,
@@ -398,6 +537,7 @@ pub async fn artifact(
         quark_systems::PrCommentKind,
         quark_systems::PrEntryKind,
         quark_systems::DiffSide,
+        quark_systems::PrFileSide,
         quark_systems::MergeMethod,
         quark_systems::GateState,
         quark_systems::GateKind,
@@ -414,6 +554,7 @@ pub(super) fn router() -> axum::Router<AppState> {
         // POST serves the custom method `/v1/pull-requests/{id}:merge`.
         .route("/v1/pull-requests/{id}", get(self::get).post(action))
         .route("/v1/pull-requests/{id}/diff", get(diff))
+        .route("/v1/pull-requests/{id}/files", get(file))
         .route(
             "/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}",
             get(artifact),

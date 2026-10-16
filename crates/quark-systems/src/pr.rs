@@ -420,6 +420,16 @@ pub struct PullRequestComment {
     pub side: Option<DiffSide>,
 }
 
+/// Which version of a pull request's file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrFileSide {
+    /// Before the change: the file where the head branched from the base.
+    Base,
+    /// After the change: the file at the head commit.
+    Head,
+}
+
 /// How to merge a pull request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

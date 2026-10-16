@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changedRange, markRange, parseUnifiedDiff, splitPath } from "./model";
+import { changedRange, fileKind, imageSides, markRange, parseUnifiedDiff, splitPath } from "./model";
 
 const DIFF = `diff --git a/src/a.rs b/src/a.rs
 index 1..2 100644
@@ -86,5 +86,27 @@ describe("word changes", () => {
   it("splits a path into folder and name", () => {
     expect(splitPath("src/a/b.ts")).toEqual({ dir: "src/a/", base: "b.ts" });
     expect(splitPath("README.md")).toEqual({ dir: "", base: "README.md" });
+  });
+});
+
+describe("image files", () => {
+  it("knows which files are pictures, case-insensitively", () => {
+    expect(fileKind("a/logo.PNG")).toBe("image");
+    for (const p of ["x.jpg", "x.jpeg", "x.gif", "x.webp"]) expect(fileKind(p)).toBe("image");
+    expect(fileKind("icons/arrow.svg")).toBe("svg");
+    for (const p of ["x.pdf", "x.png.txt", "Makefile", "png", ".png"]) expect(fileKind(p)).toBeNull();
+  });
+
+  it("shows the base under the old path and the head under the new one", () => {
+    const [added, removed, renamed] = parseUnifiedDiff([
+      "diff --git a/a.png b/a.png", "new file mode 100644", "Binary files /dev/null and b/a.png differ",
+      "diff --git a/b.png b/b.png", "deleted file mode 100644", "Binary files a/b.png and /dev/null differ",
+      "diff --git a/c.png b/d.png", "similarity index 90%", "rename from c.png", "rename to d.png",
+      "Binary files a/c.png and b/d.png differ",
+    ].join("\n"));
+    expect(added.binary).toBe(true);
+    expect(imageSides(added)).toEqual({ base: null, head: "a.png" });
+    expect(imageSides(removed)).toEqual({ base: "b.png", head: null });
+    expect(imageSides(renamed)).toEqual({ base: "c.png", head: "d.png" });
   });
 });

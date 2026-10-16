@@ -373,6 +373,37 @@ test("the PR's GitHub links open in the default browser through the desktop shel
   expect(page.context().pages()).toHaveLength(1);
 });
 
+test("PR diff shows images: before and after for a changed one, and an added SVG as a picture", async ({ page }) => {
+  await open(page, "#/pr/pr-1");
+  await page.getByRole("tab", { name: "Diff" }).click();
+  const diff = page.getByTestId("pr-diff");
+
+  // A changed PNG: before and after, side by side, each loaded as an image.
+  const icon = diff.getByTestId("diff-file").filter({ hasText: "32x32.png" });
+  await expect(icon.getByText("Binary file not shown.")).toHaveCount(0);
+  for (const side of ["base", "head"]) {
+    const img = icon.getByTestId(`image-${side}`).locator("img");
+    await expect(img).toBeVisible();
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(side === "base" ? 32 : 64);
+  }
+  await expect(icon.getByTestId("image-base")).toContainText("Before");
+  await expect(icon.getByTestId("image-head")).toContainText("64 × 64");
+
+  // An added SVG shows as a picture; its script never runs, and its markup is one click away.
+  const svg = diff.getByTestId("diff-file").filter({ hasText: "flow.svg" });
+  await expect(svg.getByTestId("image-base")).toHaveCount(0);
+  await expect(svg.getByTestId("image-head")).toContainText("Added");
+  await expect.poll(() => svg.getByTestId("image-head").locator("img").evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(240);
+  expect(await page.title()).not.toBe("pwned");
+  await expect(svg.locator("table.diff")).toHaveCount(0);
+  await svg.getByTestId("svg-source").click();
+  await expect(svg.locator("table.diff")).toContainText("<rect x=\"10\"");
+
+  // The daemon serves the SVG as an image, never as a page.
+  const res = await page.evaluate(() => fetch("http://127.0.0.1:7392/v1/pull-requests/pr-1/files?path=docs/flow.svg&side=head").then((r) => r.headers.get("content-type")));
+  expect(res).toBe("image/svg+xml");
+});
+
 test("PR center: verification evidence with failing journeys, screenshots and traces", async ({ page }) => {
   await open(page, "#/pr/pr-2");
   const summary = page.getByTestId("pr-evidence");

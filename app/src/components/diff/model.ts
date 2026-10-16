@@ -21,6 +21,26 @@ export interface DiffFile {
   status: FileStatus; binary: boolean;
 }
 
+/** Image formats the diff shows as pictures. SVG is text in a patch but is shown as an image too. */
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+
+/** "image" for a file the diff can show as a picture, "svg" for an SVG (text in the patch), else null. */
+export function fileKind(path: string): "image" | "svg" | null {
+  const name = path.split("/").pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  if (!IMAGE_EXT.has(ext)) return null;
+  return ext === "svg" ? "svg" : "image";
+}
+
+/** Which versions of a file there are to show: base under the old path, head under the new one. */
+export function imageSides(f: DiffFile): { base: string | null; head: string | null } {
+  return {
+    base: f.status === "added" ? null : f.oldPath || f.path,
+    head: f.status === "deleted" ? null : f.path,
+  };
+}
+
 function newFile(path: string, oldPath: string): DiffFile {
   return { path, oldPath, lines: [], adds: 0, dels: 0, status: "modified", binary: false };
 }

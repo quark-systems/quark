@@ -16,7 +16,7 @@ mod metrics;
 mod openapi;
 mod overview;
 mod personas;
-mod pull_requests;
+pub mod pull_requests;
 mod repositories;
 mod routes;
 mod shadows;

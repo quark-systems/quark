@@ -46,6 +46,9 @@ const pulls = new Map(); // PR id -> PullRequest
 // Each PR's comments on the forge (PrComment[]), as quarkd syncs them (quark-ual): on the conversation,
 // and inline in a review. GET /v1/pull-requests/{id}/comments groups them as quarkd does.
 const forgeComments = new Map(); // PR id -> PrComment[]
+// Each PR's file versions (quark-e4v), served by GET /v1/pull-requests/{id}/files: "<path>:<side>" -> bytes.
+const prFiles = new Map(); // PR id -> Map
+const IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml" };
 const pullDiffs = new Map(); // PR id -> unified diff text
 const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
@@ -981,8 +984,22 @@ function seed() {
   };
   const ok = (name) => ({ name, status: "success", conclusion: null, details_url: `https://github.com/quark-systems/quark/actions/runs/1#${name}`, started_at: minutesAgo(50), completed_at: minutesAgo(45) });
   const inReview = [...tasks.values()].find((t) => t.title === "OpenAPI check in CI");
+  // pr-1 also changes the app icon and adds an SVG diagram: images in the diff (quark-e4v).
+  const DIAGRAM = ['<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120">',
+    '<rect x="10" y="30" width="80" height="60" rx="8" fill="#4f8cf7"/>', '<rect x="150" y="30" width="80" height="60" rx="8" fill="#7bd88f"/>',
+    '<path d="M90 60h60" stroke="#888" stroke-width="3"/>', '<script>document.title = "pwned"</script>', "</svg>"];
+  const IMAGES_DIFF = "diff --git a/app/src-tauri/icons/32x32.png b/app/src-tauri/icons/32x32.png\nindex 1a2b3c4..5d6e7f8 100644\n" +
+    "Binary files a/app/src-tauri/icons/32x32.png and b/app/src-tauri/icons/32x32.png differ\n" +
+    "diff --git a/docs/flow.svg b/docs/flow.svg\nnew file mode 100644\nindex 0000000..9a8b7c6\n--- /dev/null\n+++ b/docs/flow.svg\n" +
+    `@@ -0,0 +1,${DIAGRAM.length} @@\n` + DIAGRAM.map((l) => "+" + l).join("\n") + "\n";
+  const icons = path.join(here, "../src-tauri/icons");
+  prFiles.set("pr-1", new Map([
+    ["app/src-tauri/icons/32x32.png:base", fs.readFileSync(path.join(icons, "32x32.png"))],
+    ["app/src-tauri/icons/32x32.png:head", fs.readFileSync(path.join(icons, "64x64.png"))],
+    ["docs/flow.svg:head", Buffer.from(DIAGRAM.join("\n"))],
+  ]));
   PR("pr-1", quark, inReview, {
-    number: 2, title: "OpenAPI check in CI", head_ref: "quark/openapi-check", base_ref: "main", diff: DIFFS[0],
+    number: 2, title: "OpenAPI check in CI", head_ref: "quark/openapi-check", base_ref: "main", diff: DIFFS[0] + IMAGES_DIFF,
     body: "Fails CI when `api/openapi.json` is stale, so the app's types never drift from the daemon.",
     checks: [ok("CI / rust"), ok("CI / desktop-app")], updated_at: minutesAgo(40), evidence: evidence("pr-1", false),
   });
@@ -1931,6 +1948,18 @@ const server = http.createServer(async (req, res) => {
       return res.end(a.body);
     }
     if (rest === "/comments" && req.method === "GET") return send(res, 200, conversationOf(pr));
+    if (rest === "/files" && req.method === "GET") {
+      const fp = url.searchParams.get("path") ?? "", side = url.searchParams.get("side") ?? "head";
+      if (!fp || fp.startsWith("/") || fp.split("/").some((x) => !x || x === "." || x === "..")) return invalid(res, "path is not a file path in the repository");
+      if (!filesOf(pullDiffs.get(pr.id)).some((f) => f.path === fp || f.old_path === fp)) return notFound(res);
+      const bytes = prFiles.get(pr.id)?.get(`${fp}:${side}`);
+      if (!bytes) return notFound(res);
+      if (bytes.length > 10 * 1024 * 1024) return send(res, 413, { error: { code: "too_large", message: `${fp} is larger than 10 MB` } });
+      const type = IMAGE_TYPES[fp.split(".").pop().toLowerCase()];
+      res.writeHead(200, { "content-type": type ?? "application/octet-stream", "content-disposition": type ? "inline" : "attachment",
+        "x-content-type-options": "nosniff", "content-security-policy": "sandbox", ...cors });
+      return res.end(bytes);
+    }
     if (rest === "/comments" && req.method === "POST") {
       const b = await readJson(req);
       if (!b?.text?.trim()) return invalid(res, "text is required");

@@ -5,7 +5,8 @@
 // (https://github.com/hardbeat920/monocode, MIT, Copyright (c) 2026 Nick).
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { highlight, langForPath } from "../../markdown";
-import { anchorOf, CommentSide, DiffFile, DiffLine, LARGE_FILE_LINES, markRange, splitPath, totals } from "./model";
+import { anchorOf, CommentSide, DiffFile, DiffLine, fileKind, LARGE_FILE_LINES, markRange, splitPath, totals } from "./model";
+import { FileSource, ImageDiff } from "./ImageDiff";
 import { errText } from "../../util";
 import "./diff.css";
 
@@ -18,8 +19,10 @@ export type OnComment = (c: { path: string; line: number; side: CommentSide; bod
 export interface DiffFocus { path: string; line: number; side: CommentSide; n: number }
 
 /** Several files with a summary bar and expand/collapse all. */
-export function DiffView({ files, comments, onComment, focus }: {
+export function DiffView({ files, comments, onComment, focus, source }: {
   files: DiffFile[]; comments?: LineComment[]; onComment?: OnComment; focus?: DiffFocus | null;
+  /** Where file bytes are served; with it, images show as pictures. */
+  source?: FileSource;
 }) {
   // Bumping `all` re-applies "everything open" or "everything closed" to each file.
   const [all, setAll] = useState<{ open: boolean; n: number } | null>(null);
@@ -39,18 +42,21 @@ export function DiffView({ files, comments, onComment, focus }: {
       )}
       {files.map((f, i) => (
         <FileDiff key={f.path + i} f={f} comments={comments} onComment={onComment} force={all}
-          focus={focus?.path === f.path ? focus : null} />
+          focus={focus?.path === f.path ? focus : null} source={source} />
       ))}
     </div>
   );
 }
 
-export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, focus }: {
+export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, focus, source }: {
   f: DiffFile; comments?: LineComment[]; onComment?: OnComment; force?: { open: boolean; n: number } | null;
-  focus?: DiffFocus | null;
+  focus?: DiffFocus | null; source?: FileSource;
 }) {
+  const kind = source ? fileKind(f.path) : null;
   const large = f.lines.length > LARGE_FILE_LINES;
-  const [open, setOpen] = useState(!large && !f.binary);
+  const [open, setOpen] = useState(!!kind || (!large && !f.binary));
+  // An SVG shows as a picture; its markup is one click away.
+  const [svgSource, setSvgSource] = useState(false);
   useEffect(() => { if (force) setOpen(force.open); }, [force]);
   useEffect(() => { if (focus && !f.binary) setOpen(true); }, [focus, f.binary]);
   const { dir, base } = splitPath(f.path);
@@ -65,11 +71,22 @@ export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, 
           <span className="dv-path" title={f.path}><span className="dv-dir">{dir}</span><span className="dv-base">{base}</span></span>
           {f.status === "renamed" && f.oldPath && <span className="dv-from" title={f.oldPath}>from {f.oldPath}</span>}
         </button>
-        {f.binary ? <span className="faint">binary</span> : <><DiffCounts adds={f.adds} dels={f.dels} /><DiffBar adds={f.adds} dels={f.dels} /></>}
+        {f.binary ? <span className="faint">{kind ? "image" : "binary"}</span> : <><DiffCounts adds={f.adds} dels={f.dels} /><DiffBar adds={f.adds} dels={f.dels} /></>}
       </div>
-      {open && (f.binary ? <div className="dv-note">Binary file not shown.</div>
+      {open && kind && source && (
+        <>
+          <ImageDiff f={f} source={source} />
+          {kind === "svg" && f.lines.length > 0 && (
+            <button className="dv-note dv-load" onClick={() => setSvgSource(!svgSource)} data-testid="svg-source">
+              {svgSource ? "Hide the SVG source" : "Show the SVG source"}
+            </button>
+          )}
+          {kind === "svg" && svgSource && <FileBody f={f} comments={comments} onComment={onComment} focus={focus} />}
+        </>
+      )}
+      {open && !kind && (f.binary ? <div className="dv-note">Binary file not shown.</div>
         : <FileBody f={f} comments={comments} onComment={onComment} focus={focus} />)}
-      {!open && large && !f.binary && (
+      {!open && large && !f.binary && !kind && (
         <button className="dv-note dv-load" onClick={() => setOpen(true)}>
           Large diff: {f.lines.length.toLocaleString()} lines. Show it
         </button>
