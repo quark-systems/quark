@@ -278,7 +278,9 @@ test("PR center: list by state, checks, line comment, merge, standing approval",
   await expect(page.getByTestId("pr-checks")).toContainText("CI / desktop-app");
   await expect(page.getByTestId("pr-evidence")).toContainText("Playwright journeys");
 
-  // A line comment goes to the worker with its path, line and side.
+  // The PR opens on its description; a line comment goes to the worker with its path, line and side.
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Diff" }).click();
   await page.getByTestId("pr-diff").locator("tr.commentable td.ln").nth(1).click();
   await page.getByLabel("Line comment").fill("Name this constant");
   await page.getByTestId("pr-diff").getByRole("button", { name: "Comment", exact: true }).click();
@@ -310,6 +312,48 @@ test("PR center: list by state, checks, line comment, merge, standing approval",
   await expect(page.getByTestId("standing-approval")).toHaveClass(/on/);
   const proj = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark")).json());
   expect(proj.standing_approval).toBe(true);
+});
+
+test("PR view opens on the rendered description, then comments, reviews and inline threads", async ({ page }) => {
+  await open(page, "#/pr/pr-2");
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  const body = page.getByTestId("pr-body");
+  await expect(body.getByRole("heading", { name: "What changed" })).toBeVisible();
+  await expect(body.locator("strong")).toHaveText("control mode");
+  await expect(body.locator("pre code")).toContainText("cargo test -p quarkd workers::tmux");
+
+  const conv = page.getByTestId("pr-conversation");
+  const comment = conv.getByTestId("pr-comment").first();
+  await expect(comment).toContainText("quark-bot");
+  await expect(comment.locator("code")).toHaveText("9f1e2d3");
+  const review = conv.getByTestId("pr-review");
+  await expect(review).toHaveCount(1);
+  await expect(review).toContainText("mattsanchez requested changes");
+  await expect(review).toContainText("Resize should debounce; the pane flickers.");
+  // The bot's reply sits in the thread it answers, not as a review of its own.
+  const thread = review.getByTestId("pr-thread");
+  await expect(thread.locator(".pr-thread-comment")).toHaveCount(2);
+  await expect(thread.locator(".pr-thread-comment").nth(1)).toContainText("raise it to 40");
+
+  // The thread's file and line open the diff at that line.
+  await thread.getByTestId("pr-thread-link").click();
+  await expect(page.getByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
+  const line = page.getByTestId("diff-focused-line");
+  await expect(line).toBeVisible();
+  await expect(line).toContainText("pub const MIN_COLS: u16 = 20;");
+
+  // A comment made on the forge streams in.
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await page.evaluate(() => fetch("http://127.0.0.1:7392/mock/pull-requests/pr-2/forge-comments", {
+    method: "POST", body: JSON.stringify({ author: "reviewer", body: "Debounced in the **next** push, thanks." }),
+  }));
+  await expect(conv.getByTestId("pr-comment").filter({ hasText: "Debounced in the next push" })).toBeVisible();
+  await expect(conv.getByTestId("pr-comment").last().locator("strong")).toHaveText("next");
+
+  // A PR without a description says so.
+  await open(page, "#/pr/pr-3");
+  await expect(page.getByTestId("pr-no-body")).toHaveText("No description.");
+  await expect(page.getByTestId("pr-no-comments")).toHaveText("No comments or reviews yet.");
 });
 
 test("PR center: verification evidence with failing journeys, screenshots and traces", async ({ page }) => {

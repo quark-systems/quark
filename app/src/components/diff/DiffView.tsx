@@ -3,7 +3,7 @@
 // center and memory commits; when `onComment` is given, clicking a line number opens a comment box.
 // File header, counts and fold rows follow MonoCode's UnifiedDiffView
 // (https://github.com/hardbeat920/monocode, MIT, Copyright (c) 2026 Nick).
-import React, { memo, useEffect, useMemo, useState } from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { highlight, langForPath } from "../../markdown";
 import { anchorOf, CommentSide, DiffFile, DiffLine, LARGE_FILE_LINES, markRange, splitPath, totals } from "./model";
 import { errText } from "../../util";
@@ -14,10 +14,12 @@ export type { CommentSide };
 
 export interface LineComment { path: string; line: number; side: CommentSide; body: string; pending?: boolean }
 export type OnComment = (c: { path: string; line: number; side: CommentSide; body: string }) => Promise<void>;
+/** A line to open, scroll to and mark; a new `n` does it again for the same line. */
+export interface DiffFocus { path: string; line: number; side: CommentSide; n: number }
 
 /** Several files with a summary bar and expand/collapse all. */
-export function DiffView({ files, comments, onComment }: {
-  files: DiffFile[]; comments?: LineComment[]; onComment?: OnComment;
+export function DiffView({ files, comments, onComment, focus }: {
+  files: DiffFile[]; comments?: LineComment[]; onComment?: OnComment; focus?: DiffFocus | null;
 }) {
   // Bumping `all` re-applies "everything open" or "everything closed" to each file.
   const [all, setAll] = useState<{ open: boolean; n: number } | null>(null);
@@ -35,17 +37,22 @@ export function DiffView({ files, comments, onComment }: {
             onClick={() => setAll({ open: false, n: (all?.n ?? 0) + 1 })}><Fold /></button>
         </div>
       )}
-      {files.map((f, i) => <FileDiff key={f.path + i} f={f} comments={comments} onComment={onComment} force={all} />)}
+      {files.map((f, i) => (
+        <FileDiff key={f.path + i} f={f} comments={comments} onComment={onComment} force={all}
+          focus={focus?.path === f.path ? focus : null} />
+      ))}
     </div>
   );
 }
 
-export const FileDiff = memo(function FileDiff({ f, comments, onComment, force }: {
+export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, focus }: {
   f: DiffFile; comments?: LineComment[]; onComment?: OnComment; force?: { open: boolean; n: number } | null;
+  focus?: DiffFocus | null;
 }) {
   const large = f.lines.length > LARGE_FILE_LINES;
   const [open, setOpen] = useState(!large && !f.binary);
   useEffect(() => { if (force) setOpen(force.open); }, [force]);
+  useEffect(() => { if (focus && !f.binary) setOpen(true); }, [focus, f.binary]);
   const { dir, base } = splitPath(f.path);
 
   return (
@@ -61,7 +68,7 @@ export const FileDiff = memo(function FileDiff({ f, comments, onComment, force }
         {f.binary ? <span className="faint">binary</span> : <><DiffCounts adds={f.adds} dels={f.dels} /><DiffBar adds={f.adds} dels={f.dels} /></>}
       </div>
       {open && (f.binary ? <div className="dv-note">Binary file not shown.</div>
-        : <FileBody f={f} comments={comments} onComment={onComment} />)}
+        : <FileBody f={f} comments={comments} onComment={onComment} focus={focus} />)}
       {!open && large && !f.binary && (
         <button className="dv-note dv-load" onClick={() => setOpen(true)}>
           Large diff: {f.lines.length.toLocaleString()} lines. Show it
@@ -71,7 +78,9 @@ export const FileDiff = memo(function FileDiff({ f, comments, onComment, force }
   );
 });
 
-function FileBody({ f, comments, onComment }: { f: DiffFile; comments?: LineComment[]; onComment?: OnComment }) {
+function FileBody({ f, comments, onComment, focus }: {
+  f: DiffFile; comments?: LineComment[]; onComment?: OnComment; focus?: DiffFocus | null;
+}) {
   const lang = langForPath(f.path);
   const html = useMemo(() => f.lines.map((l) => {
     if (l.kind === "hunk") return "";
@@ -88,6 +97,9 @@ function FileBody({ f, comments, onComment }: { f: DiffFile; comments?: LineComm
     return m;
   }, [comments, f.path]);
 
+  const focusRow = useRef<HTMLTableRowElement>(null);
+  useEffect(() => { focusRow.current?.scrollIntoView({ block: "center" }); }, [focus]);
+
   if (!f.lines.length) return <div className="dv-note">{f.status === "renamed" ? "Renamed without changes." : "No textual changes."}</div>;
   return (
     <div className="dv-scroll"><table className="diff"><tbody>
@@ -96,11 +108,13 @@ function FileBody({ f, comments, onComment }: { f: DiffFile; comments?: LineComm
         const a = anchorOf(l);
         const thread = a ? byAnchor.get(`${a.side}:${a.line}`) : undefined;
         const commentable = !!onComment && !!a;
+        const focused = !!focus && !!a && a.side === focus.side && a.line === focus.line;
         const click = commentable ? () => setOpen(j) : undefined;
         const tip = commentable ? "Comment on this line" : undefined;
         return (
           <React.Fragment key={j}>
-            <tr className={l.kind + (commentable ? " commentable" : "")}>
+            <tr className={l.kind + (commentable ? " commentable" : "") + (focused ? " focused" : "")}
+              ref={focused ? focusRow : undefined} data-testid={focused ? "diff-focused-line" : undefined}>
               <td className="ln" onClick={click} title={tip}>{l.old ?? ""}</td>
               <td className="ln" onClick={click} title={tip}>{l.new ?? ""}</td>
               <td className="sign">
