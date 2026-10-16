@@ -44,6 +44,7 @@ pub mod settings;
 pub mod shadows;
 pub mod spend;
 pub mod store;
+pub mod task_brief;
 pub mod transcripts;
 pub mod usage;
 pub mod verify_shadow;

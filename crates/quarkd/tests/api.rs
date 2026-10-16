@@ -13,8 +13,8 @@ use quark_systems::{
 use quarkd::api::{self, ApiDoc, AppState};
 use quarkd::chat::RecordingInput;
 use quarkd::engine::{
-    EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold, StubEngine, StubWrite,
-    TaskControl,
+    EngineBrief, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold, StubEngine,
+    StubWrite, TaskControl,
 };
 use quarkd::harness::{HarnessRegistry, HostEnv};
 use quarkd::projector::Projector;
@@ -264,6 +264,59 @@ fn spawn_now(generation: &str, harness: &str, model: Option<&str>) -> EngineSpaw
         spawned_at: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
         project: Some("quark".into()),
     }
+}
+
+#[tokio::test]
+async fn a_tasks_brief_outlives_its_worker() {
+    let h = harness().await;
+    h.engine.set_brief(
+        "fix-login",
+        EngineBrief {
+            text: Some(
+                "# Task\n## Captain's intent\nFix the redirect.\n\n## Firstmate spec\n- Add a test.\n"
+                    .into(),
+            ),
+            launch: Some("You are a crewmate.\n".into()),
+            written_at: Some(1_790_000_000),
+            delivery: Some(quark_systems::TaskDelivery::Direct),
+            merges_without_asking: Some(false),
+        },
+    );
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+
+    let (status, b) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/brief"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(b["task_id"], tid.as_str());
+    assert_eq!(b["brief"]["intent"], "Fix the redirect.");
+    assert_eq!(b["brief"]["spec"], "- Add a test.");
+    assert_eq!(b["brief"]["launch"], "You are a crewmate.\n");
+    assert_eq!(b["delivery"], "direct");
+    assert_eq!(b["merges_without_asking"], false);
+    assert_eq!(b["dispatched_by"], "coordinator");
+    assert_eq!(b["dispatched_at"], "2026-09-21T14:13:20Z");
+    assert_eq!(b["issue"], Value::Null, "the Project has no issues");
+
+    // Gone from the engine's fleet, the task still answers.
+    h.engine.set_snapshot(FleetSnapshot { tasks: vec![] });
+    h.projector.refresh_all().await.unwrap();
+    let (status, again) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/brief"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again, b);
+
+    let (status, body) = call(&h.app, "GET", "/v1/tasks/tsk_nope/brief", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn a_task_without_a_brief_answers_with_it_absent() {
+    let h = harness().await;
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+    let (status, b) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/brief"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(b["brief"], Value::Null);
+    assert_eq!(b["issue"], Value::Null);
+    assert_eq!(b["delivery"], Value::Null);
 }
 
 #[tokio::test]

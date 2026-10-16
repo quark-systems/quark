@@ -204,6 +204,27 @@ impl SqliteEventLog {
         .await
     }
 
+    /// The task's latest event of `kind`, if it has one.
+    pub async fn latest(&self, project: &str, task: &str, kind: &str) -> Result<Option<Event>> {
+        let (project, task, kind) = (project.to_string(), task.to_string(), kind.to_string());
+        self.with_conn(move |conn| {
+            let seq: Option<i64> = conn
+                .query_row(
+                    "SELECT MAX(seq) FROM events WHERE project = ?1 AND task = ?2 AND kind = ?3",
+                    params![project, task, kind],
+                    |r| r.get(0),
+                )
+                .map_err(backend)?;
+            let Some(seq) = seq else {
+                return Ok(None);
+            };
+            Ok(Self::read_blocking(conn, Seq(seq as u64 - 1), 1)?
+                .into_iter()
+                .next())
+        })
+        .await
+    }
+
     /// Check the file: SQLite's own integrity check, then that `seq` runs
     /// 1..=head with no gaps. Returns the head.
     pub async fn verify(&self) -> Result<Seq> {
@@ -350,6 +371,25 @@ mod tests {
             kind,
             serde_json::json!({ "n": 1 }),
         )
+    }
+
+    #[tokio::test]
+    async fn latest_finds_a_tasks_last_event_of_a_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        assert_eq!(log.latest("p", "t", "a.x").await.unwrap(), None);
+        log.append(ev("a.x")).await.unwrap();
+        log.append(ev("b.x")).await.unwrap();
+        log.append(ev("a.x")).await.unwrap();
+        assert_eq!(
+            log.latest("p", "t", "a.x").await.unwrap().unwrap().seq,
+            Seq(3)
+        );
+        assert_eq!(
+            log.latest("p", "t", "b.x").await.unwrap().unwrap().seq,
+            Seq(2)
+        );
+        assert_eq!(log.latest("p", "u", "a.x").await.unwrap(), None);
     }
 
     #[tokio::test]

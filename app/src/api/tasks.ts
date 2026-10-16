@@ -1,5 +1,6 @@
 // Tasks: state, steering, failovers and the changes a worker made.
 
+import type { Issue } from "./beads";
 import { enc, req } from "./client";
 
 export type TaskState =
@@ -32,12 +33,39 @@ export interface ChangedFile {
 export interface TaskChanges { task_id: string; base_ref: string; base: string; head: string; files: ChangedFile[] }
 export interface TaskDiff { task_id: string; base: string; path?: string | null; patch: string; truncated: boolean }
 
+/** How a task's changes reach a pull request. */
+export type TaskDelivery = "gated" | "direct" | "local_only";
+/** A task's brief as the coordinator wrote it. */
+export interface DispatchBrief {
+  /** The whole brief, Markdown. */
+  markdown: string;
+  /** The section restating what you asked for, without its heading. */
+  intent?: string | null;
+  /** The section where the coordinator specifies the work, without its heading. */
+  spec?: string | null;
+  /** The brief as the worker was started with it, when the engine wraps the coordinator's. */
+  launch?: string | null;
+}
+/** How and why a task's worker was dispatched (`GET /v1/tasks/{id}/brief`); unknown parts are null. */
+export interface TaskBrief {
+  task_id: string;
+  /** The issue it was dispatched for: the first issue id in its title, then its brief. */
+  issue?: Issue | null;
+  brief?: DispatchBrief | null;
+  dispatched_at?: string | null;
+  dispatched_by?: string | null;
+  delivery?: TaskDelivery | null;
+  merges_without_asking?: boolean | null;
+  pull_request_url?: string | null;
+}
+
 export const tasksApi = {
   tasks: (pid: string) => req<Task[]>("GET", `/v1/projects/${enc(pid)}/tasks`),
   task: (id: string) => req<Task>("GET", `/v1/tasks/${enc(id)}`),
   steer: (id: string, text: string) => req<void>("POST", `/v1/tasks/${enc(id)}/messages`, { text }),
   cancel: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:cancel`),
   relaunch: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:relaunch`),
+  brief: (id: string) => req<TaskBrief>("GET", `/v1/tasks/${enc(id)}/brief`),
   changes: (id: string) => req<TaskChanges>("GET", `/v1/tasks/${enc(id)}/changes`),
   diff: (id: string, path?: string) =>
     req<TaskDiff>("GET", `/v1/tasks/${enc(id)}/diff` + (path ? `?path=${enc(path)}` : "")),

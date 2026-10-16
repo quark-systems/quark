@@ -4016,6 +4016,46 @@
         }
       }
     },
+    "/v1/tasks/{id}/brief": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "How and why the task's worker was dispatched: the issue it was started\nfor, the brief it received, and its delivery contract. It answers for\nfinished tasks too; parts the daemon has no record of are absent.",
+        "operationId": "get_task_brief",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskBrief"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}/changes": {
       "get": {
         "tags": [
@@ -6051,6 +6091,40 @@
           "done",
           "failed"
         ]
+      },
+      "DispatchBrief": {
+        "type": "object",
+        "description": "A task's brief as the coordinator wrote it.",
+        "required": [
+          "markdown"
+        ],
+        "properties": {
+          "intent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The section restating what the person asked for (`Captain's intent`\nin the engine's briefs), Markdown without its heading."
+          },
+          "launch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The brief as the worker was started with it, when the engine wraps\nthe coordinator's in one of its own."
+          },
+          "markdown": {
+            "type": "string",
+            "description": "The whole brief, Markdown."
+          },
+          "spec": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The section where the coordinator specifies the work (`Firstmate\nspec`), Markdown without its heading."
+          }
+        }
       },
       "DispatchCandidate": {
         "type": "object",
@@ -10562,6 +10636,79 @@
           }
         }
       },
+      "TaskBrief": {
+        "type": "object",
+        "description": "How and why a task's worker was dispatched: the issue it was started\nfor, the brief it received, and the delivery contract it was given. Parts\nthe daemon has no record of are absent.",
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "brief": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchBrief",
+                "description": "The brief as dispatched."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivery": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaskDelivery",
+                "description": "How its changes reach a pull request, as recorded at spawn."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was dispatched (RFC 3339 UTC)."
+          },
+          "dispatched_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who dispatched it: `coordinator`, the only one that starts tasks."
+          },
+          "issue": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Issue",
+                "description": "The issue the task was dispatched for: the first issue id in the\ntask's title, then in its brief, that the Project's Beads database\nhas. `external_ref` links its tracker issue."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merges_without_asking": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether its pull request merges without asking once green, as\nrecorded at spawn."
+          },
+          "pull_request_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pull request the task opened, if any."
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
       "TaskChanges": {
         "type": "object",
         "description": "Files a task changed: its working tree, including uncommitted and\nuntracked work, compared with where it branched from the default branch.",
@@ -10595,6 +10742,15 @@
             "type": "string"
           }
         }
+      },
+      "TaskDelivery": {
+        "type": "string",
+        "description": "How a task's changes reach a pull request.",
+        "enum": [
+          "gated",
+          "direct",
+          "local_only"
+        ]
       },
       "TaskDiff": {
         "type": "object",

@@ -77,6 +77,9 @@ async fn reads_steers_answers_and_controls_natively() {
         engine.spawn(&ws, "t1").await.unwrap().unwrap().generation,
         g.id
     );
+    let brief = engine.brief(&ws, "t1").await.unwrap().unwrap();
+    assert_eq!(brief.text, Some(w.assignment.brief.clone()));
+    assert!(brief.launch.is_some(), "the generation's launch brief");
 
     // A question becomes a hold with the worker's wording.
     engine.send_message(&ws, "t1", "ask now").await.unwrap();
