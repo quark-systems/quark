@@ -23,9 +23,21 @@ use quark_engine::write::{self, DeliveryMode, WriteOp};
 use quark_engine::{EngineReader, EngineWriter, Error, Workspace};
 
 use super::{
-    EngineAdapter, EngineError, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold,
-    SourceRepo, StatusEntry, StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
+    EngineAdapter, EngineBrief, EngineError, EngineResolution, EngineSpawn, EngineTask,
+    FleetSnapshot, Hold, SourceRepo, StatusEntry, StatusTail, TaskControl, WorkspacePlan,
+    WorkspaceRef,
 };
+
+/// The neutral delivery for a spawn's recorded `mode`.
+pub fn delivery(mode: &str) -> Option<quark_systems::TaskDelivery> {
+    use quark_systems::TaskDelivery;
+    match mode.to_ascii_lowercase().as_str() {
+        "no-mistakes" => Some(TaskDelivery::Gated),
+        "direct-pr" => Some(TaskDelivery::Direct),
+        "local-only" => Some(TaskDelivery::LocalOnly),
+        _ => None,
+    }
+}
 
 /// Bound on one dispatch resolution: the classifier request, one quota
 /// snapshot and any local quota reading.
@@ -240,6 +252,38 @@ impl EngineAdapter for FirstmateEngine {
                 model: m.model,
                 effort: m.effort,
             }))
+    }
+
+    /// `data/<id>/brief.md` and its launch brief, which survive cleanup, and
+    /// the delivery contract from the task's metadata record while it lasts.
+    async fn brief(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<Option<EngineBrief>, EngineError> {
+        let reader = self.reader(ws)?;
+        let task = task_id.to_string();
+        let (brief, meta) = blocking(move || {
+            let brief = reader.brief(&task)?;
+            Ok((brief, reader.spawn_meta(&task)?))
+        })
+        .await?;
+        if brief.is_none() && meta.is_none() {
+            return Ok(None);
+        }
+        let (text, launch, written_at) = match brief {
+            Some(b) => (Some(b.text), b.launch, b.written_at),
+            None => (None, None, None),
+        };
+        let (mode, merges_without_asking) = meta.map(|m| (m.mode, m.yolo)).unwrap_or_default();
+        let delivery = mode.as_deref().and_then(delivery);
+        Ok(Some(EngineBrief {
+            text,
+            launch,
+            written_at,
+            delivery,
+            merges_without_asking,
+        }))
     }
 
     /// `fm-dispatch-resolve.sh` on the task's brief, the resolution the

@@ -5,6 +5,7 @@
 //!
 //! - [`snapshot`]: `fm-fleet-snapshot.sh --json` (schema `fm-fleet-snapshot.v1`).
 //! - [`meta`]: the spawn fields of `state/<id>.meta` (harness, model, effort).
+//! - [`brief`]: `data/<id>/brief.md`, the brief a task was dispatched with.
 //! - [`dispatch`]: `fm-dispatch-resolve.sh` output for a task's brief.
 //! - [`status`]: `state/<id>.status` wake-event lines and an incremental tail.
 //! - [`holds`]: captain holds and open decisions derived from a snapshot.
@@ -20,6 +21,7 @@
 //! Status lines are wake-event history, not current state. Current task state
 //! comes from the snapshot's `current_state`, which the engine reconciles.
 
+pub mod brief;
 pub mod dispatch;
 mod error;
 pub mod gates;
@@ -75,6 +77,12 @@ impl EngineReader {
     /// spawned.
     pub fn spawn_meta(&self, task_id: &str) -> Result<Option<meta::SpawnMeta>> {
         meta::read(&self.workspace.meta_path(task_id)?)
+    }
+
+    /// The brief the task was dispatched with, if it has one. It survives the
+    /// task's cleanup.
+    pub fn brief(&self, task_id: &str) -> Result<Option<brief::Brief>> {
+        brief::read(&self.workspace, task_id)
     }
 
     /// Run the engine's dispatch resolution on a task's brief. A brief that

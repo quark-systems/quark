@@ -5,8 +5,8 @@ use axum::Json;
 use quark_systems::{
     ActOnDecision, AgentRole, AnswerDecision, CoordinatorMessage, CoordinatorMessageAccepted,
     CreateProject, Decision, DecisionState, DispatchRecord, ErrorBody, Health, Project,
-    ProjectStatus, RelaunchTask, SendTaskMessage, Task, TaskChanges, TaskDiff, TaskEvent,
-    TranscriptItem, UpdateProject,
+    ProjectStatus, RelaunchTask, SendTaskMessage, Task, TaskBrief, TaskChanges, TaskDiff,
+    TaskEvent, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -520,6 +520,26 @@ pub async fn list_task_dispatch(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<DispatchRecord>>, ApiError> {
     Ok(Json(db(&state, move |s| s.list_dispatch(&id)).await?))
+}
+
+/// How and why the task's worker was dispatched: the issue it was started
+/// for, the brief it received, and its delivery contract. It answers for
+/// finished tasks too; parts the daemon has no record of are absent.
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/brief",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 200, body = TaskBrief),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn get_task_brief(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TaskBrief>, ApiError> {
+    Ok(Json(crate::task_brief::read(&state, id).await?))
 }
 
 /// Files the task changed: its working tree, including uncommitted and
@@ -1062,6 +1082,7 @@ pub async fn send_coordinator_message(
         relaunch_task,
         list_task_events,
         list_task_dispatch,
+        get_task_brief,
         get_task_changes,
         get_task_diff,
         list_decisions,
@@ -1074,6 +1095,8 @@ pub async fn send_coordinator_message(
     components(schemas(
         quark_systems::TaskState,
         quark_systems::TaskKind,
+        quark_systems::TaskDelivery,
+        quark_systems::DispatchBrief,
         quark_systems::TaskEvent,
         quark_systems::FileChangeStatus,
         quark_systems::DecisionState,
@@ -1109,6 +1132,7 @@ pub(super) fn router() -> axum::Router<AppState> {
         .route("/v1/tasks/{id}/transcript", get(task_transcript))
         .route("/v1/tasks/{id}/events", get(list_task_events))
         .route("/v1/tasks/{id}/dispatch", get(list_task_dispatch))
+        .route("/v1/tasks/{id}/brief", get(get_task_brief))
         .route("/v1/tasks/{id}/changes", get(get_task_changes))
         .route("/v1/tasks/{id}/diff", get(get_task_diff))
         .route("/v1/decisions", get(list_decisions))

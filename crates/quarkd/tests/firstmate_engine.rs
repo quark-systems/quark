@@ -239,6 +239,37 @@ async fn spawns_and_dispatch_resolution_come_from_the_engine() {
 }
 
 #[tokio::test]
+async fn a_brief_survives_the_tasks_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let (e, ws) = engine(dir.path());
+    assert!(e.brief(&ws, "ship-task").await.unwrap().is_none());
+    assert!(e.brief(&ws, "../ship-task").await.is_err());
+
+    let data = ws.root.join("data/ship-task");
+    fs::create_dir_all(&data).unwrap();
+    fs::write(data.join("brief.md"), "## Captain's intent\nFix it.\n").unwrap();
+    fs::write(data.join("launch-brief.md"), "You are a crewmate.\n").unwrap();
+    let meta = ws.root.join("state/ship-task.meta");
+    fs::write(
+        &meta,
+        "harness=codex\nkind=ship\nmode=direct-PR\nyolo=on\nspawn_gen=s1.1.1\n",
+    )
+    .unwrap();
+    let b = e.brief(&ws, "ship-task").await.unwrap().unwrap();
+    assert_eq!(b.text.as_deref(), Some("## Captain's intent\nFix it.\n"));
+    assert_eq!(b.launch.as_deref(), Some("You are a crewmate.\n"));
+    assert!(b.written_at.is_some());
+    assert_eq!(b.delivery, Some(quark_systems::TaskDelivery::Direct));
+    assert_eq!(b.merges_without_asking, Some(true));
+
+    // Cleanup removes the metadata record; the brief stays.
+    fs::remove_file(&meta).unwrap();
+    let b = e.brief(&ws, "ship-task").await.unwrap().unwrap();
+    assert!(b.text.is_some());
+    assert_eq!((b.delivery, b.merges_without_asking), (None, None));
+}
+
+#[tokio::test]
 async fn a_description_is_resolved_as_a_brief_without_a_task() {
     let dir = tempfile::tempdir().unwrap();
     let (e, ws) = engine(dir.path());

@@ -66,8 +66,8 @@ use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskStat
 use serde::Serialize;
 
 use super::{
-    EngineAdapter, EngineError, EngineResolution, EngineSpawn, FleetSnapshot, Hold, SourceRepo,
-    StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
+    EngineAdapter, EngineBrief, EngineError, EngineResolution, EngineSpawn, FleetSnapshot, Hold,
+    SourceRepo, StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
 };
 
 /// The variable holding startup slice modes, such as `1=shadow`.
@@ -849,6 +849,17 @@ impl EngineAdapter for ShadowEngine {
     ) -> Result<Option<EngineSpawn>, EngineError> {
         self.read(Slice::Supervision, "spawn", &ws.project_id, |e| {
             e.spawn(ws, task_id)
+        })
+        .await
+    }
+
+    async fn brief(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<Option<EngineBrief>, EngineError> {
+        self.read(Slice::Supervision, "brief", &ws.project_id, |e| {
+            e.brief(ws, task_id)
         })
         .await
     }

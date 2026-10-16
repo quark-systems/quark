@@ -112,6 +112,23 @@ pub struct EngineSpawn {
     pub project: Option<String>,
 }
 
+/// The brief a task's worker was dispatched with, and the delivery contract
+/// recorded at its spawn.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineBrief {
+    /// The brief as the coordinator wrote it.
+    pub text: Option<String>,
+    /// The brief as the worker was started with it, when the engine renders
+    /// one of its own around the coordinator's.
+    pub launch: Option<String>,
+    /// When the brief was written, in Unix seconds.
+    pub written_at: Option<i64>,
+    /// How its changes reach a pull request.
+    pub delivery: Option<quark_systems::TaskDelivery>,
+    /// Whether a green pull request merges without asking.
+    pub merges_without_asking: Option<bool>,
+}
+
 /// The engine's dispatch resolution for a task's brief, in neutral fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EngineResolution {
@@ -476,6 +493,16 @@ pub trait EngineAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// The brief the task was dispatched with. It outlives the task's
+    /// worker; `None` when the engine has no record of one.
+    async fn brief(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+    ) -> Result<Option<EngineBrief>, EngineError> {
+        Ok(None)
+    }
+
     /// Run the engine's dispatch resolution on the task's brief, as the
     /// coordinator does before a spawn. `None` when the engine has no
     /// resolution or the task no brief.
@@ -661,6 +688,8 @@ pub struct StubEngine {
     description_resolution: Mutex<Option<Result<EngineResolution, String>>>,
     /// Descriptions the dispatch resolution ran for, in order.
     described: Mutex<Vec<String>>,
+    /// The brief per engine task id.
+    briefs: Mutex<HashMap<String, EngineBrief>>,
 }
 
 impl StubEngine {
@@ -700,6 +729,13 @@ impl StubEngine {
     }
 
     /// The current worker spawn of an engine task.
+    pub fn set_brief(&self, task_id: &str, brief: EngineBrief) {
+        self.briefs
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), brief);
+    }
+
     pub fn set_spawn(&self, task_id: &str, spawn: EngineSpawn) {
         self.spawns
             .lock()
@@ -951,6 +987,14 @@ impl EngineAdapter for StubEngine {
         task_id: &str,
     ) -> Result<Option<EngineSpawn>, EngineError> {
         Ok(self.spawns.lock().unwrap().get(task_id).cloned())
+    }
+
+    async fn brief(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<Option<EngineBrief>, EngineError> {
+        Ok(self.briefs.lock().unwrap().get(task_id).cloned())
     }
 
     async fn resolve_dispatch(

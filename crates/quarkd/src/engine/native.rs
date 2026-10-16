@@ -36,9 +36,9 @@ use super::native_dispatch_engine::{self, NativeDispatch};
 use super::native_project::ProjectSetup;
 use super::native_verify::NativeVerify;
 use super::{
-    EngineAdapter, EngineError, EngineResolution, EngineSpawn, EngineTask, FleetSnapshot, Hold,
-    NewTask, SourceRepo, StatusEntry, StatusTail, TaskControl, TaskStart, WorkspacePlan,
-    WorkspaceRef,
+    EngineAdapter, EngineBrief, EngineError, EngineResolution, EngineSpawn, EngineTask,
+    FleetSnapshot, Hold, NewTask, SourceRepo, StatusEntry, StatusTail, TaskControl, TaskStart,
+    WorkspacePlan, WorkspaceRef,
 };
 
 /// `state_source` of every task this engine reports.
@@ -380,6 +380,27 @@ impl EngineAdapter for NativeEngine {
                 .repo
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned()),
+        }))
+    }
+
+    /// The task's assignment, and the launch brief its current generation
+    /// was started with.
+    async fn brief(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+    ) -> Result<Option<EngineBrief>, EngineError> {
+        let (p, t) = (project(ws), task_id(task)?);
+        let Some((_, w)) = self.supervisor.task(&p, &t) else {
+            return Ok(None);
+        };
+        let launch = w.current.and_then(|g| {
+            std::fs::read_to_string(g.dir.join(quark_supervisor::launch::BRIEF_FILE)).ok()
+        });
+        Ok(Some(EngineBrief {
+            text: Some(w.assignment.brief),
+            launch,
+            ..EngineBrief::default()
         }))
     }
 

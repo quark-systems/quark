@@ -109,6 +109,39 @@ function addProject(p) {
   return proj;
 }
 
+// GET /v1/tasks/{id}/brief: the brief each task was dispatched with, and its delivery contract.
+// The issue is found as the daemon finds it: the first issue id in the title, then the brief.
+const briefs = new Map(); // task id -> { markdown, launch, delivery, merges_without_asking, dispatched_at }
+const BRIEF_SECTION = { intent: "captain's intent", spec: "firstmate spec" };
+function briefSection(markdown, title) {
+  const lines = markdown.split("\n");
+  const at = lines.findIndex((l) => /^#{1,6} /.test(l) && l.replace(/^#+ /, "").replace(/\u2019/g, "'").trim().toLowerCase() === title);
+  if (at < 0) return null;
+  const level = /^#+/.exec(lines[at])[0].length;
+  const end = lines.findIndex((l, i) => i > at && /^#{1,6} /.test(l) && /^#+/.exec(l)[0].length <= level);
+  const body = lines.slice(at + 1, end < 0 ? undefined : end).join("\n").trim();
+  return body || null;
+}
+function taskBrief(task) {
+  const b = briefs.get(task.id);
+  const issues = issuesOf(task.project_id);
+  const words = [task.title, b?.markdown ?? ""].flatMap((t) => t.split(/[^A-Za-z0-9._-]+/).map((w) => w.replace(/\.+$/, "")));
+  const id = words.find((w) => issues.has(w));
+  const dispatch = dispatches.get(task.id)?.[0];
+  return {
+    task_id: task.id,
+    issue: id ? issueView(task.project_id, issues.get(id)) : null,
+    brief: b ? {
+      markdown: b.markdown, intent: briefSection(b.markdown, BRIEF_SECTION.intent),
+      spec: briefSection(b.markdown, BRIEF_SECTION.spec), launch: b.launch ?? null,
+    } : null,
+    dispatched_at: dispatch?.recorded_at ?? b?.dispatched_at ?? null,
+    dispatched_by: dispatch || b ? "coordinator" : null,
+    delivery: b?.delivery ?? null, merges_without_asking: b?.merges_without_asking ?? null,
+    pull_request_url: task.pull_request_url,
+  };
+}
+
 function addTask(projectId, t, { silent = false } = {}) {
   const task = {
     id: t.id ?? nextId("t"), project_id: projectId, title: t.title, state: t.state ?? "queued",
@@ -790,6 +823,22 @@ function seed() {
   T(quark, "Daemon skeleton", "done", { updated_at: minutesAgo(300) });
   T(site, "Pricing page on the new grid", "running", { diff: DIFFS[3], harness: "codex", updated_at: minutesAgo(8) });
   T(site, "Changelog feed", "failed", { state_note: "Build failed: missing RSS dependency", updated_at: minutesAgo(70) });
+
+  briefs.set(a.id, {
+    delivery: "gated", merges_without_asking: false,
+    markdown: [
+      "You are a crewmate: an autonomous worker agent. Work on your own; do not wait for a human.", "",
+      "# Task", "## Captain's intent",
+      "Slow clients fall behind the event stream and miss events (qk-30). When a client lags, resync it from the store instead of dropping it.", "",
+      "## Firstmate spec",
+      "- Reproduce with a client that reads one event a second.",
+      "- On lag, send a `resync` marker and replay from the store from the client's cursor.",
+      "- Add a test in `crates/quarkd/tests/api.rs`.",
+      "- Out of scope: the WebSocket framing.", "",
+      "# Report", "Open one PR against `main` and report its URL.",
+    ].join("\n"),
+    launch: "# Current worker role contract\nYou are a crewmate: an autonomous worker agent managed by the coordinator.\n\n(The brief follows.)\n",
+  });
 
   // Every spawned task has its dispatch record, finished ones included.
   recordDispatch(a, "classifier", { silent: true, ts: minutesAgo(31), model: "claude-sonnet-5", effort: "high" });
@@ -1797,6 +1846,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (rest === "/transcript" && req.method === "GET") return send(res, 200, transcripts.get(task.id));
     if (rest === "/dispatch" && req.method === "GET") return send(res, 200, dispatches.get(task.id) ?? []);
+    if (rest === "/brief" && req.method === "GET") return send(res, 200, taskBrief(task));
     if ((rest === "/changes" || rest === "/diff") && task.state === "queued") {
       return send(res, 409, { error: { code: "no_worktree", message: "the task has no worktree yet" } });
     }

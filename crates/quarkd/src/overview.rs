@@ -449,6 +449,8 @@ mod tests {
             effort: None,
             project: None,
             kind: Some("ship".into()),
+            mode: None,
+            yolo: None,
         };
         log.append(
             NewEvent::typed(

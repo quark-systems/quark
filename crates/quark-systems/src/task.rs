@@ -228,3 +228,56 @@ mod tests {
         }
     }
 }
+
+/// How and why a task's worker was dispatched: the issue it was started
+/// for, the brief it received, and the delivery contract it was given. Parts
+/// the daemon has no record of are absent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TaskBrief {
+    pub task_id: String,
+    /// The issue the task was dispatched for: the first issue id in the
+    /// task's title, then in its brief, that the Project's Beads database
+    /// has. `external_ref` links its tracker issue.
+    pub issue: Option<crate::Issue>,
+    /// The brief as dispatched.
+    pub brief: Option<DispatchBrief>,
+    /// When it was dispatched (RFC 3339 UTC).
+    pub dispatched_at: Option<String>,
+    /// Who dispatched it: `coordinator`, the only one that starts tasks.
+    pub dispatched_by: Option<String>,
+    /// How its changes reach a pull request, as recorded at spawn.
+    pub delivery: Option<TaskDelivery>,
+    /// Whether its pull request merges without asking once green, as
+    /// recorded at spawn.
+    pub merges_without_asking: Option<bool>,
+    /// The pull request the task opened, if any.
+    pub pull_request_url: Option<String>,
+}
+
+/// A task's brief as the coordinator wrote it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchBrief {
+    /// The whole brief, Markdown.
+    pub markdown: String,
+    /// The section restating what the person asked for (`Captain's intent`
+    /// in the engine's briefs), Markdown without its heading.
+    pub intent: Option<String>,
+    /// The section where the coordinator specifies the work (`Firstmate
+    /// spec`), Markdown without its heading.
+    pub spec: Option<String>,
+    /// The brief as the worker was started with it, when the engine wraps
+    /// the coordinator's in one of its own.
+    pub launch: Option<String>,
+}
+
+/// How a task's changes reach a pull request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDelivery {
+    /// The change passes the verification gate before its PR is opened.
+    Gated,
+    /// The worker opens the PR directly; CI is the only check.
+    Direct,
+    /// The change stays local; no PR.
+    LocalOnly,
+}

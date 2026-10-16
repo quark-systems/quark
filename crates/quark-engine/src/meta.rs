@@ -25,6 +25,12 @@ pub struct SpawnMeta {
     pub project: Option<String>,
     /// `kind`, e.g. `ship`, `scout` or `secondmate`.
     pub kind: Option<String>,
+    /// `mode`, the delivery mode: `no-mistakes`, `direct-PR`, `local-only`
+    /// or `secondmate`. Scouts record none.
+    pub mode: Option<String>,
+    /// `yolo`, the merge posture: whether a green pull request merges
+    /// without asking. Scouts record none.
+    pub yolo: Option<bool>,
 }
 
 impl SpawnMeta {
@@ -73,6 +79,12 @@ pub fn parse(text: &str) -> Option<SpawnMeta> {
         effort: explicit("effort"),
         project: value("project"),
         kind: value("kind"),
+        mode: value("mode"),
+        yolo: value("yolo").and_then(|v| match v.as_str() {
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        }),
     })
 }
 
@@ -94,6 +106,10 @@ mod tests {
         assert_eq!(m.spawned_at(), Some(1_790_000_000));
         assert_eq!(m.project_name(), Some("quark"));
         assert_eq!(m.kind.as_deref(), Some("ship"));
+        assert_eq!(m.mode.as_deref(), Some("direct-pr"));
+        assert_eq!(m.yolo, None, "the fixture records no yolo");
+        let m = parse(&format!("{META}yolo=on\n")).unwrap();
+        assert_eq!(m.yolo, Some(true));
     }
 
     #[test]
