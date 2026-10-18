@@ -379,7 +379,7 @@ async fn each_spawn_records_why_this_agent() {
     assert_eq!(e.payload["rule"]["id"], "rule_1");
     assert_eq!(e.payload["classifier"]["provider"], "system1");
     assert_eq!(e.payload["classifier"]["confidence"], 0.93);
-    assert_eq!(e.payload["chosen"]["harness"], "claude");
+    assert_eq!(e.payload["chosen"]["harness"], "claude-code");
     assert_eq!(e.payload["chosen"]["effort"], "high");
     // The account the task runs under (quark#23) is the one recorded.
     let (_, task) = call(&h.app, "GET", &format!("/v1/tasks/{tid}"), None).await;

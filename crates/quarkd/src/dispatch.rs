@@ -56,7 +56,7 @@ pub fn build(
     resolved: Resolved,
 ) -> DispatchRecord {
     let chosen = DispatchChoice {
-        harness: spawn.harness.clone(),
+        harness: quark_id(&spawn.harness),
         model: spawn.model.clone(),
         effort: spawn.effort.clone(),
         account: None,
@@ -108,7 +108,13 @@ pub fn build(
             };
         }
         Resolved::Ran(r) => {
-            let r = *r;
+            let mut r = *r;
+            if let Some(p) = &mut r.profile {
+                p.harness = quark_id(&p.harness);
+            }
+            for c in &mut r.candidates {
+                c.harness = quark_id(&c.harness);
+            }
             record.classifier = classifier(&r);
             let mut notes = r.notes.clone();
             let selected = r
@@ -229,6 +235,17 @@ pub fn label(c: &DispatchChoice) -> String {
     s
 }
 
+/// Quark's id for a harness the engine names by its adapter name
+/// (`claude` is `claude-code`), so the resolution's profile and the spawned
+/// agent compare and read alike. Names with no built-in harness pass through.
+pub fn quark_id(name: &str) -> String {
+    quark_harness::builtin()
+        .iter()
+        .find(|m| m.id == name || m.aliases.iter().any(|a| a == name))
+        .map_or(name, |m| m.id.as_str())
+        .to_string()
+}
+
 fn same_agent(a: &DispatchChoice, b: &DispatchChoice) -> bool {
     a.harness == b.harness && a.model == b.model && a.effort == b.effort
 }
@@ -347,8 +364,26 @@ mod tests {
         assert_eq!(
             r.summary,
             "The classifier matched rule rule_2 (A trivial mechanical edit.) at 0.91 confidence. \
-             The resolution selected claude:sonnet."
+             The resolution selected claude-code:sonnet."
         );
+        assert_eq!(r.candidates[0].harness, "claude-code");
+    }
+
+    #[test]
+    fn the_engine_adapter_name_is_the_same_agent() {
+        let r = build(
+            "tsk_1",
+            "prj_1",
+            &spawn("claude-code", Some("opus")),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(clear(("claude", Some("opus"))))),
+        );
+        assert_ne!(r.decided_by, DispatchDecider::Coordinator);
+        assert!(!r.summary.contains("overrode"), "{}", r.summary);
+        assert!(r
+            .summary
+            .ends_with("The resolution selected claude-code:opus."));
+        assert_eq!(r.chosen.harness, "claude-code");
     }
 
     #[test]
@@ -363,7 +398,7 @@ mod tests {
         assert_eq!(r.decided_by, DispatchDecider::Coordinator);
         assert!(r
             .summary
-            .contains("overrode the selected profile claude:sonnet"));
+            .contains("overrode the selected profile claude-code:sonnet"));
         assert!(r.resolution.notes.iter().any(|n| n.contains("overrode")));
         assert_eq!(r.chosen.harness, "codex");
     }
@@ -396,7 +431,7 @@ mod tests {
         assert_eq!(r.chosen.account, None);
         assert_eq!(
             r.summary,
-            "No classifier is configured (provider: none), so the coordinator picked claude."
+            "No classifier is configured (provider: none), so the coordinator picked claude-code."
         );
     }
 
@@ -422,7 +457,7 @@ mod tests {
         assert_eq!(
             r.summary,
             "No classifier is configured, so the coordinator matched rule rule_2 \
-             (A trivial mechanical edit.). The resolution selected claude:sonnet."
+             (A trivial mechanical edit.). The resolution selected claude-code:sonnet."
         );
 
         // With no rules at all, the default rule applies on its own.
@@ -515,7 +550,7 @@ mod tests {
             r.summary,
             "The classifier's answer was not used (classifier request timed out after 2000ms), \
              so the default rule applied (on_failure: default). The resolution selected \
-             claude:sonnet."
+             claude-code:sonnet."
         );
 
         // It answered below the floor: its model and confidence are kept.
