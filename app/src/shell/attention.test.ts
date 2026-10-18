@@ -15,6 +15,9 @@ describe("attentionQueue", () => {
   it("holds open decisions, red open PRs and stuck workers, oldest first", () => {
     expect(q.map((i) => i.key)).toEqual(["pr:p1", "decision:d1", "worker:t1"]);
   });
+  it("leaves out archived projects", () => {
+    expect(attentionQueue({ d1: dec("d1", "2026-10-08T03:00:00Z") }, {}, {}, new Set(["p"]))).toEqual([]);
+  });
   it("walks the queue from the item on screen, wrapping to the oldest", () => {
     expect(nextAttention(q, { name: "projects" })?.key).toBe("pr:p1");
     expect(nextAttention(q, { name: "pr", id: "p1" })?.key).toBe("decision:d1");

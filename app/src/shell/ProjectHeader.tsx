@@ -6,6 +6,7 @@ import { useStore } from "../store";
 import { useLabels } from "../persona";
 import { CountBadge } from "../ui";
 import { swatchFor } from "./groups";
+import { UnarchiveButton } from "../components/ProjectLifecycle";
 
 export type ProjectTab = "conversation" | "overview" | "work" | "issues" | "decisions" | "memory" | "metrics" | "settings";
 
@@ -47,6 +48,10 @@ export function ProjectHeader({ project: pid, current }: { project: string; curr
         {project.status && project.status !== "ready" && (
           <span className={"pill " + (project.status === "failed" ? "red" : "yellow")} data-testid="project-status">{project.status}</span>
         )}
+        {project.archived_at && <>
+          <span className="pill" data-testid="project-archived" title="Its coordinator and workers are stopped">Archived</span>
+          <UnarchiveButton project={project} />
+        </>}
       </div>
       <nav className="ph-tabs" aria-label="Project">
         {tabs.map((t) => (

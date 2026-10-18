@@ -43,15 +43,36 @@ pub async fn health(State(state): State<AppState>) -> Result<Json<Health>, ApiEr
     }))
 }
 
-/// List Projects.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ProjectQuery {
+    /// Also list archived Projects (those with `archived_at`).
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
+/// List Projects. Archived ones are left out unless `include_archived`.
 #[utoipa::path(
     get,
     path = "/v1/projects",
     tag = "projects",
+    params(ProjectQuery),
     responses((status = 200, body = Vec<Project>))
 )]
-pub async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Project>>, ApiError> {
-    Ok(Json(db(&state, |s| s.list_projects()).await?))
+pub async fn list_projects(
+    State(state): State<AppState>,
+    Query(q): Query<ProjectQuery>,
+) -> Result<Json<Vec<Project>>, ApiError> {
+    Ok(Json(
+        db(&state, move |s| {
+            if q.include_archived {
+                s.list_all_projects()
+            } else {
+                s.list_projects()
+            }
+        })
+        .await?,
+    ))
 }
 
 /// Create a Project.
@@ -133,11 +154,17 @@ pub async fn project_action(
 ) -> Result<(StatusCode, Json<Project>), ApiError> {
     match target.rsplit_once(':') {
         Some((id, "provision")) => provision_project(state, Path(id.to_string())).await,
+        Some((id, "archive")) => {
+            super::lifecycle::archive_project(state, Path(id.to_string())).await
+        }
+        Some((id, "unarchive")) => {
+            super::lifecycle::unarchive_project(state, Path(id.to_string())).await
+        }
         Some(_) => Err(ApiError::not_found()),
         None => Err(ApiError::new(
             StatusCode::METHOD_NOT_ALLOWED,
             "method_not_allowed",
-            "use POST /v1/projects/{id}:provision",
+            "use POST /v1/projects/{id}:provision, :archive or :unarchive",
         )),
     }
 }
@@ -1119,10 +1146,14 @@ pub(super) fn router() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/v1/health", get(health))
         .route("/v1/projects", get(list_projects).post(create_project))
-        // POST serves the custom method `/v1/projects/{id}:provision`.
+        // POST serves the custom methods `/v1/projects/{id}:provision`,
+        // `:archive` and `:unarchive`.
         .route(
             "/v1/projects/{id}",
-            get(get_project).patch(update_project).post(project_action),
+            get(get_project)
+                .patch(update_project)
+                .post(project_action)
+                .delete(super::lifecycle::delete_project),
         )
         .route("/v1/projects/{id}/tasks", get(list_tasks))
         // POST serves the custom methods `/v1/tasks/{id}:cancel` and

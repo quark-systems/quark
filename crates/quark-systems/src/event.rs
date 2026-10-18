@@ -9,6 +9,9 @@ use utoipa::ToSchema;
 pub enum EventType {
     #[serde(rename = "project.updated")]
     ProjectUpdated,
+    /// A Project was deleted; payload is a [`ProjectDeleted`](crate::ProjectDeleted).
+    #[serde(rename = "project.deleted")]
+    ProjectDeleted,
     #[serde(rename = "task.created")]
     TaskCreated,
     #[serde(rename = "task.state_changed")]
@@ -78,8 +81,9 @@ pub enum EventType {
 }
 
 impl EventType {
-    pub const ALL: [EventType; 24] = [
+    pub const ALL: [EventType; 25] = [
         EventType::ProjectUpdated,
+        EventType::ProjectDeleted,
         EventType::TaskCreated,
         EventType::TaskStateChanged,
         EventType::TaskEvent,
@@ -108,6 +112,7 @@ impl EventType {
     pub fn as_str(self) -> &'static str {
         match self {
             EventType::ProjectUpdated => "project.updated",
+            EventType::ProjectDeleted => "project.deleted",
             EventType::TaskCreated => "task.created",
             EventType::TaskStateChanged => "task.state_changed",
             EventType::TaskEvent => "task.event",

@@ -10,6 +10,7 @@ import { Unavailable } from "../../components/Unavailable";
 import { StandingApproval } from "../../components/StandingApproval";
 import { PersonaPicker } from "../../components/PersonaPicker";
 import { IssueSync } from "./IssueSync";
+import { ProjectLifecycle } from "../../components/ProjectLifecycle";
 import "./settings.css";
 import "./overview.css";
 
@@ -119,6 +120,10 @@ export function Settings({ project: pid }: { project: string }) {
           <Section title="Persona" testId="settings-persona">
             <PersonaPicker projectId={pid} />
             <p className="faint">Role names, how agents address you and some labels. It changes how the Project reads, not what it does.</p>
+          </Section>
+
+          <Section title="Archive or delete" testId="settings-lifecycle">
+            <ProjectLifecycle project={project} />
           </Section>
         </div>
       </div>

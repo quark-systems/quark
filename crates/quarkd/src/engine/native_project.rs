@@ -249,6 +249,16 @@ impl ProjectSetup {
             .collect())
     }
 
+    /// Drop the record of a deleted Project's coordinator.
+    pub fn forget_coordinator(&self, command: &Path, project_id: &str) -> Result<(), EngineError> {
+        check_id(project_id)?;
+        let path = command.join(RECORDS_DIR).join(format!("{project_id}.json"));
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
+    }
+
     fn manifest(&self, agent: &AgentConfig) -> Result<&HarnessManifest, EngineError> {
         let m = self.manifests.resolve(&agent.harness).ok_or_else(|| {
             EngineError::Invalid(format!("no harness {} is known", agent.harness))

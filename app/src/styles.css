@@ -318,6 +318,7 @@ a.side-item { text-decoration: none; }
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; padding: 16px; }
 .project-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
 .project-card:hover { border-color: var(--accent); }
+.project-card.archived { opacity: 0.75; }
 .pc-name { font-weight: 600; font-size: 14px; }
 .pc-goal { color: var(--fg-dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pc-repos { font-size: 11px; }

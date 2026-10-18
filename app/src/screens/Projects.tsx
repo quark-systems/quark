@@ -1,5 +1,6 @@
 // All projects, the app's home: what needs you across every project (oldest first), open PRs,
-// and one card per project. The decisions inbox and PR center open from here.
+// and one card per project. The decisions inbox and PR center open from here. Archived projects
+// are left out, except under the Archived filter, where each can be brought back.
 import React, { useMemo, useState } from "react";
 import { href } from "../nav";
 import { useStore } from "../store";
@@ -7,7 +8,8 @@ import { ago, isActive } from "../util";
 import { CountBadge, SectionLabel, StatusDot } from "../ui";
 import { useAttention } from "../shell/NextAttention";
 import { AttentionKind } from "../shell/attention";
-import { swatchFor } from "../shell/groups";
+import { archivedIds, swatchFor } from "../shell/groups";
+import { UnarchiveButton } from "../components/ProjectLifecycle";
 
 const KIND: Record<AttentionKind, { label: string; tone: "needs-you" | "failed" }> = {
   decision: { label: "Decision", tone: "needs-you" },
@@ -23,6 +25,8 @@ export function Projects() {
   const connected = useStore((s) => s.connected);
   const queue = useAttention();
   const [filter, setFilter] = useState<Filter>("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const archived = useMemo(() => archivedIds(projects), [projects]);
   const pname = (id: string) => projects[id]?.name ?? id;
 
   const counts = useMemo(() => {
@@ -31,12 +35,13 @@ export function Projects() {
     return c;
   }, [queue]);
   const shown = filter === "all" ? queue : queue.filter((i) => i.kind === filter);
-  const openPrs = useMemo(() => Object.values(prs).filter((p) => p.state === "open" || p.state === "draft")
-    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs]);
-  const rows = useMemo(() => Object.values(projects).map((p) => {
+  const openPrs = useMemo(() => Object.values(prs).filter((p) => (p.state === "open" || p.state === "draft") && !archived.has(p.project_id))
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs, archived]);
+  const archivedShown = showArchived && archived.size > 0;
+  const rows = useMemo(() => Object.values(projects).filter((p) => !!p.archived_at === archivedShown).map((p) => {
     const ts = Object.values(tasks).filter((t) => t.project_id === p.id);
     return { p, active: ts.filter((t) => isActive(t.state)).length, waiting: queue.filter((i) => i.projectId === p.id).length };
-  }).sort((a, b) => b.p.updated_at.localeCompare(a.p.updated_at)), [projects, tasks, queue]);
+  }).sort((a, b) => b.p.updated_at.localeCompare(a.p.updated_at)), [projects, tasks, queue, archivedShown]);
 
   return (
     <>
@@ -47,7 +52,7 @@ export function Projects() {
       </div>
       <div className="screen scroll">
         <div className="home">
-          {rows.length === 0 ? (
+          {rows.length === 0 && !archived.size ? (
             <div className="empty">
               {connected ? <>No projects yet. <a href={href({ name: "new" })}>Create one</a> to get started.</> : "Waiting for the daemon…"}
             </div>
@@ -96,16 +101,28 @@ export function Projects() {
                 <a className="home-more" href={href({ name: "prs" })} data-testid="nav-prs">All pull requests</a>
               </section>
 
+              {archived.size > 0 && (
+                <SectionLabel right={
+                  <div className="home-filters" role="group" aria-label="Show projects">
+                    <button type="button" className={"home-chip" + (!archivedShown ? " on" : "")} aria-pressed={!archivedShown}
+                      onClick={() => setShowArchived(false)} data-testid="home-projects-active">Active</button>
+                    <button type="button" className={"home-chip" + (archivedShown ? " on" : "")} aria-pressed={archivedShown}
+                      onClick={() => setShowArchived(true)} data-testid="home-projects-archived">Archived {archived.size}</button>
+                  </div>
+                }>Projects</SectionLabel>
+              )}
+              {rows.length === 0 && <p className="faint">{archivedShown ? "No archived projects." : <>Every project is archived. <a href={href({ name: "new" })}>Create one</a>.</>}</p>}
               <section className="home-cards" aria-label="Projects">
                 {rows.map(({ p, active, waiting }) => (
-                  <a className="project-card" key={p.id} href={href({ name: "project", id: p.id })} data-testid="project-card">
+                  <a className={"project-card" + (p.archived_at ? " archived" : "")} key={p.id} href={href({ name: "project", id: p.id })} data-testid="project-card">
                     <div className="pc-name"><span className="ll-swatch" style={{ background: swatchFor(p.id) }} />{p.name}<span className="spacer" /><CountBadge n={waiting} tone="needs-you" /></div>
                     {p.goal && <div className="pc-goal">{p.goal}</div>}
                     <div className="meta">
                       <span>{active} {active === 1 ? "worker" : "workers"}</span>
                       {p.status && p.status !== "ready" && <span className={"pill " + (p.status === "failed" ? "red" : "yellow")}>{p.status}</span>}
                       <span className="spacer" />
-                      <span>{ago(p.updated_at)}</span>
+                      {p.archived_at ? <><span title={p.archived_at}>Archived {ago(p.archived_at)}</span><UnarchiveButton project={p} /></>
+                        : <span>{ago(p.updated_at)}</span>}
                     </div>
                   </a>
                 ))}

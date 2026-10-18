@@ -25,6 +25,10 @@ describe("leftListGroups", () => {
     const g = leftListGroups({ a: p("a", "A") }, { f1: t("f1", "a", "failed", "2026-10-07T00:00:00Z"), f2: t("f2", "a", "failed", "2026-10-01T00:00:00Z") }, {}, now);
     expect(g[0].workers.map((w) => [w.id, w.tone])).toEqual([["f1", "failed"]]);
   });
+  it("leaves archived projects out", () => {
+    const g = leftListGroups({ a: p("a", "A"), b: { ...p("b", "B"), archived_at: "2026-10-18T00:00:00Z" } }, { t1: t("t1", "b", "running") }, {});
+    expect(g.map((x) => x.project.id)).toEqual(["a"]);
+  });
   it("gives each project a stable color", () => {
     expect(swatchFor("quark")).toBe(swatchFor("quark"));
   });

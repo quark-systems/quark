@@ -8,8 +8,10 @@ export interface AttentionItem { key: string; kind: AttentionKind; title: string
 
 const time = (s: string | null | undefined) => s ?? "";
 
-/** Open decisions, open PRs with a failing check, and failed or blocked workers, oldest first. */
-export function attentionQueue(decisions: Record<string, Decision>, prs: Record<string, PullRequest>, tasks: Record<string, Task>): AttentionItem[] {
+/** Open decisions, open PRs with a failing check, and failed or blocked workers, oldest first.
+ * Items of projects in `hidden` (archived ones) are left out. */
+export function attentionQueue(decisions: Record<string, Decision>, prs: Record<string, PullRequest>, tasks: Record<string, Task>,
+  hidden: ReadonlySet<string> = new Set()): AttentionItem[] {
   const items: AttentionItem[] = [];
   const asked = new Set<string>();
   for (const d of Object.values(decisions)) {
@@ -26,7 +28,7 @@ export function attentionQueue(decisions: Record<string, Decision>, prs: Record<
     if ((t.state !== "failed" && t.state !== "blocked") || asked.has(t.id)) continue;
     items.push({ key: "worker:" + t.id, kind: "worker", title: t.title, projectId: t.project_id, since: t.updated_at, route: { name: "task", id: t.id } });
   }
-  return items.sort((a, b) => a.since.localeCompare(b.since) || a.key.localeCompare(b.key));
+  return items.filter((i) => !hidden.has(i.projectId)).sort((a, b) => a.since.localeCompare(b.since) || a.key.localeCompare(b.key));
 }
 
 /** The item the current route shows, if any. */

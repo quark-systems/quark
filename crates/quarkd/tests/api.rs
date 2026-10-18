@@ -1191,7 +1191,7 @@ async fn failed_provisioning_reports_the_step_and_can_be_retried() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"]["code"], "conflict");
-    let (status, _) = call(&h.app, "POST", &format!("/v1/projects/{id}:archive"), None).await;
+    let (status, _) = call(&h.app, "POST", &format!("/v1/projects/{id}:explode"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -1280,4 +1280,205 @@ async fn lists_forge_repositories() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body[0]["full_name"], "quark-systems/quark");
     assert_eq!(body[0]["ssh_url"], "git@github.com:quark-systems/quark.git");
+}
+
+fn worker(id: &str, state: TaskState) -> EngineTask {
+    EngineTask {
+        id: id.into(),
+        title: format!("Task {id}"),
+        worktree: Some(format!("/pool/{id}").into()),
+        ..task(state)
+    }
+}
+
+#[tokio::test]
+async fn archiving_stops_hides_and_unarchiving_brings_back() {
+    let h = harness().await;
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({
+            "name": "Old work",
+            "repos": [{"url": "https://github.com/quark-systems/quark.git"}],
+            "agent_config": {"harness": "claude-code"}
+        })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap().to_string();
+    settled(&h, &id).await;
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![
+            worker("a", TaskState::Running),
+            worker("b", TaskState::Done),
+        ],
+    });
+    let before = h.engine.writes().len();
+
+    let (status, p) = call(&h.app, "POST", &format!("/v1/projects/{id}:archive"), None).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert!(p["archived_at"].is_string(), "{p}");
+    // Only the open task is stopped; the done one has no worker.
+    assert_eq!(
+        h.engine.writes()[before..],
+        [StubWrite::Control {
+            task_id: "a".into(),
+            action: TaskControl::Cancel
+        }]
+    );
+    let (_, listed) = call(&h.app, "GET", "/v1/projects", None).await;
+    assert_eq!(listed, json!([]));
+    let (_, all) = call(&h.app, "GET", "/v1/projects?include_archived=true", None).await;
+    assert_eq!(all[0]["id"], id.as_str());
+
+    let (status, p) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/projects/{id}:unarchive"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert_eq!(p["archived_at"], Value::Null);
+    let (_, listed) = call(&h.app, "GET", "/v1/projects", None).await;
+    assert_eq!(listed[0]["id"], id.as_str());
+}
+
+#[tokio::test]
+async fn deleting_needs_the_name_keeps_unlanded_work_then_removes_quarks_files() {
+    let h = harness().await;
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({
+            "name": "Throwaway",
+            "repos": [{"url": "https://github.com/quark-systems/quark.git"}],
+            "agent_config": {"harness": "claude-code"}
+        })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap().to_string();
+    settled(&h, &id).await;
+    let home = h._home.path();
+    let workspace = home.join("workspaces").join(&id);
+    let repo = home.join("projects").join(format!("{id}.git"));
+    let beads = home.join("beads").join(&id);
+    std::fs::create_dir_all(&beads).unwrap();
+    std::fs::write(beads.join("quark-beads.json"), "{}").unwrap();
+    assert!(workspace.is_dir() && repo.is_dir());
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![
+            worker("a", TaskState::Running),
+            worker("b", TaskState::Done),
+        ],
+    });
+    let uri = format!("/v1/projects/{id}");
+
+    let (status, body) = call(
+        &h.app,
+        "DELETE",
+        &uri,
+        Some(json!({"confirm_name": "throwaway"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "confirm_mismatch");
+    let (_, p) = call(&h.app, "GET", &uri, None).await;
+    assert_eq!(
+        p["archived_at"],
+        Value::Null,
+        "a refused name changes nothing"
+    );
+
+    h.engine.set_unlanded("b", true);
+    let (status, body) = call(
+        &h.app,
+        "DELETE",
+        &uri,
+        Some(json!({"confirm_name": "Throwaway"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "unlanded_work");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Task b (uncommitted changes)"),
+        "{body}"
+    );
+    let (status, p) = call(&h.app, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(p["archived_at"].is_string(), "left archived: {p}");
+    assert!(workspace.is_dir() && repo.is_dir() && beads.is_dir());
+
+    h.engine.set_unlanded("b", false);
+    let mut ws = connect(h.addr, "").await;
+    let before = h.engine.writes().len();
+    let (status, body) = call(
+        &h.app,
+        "DELETE",
+        &uri,
+        Some(json!({"confirm_name": "Throwaway"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        h.engine.writes()[before..],
+        [
+            StubWrite::Control {
+                task_id: "a".into(),
+                action: TaskControl::Cancel
+            },
+            StubWrite::ReleaseWorktree {
+                task_id: "a".into()
+            },
+            StubWrite::ReleaseWorktree {
+                task_id: "b".into()
+            },
+            StubWrite::ForgetCoordinator {
+                project_id: id.clone()
+            },
+        ]
+    );
+    assert!(!workspace.exists() && !repo.exists() && !beads.exists());
+    let (status, _) = call(&h.app, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, all) = call(&h.app, "GET", "/v1/projects?include_archived=true", None).await;
+    assert_eq!(all, json!([]));
+    loop {
+        let e = next_event(&mut ws).await;
+        if e.event_type == EventType::ProjectDeleted {
+            assert_eq!(e.payload, json!({"id": id, "name": "Throwaway"}));
+            break;
+        }
+    }
+}
+
+#[tokio::test]
+async fn deleting_an_attached_project_leaves_its_workspace() {
+    let h = harness().await;
+    let mine = tempfile::tempdir().unwrap();
+    std::fs::write(mine.path().join("notes.md"), "mine").unwrap();
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Attached", "workspace_path": mine.path()})),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let (status, body) = call(
+        &h.app,
+        "DELETE",
+        &format!("/v1/projects/{id}"),
+        Some(json!({"confirm_name": "Attached"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        std::fs::read_to_string(mine.path().join("notes.md")).unwrap(),
+        "mine"
+    );
 }

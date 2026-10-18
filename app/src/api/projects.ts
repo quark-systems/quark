@@ -20,6 +20,8 @@ export interface Project {
   agent_config?: AgentConfig | null; dispatch_preset?: DispatchPreset | null; delivery?: DeliveryPolicy | null;
   /** PR center: merge this Project's green PRs without asking (the engine's yolo posture). */
   standing_approval?: boolean | null;
+  /** When it was archived: its agents are stopped and it is hidden until unarchived. */
+  archived_at?: string | null;
 }
 
 export interface CreateProject {
@@ -31,10 +33,16 @@ export interface Health { status: string; version: string; engine: string; last_
 export const projectsApi = {
   forgeRepositories: (refresh = false) => req<ForgeRepository[]>("GET", `/v1/forge/repositories${refresh ? "?refresh=true" : ""}`),
   health: () => req<Health>("GET", "/v1/health"),
-  projects: () => req<Project[]>("GET", "/v1/projects"),
+  /** Every project, archived ones too; screens hide those with `archived_at`. */
+  projects: () => req<Project[]>("GET", "/v1/projects?include_archived=true"),
   project: (id: string) => req<Project>("GET", `/v1/projects/${enc(id)}`),
   createProject: (p: CreateProject) => req<Project>("POST", "/v1/projects", p),
   provision: (id: string) => req<void>("POST", `/v1/projects/${enc(id)}:provision`),
+  archiveProject: (id: string) => req<Project>("POST", `/v1/projects/${enc(id)}:archive`),
+  unarchiveProject: (id: string) => req<Project>("POST", `/v1/projects/${enc(id)}:unarchive`),
+  /** Deletes the project and what Quark keeps for it; `confirmName` must be its name. */
+  deleteProject: (id: string, confirmName: string) =>
+    req<void>("DELETE", `/v1/projects/${enc(id)}`, { confirm_name: confirmName }),
   setStandingApproval: (projectId: string, on: boolean) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { standing_approval: on }),
 };

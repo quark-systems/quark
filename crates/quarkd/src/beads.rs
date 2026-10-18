@@ -434,6 +434,41 @@ impl Beads {
         }
     }
 
+    /// Starts tailing one Project's journal again (after it is unarchived),
+    /// when its database is ready.
+    pub fn watch_project(self: &Arc<Self>, store: Arc<Store>, home: PathBuf, project_id: &str) {
+        if Self::ready_dir(&home, project_id).is_ok() {
+            self.watch(store, home, project_id.to_string());
+        }
+    }
+
+    /// Stops tailing the Project's journal and running its sync rules.
+    pub fn unwatch(&self, project_id: &str) {
+        if let Some(tasks) = self.watchers.lock().unwrap().remove(project_id) {
+            tasks.iter().for_each(JoinHandle::abort);
+        }
+    }
+
+    /// Removes a deleted Project's database: stops watching it, asks `bd`
+    /// to stop its Dolt server, then deletes `<home>/beads/<project id>`.
+    pub async fn remove(&self, home: &Path, project_id: &str) -> Result<(), BeadsError> {
+        self.unwatch(project_id);
+        let dir = dir_of(home, project_id);
+        if !dir.exists() {
+            return Ok(());
+        }
+        if dir.join(".beads").is_dir() {
+            // Best effort: a server that is not running, or a bd without
+            // `dolt stop`, leaves nothing to stop.
+            if let Err(e) = self.bd(&dir, &["dolt", "stop"], &[]).await {
+                tracing::debug!(project = %project_id, error = %e, "bd dolt stop");
+            }
+        }
+        tokio::fs::remove_dir_all(&dir)
+            .await
+            .map_err(|e| BeadsError::Invalid(format!("removing {}: {e}", dir.display())))
+    }
+
     /// Tails one database's journal and runs its enabled sync rules
     /// periodically,
     /// until the daemon stops.

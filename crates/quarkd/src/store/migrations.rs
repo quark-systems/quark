@@ -43,6 +43,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     migration!("0016_issue_drafts"),
     migration!("0017_decision_beads"),
     migration!("0018_pr_conversation"),
+    migration!("0019_project_archive"),
 ];
 
 /// The schema version a fully migrated database has.
