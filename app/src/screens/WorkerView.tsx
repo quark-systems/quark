@@ -18,6 +18,7 @@ import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 import { useLabels } from "../persona";
 import { Dock } from "../shell/Dock";
 import { StatusDot, taskTone, TONE_LABEL } from "../ui";
+import { useDraft } from "../drafts";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
@@ -257,7 +258,7 @@ function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: strin
 
 function SteerBox({ taskId }: { taskId: string }) {
   const worker = useLabels(useStore((s) => s.tasks[taskId]?.project_id)).role("worker");
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`worker:${taskId}`);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
 

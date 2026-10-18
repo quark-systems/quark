@@ -17,6 +17,7 @@ import { useStore } from "../store";
 import { errText } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { DECIDER } from "../components/WhyThisAgent";
+import { useDraft } from "../drafts";
 
 type Tab = "rules" | "test";
 const VALID: HarnessValidation = { valid: true, errors: [], warnings: [] };
@@ -117,7 +118,7 @@ export function Dispatch({ project: pid }: { project: string }) {
     }
   };
 
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useDraft(`dispatch-test:${pid}`);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<{ result: DispatchTest; draft: boolean } | null>(null);
   const [testErr, setTestErr] = useState<string | null>(null);

@@ -11,6 +11,7 @@ import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import "./settings.css";
 import "./automation.css";
+import { useDraft } from "../../drafts";
 
 const POSTURES: AwayPosture[] = ["present", "away", "quiet"];
 const OCCASIONS: [AwayOccasion, string][] = [
@@ -57,7 +58,7 @@ export function Automation({ project: pid }: { project: string }) {
 }
 
 function InboxSection({ pid, a, reload }: { pid: string; a: ProjectAutomation; reload: () => Promise<void> }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`inbox-note:${pid}`);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [sent, setSent] = useState(false);

@@ -72,6 +72,27 @@ test("the board updates live when the coordinator queues a task", async ({ page 
   await expect(page.getByTestId("col-queued")).toContainText("Add tests for the parser");
 });
 
+test("drafts in message boxes survive leaving the view and reloading the app", async ({ page }) => {
+  await open(page, "#/p/quark");
+  const box = page.getByTestId("coordinator-chat").getByLabel("Message the coordinator");
+  await box.fill("Half-written plan\nsecond line");
+  await page.getByTestId("nav-work").click();
+  await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
+  await expect(page).toHaveURL(/#\/t\//);
+  const steer = page.getByLabel("Message the worker");
+  await steer.fill("Unsent note for the worker");
+  // Quitting and relaunching the app reloads the page from the same storage.
+  await page.reload();
+  await expect(page.getByLabel("Message the worker")).toHaveValue("Unsent note for the worker");
+  await open(page, "#/p/quark");
+  await expect(page.getByTestId("coordinator-chat").getByLabel("Message the coordinator")).toHaveValue("Half-written plan\nsecond line");
+  // Sending clears the draft for good.
+  await page.getByTestId("coordinator-chat").getByLabel("Message the coordinator").press("Enter");
+  await expect(page.getByTestId("coordinator-chat").getByLabel("Message the coordinator")).toHaveValue("");
+  await page.reload();
+  await expect(page.getByTestId("coordinator-chat").getByLabel("Message the coordinator")).toHaveValue("");
+});
+
 test("coordinator chat: workers started and questions asked show as cards", async ({ page }) => {
   await open(page, "#/p/quark");
   const chat = page.getByTestId("coordinator-chat");
