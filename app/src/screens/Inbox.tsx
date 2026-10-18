@@ -10,6 +10,7 @@ import { upsertDecision, useStore } from "../store";
 import { inboxList, nextAfterAnswer, step } from "../inbox";
 import { ago, errText, savedUser, saveUser } from "../util";
 import { Unavailable } from "../components/Unavailable";
+import { useDraft } from "../drafts";
 
 export function Inbox({ id }: { id?: string }) {
   const decisions = useStore((s) => s.decisions);
@@ -120,7 +121,7 @@ function DecisionDetail({ d, answerBox, onAnswered }: {
 }) {
   const project = useStore((s) => s.projects[d.project_id]);
   const task = useStore((s) => (d.task_id ? s.tasks[d.task_id] : undefined));
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`decision:${d.id}`);
   const [user, setUser] = useState(savedUser);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);

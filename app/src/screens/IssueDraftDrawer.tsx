@@ -6,6 +6,7 @@ import { api, BeadsStatus, DraftIssue, Issue, IssueDraft } from "../api";
 import { loadIssueDrafts, upsertIssueDraft, useStore } from "../store";
 import { draftBlockers, openDraft, parseLabels, pushedTo } from "../issues";
 import { errText } from "../util";
+import { useDraft } from "../drafts";
 
 export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated }: {
   pid: string; beads: BeadsStatus; issues: Issue[]; seed: string | null;
@@ -15,7 +16,7 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
   // The draft this drawer works on: the one it started, else the Project's open one.
   const [draftId, setDraftId] = useState<string | null>(null);
   const draft: IssueDraft | undefined = draftId ? drafts[draftId] : openDraft(Object.values(drafts), pid);
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`issue-draft:${pid}`);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);

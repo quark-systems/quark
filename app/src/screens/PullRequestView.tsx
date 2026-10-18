@@ -15,6 +15,7 @@ import { StandingApproval } from "../components/StandingApproval";
 import { EvidencePanel, EvidenceSummary } from "../components/Evidence";
 import { Unavailable } from "../components/Unavailable";
 import { evidenceOutcome, checkOutcome, checksMeta, mergeBlocker, prStateMeta, prTitle, reviewLabel, reviewMeta, sortChecks } from "../prs";
+import { useDraft } from "../drafts";
 
 export function PullRequestView({ id }: { id: string }) {
   const pr = useStore((s) => s.pullRequests[id]);
@@ -95,7 +96,7 @@ export function PullRequestView({ id }: { id: string }) {
           <div className="tab-body" hidden={tab !== "diff"}>
             <DiffPanel pr={pr} comments={comments} focus={focus}
               onComment={pr.state === "merged" || pr.state === "closed" ? undefined : onComment} />
-            {pr.state !== "merged" && pr.state !== "closed" && <PrCommentBox onSend={(text) => comment({ text })} />}
+            {pr.state !== "merged" && pr.state !== "closed" && <PrCommentBox prId={pr.id} onSend={(text) => comment({ text })} />}
           </div>
           <div className="tab-body" hidden={tab !== "evidence"}>
             <EvidencePanel prId={pr.id} ev={pr.evidence} />
@@ -211,8 +212,8 @@ function DiffPanel({ pr, comments, onComment, focus }: {
   );
 }
 
-function PrCommentBox({ onSend }: { onSend: (body: string) => Promise<void> }) {
-  const [text, setText] = useState("");
+function PrCommentBox({ prId, onSend }: { prId: string; onSend: (body: string) => Promise<void> }) {
+  const [text, setText] = useDraft(`pr-comment:${prId}`);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const send = async () => {

@@ -10,6 +10,7 @@ import { WorkerCard } from "../components/WorkerCard";
 import { lastId, PendingMessage, stillPending, Transcript, UserMessage } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
 import { useLabels } from "../persona";
+import { useDraft } from "../drafts";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
 
@@ -101,7 +102,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const items = loaded ?? EMPTY;
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`coordinator:${cid}`);
   const [sending, setSending] = useState(false);
   // Sent messages are not echoed: they appear once the coordinator's session records them.
   const [pending, setPending] = useState<PendingMessage[]>([]);

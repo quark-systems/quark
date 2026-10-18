@@ -12,6 +12,7 @@ import {
   askedBy, blockLabels, decidedByAgent, decisionLabel, joinAnd, LIFECYCLE, lifecycleStep, ruleDraft, usesOf,
 } from "../decisions";
 import { Button, ButtonLink } from "./button";
+import { useDraft, writeDraft } from "../drafts";
 
 export type DecisionCardSize = "inline" | "full" | "phone";
 
@@ -60,6 +61,8 @@ export function DecisionCard({ d, size, onAnswered, answerBox }: {
         answer: answer.trim(), answered_by: savedUser().trim() || null, via: size === "phone" ? "phone" : "app",
         why: extra.why?.trim() || null, make_rule: extra.make_rule?.trim() || null,
       });
+      // The form goes away once answered, so its drafts are cleared here.
+      writeDraft(`decision:${d.id}`, ""); writeDraft(`decision-why:${d.id}`, "");
       upsertDecision(r);
       onAnswered?.(r);
     } catch (e) {
@@ -180,8 +183,8 @@ function AnswerForm({ d, send, answerBox, ...status }: {
   const opts = options(d);
   const [pick, setPick] = useState<string>(d.brief?.recommended && opts.some((o) => o.label === d.brief?.recommended)
     ? d.brief.recommended : opts[0]?.label ?? OTHER);
-  const [other, setOther] = useState("");
-  const [why, setWhy] = useState("");
+  const [other, setOther] = useDraft(`decision:${d.id}`);
+  const [why, setWhy] = useDraft(`decision-why:${d.id}`);
   const [makeRule, setMakeRule] = useState(false);
   const [rule, setRule] = useState("");
   const answer = pick === OTHER ? other : pick;
