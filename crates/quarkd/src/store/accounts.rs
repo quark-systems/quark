@@ -317,6 +317,7 @@ fn active_leases(c: &rusqlite::Connection) -> Result<HashMap<String, u32>> {
              UNION ALL
              SELECT coordinator_account_id FROM projects
              WHERE coordinator_account_id IS NOT NULL AND status != 'failed'
+                 AND archived_at IS NULL
          ) GROUP BY account_id"
     ))?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?;

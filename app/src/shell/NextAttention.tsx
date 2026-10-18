@@ -4,12 +4,14 @@ import { go, parseRoute, Route, useRoute } from "../nav";
 import { useStore } from "../store";
 import { Kbd } from "../ui";
 import { attentionQueue, AttentionItem, nextAttention } from "./attention";
+import { archivedIds } from "./groups";
 
 export function useAttention(): AttentionItem[] {
   const decisions = useStore((s) => s.decisions);
   const prs = useStore((s) => s.pullRequests);
   const tasks = useStore((s) => s.tasks);
-  return useMemo(() => attentionQueue(decisions, prs, tasks), [decisions, prs, tasks]);
+  const projects = useStore((s) => s.projects);
+  return useMemo(() => attentionQueue(decisions, prs, tasks, archivedIds(projects)), [decisions, prs, tasks, projects]);
 }
 
 /** Opens the next item; returns false when nothing waits. */

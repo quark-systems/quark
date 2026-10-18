@@ -59,6 +59,15 @@ export const initialState: AppState = {
   beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null, notices: [],
 };
 
+/** The state without a deleted project and its workers, decisions and pull requests. */
+function withoutProject(s: AppState, id: unknown): AppState {
+  if (typeof id !== "string" || !(id in s.projects)) return s;
+  const keep = <T extends { project_id?: string | null }>(r: Record<string, T>) =>
+    Object.fromEntries(Object.entries(r).filter(([, v]) => v.project_id !== id));
+  const { [id]: _gone, ...projects } = s.projects;
+  return { ...s, projects, tasks: keep(s.tasks), decisions: keep(s.decisions), pullRequests: keep(s.pullRequests) };
+}
+
 function upsertById<T extends { id: string | number }>(list: T[] | undefined, item: T): T[] {
   const cur = list ?? [];
   const i = cur.findIndex((x) => x.id === item.id);
@@ -76,6 +85,8 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
   switch (e.type) {
     case "project.updated":
       return { ...s, projects: { ...s.projects, [p.id]: { ...s.projects[p.id], ...p } } };
+    case "project.deleted":
+      return withoutProject(s, p?.id);
     case "task.created":
       return { ...s, tasks: { ...s.tasks, [p.id]: { ...s.tasks[p.id], ...p } } };
     case "task.state_changed": {
@@ -396,6 +407,12 @@ export function setIssueSeed(seed: AppState["issueSeed"]) {
 
 export function addProject(p: Project) {
   set({ projects: { ...state.projects, [p.id]: p } });
+}
+
+/** Forgets a deleted project, as its `project.deleted` event would. */
+export function removeProject(id: string) {
+  const next = withoutProject(state, id);
+  if (next !== state) commit(next);
 }
 
 // ---- event stream ----

@@ -11,6 +11,7 @@ mod error;
 mod events;
 mod harnesses;
 mod hosts;
+mod lifecycle;
 mod memory;
 mod metrics;
 mod openapi;
@@ -144,6 +145,10 @@ const MODULES: &[Module] = &[
     Module {
         router: shadows::router,
         openapi: <shadows::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: lifecycle::router,
+        openapi: <lifecycle::Api as OpenApi>::openapi,
     },
 ];
 

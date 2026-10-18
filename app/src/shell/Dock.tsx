@@ -50,7 +50,7 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
   const tasks = useStore((s) => s.tasks);
   const pullRequests = useStore((s) => s.pullRequests);
   const decisions = useStore((s) => s.decisions);
-  const sorted = useMemo(() => Object.values(projects).sort((a, b) => a.name.localeCompare(b.name)), [projects]);
+  const sorted = useMemo(() => Object.values(projects).filter((p) => !p.archived_at).sort((a, b) => a.name.localeCompare(b.name)), [projects]);
   const fallback = lastProject && projects[lastProject] ? lastProject : sorted[0]?.id ?? null;
   const ctx = dockContext(route, { tasks, pullRequests, decisions }, fallback);
   const [picked, setPicked] = useState<string | null>(null);

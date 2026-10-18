@@ -1185,8 +1185,19 @@
         "tags": [
           "projects"
         ],
-        "summary": "List Projects.",
+        "summary": "List Projects. Archived ones are left out unless `include_archived`.",
         "operationId": "list_projects",
+        "parameters": [
+          {
+            "name": "include_archived",
+            "in": "query",
+            "description": "Also list archived Projects (those with `archived_at`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1270,6 +1281,79 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a Project and everything Quark keeps for it.",
+        "description": "`confirm_name` must be the Project's name. The Project is archived and\nits agents stopped first; then each worker's worktree is given back,\nand a worktree with uncommitted changes or unpushed commits stops the\ndelete (409 `unlanded_work`) before anything is removed. Quark's own\nworkspace, Project repo and Beads database for the Project are removed;\na workspace that was attached rather than made by Quark is left as it\nis. Emits `project.deleted`.",
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The Project is deleted"
+          },
+          "400": {
+            "description": "`confirm_name` is not the Project's name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still provisioning, or a worktree holds work that has not landed; the Project is archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine could not stop an agent or give a worktree back; the Project is archived",
             "content": {
               "application/json": {
                 "schema": {
@@ -3292,6 +3376,67 @@
         }
       }
     },
+    "/v1/projects/{id}:archive": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Archive a Project: stop its coordinator and workers and hide it.",
+        "description": "Repeating it stops anything still running again.",
+        "operationId": "archive_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Project is still being provisioned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine could not stop an agent; the Project is archived and archiving again retries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}:provision": {
       "post": {
         "tags": [
@@ -3332,6 +3477,46 @@
           },
           "409": {
             "description": "The Project is not in a failed state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}:unarchive": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Bring an archived Project back. Its coordinator starts again in its\nlatest conversation; workers stopped by archiving stay stopped.",
+        "operationId": "unarchive_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6171,6 +6356,18 @@
           "acted"
         ]
       },
+      "DeleteProject": {
+        "type": "object",
+        "description": "Delete a Project. `confirm_name` must be the Project's name exactly, so a\nProject is never deleted by its id alone.",
+        "required": [
+          "confirm_name"
+        ],
+        "properties": {
+          "confirm_name": {
+            "type": "string"
+          }
+        }
+      },
       "DeliveryPolicy": {
         "type": "string",
         "description": "How a Project's changes reach a pull request.",
@@ -7184,6 +7381,7 @@
         "description": "Every event type the stream can carry. The daemon emits the project, task\nand decision events; the rest are reserved so clients can be generated now.",
         "enum": [
           "project.updated",
+          "project.deleted",
           "task.created",
           "task.state_changed",
           "task.event",
@@ -9409,6 +9607,13 @@
               }
             ]
           },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the Project was archived. An archived Project's coordinator and\nworkers are stopped and it is left out of `GET /v1/projects` unless\nasked for; its data is kept until it is unarchived or deleted."
+          },
           "created_at": {
             "type": "string"
           },
@@ -9518,6 +9723,22 @@
             "items": {
               "$ref": "#/components/schemas/TriggerRule"
             }
+          }
+        }
+      },
+      "ProjectDeleted": {
+        "type": "object",
+        "description": "Payload of `project.deleted`: the Project is gone with everything Quark\nkept for it.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },

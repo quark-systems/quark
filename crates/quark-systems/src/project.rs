@@ -28,8 +28,28 @@ pub struct Project {
     /// asking. Maps to the engine's merge posture for the Project's repos.
     #[serde(default)]
     pub standing_approval: bool,
+    /// When the Project was archived. An archived Project's coordinator and
+    /// workers are stopped and it is left out of `GET /v1/projects` unless
+    /// asked for; its data is kept until it is unarchived or deleted.
+    #[serde(default)]
+    pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Delete a Project. `confirm_name` must be the Project's name exactly, so a
+/// Project is never deleted by its id alone.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct DeleteProject {
+    pub confirm_name: String,
+}
+
+/// Payload of `project.deleted`: the Project is gone with everything Quark
+/// kept for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ProjectDeleted {
+    pub id: String,
+    pub name: String,
 }
 
 /// Create a Project.

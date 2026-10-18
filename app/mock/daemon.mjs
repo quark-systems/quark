@@ -109,6 +109,7 @@ function addProject(p) {
     repos: (p.repos ?? []).map((r) => ({ url: r.url, name: r.name ?? r.url.replace(/\.git$/, "").split(/[/:]/).pop() })),
     agent_config: p.agent_config ?? null, dispatch_preset: p.dispatch_preset ?? "single", delivery: p.delivery ?? "gated",
     status: p.status ?? "ready", status_detail: p.status_detail ?? null, standing_approval: p.standing_approval ?? false,
+    archived_at: p.archived_at ?? null,
   };
   projects.set(proj.id, proj);
   chats.set(proj.id, []);
@@ -1334,7 +1335,10 @@ const server = http.createServer(async (req, res) => {
   let r;
 
   if (req.method === "GET" && p === "/v1/health") return send(res, 200, { status: "ok", version: "mock", engine: "mock", last_seq: seq });
-  if (p === "/v1/projects" && req.method === "GET") return send(res, 200, [...projects.values()]);
+  if (p === "/v1/projects" && req.method === "GET") {
+    const all = url.searchParams.get("include_archived") === "true";
+    return send(res, 200, [...projects.values()].filter((x) => all || !x.archived_at));
+  }
   if (p === "/v1/projects" && req.method === "POST") {
     const b = await readJson(req);
     if (!b || typeof b.name !== "string" || !b.name.trim()) return invalid(res, "name is required");
@@ -1343,6 +1347,24 @@ const server = http.createServer(async (req, res) => {
     if (proj.repos.length) provision(proj);
     setupBeads(proj);
     return send(res, 201, proj);
+  }
+  // Archive, unarchive and delete: quarkd stops the project's agents too; the mock only marks it.
+  if ((r = m(/^\/v1\/projects\/([^/:]+):(archive|unarchive)$/)) && req.method === "POST") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    proj.archived_at = r[2] === "archive" ? (proj.archived_at ?? now()) : null;
+    proj.updated_at = now();
+    emit("project.updated", { ...proj }, proj.id);
+    return send(res, 200, proj);
+  }
+  if ((r = m(/^\/v1\/projects\/([^/:]+)$/)) && req.method === "DELETE") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const b = await readJson(req);
+    if (b?.confirm_name?.trim() !== proj.name) return send(res, 400, { error: { code: "confirm_mismatch", message: "type the Project's name exactly to delete it" } });
+    projects.delete(proj.id);
+    emit("project.deleted", { id: proj.id, name: proj.name }, proj.id);
+    return send(res, 204);
   }
   if ((r = m(/^\/v1\/projects\/([^/:]+)(:provision)?$/))) {
     const proj = projects.get(decodeURIComponent(r[1]));

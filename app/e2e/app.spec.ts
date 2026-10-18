@@ -1305,3 +1305,38 @@ test("worker view: the work pane's edge drags wider, is remembered, and resets o
   await page.getByTestId("pane-resizer").dblclick();
   await expect.poll(async () => (await pane.boundingBox())!.width).toBeCloseTo(before, -1);
 });
+
+test("project lifecycle: archive hides a project, Archived brings it back, delete needs its name", async ({ page, request }) => {
+  const proj = await (await request.post("http://127.0.0.1:7392/v1/projects", { data: { name: "Old experiment" } })).json();
+  await open(page, `#/p/${proj.id}/settings`);
+  const list = page.getByRole("navigation", { name: "Projects" });
+  await expect(list.getByRole("region", { name: "Old experiment" })).toBeVisible();
+
+  const life = page.getByTestId("settings-lifecycle");
+  await life.getByTestId("archive-project").click();
+  await expect(page.getByTestId("project-archived")).toBeVisible();
+  await expect(list.getByRole("region", { name: "Old experiment" })).toHaveCount(0);
+
+  // All projects hides it unless Archived is chosen, where it can be brought back.
+  await open(page, "#/");
+  await expect(page.getByTestId("project-card").filter({ hasText: "Old experiment" })).toHaveCount(0);
+  await page.getByTestId("home-projects-archived").click();
+  const card = page.getByTestId("project-card").filter({ hasText: "Old experiment" });
+  await expect(card).toContainText("Archived");
+  await card.getByTestId("unarchive-project").click();
+  await expect(list.getByRole("region", { name: "Old experiment" })).toBeVisible();
+
+  // Delete is offered only once the name is typed exactly.
+  await open(page, `#/p/${proj.id}/settings`);
+  await life.getByTestId("delete-project").click();
+  const confirm = life.getByTestId("delete-confirm");
+  await expect(confirm).toBeDisabled();
+  await life.getByTestId("delete-confirm-name").fill("old experiment");
+  await expect(confirm).toBeDisabled();
+  await life.getByTestId("delete-confirm-name").fill("Old experiment");
+  await confirm.click();
+  await expect(page).toHaveURL(/#\/$/);
+  await expect(list.getByRole("region", { name: "Old experiment" })).toHaveCount(0);
+  const all = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects?include_archived=true")).json());
+  expect(all.map((p: any) => p.id)).not.toContain(proj.id);
+});

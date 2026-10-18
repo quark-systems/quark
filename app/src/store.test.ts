@@ -48,6 +48,19 @@ describe("applyEvent", () => {
     expect(s.projects.p1.status).toBe("ready");
   });
 
+  it("forgets a deleted project with its workers and decisions", () => {
+    let s = applyEvent(initialState, ev(1, "project.updated", { id: "p1", name: "P", created_at: "", updated_at: "" }));
+    s = applyEvent(s, ev(2, "project.updated", { id: "p2", name: "Q", created_at: "", updated_at: "" }));
+    s = applyEvent(s, ev(3, "task.created", { id: "t1", project_id: "p1", title: "a", state: "running", created_at: "", updated_at: "" }));
+    s = applyEvent(s, ev(4, "task.created", { id: "t2", project_id: "p2", title: "b", state: "running", created_at: "", updated_at: "" }));
+    s = applyEvent(s, ev(5, "decision.opened", { id: "d1", project_id: "p1", question: "?", state: "open", opened_at: "" }));
+    s = applyEvent(s, ev(6, "project.deleted", { id: "p1", name: "P" }));
+    expect(Object.keys(s.projects)).toEqual(["p2"]);
+    expect(Object.keys(s.tasks)).toEqual(["t2"]);
+    expect(s.decisions).toEqual({});
+    expect(applyEvent(s, ev(7, "project.deleted", { id: "p1", name: "P" }))).toBe(s);
+  });
+
   const entry = { role: "assistant", text: "working", is_error: false, truncated: false, ts: null };
 
   it("appends coordinator entries only to a loaded chat, keyed by the event seq", () => {

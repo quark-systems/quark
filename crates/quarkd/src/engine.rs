@@ -27,7 +27,7 @@ pub mod native_project;
 pub mod native_verify;
 pub mod shadow;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -569,6 +569,42 @@ pub trait EngineAdapter: Send + Sync {
     ) -> Result<HashMap<String, String>, EngineError> {
         Ok(HashMap::new())
     }
+
+    /// Give a stopped task's worktree back for good, as when its Project is
+    /// deleted. A worktree holding work that has not landed is kept and
+    /// reported, never discarded. An engine that cannot give worktrees back
+    /// refuses.
+    async fn release_worktree(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+    ) -> Result<WorktreeRelease, EngineError> {
+        Err(EngineError::Invalid(
+            "this engine cannot give a worker's worktree back".into(),
+        ))
+    }
+
+    /// Drop the engine's record of a deleted Project's coordinator, so
+    /// nothing starts it again. Engines without records have nothing to do.
+    async fn forget_coordinator(
+        &self,
+        _command: &Path,
+        _project_id: &str,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+/// How [`EngineAdapter::release_worktree`] went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeRelease {
+    /// Given back, or the task had none.
+    Returned,
+    /// Kept: it has uncommitted changes or commits on no remote.
+    Kept {
+        uncommitted: bool,
+        unpushed_commits: u32,
+    },
 }
 
 /// Why an engine without native dispatch refuses to start a task.
@@ -662,6 +698,12 @@ pub enum StubWrite {
         task_id: String,
         rule: String,
     },
+    ReleaseWorktree {
+        task_id: String,
+    },
+    ForgetCoordinator {
+        project_id: String,
+    },
 }
 
 /// In-memory adapter. Every workspace sees the same configurable state.
@@ -688,6 +730,8 @@ pub struct StubEngine {
     description_resolution: Mutex<Option<Result<EngineResolution, String>>>,
     /// Descriptions the dispatch resolution ran for, in order.
     described: Mutex<Vec<String>>,
+    /// Engine task ids whose worktree holds work that has not landed.
+    unlanded: Mutex<HashSet<String>>,
     /// The brief per engine task id.
     briefs: Mutex<HashMap<String, EngineBrief>>,
 }
@@ -764,6 +808,17 @@ impl StubEngine {
     /// Descriptions the dispatch resolution ran for, oldest first.
     pub fn described(&self) -> Vec<String> {
         self.described.lock().unwrap().clone()
+    }
+
+    /// Make the engine task's worktree hold work that has not landed, so
+    /// releasing it keeps it.
+    pub fn set_unlanded(&self, task_id: &str, unlanded: bool) {
+        let mut set = self.unlanded.lock().unwrap();
+        if unlanded {
+            set.insert(task_id.to_string());
+        } else {
+            set.remove(task_id);
+        }
     }
 
     /// Writes received so far, oldest first.
@@ -868,6 +923,35 @@ impl EngineAdapter for StubEngine {
         self.accept(StubWrite::Control {
             task_id: task_id.into(),
             action: action.clone(),
+        })
+    }
+
+    async fn release_worktree(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<WorktreeRelease, EngineError> {
+        self.accept(StubWrite::ReleaseWorktree {
+            task_id: task_id.into(),
+        })?;
+        Ok(if self.unlanded.lock().unwrap().contains(task_id) {
+            WorktreeRelease::Kept {
+                uncommitted: true,
+                unpushed_commits: 0,
+            }
+        } else {
+            WorktreeRelease::Returned
+        })
+    }
+
+    async fn forget_coordinator(
+        &self,
+        _command: &Path,
+        project_id: &str,
+    ) -> Result<(), EngineError> {
+        self.coordinators.lock().unwrap().remove(project_id);
+        self.accept(StubWrite::ForgetCoordinator {
+            project_id: project_id.into(),
         })
     }
 

@@ -12,9 +12,9 @@ use std::sync::Mutex;
 use crate::engine::{FleetSnapshot, Hold, StatusEntry};
 use quark_systems::{
     AgentConfig, CreateProject, Decision, DecisionBrief, DecisionState, DeliveryPolicy,
-    DispatchPreset, DispatchRecord, DispatchTrigger, Event, EventType, Project, ProjectStatus,
-    RepoSource, Task, TaskEvent, TaskKind, TaskState, TranscriptEntry, TranscriptItem,
-    UpdateProject,
+    DispatchPreset, DispatchRecord, DispatchTrigger, Event, EventType, Project, ProjectDeleted,
+    ProjectStatus, RepoSource, Task, TaskEvent, TaskKind, TaskState, TranscriptEntry,
+    TranscriptItem, UpdateProject,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tokio::sync::broadcast;
@@ -228,11 +228,78 @@ impl Store {
 
     // Projects
 
+    /// Active Projects: every one not archived. Background work (recovery,
+    /// refreshes, triggers, Beads) runs over these only.
     pub fn list_projects(&self) -> Result<Vec<Project>> {
+        self.list_projects_where(false)
+    }
+
+    /// Every Project, archived ones too.
+    pub fn list_all_projects(&self) -> Result<Vec<Project>> {
+        self.list_projects_where(true)
+    }
+
+    fn list_projects_where(&self, archived: bool) -> Result<Vec<Project>> {
         self.read(|c| {
-            let mut stmt = c.prepare(&format!("{PROJECT_SELECT} ORDER BY created_at, id"))?;
+            let filter = if archived {
+                ""
+            } else {
+                " WHERE archived_at IS NULL"
+            };
+            let mut stmt =
+                c.prepare(&format!("{PROJECT_SELECT}{filter} ORDER BY created_at, id"))?;
             let rows = stmt.query_map([], project_from_row)?;
             Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    /// Archives the Project, or brings it back with `archived` false.
+    /// Repeating either is a no-op that still returns the Project.
+    pub fn set_project_archived(&self, id: &str, archived: bool) -> Result<Project> {
+        self.write(|tx, events| {
+            let mut project = get_project(tx, id)?;
+            if project.archived_at.is_some() == archived {
+                return Ok(project);
+            }
+            let now = now_rfc3339();
+            project.archived_at = archived.then(|| now.clone());
+            project.updated_at = now;
+            tx.execute(
+                "UPDATE projects SET archived_at = ?2, updated_at = ?3 WHERE id = ?1",
+                params![project.id, project.archived_at, project.updated_at],
+            )?;
+            append_event(
+                tx,
+                events,
+                Some(&project.id),
+                EventType::ProjectUpdated,
+                serde_json::to_value(&project)?,
+            )?;
+            Ok(project)
+        })
+    }
+
+    /// Removes the Project and every row Quark keeps for it: tasks and their
+    /// activity, decisions, rules, pull requests, memory proposals, drafts,
+    /// dispatch records and adapter calls. The event history stays, ending
+    /// with `project.deleted`.
+    pub fn delete_project(&self, id: &str) -> Result<()> {
+        self.write(|tx, events| {
+            let project = get_project(tx, id)?;
+            tx.execute("DELETE FROM dispatch_records WHERE project_id = ?1", [id])?;
+            tx.execute("DELETE FROM adapter_calls WHERE project_id = ?1", [id])?;
+            tx.execute("DELETE FROM projects WHERE id = ?1", [id])?;
+            append_event(
+                tx,
+                events,
+                Some(id),
+                EventType::ProjectDeleted,
+                serde_json::to_value(ProjectDeleted {
+                    id: project.id,
+                    name: project.name,
+                })?,
+            )?;
+            Ok(())
         })
     }
 
@@ -268,6 +335,7 @@ impl Store {
                 delivery: input.delivery,
                 project_repo_path: None,
                 standing_approval: false,
+                archived_at: None,
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -1561,7 +1629,7 @@ fn new_id(prefix: &str) -> String {
 
 const PROJECT_SELECT: &str = "SELECT id, name, goal, workspace_path, created_at, updated_at, \
                               status, status_detail, spec, project_repo_path, \
-                              standing_approval FROM projects";
+                              standing_approval, archived_at FROM projects";
 
 /// The creation inputs kept with a Project row.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -1612,6 +1680,7 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         delivery: spec.delivery,
         project_repo_path: r.get(9)?,
         standing_approval: r.get(10)?,
+        archived_at: r.get(11)?,
     })
 }
 

@@ -67,7 +67,7 @@ use serde::Serialize;
 
 use super::{
     EngineAdapter, EngineBrief, EngineError, EngineResolution, EngineSpawn, FleetSnapshot, Hold,
-    SourceRepo, StatusTail, TaskControl, WorkspacePlan, WorkspaceRef,
+    SourceRepo, StatusTail, TaskControl, WorkspacePlan, WorkspaceRef, WorktreeRelease,
 };
 
 /// The variable holding startup slice modes, such as `1=shadow`.
@@ -901,6 +901,26 @@ impl EngineAdapter for ShadowEngine {
             |e| e.coordinator_terminals(command),
         )
         .await
+    }
+
+    async fn release_worktree(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+    ) -> Result<WorktreeRelease, EngineError> {
+        self.acting(Slice::Supervision)
+            .release_worktree(ws, task_id)
+            .await
+    }
+
+    async fn forget_coordinator(
+        &self,
+        command: &Path,
+        project_id: &str,
+    ) -> Result<(), EngineError> {
+        self.acting(Slice::Supervision)
+            .forget_coordinator(command, project_id)
+            .await
     }
 }
 

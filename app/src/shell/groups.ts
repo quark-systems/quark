@@ -33,14 +33,19 @@ export function listed(t: Task, now: number): boolean {
   return isActive(t.state) || (t.state === "failed" && now - Date.parse(t.updated_at) < FAILED_SHOWN_MS);
 }
 
-/** Projects by name, each with its listed workers, newest activity first. */
+/** Ids of archived projects, which the left list, home and attention queue leave out. */
+export function archivedIds(projects: Record<string, Project>): Set<string> {
+  return new Set(Object.values(projects).filter((p) => p.archived_at).map((p) => p.id));
+}
+
+/** Projects by name, each with its listed workers, newest activity first. Archived projects are left out. */
 export function leftListGroups(projects: Record<string, Project>, tasks: Record<string, Task>, decisions: Record<string, Decision>, now = Date.now()): ProjectGroup[] {
   const byProject: Record<string, Task[]> = {};
   for (const t of Object.values(tasks)) if (listed(t, now)) (byProject[t.project_id] ??= []).push(t);
   const waitingBy: Record<string, number> = {};
   for (const d of Object.values(decisions)) if (d.state === "open") waitingBy[d.project_id] = (waitingBy[d.project_id] ?? 0) + 1;
 
-  return Object.values(projects).sort((a, b) => a.name.localeCompare(b.name)).map((p) => {
+  return Object.values(projects).filter((p) => !p.archived_at).sort((a, b) => a.name.localeCompare(b.name)).map((p) => {
     const ws = (byProject[p.id] ?? []).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     const waiting = waitingBy[p.id] ?? 0;
     const parts = [waiting ? plural(waiting, "decision") : null, ws.length ? plural(ws.length, "worker") : null].filter(Boolean);

@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use quark_core::worker::{WorkerEnvelope, WorkerMessage};
+use quark_core::worktree::ReturnOutcome;
 use quark_core::{
     replay, CoreError, Event, EventLog, ProjectId, ReadModel, Seq, Slice, SliceMode, SliceSwitch,
     TaskId,
@@ -38,7 +39,7 @@ use super::native_verify::NativeVerify;
 use super::{
     EngineAdapter, EngineBrief, EngineError, EngineResolution, EngineSpawn, EngineTask,
     FleetSnapshot, Hold, NewTask, SourceRepo, StatusEntry, StatusTail, TaskControl, TaskStart,
-    WorkspacePlan, WorkspaceRef,
+    WorkspacePlan, WorkspaceRef, WorktreeRelease,
 };
 
 /// `state_source` of every task this engine reports.
@@ -509,6 +510,38 @@ impl EngineAdapter for NativeEngine {
         match &self.project {
             Some(p) => p.coordinator_terminals(command),
             None => Ok(HashMap::new()),
+        }
+    }
+
+    async fn release_worktree(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+    ) -> Result<WorktreeRelease, EngineError> {
+        match self
+            .supervisor
+            .teardown(&project(ws), &task_id(task)?)
+            .await
+        {
+            Ok(ReturnOutcome::Returned) | Err(CoreError::NotFound(_)) => {
+                Ok(WorktreeRelease::Returned)
+            }
+            Ok(ReturnOutcome::Kept { work }) => Ok(WorktreeRelease::Kept {
+                uncommitted: work.uncommitted,
+                unpushed_commits: work.unpushed_commits,
+            }),
+            Err(e) => Err(engine_error(e)),
+        }
+    }
+
+    async fn forget_coordinator(
+        &self,
+        command: &Path,
+        project_id: &str,
+    ) -> Result<(), EngineError> {
+        match &self.project {
+            Some(p) => p.forget_coordinator(command, project_id),
+            None => Ok(()),
         }
     }
 
