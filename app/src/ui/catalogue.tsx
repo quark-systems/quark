@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -33,6 +33,19 @@ const SAMPLE: Decision = {
 function FolderPickerExample() {
   const [path, setPath] = useState("");
   return <FolderPicker value={path} onChange={setPath} title="Choose a folder" label="Folder" />;
+}
+
+const SAMPLE_IMAGE = "data:image/svg+xml," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" rx="12" fill="#5b8def"/><text x="120" y="68" font-family="sans-serif" font-size="20" fill="white" text-anchor="middle">Zoom me</text></svg>');
+
+function ImagePreviewExample() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Preview image</Button>
+      <ImagePreview open={open} onOpenChange={setOpen} title="sample.svg" images={[{ src: SAMPLE_IMAGE, label: "Sample", alt: "A sample picture" }]} />
+    </>
+  );
 }
 
 function SelectExample() {
@@ -187,6 +200,12 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "Any folder on disk: a workspace, a local repository. Never a plain text box for a path.",
     contract: "value, onChange, title (the dialog's), label. Opens the system folder dialog in the desktop app when the daemon runs on this machine; otherwise falls back to typing the path, and says why.",
     example: () => <FolderPickerExample />,
+  },
+  {
+    name: "ImagePreview",
+    when: "Looking closely at an image: clicking a thumbnail opens it full screen. Before and after go in one preview so arrow keys flip between them.",
+    contract: "images of { src, label, alt }, initial index, title, open, onOpenChange. Wheel or pinch zooms about the cursor, drag pans, double-click toggles fit and 100%; + - 0 1 and arrows on the keyboard; Esc closes.",
+    example: () => <ImagePreviewExample />,
   },
   {
     name: "Disclosure",

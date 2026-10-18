@@ -456,6 +456,69 @@ test("PR diff shows images: before and after for a changed one, and an added SVG
   expect(res).toBe("image/svg+xml");
 });
 
+test("PR diff: clicking an image opens a full-screen preview that zooms, pans and flips between before and after", async ({ page }) => {
+  await open(page, "#/pr/pr-1");
+  await page.getByRole("tab", { name: "Diff" }).click();
+  const icon = page.getByTestId("pr-diff").getByTestId("diff-file").filter({ hasText: "32x32.png" });
+  await expect(icon.getByTestId("image-head").locator("img")).toBeVisible();
+  await icon.getByRole("button", { name: /Preview .*after/ }).click();
+
+  const preview = page.getByRole("dialog");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("After");
+  await expect(preview).toContainText("64 × 64");
+  const zoom = preview.getByTestId("image-preview-zoom");
+  const img = preview.getByTestId("image-preview-viewport").locator("img");
+  // Opens fitted to the window, so a 64px icon is shown far larger than 100%.
+  const fitted = Number((await zoom.textContent())!.replace("%", ""));
+  expect(fitted).toBeGreaterThan(400);
+  await expect(preview.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-pressed", "true");
+
+  await preview.getByRole("button", { name: "100%" }).click();
+  await expect(zoom).toHaveText("100%");
+  await expect.poll(() => img.evaluate((el) => el.getBoundingClientRect().width)).toBe(64);
+  await preview.getByRole("button", { name: "Zoom in" }).click();
+  await expect(zoom).toHaveText("125%");
+  await page.keyboard.press("-");
+  await expect(zoom).toHaveText("100%");
+
+  // The wheel zooms about the cursor; the page behind does not scroll.
+  const box = (await preview.getByTestId("image-preview-viewport").boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -200);
+  await expect.poll(async () => Number((await zoom.textContent())!.replace("%", ""))).toBeGreaterThan(100);
+
+  // Dragging pans the image.
+  const before = (await img.boundingBox())!;
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 40, { steps: 4 });
+  await page.mouse.up();
+  const after = (await img.boundingBox())!;
+  expect(Math.round(after.x - before.x)).toBe(80);
+  expect(Math.round(after.y - before.y)).toBe(40);
+
+  // Left arrow flips to the before image; 0 fits it again.
+  await page.keyboard.press("ArrowLeft");
+  await expect(preview).toContainText("32 × 32");
+  await expect(preview.getByRole("button", { name: "Before" })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("0");
+  await expect(preview.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-pressed", "true");
+  if (process.env.PREVIEW_SHOTS) await page.screenshot({ path: `${process.env.PREVIEW_SHOTS}/preview-before.png` });
+
+  await page.keyboard.press("Escape");
+  await expect(preview).toHaveCount(0);
+
+  // An SVG opens too, and is redrawn at the zoomed size rather than stretched.
+  const svg = page.getByTestId("pr-diff").getByTestId("diff-file").filter({ hasText: "flow.svg" });
+  await svg.getByRole("button", { name: /Preview .*added/ }).click();
+  await expect(page.getByRole("dialog")).toContainText("flow.svg");
+  await page.getByRole("dialog").getByRole("button", { name: "100%" }).click();
+  await page.keyboard.press("+");
+  await expect.poll(() => page.getByRole("dialog").getByTestId("image-preview-viewport").locator("img").evaluate((el) => el.getBoundingClientRect().width)).toBe(300);
+  if (process.env.PREVIEW_SHOTS) await page.screenshot({ path: `${process.env.PREVIEW_SHOTS}/preview-svg.png` });
+  expect(await page.title()).not.toBe("pwned");
+});
+
 test("PR center: verification evidence with failing journeys, screenshots and traces", async ({ page }) => {
   await open(page, "#/pr/pr-2");
   const summary = page.getByTestId("pr-evidence");
