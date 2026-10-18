@@ -1,8 +1,9 @@
 // An image file in a diff: the added image, the removed one, or before and after side by side.
 // Bytes come from the daemon as blobs and show in <img>, so an SVG renders as a picture and its
 // markup never reaches the page.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { externalLink } from "../../links";
+import { ImagePreview, PreviewImage } from "../../ui";
 import { DiffFile, imageSides } from "./model";
 
 /** Where each version of a file is served, and where to open one that is too large to show. */
@@ -15,10 +16,19 @@ export interface FileSource {
 export function ImageDiff({ f, source }: { f: DiffFile; source: FileSource }) {
   const sides = imageSides(f);
   const both = sides.base && sides.head;
+  // Each side's loaded picture, so a click on either opens a preview holding both.
+  const [loaded, setLoaded] = useState<{ base?: PreviewImage; head?: PreviewImage }>({});
+  const [preview, setPreview] = useState<"base" | "head" | null>(null);
+  const onLoaded = useCallback((side: "base" | "head", img: PreviewImage | null) =>
+    setLoaded((l) => ({ ...l, [side]: img ?? undefined })), []);
+  const images = (["base", "head"] as const).flatMap((s) => (loaded[s] ? [{ side: s, img: loaded[s]! }] : []));
+  const at = Math.max(0, images.findIndex((i) => i.side === preview));
   return (
     <div className={"dv-images" + (both ? " both" : "")} data-testid="image-diff">
-      {sides.base && <Side label={both ? "Before" : "Removed"} path={sides.base} side="base" source={source} />}
-      {sides.head && <Side label={both ? "After" : "Added"} path={sides.head} side="head" source={source} />}
+      {sides.base && <Side label={both ? "Before" : "Removed"} path={sides.base} side="base" source={source} onLoaded={onLoaded} onOpen={() => setPreview("base")} />}
+      {sides.head && <Side label={both ? "After" : "Added"} path={sides.head} side="head" source={source} onLoaded={onLoaded} onOpen={() => setPreview("head")} />}
+      <ImagePreview open={preview !== null && images.length > 0} onOpenChange={(o) => { if (!o) setPreview(null); }}
+        title={sides.head ?? sides.base ?? ""} images={images.map((i) => i.img)} initial={at} />
     </div>
   );
 }
@@ -29,7 +39,11 @@ type Loaded =
   | { state: "too_large"; message: string }
   | { state: "error"; message: string };
 
-function Side({ label, path, side, source }: { label: string; path: string; side: "base" | "head"; source: FileSource }) {
+function Side({ label, path, side, source, onLoaded, onOpen }: {
+  label: string; path: string; side: "base" | "head"; source: FileSource;
+  onLoaded: (side: "base" | "head", img: PreviewImage | null) => void;
+  onOpen: () => void;
+}) {
   const [img, setImg] = useState<Loaded>({ state: "loading" });
   const [dims, setDims] = useState<string | null>(null);
   const url = source.url(path, side);
@@ -57,6 +71,10 @@ function Side({ label, path, side, source }: { label: string; path: string; side
     return () => { live = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [url]);
 
+  const alt = `${path}, ${label.toLowerCase()}`;
+  const src = img.state === "ok" ? img.src : null;
+  useEffect(() => { onLoaded(side, src ? { src, label, alt } : null); }, [onLoaded, side, src, label, alt]);
+
   const external = source.external?.(path, side) ?? null;
   return (
     <figure className={"dv-image " + side} data-testid={`image-${side}`}>
@@ -67,8 +85,10 @@ function Side({ label, path, side, source }: { label: string; path: string; side
       <div className="dv-image-frame">
         {img.state === "loading" && <span className="faint">Loading…</span>}
         {img.state === "ok" && (
-          <img src={img.src} alt={`${path}, ${label.toLowerCase()}`}
-            onLoad={(e) => setDims(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)} />
+          <button type="button" className="dv-image-open" onClick={onOpen} aria-label={`Preview ${alt}`} title="Click to zoom">
+            <img src={img.src} alt={alt}
+              onLoad={(e) => setDims(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)} />
+          </button>
         )}
         {img.state === "too_large" && (
           <span className="faint" data-testid="image-too-large">

@@ -11,6 +11,8 @@ export type { Tone } from "./tone";
 export { ControlRow, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput } from "./form";
 export type { OptionCardChoice } from "./form";
 export { FolderPicker } from "./FolderPicker";
+export { ImagePreview } from "./ImagePreview";
+export type { PreviewImage } from "./ImagePreview";
 export { Button, ButtonLink, buttonClass } from "./button";
 export { controlClass } from "./form";
 export { cx } from "./cx";
