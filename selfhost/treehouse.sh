@@ -6,7 +6,7 @@
 #
 # The native worktree pool (engine slice 9) is a port of treehouse 3.1.2, so
 # quarkd only compares it with treehouse 3.1.2 or a later 3.x
-# (docs/shadow-readiness.md). With such a treehouse first on PATH this prints
+# (docs/engine/worktrees.md). With such a treehouse first on PATH this prints
 # its version and does nothing else. Otherwise it downloads the 3.1.2 release
 # for this machine, checks its sha256, and installs it into the directory of
 # the treehouse on PATH, or ~/.local/bin when there is none (--dir picks

@@ -1,23 +1,17 @@
-//! The judgment-only coordinator (slice 6), in shadow beside the bash
-//! engine or native once slices 1 to 5 are.
+//! The judgment-only coordinator (slice 6).
 //!
-//! Slice 6 switches on after slices 1 to 5, so firstmate's coordinator still
-//! runs every Project. Unless [`ENV`] is `0`, quarkd runs the native
-//! coordinator on a timer, for each Project:
+//! With the native engine, quarkd runs the coordinator on a timer, for each
+//! Project:
 //!
 //! - builds its layered prompt (built-in, persona, the Project repo's
 //!   instructions and memory, code repo instructions, skills) and records it
 //!   when it changes;
-//! - in shadow, reads firstmate's coordinator transcript into
-//!   `coordinator.baseline` turns, the token baseline the native coordinator
-//!   is measured against, and records which events would have woken the
-//!   native coordinator (`coordinator.would_wake`);
-//! - native, points a Claude Code coordinator at its tools and turn-end hook
+//! - points a Claude Code coordinator at its tools and turn-end hook
 //!   ([`crate::coordinator_http::install_claude`]), wakes it through the
 //!   [`Brain`] and runs its calls through the [`Hands`]
 //!   ([`crate::coordinator_hands`]);
-//! - native, closes the window of a coordinator that was launched with an
-//!   older prompt, once it is between turns. A harness reads its system
+//! - closes the window of a coordinator that was launched with an older
+//!   prompt, once it is between turns. A harness reads its system
 //!   prompt at launch only, so a persona, instruction or memory change
 //!   reaches a running coordinator when coordinator recovery
 //!   ([`crate::recovery`]) starts it again in its conversation.
@@ -28,9 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use quark_coordinator::{
-    Brain, Config, Coordinator, Hands, LayeredPrompt, Mode, NoBrain, NoHands, Sources,
-};
+use quark_coordinator::{Brain, Config, Coordinator, Hands, LayeredPrompt, Sources};
 use quark_core::{EventLog, ProjectId};
 use quark_persona::FilePersonas;
 use quark_transcript::{locate, SessionFormat, SessionRoots};
@@ -46,24 +38,12 @@ use crate::store::Store;
 /// it is open.
 const QUIET: Duration = Duration::from_secs(60);
 
-/// Set to `0` to turn the slice 6 coordinator off.
-pub const ENV: &str = "QUARK_NATIVE_COORDINATOR";
-
-pub fn enabled() -> bool {
-    !std::env::var(ENV).is_ok_and(|v| v == "0")
-}
-
-/// How the coordinator is wired.
-pub enum Wiring {
-    /// Beside firstmate: records, never acts.
-    Shadow,
-    /// Wakes the coordinator and runs its tools. `base_url` is quarkd's own
-    /// address, for the coordinator's MCP server and turn-end hook.
-    Native {
-        brain: Arc<dyn Brain>,
-        hands: Arc<dyn Hands>,
-        base_url: String,
-    },
+/// How the coordinator is woken and acts. `base_url` is quarkd's own
+/// address, for the coordinator's MCP server and turn-end hook.
+pub struct Wiring {
+    pub brain: Arc<dyn Brain>,
+    pub hands: Arc<dyn Hands>,
+    pub base_url: String,
 }
 
 /// The slice 6 coordinator and the Projects it serves.
@@ -73,7 +53,7 @@ pub struct NativeCoordinator {
     layout: Layout,
     roots: SessionRoots,
     tokens: Tokens,
-    base_url: Option<String>,
+    base_url: String,
     sessions: Option<Sessions>,
 }
 
@@ -85,24 +65,13 @@ impl NativeCoordinator {
         roots: SessionRoots,
         wiring: Wiring,
     ) -> anyhow::Result<Self> {
-        let (mode, brain, hands, base_url): (Mode, Arc<dyn Brain>, Arc<dyn Hands>, _) = match wiring
-        {
-            Wiring::Shadow => (Mode::Shadow, Arc::new(NoBrain), Arc::new(NoHands), None),
-            Wiring::Native {
-                brain,
-                hands,
-                base_url,
-            } => (Mode::Native, brain, hands, Some(base_url)),
-        };
-        let coordinator = Coordinator::open(
-            log,
-            crate::event_ingest::host(),
-            mode,
-            Config::default(),
+        let Wiring {
             brain,
             hands,
-        )
-        .await?;
+            base_url,
+        } = wiring;
+        let coordinator =
+            Coordinator::open(log, crate::host(), Config::default(), brain, hands).await?;
         Ok(Self {
             coordinator: Arc::new(coordinator),
             store,
@@ -131,8 +100,8 @@ impl NativeCoordinator {
         self.tokens.clone()
     }
 
-    /// Refresh each Project's prompt, then its baseline (shadow) or its
-    /// tool and hook config (native), then evaluate.
+    /// Refresh each Project's prompt and its tool and hook config, then
+    /// evaluate.
     pub async fn pass(&self) -> anyhow::Result<()> {
         let store = self.store.clone();
         let projects = tokio::task::spawn_blocking(move || store.list_projects()).await??;
@@ -149,30 +118,17 @@ impl NativeCoordinator {
                 tokio::task::spawn_blocking(move || build_prompt(&layout, &pid, &ws)).await?;
             match built {
                 Ok((prompt, persona)) => {
-                    if self.base_url.is_some() {
-                        self.retire_stale(&id, &workspace, &prompt_text(&prompt))
-                            .await;
-                    }
+                    self.retire_stale(&id, &workspace, &prompt_text(&prompt))
+                        .await;
                     if let Err(e) = self.coordinator.set_prompt(&id, prompt, &persona).await {
                         tracing::warn!(project = %id, error = %e, "slice 6 prompt not recorded");
                     }
                 }
                 Err(e) => tracing::warn!(project = %id, error = %e, "slice 6 prompt not built"),
             }
-            match &self.base_url {
-                None => {
-                    if let Some(path) = locate(SessionFormat::Claude, &workspace, &self.roots) {
-                        if let Err(e) = self.coordinator.read_baseline(&id, &path).await {
-                            tracing::warn!(project = %id, error = %e, "slice 6 baseline not read");
-                        }
-                    }
-                }
-                Some(base) => {
-                    let harness = project.agent_config.as_ref().map(|a| a.harness.as_str());
-                    if let Err(e) = self.install(base, &project.id, &workspace, harness) {
-                        tracing::warn!(project = %id, error = %e, "coordinator tools not installed");
-                    }
-                }
+            let harness = project.agent_config.as_ref().map(|a| a.harness.as_str());
+            if let Err(e) = self.install(&project.id, &workspace, harness) {
+                tracing::warn!(project = %id, error = %e, "coordinator tools not installed");
             }
         }
         let r = self
@@ -183,7 +139,6 @@ impl NativeCoordinator {
             tracing::debug!(
                 items = r.items,
                 turns = r.turns,
-                mode = ?self.coordinator.mode(),
                 "slice 6 opened coordinator turns"
             );
         }
@@ -243,7 +198,6 @@ impl NativeCoordinator {
     /// Claude Code coordinators are configured so far.
     fn install(
         &self,
-        base: &str,
         project: &str,
         workspace: &Path,
         harness: Option<&str>,
@@ -252,7 +206,10 @@ impl NativeCoordinator {
             return Ok(false);
         }
         let token = self.tokens.get_or_create(project)?;
-        install_claude(workspace, &CoordinatorUrls::new(base, project, &token))
+        install_claude(
+            workspace,
+            &CoordinatorUrls::new(&self.base_url, project, &token),
+        )
     }
 
     pub async fn run(self, interval: Duration) {
@@ -295,9 +252,8 @@ pub(crate) fn build_prompt(
 }
 
 /// A Project's prompt sources in its workspace: the Project repo checkout
-/// (`project/`), then each code repo (under `projects/` in a firstmate
-/// workspace, `repos/` in a native one), the Project's memory and the
-/// user's.
+/// (`project/`), then each code repo (under `repos/`, or `projects/` in a
+/// workspace firstmate made), the Project's memory and the user's.
 fn sources(workspace: &Path, persona: quark_core::PersonaPack, user_memory: PathBuf) -> Sources {
     let project_repo = workspace.join("project");
     let mut repos = vec![("project".to_string(), project_repo.clone())];
@@ -329,7 +285,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn a_pass_records_the_prompt_and_baseline_and_acts_on_nothing() {
+    async fn a_pass_records_the_prompt() {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws");
         std::fs::create_dir_all(ws.join("project/memory")).unwrap();
@@ -337,32 +293,6 @@ mod tests {
         std::fs::write(ws.join("project/memory/0001.md"), "Rebase first.\n").unwrap();
         std::fs::create_dir_all(ws.join("projects/quark/.git")).unwrap();
         std::fs::write(ws.join("projects/quark/AGENTS.md"), "Run cargo test.\n").unwrap();
-        // firstmate's coordinator transcript, where Claude Code keeps it.
-        let claude = dir.path().join("claude");
-        let slug: String = ws
-            .to_string_lossy()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        let logs = claude.join("projects").join(slug);
-        std::fs::create_dir_all(&logs).unwrap();
-        let user = |id: &str, text: &str| {
-            format!(
-                "{}\n",
-                serde_json::json!({"type": "user", "uuid": id, "timestamp": "t",
-                    "message": {"role": "user", "content": text}})
-            )
-        };
-        std::fs::write(
-            logs.join("s.jsonl"),
-            [
-                user("u1", "<task-notification>x</task-notification>"),
-                user("u2", "hi"),
-            ]
-            .concat(),
-        )
-        .unwrap();
-
         let store = Arc::new(Store::open_in_memory().unwrap());
         let project = store
             .create_project(CreateProject {
@@ -376,21 +306,21 @@ mod tests {
             })
             .unwrap();
         let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
-        let roots = SessionRoots {
-            claude: vec![claude],
-            ..Default::default()
-        };
-        let shadow = NativeCoordinator::open(
+        let coordinator = NativeCoordinator::open(
             store,
             Arc::new(log.clone()),
             Layout::new(dir.path().join("home")),
-            roots,
-            Wiring::Shadow,
+            SessionRoots::default(),
+            Wiring {
+                brain: Arc::new(quark_coordinator::NoBrain),
+                hands: Arc::new(quark_coordinator::NoHands),
+                base_url: "http://127.0.0.1:1".into(),
+            },
         )
         .await
         .unwrap();
-        shadow.pass().await.unwrap();
-        shadow.pass().await.unwrap();
+        coordinator.pass().await.unwrap();
+        coordinator.pass().await.unwrap();
         let kinds: Vec<String> = log
             .read(Seq::ZERO, 100)
             .await
@@ -399,15 +329,8 @@ mod tests {
             .filter(|e| e.project.as_str() == project.id)
             .map(|e| e.kind.0)
             .collect();
-        assert_eq!(
-            kinds,
-            [
-                "coordinator.prompt",
-                "coordinator.baseline",
-                "coordinator.transcript_read"
-            ]
-        );
-        let prompt = shadow
+        assert_eq!(kinds, ["coordinator.prompt"]);
+        let prompt = coordinator
             .coordinator
             .prompt(&ProjectId::new(project.id))
             .unwrap();

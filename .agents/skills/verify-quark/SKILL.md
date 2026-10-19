@@ -26,10 +26,9 @@ Requirements: `cargo`, `node` 22 with `npm`, `tmux` 3.2+, `curl`, `git`, and a C
 
 ```sh
 $Q launch                                                    # real quarkd, stub engine (no agents, no network)
-$Q launch --engine firstmate --engine-dir ../firstmate       # real quarkd driving a clone of a quark-systems/firstmate checkout
 $Q launch --daemon mock                                      # the app against app/mock/daemon.mjs (demo data, quiet)
-$Q launch --engine firstmate --engine-dir ../firstmate --harness fake   # agents run bin/fake-agent: no account or network needed
-$Q launch --engine native --harness fake                     # quarkd's own engine, no firstmate anywhere (needs treehouse)
+$Q launch --engine native                                    # quarkd's own engine, with real harnesses (needs treehouse)
+$Q launch --engine native --harness fake                     # agents run bin/fake-agent: no account or network needed
 ```
 
 Launch builds `app/dist` (`npm ci` first if `app/node_modules` is missing) and `quarkd` (`cargo build -p quarkd --bin quarkd`; it runs the native engine's PTY supervisor itself as `quarkd ptyd`), then starts, each on a free port and in its own process group:
@@ -47,8 +46,7 @@ Modes and what they prove:
 | Mode | Proves | Does not prove |
 | :--- | :--- | :--- |
 | `--daemon real --engine stub` (default) | the app against the real daemon: API, store, events, Project provisioning without an engine | anything an engine or agent does: no tasks, decisions or terminals appear |
-| `--daemon real --engine firstmate` | the real daemon driving the real engine: provisioning, coordinator and worker windows, decisions, terminals | agent behavior unless a harness is installed and signed in (the coordinator window runs it) |
-| `--daemon real --engine native` | quarkd's own engine with no firstmate: provisioning, the coordinator window and its tools, dispatch, worker sessions in `quark-ptyd`, steering, decisions, cancel and relaunch | worker terminals in the app (not served yet); agent behavior unless a harness is signed in. Worker worktrees come from treehouse, kept in the run (`TREEHOUSE_ROOT`) |
+| `--daemon real --engine native` | quarkd's own engine: provisioning, the coordinator window and its tools, dispatch, worker sessions in `quark-ptyd`, steering, decisions, cancel and relaunch | worker terminals in the app (not served yet); agent behavior unless a harness is signed in. Worker worktrees come from treehouse, kept in the run (`TREEHOUSE_ROOT`) |
 | `--daemon mock` | app-only behavior against demo data (what `npm run e2e` uses) | the daemon or engine; say "against the mock" in any proof |
 
 ## Doctor
@@ -102,9 +100,9 @@ $Q crash host                                                  # a reboot: daemo
 $Q agents                                                      # the fake harness's start journal (pid, argv, resumed)
 ```
 
-Native engine: `$Q journey native` runs a Project end to end on `--engine native` with no firstmate ([features/native-engine.md](features/native-engine.md)), and `$Q journey durability -- --engine native --harness fake` is its durability bar ([features/durability.md](features/durability.md)).
+Native engine: `$Q journey native` runs a Project end to end on `--engine native` ([features/native-engine.md](features/native-engine.md)), and `$Q journey durability -- --engine native --harness fake` is its durability bar ([features/durability.md](features/durability.md)).
 
-Native shadows: `$Q journey shadows --rounds 3 --engine-dir ../firstmate` runs every shadow against a scripted firstmate workload and fails on any divergence ([features/shadows.md](features/shadows.md)). `launch --env NAME=VALUE` puts a setting in the daemon's start script, so it survives `restart`.
+`launch --env NAME=VALUE` puts a setting in the daemon's start script, so it survives `restart`.
 
 ## Hand-off to a person
 
@@ -141,8 +139,8 @@ Run it after every failed attempt too. Evidence of old runs stays until you dele
 
 ## Gotchas
 
-- The stub engine provisions a Project without cloning anything and never opens a coordinator window, so worker and coordinator terminals need `--engine firstmate`.
-- `--engine firstmate` clones the given checkout into the daemon's `home/engine`, so commit what you want tested there first. Delivery `gated` (the form's default) needs `no-mistakes` installed; pick `direct` under Advanced when it is not. A Project's coordinator runs its harness for real in the private tmux server, which needs that harness signed in.
+- The stub engine provisions a Project without cloning anything and never opens a coordinator window, so worker and coordinator terminals need `--engine native`.
+- With `--engine native` and real harnesses, a Project's coordinator runs its harness for real in the private tmux server, which needs that harness signed in; `--harness fake` needs no account.
 - Repositories can be local: the form takes an absolute path to a bare repo with a `main` branch (not a `file://` URL), which works offline.
 - The first `launch` builds quarkd and the app and can take minutes; later launches reuse the builds.
 - The app server serves the production build. After changing `app/src`, launch a new run (or rebuild with `npm run build` in `app/` and reload with `browser open`).

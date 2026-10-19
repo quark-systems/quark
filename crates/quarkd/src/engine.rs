@@ -9,23 +9,17 @@
 //! that the adapter maps onto its own engine calls.
 //!
 //! - [`StubEngine`] is an in-memory adapter for tests and for running the
-//!   daemon without an engine checkout.
-//! - [`firstmate::FirstmateEngine`] wraps the `quark-engine` crate: typed
-//!   readers (fleet snapshot, status-log tails, hold records, PR poll records)
-//!   mapped onto the neutral [`TaskState`], and allowlisted `fm-*.sh` writes
-//!   with argument validation, so nothing engine-specific reaches the API.
+//!   daemon with no engine.
+//! - [`native::NativeEngine`] is quarkd's own engine: the native supervisor
+//!   over the event log.
 //!
 //! Adapters also name the directories worth watching, so the projector can
 //! refresh a workspace as soon as a worker reports, not only on its timer.
 
-pub mod eventlog;
-pub mod firstmate;
-pub mod liveness;
 pub mod native;
 pub mod native_dispatch_engine;
 pub mod native_project;
 pub mod native_verify;
-pub mod shadow;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -38,7 +32,7 @@ use quark_systems::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Addresses one engine workspace (a firstmate home). Location-neutral so a
+/// Addresses one engine workspace (a Project's home). Location-neutral so a
 /// cloud runtime can become another kind of location later.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WorkspaceRef {
@@ -54,11 +48,6 @@ pub struct FleetSnapshot {
     pub tasks: Vec<EngineTask>,
 }
 
-/// The state note firstmate's `fm-fleet-snapshot.sh` gives a task whose files
-/// changed (a cleanup, a respawn) while the snapshot was reading them. It
-/// says nothing about the task, so it is never a state to record.
-pub const TRANSIENT_SNAPSHOT_NOTE: &str = "task generation changed during snapshot";
-
 /// A task as the engine reports it, already mapped to neutral names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EngineTask {
@@ -68,8 +57,8 @@ pub struct EngineTask {
     pub kind: Option<TaskKind>,
     pub state: TaskState,
     pub state_note: Option<String>,
-    /// Where the engine read the state, e.g. firstmate's `status-log`,
-    /// `pane` or `run-step`. `None` when the engine does not say.
+    /// Where the engine read the state, e.g. `native`. `None` when the
+    /// engine does not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_source: Option<String>,
     pub harness: Option<String>,
@@ -84,16 +73,6 @@ pub struct EngineTask {
     /// the session log by this directory.
     #[serde(default)]
     pub worktree: Option<PathBuf>,
-}
-
-impl EngineTask {
-    /// Whether the engine failed to read this task rather than reporting it:
-    /// the result of a snapshot that raced a change to the task. The next
-    /// refresh reads it again.
-    pub fn is_transient(&self) -> bool {
-        self.state == TaskState::Unknown
-            && self.state_note.as_deref() == Some(TRANSIENT_SNAPSHOT_NOTE)
-    }
 }
 
 /// Which agent a task's current worker was started with.
@@ -295,12 +274,6 @@ pub trait EngineAdapter: Send + Sync {
     /// Short name reported by `GET /v1/health`.
     fn name(&self) -> &'static str;
 
-    /// Which engine serves each slice of the native port. Every slice is
-    /// bash unless this is a [`shadow::ShadowEngine`].
-    fn slices(&self) -> quark_core::SliceSwitch {
-        quark_core::SliceSwitch::new()
-    }
-
     /// Every task currently known to the workspace.
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError>;
 
@@ -337,13 +310,6 @@ pub trait EngineAdapter: Send + Sync {
         text: &str,
     ) -> Result<(), EngineError>;
 
-    /// Leave the user's note in the workspace inbox, where the coordinator
-    /// picks it up at its next check. `Ok` means it is durably queued.
-    async fn inbox_note(&self, ws: &WorkspaceRef, text: &str) -> Result<(), EngineError> {
-        let _ = (ws, text);
-        Err(EngineError::Invalid("this engine has no inbox".into()))
-    }
-
     /// Answer the open hold `hold_id` with `answer`, recording `answered_by`
     /// as the person who answered. `Ok` means the engine durably recorded the
     /// answer and the question is no longer waiting; the hold leaves later
@@ -379,8 +345,7 @@ pub trait EngineAdapter: Send + Sync {
     /// merged outside the engine's guarded merge: by a person on the forge,
     /// or by the worker itself. The engine marks the task landed and tells
     /// whoever waits on the merge, as its own merge does. Repeating it is a
-    /// no-op, and so is a task the engine no longer has. Engines that watch
-    /// the forge themselves (firstmate's merge poll) need nothing here.
+    /// no-op, and so is a task the engine no longer has.
     async fn pull_request_merged(
         &self,
         _ws: &WorkspaceRef,
@@ -607,6 +572,36 @@ pub enum WorktreeRelease {
     },
 }
 
+/// Whether `id` is a safe task id: nonempty, no leading dot, and only
+/// `A-Za-z0-9._-`, so it can never escape a directory it names a file in.
+pub fn valid_task_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('.')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// The brief of a decision a task's worker asked: it blocks that task.
+pub fn worker_brief(task_id: &str) -> quark_systems::DecisionBrief {
+    quark_systems::DecisionBrief {
+        asked_by: Some(task_id.to_string()),
+        blocks: vec![task_id.to_string()],
+        ..Default::default()
+    }
+}
+
+/// A harness id as the engine's records name it (`claude` for
+/// `claude-code`), which is how session logs are found for it.
+pub fn engine_harness(harness: &str) -> &str {
+    match harness {
+        "claude-code" => "claude",
+        "cursor-agent" => "cursor",
+        "bob-shell" => "bob",
+        other => other,
+    }
+}
+
 /// Why an engine without native dispatch refuses to start a task.
 pub const NO_DISPATCH: &str = "this engine starts tasks through its own coordinator";
 
@@ -638,9 +633,6 @@ const STUB_ACCOUNT_ENVS: &[&str] = &[
 pub enum StubWrite {
     Message {
         task_id: String,
-        text: String,
-    },
-    InboxNote {
         text: String,
     },
     Control {
@@ -886,10 +878,6 @@ impl EngineAdapter for StubEngine {
             task_id: task_id.into(),
             text: text.into(),
         })
-    }
-
-    async fn inbox_note(&self, _ws: &WorkspaceRef, text: &str) -> Result<(), EngineError> {
-        self.accept(StubWrite::InboxNote { text: text.into() })
     }
 
     /// Records the answer and drops the hold, as an engine would.

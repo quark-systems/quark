@@ -114,24 +114,6 @@ pub struct TaskTarget {
     pub workspace_path: Option<String>,
 }
 
-/// One engine script call as stored in `adapter_calls`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScriptCall {
-    pub ts: String,
-    /// Filled in from the workspace on insert; ignored by `record_script_call`.
-    pub project_id: Option<String>,
-    /// `read` or `write`.
-    pub kind: String,
-    pub script: String,
-    pub args: Vec<String>,
-    pub workspace: String,
-    pub ok: bool,
-    pub exit_code: Option<i32>,
-    pub duration_ms: u64,
-    /// Failure detail: stderr tail, or why the script could not run.
-    pub detail: Option<String>,
-}
-
 pub struct Store {
     conn: Mutex<Connection>,
     bus: broadcast::Sender<Event>,
@@ -558,13 +540,6 @@ impl Store {
             let merged = merged_pull_requests(tx, project_id)?;
             let mut read: HashSet<&str> = HashSet::new();
             for et in &snapshot.tasks {
-                // The engine could not read this task just now. Keep what is
-                // recorded, or record nothing for a task not yet known, and
-                // read it again next refresh. The sweep below still finishes
-                // a merged one.
-                if et.is_transient() {
-                    continue;
-                }
                 read.insert(&et.id);
                 let now = now_rfc3339();
                 let worktree = et
@@ -1399,38 +1374,6 @@ impl Store {
 
     // Adapter calls
 
-    /// Records one engine script call. The Project is the one whose workspace
-    /// the script ran against, when the daemon knows it.
-    pub fn record_script_call(&self, call: &ScriptCall) -> Result<()> {
-        self.read(|c| {
-            let project_id: Option<String> = c
-                .query_row(
-                    "SELECT id FROM projects WHERE workspace_path = ?1",
-                    [&call.workspace],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            c.execute(
-                "INSERT INTO adapter_calls (ts, project_id, operation, ok, duration_ms, detail,
-                     kind, script, args, exit_code, workspace)
-                 VALUES (?1, ?2, 'script', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    call.ts,
-                    project_id,
-                    call.ok,
-                    call.duration_ms as i64,
-                    call.detail,
-                    call.kind,
-                    call.script,
-                    serde_json::to_string(&call.args)?,
-                    call.exit_code,
-                    call.workspace
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
     /// Outcomes of a Project's most recent adapter calls for `operation`
     /// (`snapshot`, `gates`, `dispatch`...), newest first: whether each
     /// succeeded and its failure detail.
@@ -1449,41 +1392,6 @@ impl Store {
                 Ok((r.get(0)?, r.get(1)?))
             })?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
-        })
-    }
-
-    /// Most recent script calls first.
-    pub fn recent_script_calls(&self, limit: u32) -> Result<Vec<ScriptCall>> {
-        self.read(|c| {
-            let mut stmt = c.prepare(
-                "SELECT ts, project_id, ok, duration_ms, detail, kind, script, args, exit_code,
-                        workspace
-                 FROM adapter_calls WHERE operation = 'script' ORDER BY id DESC LIMIT ?1",
-            )?;
-            let rows = stmt.query_map([limit], |r| {
-                Ok((
-                    ScriptCall {
-                        ts: r.get(0)?,
-                        project_id: r.get(1)?,
-                        ok: r.get(2)?,
-                        duration_ms: r.get::<_, i64>(3)? as u64,
-                        detail: r.get(4)?,
-                        kind: r.get(5)?,
-                        script: r.get(6)?,
-                        args: Vec::new(),
-                        exit_code: r.get(8)?,
-                        workspace: r.get(9)?,
-                    },
-                    r.get::<_, String>(7)?,
-                ))
-            })?;
-            let mut out = Vec::new();
-            for row in rows {
-                let (mut call, args) = row?;
-                call.args = serde_json::from_str(&args)?;
-                out.push(call);
-            }
-            Ok(out)
         })
     }
 
@@ -2077,7 +1985,7 @@ mod tests {
             question: "merge?".into(),
             answer: None,
             answered_by: None,
-            brief: crate::engine::firstmate::worker_brief("a"),
+            brief: crate::engine::worker_brief("a"),
         };
         store
             .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())

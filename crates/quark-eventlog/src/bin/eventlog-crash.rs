@@ -5,14 +5,12 @@
 //!   `i = <start>`, alternating single
 //!   events and three-event batches that also set the `writer` checkpoint,
 //!   and prints `ack <seq> <id>` for each event once `append` returned.
-//! - `eventlog-crash ingest <db> <home> <project>`: runs the firstmate
-//!   bridge on `<home>` forever.
 
 use std::io::Write;
 use std::path::PathBuf;
 
 use quark_core::{EventLog, HostId, NewEvent, ProjectId, TaskId};
-use quark_eventlog::{FirstmateBridge, SqliteEventLog};
+use quark_eventlog::SqliteEventLog;
 
 fn event(i: u64) -> NewEvent {
     NewEvent::new(
@@ -52,15 +50,6 @@ async fn main() {
                     i += 3;
                 }
                 out.flush().unwrap();
-            }
-        }
-        "ingest" => {
-            let bridge = FirstmateBridge::new(log, HostId::from("crash"));
-            let home = PathBuf::from(&args[2]);
-            let project = ProjectId::from(args[3].as_str());
-            loop {
-                bridge.ingest(&project, &home).await.expect("ingest");
-                tokio::task::yield_now().await;
             }
         }
         other => panic!("unknown mode {other}"),

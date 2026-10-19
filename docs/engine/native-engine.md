@@ -1,6 +1,6 @@
 # The native engine
 
-`quarkd --engine native` runs Quark with no firstmate checkout.
+`quarkd --engine native` runs Quark; it is the only real engine since firstmate was retired (slice 10), and `--engine stub` is an in-memory adapter for tests.
 The engine adapter is `crates/quarkd/src/engine/native.rs` (`NativeEngine`).
 It sits on the native supervisor (`quark-supervisor`, slice 4), native verification (`quark-verify`, slice 2), native dispatch (`quark-dispatch`, slice 5) and the event log (slice 1).
 
@@ -52,11 +52,11 @@ Answering it `merge anyway` overrides the guardrail until main is green again; a
 ## Dispatch
 
 The coordinator's `start_task` tool (title, brief, optional repo and agent) calls `EngineAdapter::start_task`, and `choose_profile` calls `EngineAdapter::choose_profile`.
-Both are additive trait methods whose default refuses, so the firstmate adapter is unchanged.
+Both are additive trait methods whose default refuses, so the stub engine refuses them.
 
 `start_task`:
 
-1. Makes the task id from the title (lowercase letters, digits and dashes, at most 40 characters, `-2`, `-3` and so on when taken), so it passes `quark_engine::validate_task_id`.
+1. Makes the task id from the title (lowercase letters, digits and dashes, at most 40 characters, `-2`, `-3` and so on when taken), so it passes `quarkd::engine::valid_task_id`.
 2. Finds the repo in the Project workspace: `<root>/repos/<name>` is each source repo's primary checkout.
    `<root>/projects/<name>`, firstmate's layout, is read too, so a workspace firstmate seeded runs natively.
    With no repo named, the workspace's only repo is used; with several, the call names them and refuses.
@@ -104,13 +104,13 @@ Creating a Project needs no firstmate home and no `AGENTS.md` persona.
 Only Claude Code coordinators start so far: its tools and turn-end hook are the ones wired.
 Another harness is refused with an error that says so.
 
-With `--engine native`, the native coordinator (slice 6) always runs, in Native wiring (`InputBrain` and `EngineHands`), whatever `QUARK_ENGINE_SLICES` and `QUARK_NATIVE_COORDINATOR` say.
-Coordinator recovery runs for the native engine as it does for firstmate.
+With `--engine native`, the coordinator (slice 6) runs with `InputBrain` and `EngineHands`.
+Coordinator recovery starts each Project's coordinator again after a restart.
 It also adopts a ready Project with no coordinator record, such as one firstmate created, and starts its coordinator unless a `coordinator-<Project id>` window is already up.
 
 ## Channels and the inbox
 
-With `--engine native`, the slice 7 engine (`native_triggers.rs`) always runs in native mode: the user's inbox note and plug-in channel messages land as `channel.received` events, wake the coordinator, and the coordinator's `ack_message` tool marks them handled.
+With `--engine native`, the slice 7 engine (`native_triggers.rs`) acts: the user's inbox note and plug-in channel messages land as `channel.received` events, wake the coordinator, and the coordinator's `ack_message` tool marks them handled.
 
 ## Durability
 
@@ -125,12 +125,9 @@ The native engine refuses the operations below, each with an error that names th
 
 - coordinators on harnesses other than Claude Code
 
-## Getting off firstmate
+## Firstmate retired
 
-These steps remain, in order:
-
-1. Coordinators on other harnesses: their tool and turn-end hook wiring.
-2. Self-hosting starts quarkd with `--engine native`.
-3. Retire the firstmate adapter, the ingest bridge, and the shadows (slice 10).
-
-The `verify-quark` journeys run and pass with `--engine native` (durability: 33 checks; native: 18).
+Self-hosting moved to `--engine native` on 2026-10-12, and slice 10 then removed the firstmate adapter, its ingest bridge and the shadow comparisons.
+quarkd no longer reads a firstmate home; `~/.quark/engine` (the firstmate clone) is no longer needed.
+Event logs from before then still hold `firstmate.*` and `shadow.divergence` events, which nothing reads, and trigger `would_fire` and away `shadowed` events, which the triggers engine reads back but which change nothing.
+The Overview and Metrics show no history from before the switch.

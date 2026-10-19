@@ -2,7 +2,7 @@
 
 `crates/quark-worktree` gives every task an isolated git worktree through the `WorktreeProvider` contract (`docs/engine/contracts.md`).
 `TreehouseProvider` owns the safety rules (the isolation assertion, the tangle check, the landed-work check before a return) and leases worktrees from a `Pool` underneath it.
-Treehouse 3.1.2 (`TreehouseCli`) is that pool today; `NativePool` is its replacement, and `ShadowPool` compares the two until slice 9 switches on.
+Treehouse 3.1.2 (`TreehouseCli`) is that pool today; `NativePool` is its replacement, and `ShadowPool` compares the two until the native pool takes over.
 
 ## The native pool
 
@@ -16,7 +16,7 @@ Not ported yet, and refused rather than done differently: jj workspaces, `worktr
 
 ## Shadow
 
-Slice 9 switches on last. Until then, `QUARK_NATIVE_WORKTREES=1` makes the pool behind quarkd's worktree providers (the Hosts view's pool reports every minute, and the native supervisor's worktrees when `QUARK_NATIVE_SUPERVISOR=1`) a `ShadowPool`: treehouse answers every call, and the native pool is asked what it would have done on the same pool.
+This is the one shadow comparison quarkd still runs. `QUARK_NATIVE_WORKTREES=1` makes the pool behind quarkd's worktree providers (the Hosts view's pool reports every minute, and the native supervisor's worktrees) a `ShadowPool`: treehouse answers every call, and the native pool is asked what it would have done on the same pool.
 
 | Call | Compared |
 |---|---|
@@ -25,6 +25,7 @@ Slice 9 switches on last. Until then, `QUARK_NATIVE_WORKTREES=1` makes the pool 
 | list | each slot's status, branch, lease id and holder, read without writing |
 
 Each disagreement is appended to the event log as `shadow.divergence` (slice `worktree_pool`), once until it changes. The native side never acts in shadow.
+quarkd only compares with treehouse 3.1.2 or a later 3.x; against an older one it says which version it found and leaves the shadow off.
 
 ## Tests
 

@@ -2174,16 +2174,6 @@
               }
             }
           },
-          "409": {
-            "description": "The Project has no workspace yet (`workspace_missing`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
           "503": {
             "description": "The automation engine is off (`automation_off`)",
             "content": {
@@ -4260,40 +4250,6 @@
         }
       }
     },
-    "/v1/shadows": {
-      "get": {
-        "tags": [
-          "daemon"
-        ],
-        "summary": "Each slice's shadow: whether it compares with bash, whether it ran on\nthe daemon's latest start and since when, its divergences over `days`\nper operation, and the newest few with both sides.",
-        "description": "`QUARK_SHADOWS=all` turns on every shadow. A slice reads `agreeing`\nonce its shadow ran for the whole window with no divergences; it still\nneeds the verify-quark durability journeys before it switches native.\nAn unreadable event log is reported in `error` rather than failing the\ncall.",
-        "operationId": "get",
-        "parameters": [
-          {
-            "name": "days",
-            "in": "query",
-            "description": "Days of history to count, ending now: 1 to 90, default 7.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ShadowReadiness"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/tasks/{id}": {
       "get": {
         "tags": [
@@ -5956,32 +5912,20 @@
       },
       "CoordinatorMetrics": {
         "type": "object",
-        "description": "Coordinator token efficiency over the window.\n\nA turn that changed nothing (no task started, steered, answered or\ncancelled, nothing told or asked of the user) only acknowledged status;\nthe native coordinator's target share of those is near zero.",
+        "description": "Coordinator token efficiency over the window.\n\nA turn that changed nothing (no task started, steered, answered or\ncancelled, nothing told or asked of the user) only acknowledged status;\nthe coordinator's target share of those is near zero.",
         "required": [
           "tasks",
-          "baseline",
-          "native",
-          "would_wake_turns"
+          "native"
         ],
         "properties": {
-          "baseline": {
-            "$ref": "#/components/schemas/CoordinatorTurns",
-            "description": "firstmate's coordinator (Claude Code transcripts only)."
-          },
           "native": {
             "$ref": "#/components/schemas/CoordinatorTurns",
-            "description": "The native coordinator; no turns until slice 6 switches on."
+            "description": "The native coordinator's turns."
           },
           "tasks": {
             "type": "integer",
             "format": "int32",
             "description": "Tasks seen in the window, the divisor of the per-task figures.",
-            "minimum": 0
-          },
-          "would_wake_turns": {
-            "type": "integer",
-            "format": "int32",
-            "description": "While slice 6 runs in shadow: turns the native coordinator would\nhave taken.",
             "minimum": 0
           }
         }
@@ -7180,50 +7124,6 @@
           "spawn",
           "relaunch"
         ]
-      },
-      "DivergenceExample": {
-        "type": "object",
-        "description": "One recorded disagreement, with each side cut to a short preview.",
-        "required": [
-          "seq",
-          "at",
-          "project_id",
-          "operation",
-          "bash",
-          "native"
-        ],
-        "properties": {
-          "at": {
-            "type": "string",
-            "description": "RFC 3339."
-          },
-          "bash": {
-            "type": "string",
-            "description": "What bash answered (what callers got), as JSON."
-          },
-          "native": {
-            "type": "string",
-            "description": "What native answered, as JSON."
-          },
-          "operation": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "seq": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Its position in the event log.",
-            "minimum": 0
-          },
-          "task": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
       },
       "DraftIssue": {
         "type": "object",
@@ -9140,23 +9040,6 @@
           "return"
         ]
       },
-      "OperationCount": {
-        "type": "object",
-        "required": [
-          "operation",
-          "count"
-        ],
-        "properties": {
-          "count": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "operation": {
-            "type": "string"
-          }
-        }
-      },
       "OverviewDigest": {
         "type": "object",
         "description": "What changed in a Project after `since`.",
@@ -9695,16 +9578,11 @@
         "description": "Everything the Automation screen shows, in one read.",
         "required": [
           "project_id",
-          "acting",
           "inbox",
           "rules",
           "away"
         ],
         "properties": {
-          "acting": {
-            "type": "boolean",
-            "description": "Whether the native engine acts on rules and routes, or only records\nwhat it would do beside the current engine."
-          },
           "away": {
             "$ref": "#/components/schemas/AwaySettings"
           },
@@ -10759,167 +10637,6 @@
               "string",
               "null"
             ]
-          }
-        }
-      },
-      "ShadowReadiness": {
-        "type": "object",
-        "description": "Every slice's shadow readiness over the last `days`.",
-        "required": [
-          "days",
-          "slices"
-        ],
-        "properties": {
-          "days": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Days of history the counts and examples cover, ending now.",
-            "minimum": 0
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Set when the event log could not be read; `slices` is then empty."
-          },
-          "latest_start": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ShadowStart",
-                "description": "When the daemon last started, and which shadows it ran."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "slices": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/SliceReadiness"
-            },
-            "description": "Slices 1 to 9, in switch-on order."
-          }
-        }
-      },
-      "ShadowStart": {
-        "type": "object",
-        "description": "One daemon start's shadows.",
-        "required": [
-          "at",
-          "slices"
-        ],
-        "properties": {
-          "at": {
-            "type": "string",
-            "description": "RFC 3339."
-          },
-          "native": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Slice names that ran native, such as `event_log`."
-          },
-          "slices": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Slice names whose shadow ran, such as `dispatch`."
-          }
-        }
-      },
-      "ShadowStatus": {
-        "type": "string",
-        "description": "Where a slice stands.",
-        "enum": [
-          "no_check",
-          "off",
-          "watching",
-          "diverging",
-          "agreeing",
-          "native"
-        ]
-      },
-      "SliceReadiness": {
-        "type": "object",
-        "description": "One slice's shadow and what it recorded.",
-        "required": [
-          "number",
-          "slice",
-          "status",
-          "note",
-          "divergences",
-          "operations",
-          "examples"
-        ],
-        "properties": {
-          "agrees_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "While `watching`: when it reads `agreeing` if it keeps running and\nnothing diverges, `on_since` plus the window (RFC 3339)."
-          },
-          "divergences": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Divergences in the window.",
-            "minimum": 0
-          },
-          "examples": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DivergenceExample"
-            },
-            "description": "The window's newest divergences, newest first."
-          },
-          "last_divergence_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The newest divergence ever recorded for this slice (RFC 3339)."
-          },
-          "note": {
-            "type": "string",
-            "description": "What the shadow compares, or why there is none."
-          },
-          "number": {
-            "type": "integer",
-            "format": "int32",
-            "description": "1 to 9.",
-            "minimum": 0
-          },
-          "on_since": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Start of the unbroken run of daemon starts with this shadow on\n(RFC 3339)."
-          },
-          "operations": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OperationCount"
-            },
-            "description": "The window's divergences per operation, most first."
-          },
-          "slice": {
-            "type": "string",
-            "description": "Such as `verification`."
-          },
-          "status": {
-            "$ref": "#/components/schemas/ShadowStatus"
-          },
-          "switch": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The setting that turns this slice's shadow on, when it has one."
           }
         }
       },
@@ -12053,7 +11770,7 @@
           "fires": {
             "type": "integer",
             "format": "int32",
-            "description": "Fires so far (or would-be fires, when the engine is not acting).",
+            "description": "Fires so far.",
             "minimum": 0
           },
           "id": {

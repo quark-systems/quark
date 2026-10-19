@@ -1,8 +1,6 @@
-//! The native supervisor (slice 4), run beside the bash engine.
+//! The native supervisor (slice 4), which the native engine runs on.
 //!
-//! Until slice 4 switches on, firstmate still spawns and steers every
-//! worker, so the native supervisor starts only when [`ENV`] is `1`. It
-//! then:
+//! With `--engine native`, quarkd:
 //!
 //! - starts the PTY supervisor (`quark-ptyd` from [`PTYD_ENV`], else this
 //!   binary as `quarkd ptyd`) on
@@ -33,18 +31,12 @@ use quark_worktree::TreehouseProvider;
 
 use crate::config::Config;
 
-/// Set to `1` to run the native supervisor.
-pub const ENV: &str = "QUARK_NATIVE_SUPERVISOR";
 /// Path of the `quark-ptyd` binary, when it is not next to `quarkd`.
 pub const PTYD_ENV: &str = "QUARK_PTYD";
 /// Where the worker protocol's routes are nested.
 pub const WORKER_PREFIX: &str = "/v1/worker";
 /// How often the supervisor looks at its workers.
 pub const TICK: Duration = Duration::from_secs(2);
-
-pub fn enabled() -> bool {
-    std::env::var(ENV).is_ok_and(|v| v == "1")
-}
 
 /// The PTY supervisor to start: the program and the arguments before
 /// `--socket <path>`. [`PTYD_ENV`] names a `quark-ptyd` binary; otherwise
@@ -67,7 +59,7 @@ pub struct NativeSupervision {
 impl NativeSupervision {
     /// Start everything, recover, and begin supervising.
     pub async fn start(config: &Config, log: Arc<dyn EventLog>) -> anyhow::Result<Self> {
-        let host = crate::event_ingest::host();
+        let host = crate::host();
         let socket = config.run_dir().join("ptyd.sock");
         let (ptyd, args) = ptyd_command();
         let sessions = PtyClient::start_with(&socket, &ptyd, &args)

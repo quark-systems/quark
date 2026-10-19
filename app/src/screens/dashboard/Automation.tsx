@@ -44,10 +44,6 @@ export function Automation({ project: pid }: { project: string }) {
         {unavailable && <Unavailable what="Automation" endpoint={`GET /v1/projects/${pid}/automation`} />}
         {loadErr && <div className="set-error" role="alert">{loadErr} <button className="btn" onClick={() => void load()}>Retry</button></div>}
         {a && <div className="set-body">
-          {!a.acting && <p className="faint" data-testid="automation-shadow">
-            Rules and the away policy are recorded but not acted on yet: the current engine still wakes the coordinator, and
-            each rule's count is how often it would have fired.
-          </p>}
           <InboxSection pid={pid} a={a} reload={load} />
           <RulesSection pid={pid} rules={a.rules} reload={load} />
           <AwaySection pid={pid} a={a} onSaved={(away) => setA({ ...a, away })} />
@@ -163,7 +159,7 @@ function RuleForm({ rule, onCancel, onSave }: {
         </select>
       </label>
       {when.source === "event" && <>
-        <label>Event kind<input aria-label="Event kind" className="mono" value={str(when.kind)} placeholder="firstmate.status or pr.*" onChange={(e) => w("kind", e.target.value)} /></label>
+        <label>Event kind<input aria-label="Event kind" className="mono" value={str(when.kind)} placeholder="worker.message or pr.*" onChange={(e) => w("kind", e.target.value)} /></label>
         <label>Task<input aria-label="Event task" className="mono" value={str(when.task)} placeholder="any" onChange={(e) => w("task", e.target.value || undefined)} /></label>
       </>}
       {when.source === "every" && <label>Seconds<input aria-label="Interval seconds" type="number" min={1} value={str(when.secs)} onChange={(e) => w("secs", Number(e.target.value))} /></label>}

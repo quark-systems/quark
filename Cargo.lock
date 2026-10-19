@@ -977,22 +977,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "quark-engine"
-version = "0.0.1"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
 name = "quark-eventlog"
 version = "0.0.1"
 dependencies = [
  "async-trait",
  "quark-core",
- "quark-engine",
  "quark-systems",
  "rusqlite",
  "serde",
@@ -1223,7 +1212,6 @@ dependencies = [
  "quark-coordinator",
  "quark-core",
  "quark-dispatch",
- "quark-engine",
  "quark-eventlog",
  "quark-harness",
  "quark-hosts",

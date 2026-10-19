@@ -1,19 +1,17 @@
-//! Kill-at-random-point crash tests for the event log and the firstmate
-//! bridge. Each round starts the `eventlog-crash` child, lets it write for a
-//! random moment, SIGKILLs it and checks the file.
+//! Kill-at-random-point crash tests for the event log. Each round starts
+//! the `eventlog-crash` child, lets it write for a random moment, SIGKILLs
+//! it and checks the file.
 //!
 //! Set `QUARK_CRASH_SEED` to replay a failing run; the seed is in every
 //! assertion message. `QUARK_CRASH_ROUNDS` raises the round count.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use quark_core::{EventLog, NewEvent, Seq};
-use quark_eventlog::firstmate::{kinds, StatusPayload};
-use quark_eventlog::{FirstmateBridge, SqliteEventLog};
+use quark_eventlog::SqliteEventLog;
 
 const CHILD: &str = env!("CARGO_BIN_EXE_eventlog-crash");
 
@@ -144,81 +142,4 @@ async fn appends_survive_kill_at_random_points() {
         !acked.is_empty(),
         "seed {seed}: the child never acknowledged an append"
     );
-}
-
-fn append(path: &Path, text: &str) {
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .unwrap();
-    f.write_all(text.as_bytes()).unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn ingest_lands_each_line_once_across_kills() {
-    let mut rng = Rng::from_env();
-    let seed = rng.0;
-    let home = tempfile::tempdir().unwrap();
-    let state = home.path().join("state");
-    std::fs::create_dir_all(&state).unwrap();
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = db_dir.path().join("events.db");
-    let tasks = ["t1", "t2", "t3"];
-    let verbs = ["working", "needs-decision", "resolved", "paused", "done"];
-    let mut n = 0;
-
-    for round in 0..rounds() {
-        let child = spawn(&[
-            "ingest",
-            db.to_str().unwrap(),
-            home.path().to_str().unwrap(),
-            "p",
-        ]);
-        // Write while the bridge reads, sometimes a line in two pieces.
-        let writes = 1 + rng.below(40);
-        for _ in 0..writes {
-            let task = tasks[rng.below(3) as usize];
-            let line = format!(
-                "{} [key=k{}]: line {n}\n",
-                verbs[rng.below(5) as usize],
-                rng.below(4)
-            );
-            n += 1;
-            let path = state.join(format!("{task}.status"));
-            if rng.below(4) == 0 {
-                let (a, b) = line.split_at(line.len() / 2);
-                append(&path, a);
-                std::thread::sleep(Duration::from_micros(rng.below(500)));
-                append(&path, b);
-            } else {
-                append(&path, &line);
-            }
-        }
-        kill_after(child, rng.below(30));
-        let log = SqliteEventLog::open(&db).unwrap();
-        log.verify()
-            .await
-            .unwrap_or_else(|e| panic!("seed {seed} round {round}: {e}"));
-    }
-
-    // One last pass in-process picks up whatever the last kill cut off.
-    let log = SqliteEventLog::open(&db).unwrap();
-    let bridge = FirstmateBridge::new(log.clone(), "h".into());
-    bridge.ingest(&"p".into(), home.path()).await.unwrap();
-    let events = log.read(Seq::ZERO, usize::MAX).await.unwrap();
-    for task in tasks {
-        let want: Vec<String> = std::fs::read_to_string(state.join(format!("{task}.status")))
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect();
-        let got: Vec<String> = events
-            .iter()
-            .filter(|e| e.kind.as_str() == kinds::STATUS)
-            .filter(|e| e.task.as_ref().map(|t| t.as_str()) == Some(task))
-            .map(|e| e.decode::<StatusPayload>().unwrap().raw)
-            .collect();
-        assert_eq!(got, want, "seed {seed}: {task}");
-    }
 }

@@ -22,7 +22,7 @@ A user opens a Project and sees one column per task state, updated live from the
 Preconditions:
 
 - Mock: `$Q launch --daemon mock`; the `Quark MVP` Project (`quark`) has a coordinator that answers.
-- Real: `$Q launch --engine firstmate ...`, a ready Project, and its coordinator harness signed in so it can answer.
+- Real: `$Q launch --engine native`, a ready Project, and its coordinator harness signed in so it can answer.
 
 - **Open the board.** Run `$Q browser open "#/p/quark"` and `$Q browser wait --testid connection --contains connected`. `$Q browser snapshot --path board-and-chat/01-board.aria.txt` lists the columns and cards.
 - **Ask for work.** Run `$Q browser fill --label "Message the coordinator" --value "Add tests for the parser"` and `$Q browser press Enter --label "Message the coordinator"`. The message shows as pending in `coordinator-chat`.

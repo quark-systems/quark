@@ -7,9 +7,6 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ProjectAutomation {
     pub project_id: String,
-    /// Whether the native engine acts on rules and routes, or only records
-    /// what it would do beside the current engine.
-    pub acting: bool,
     /// Messages waiting for the coordinator, oldest first.
     pub inbox: Vec<InboxMessage>,
     pub rules: Vec<TriggerRule>,
@@ -58,7 +55,7 @@ pub struct TriggerRule {
     pub then: serde_json::Value,
     /// When this version of the rule was defined, RFC 3339.
     pub defined_at: String,
-    /// Fires so far (or would-be fires, when the engine is not acting).
+    /// Fires so far.
     pub fires: u32,
 }
 

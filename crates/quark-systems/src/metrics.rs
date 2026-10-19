@@ -135,18 +135,13 @@ pub struct AccountUse {
 ///
 /// A turn that changed nothing (no task started, steered, answered or
 /// cancelled, nothing told or asked of the user) only acknowledged status;
-/// the native coordinator's target share of those is near zero.
+/// the coordinator's target share of those is near zero.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct CoordinatorMetrics {
     /// Tasks seen in the window, the divisor of the per-task figures.
     pub tasks: u32,
-    /// firstmate's coordinator (Claude Code transcripts only).
-    pub baseline: CoordinatorTurns,
-    /// The native coordinator; no turns until slice 6 switches on.
+    /// The native coordinator's turns.
     pub native: CoordinatorTurns,
-    /// While slice 6 runs in shadow: turns the native coordinator would
-    /// have taken.
-    pub would_wake_turns: u32,
 }
 
 /// One coordinator's turns and tokens.

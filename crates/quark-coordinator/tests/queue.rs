@@ -1,5 +1,5 @@
-//! The wake queue against the SQLite log: batching, shadow mode, crash
-//! recovery, timeouts, tools and the baseline reader.
+//! The wake queue against the SQLite log: batching, crash recovery,
+//! timeouts and tools.
 
 use std::sync::{Arc, Mutex};
 
@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use quark_coordinator::events::{CoordinatorEvent, TurnEnd};
 use quark_coordinator::mcp::CoordinatorMcp;
 use quark_coordinator::{
-    Brain, Config, Coordinator, Efficiency, Hands, LayeredPrompt, Mode, Need, NoBrain, NoHands,
-    Sources, ToolCall, Turn, Usage,
+    Brain, Config, Coordinator, Efficiency, Hands, LayeredPrompt, Need, Sources, ToolCall, Turn,
+    Usage,
 };
 use quark_core::worker::{Transport, WorkerEnvelope, WorkerMessage};
 use quark_core::{event::kinds, Event, EventLog, HostId, NewEvent, ProjectId, Result, Seq, TaskId};
@@ -61,18 +61,13 @@ impl Rig {
         }
     }
 
-    async fn open(&self, mode: Mode) -> Coordinator {
-        let (brain, hands): (Arc<dyn Brain>, Arc<dyn Hands>) = match mode {
-            Mode::Native => (self.rec.clone(), self.rec.clone()),
-            Mode::Shadow => (Arc::new(NoBrain), Arc::new(NoHands)),
-        };
+    async fn open(&self) -> Coordinator {
         Coordinator::open(
             self.log.clone(),
             HostId::from("h"),
-            mode,
             Config::default(),
-            brain,
-            hands,
+            self.rec.clone(),
+            self.rec.clone(),
         )
         .await
         .unwrap()
@@ -159,7 +154,7 @@ fn p() -> ProjectId {
 async fn history_wakes_no_one_and_progress_never_does() {
     let rig = Rig::new();
     rig.ask("t0", "old", "an old question").await;
-    let c = rig.open(Mode::Native).await;
+    let c = rig.open().await;
     for _ in 0..5 {
         rig.working("t1").await;
     }
@@ -170,51 +165,9 @@ async fn history_wakes_no_one_and_progress_never_does() {
 }
 
 #[tokio::test]
-async fn shadow_records_would_wake_once_and_acts_on_nothing() {
-    let mut rig = Rig::new();
-    let c = rig.open(Mode::Shadow).await;
-    rig.working("t1").await;
-    let ask = rig.ask("t1", "schema", "v14 or v15?").await;
-    rig.worker(
-        "t2",
-        WorkerMessage::Report {
-            state: "blocked".into(),
-            note: "no credentials".into(),
-            key: None,
-        },
-    )
-    .await;
-    rig.working("t2").await;
-    let r = c.tick(now()).await.unwrap();
-    assert_eq!((r.items, r.turns), (2, 1));
-    c.tick(now()).await.unwrap();
-    let would = rig.decoded("coordinator.would_wake").await;
-    assert_eq!(would.len(), 1);
-    let CoordinatorEvent::WouldWake { items } = &would[0] else {
-        unreachable!()
-    };
-    assert_eq!(items[0].source, ask);
-    assert_eq!(items[0].need, Need::Decision);
-    assert_eq!(items[1].need, Need::Blocked);
-    assert!(c
-        .call(&p(), ToolCall::TellUser { text: "x".into() })
-        .await
-        .is_err());
-
-    // A restart re-evaluates nothing it already batched.
-    drop(c);
-    rig.reopen_log();
-    let c = rig.open(Mode::Shadow).await;
-    c.tick(now()).await.unwrap();
-    assert_eq!(rig.decoded("coordinator.would_wake").await.len(), 1);
-    let eff = Efficiency::fold(&rig.log.read(Seq::ZERO, 1000).await.unwrap(), |_| true);
-    assert_eq!(eff.would_wake, 1);
-}
-
-#[tokio::test]
 async fn native_batches_items_into_turns_and_waits_for_the_turn_to_end() {
     let rig = Rig::new();
-    let c = rig.open(Mode::Native).await;
+    let c = rig.open().await;
     rig.ask("t1", "schema", "v14 or v15?").await;
     rig.worker(
         "t2",
@@ -297,7 +250,7 @@ async fn native_batches_items_into_turns_and_waits_for_the_turn_to_end() {
 #[tokio::test]
 async fn a_crash_redelivers_the_open_turn_and_closes_a_tool_that_was_running() {
     let mut rig = Rig::new();
-    let c = rig.open(Mode::Native).await;
+    let c = rig.open().await;
     rig.ask("t1", "k", "q?").await;
     c.tick(now()).await.unwrap();
     // A tool call recorded, then the daemon dies before its outcome.
@@ -318,7 +271,7 @@ async fn a_crash_redelivers_the_open_turn_and_closes_a_tool_that_was_running() {
     drop(c);
 
     rig.reopen_log();
-    let c = rig.open(Mode::Native).await;
+    let c = rig.open().await;
     let done = rig.decoded("coordinator.tool_done").await;
     assert_eq!(done.len(), 1);
     let CoordinatorEvent::ToolDone { id, ok, .. } = &done[0] else {
@@ -340,7 +293,7 @@ async fn a_crash_redelivers_the_open_turn_and_closes_a_tool_that_was_running() {
     // the waiting item survives the restart too.
     drop(c);
     rig.reopen_log();
-    let c = rig.open(Mode::Native).await;
+    let c = rig.open().await;
     c.tick(now()).await.unwrap();
     assert_eq!(rig.rec.turns.lock().unwrap().last().unwrap().1.attempt, 3);
     c.turn_ended(&p(), Usage::default(), None).await.unwrap();
@@ -353,7 +306,7 @@ async fn a_crash_redelivers_the_open_turn_and_closes_a_tool_that_was_running() {
 #[tokio::test]
 async fn a_turn_that_never_ends_times_out_and_its_items_wake_again() {
     let rig = Rig::new();
-    let c = rig.open(Mode::Native).await;
+    let c = rig.open().await;
     rig.ask("t1", "k", "q?").await;
     c.tick(now()).await.unwrap();
     rig.ask("t2", "k", "later?").await;
@@ -384,7 +337,7 @@ async fn a_turn_that_never_ends_times_out_and_its_items_wake_again() {
 #[tokio::test]
 async fn explicit_requests_and_dispatch_escalations_wake() {
     let rig = Rig::new();
-    let c = rig.open(Mode::Native).await;
+    let c = rig.open().await;
     c.request(&p(), None, "nightly failed twice", "rule nightly")
         .await
         .unwrap();
@@ -429,7 +382,7 @@ async fn prompts_are_recorded_on_change_and_serve_skills() {
         repos: vec![("quark".into(), repo.clone())],
         ..Default::default()
     };
-    let c = Arc::new(rig.open(Mode::Native).await);
+    let c = Arc::new(rig.open().await);
     assert!(c
         .set_prompt(&p(), LayeredPrompt::build(&sources("nautical")), "nautical")
         .await
@@ -513,39 +466,4 @@ async fn prompts_are_recorded_on_change_and_serve_skills() {
         )
         .await
         .is_none());
-}
-
-#[tokio::test]
-async fn the_baseline_is_read_once_per_turn() {
-    let rig = Rig::new();
-    let c = rig.open(Mode::Shadow).await;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("coordinator.jsonl");
-    let user = |id: &str, text: &str| {
-        format!(
-            "{}\n",
-            json!({"type": "user", "uuid": id, "timestamp": "t", "message": {"role": "user", "content": text}})
-        )
-    };
-    let reply = |id: &str| {
-        format!(
-            "{}\n",
-            json!({"type": "assistant", "message": {"id": id, "content": [], "usage": {"input_tokens": 10, "output_tokens": 2}}})
-        )
-    };
-    let text = [
-        user("u1", "<task-notification>done</task-notification>"),
-        reply("m1"),
-        user("u2", "what's the status?"),
-        reply("m2"),
-        user("u3", "signal: t1"),
-    ]
-    .concat();
-    std::fs::write(&path, text).unwrap();
-    assert_eq!(c.read_baseline(&p(), &path).await.unwrap(), 2);
-    assert_eq!(c.read_baseline(&p(), &path).await.unwrap(), 0);
-    let eff = Efficiency::fold(&rig.log.read(Seq::ZERO, 1000).await.unwrap(), |_| true);
-    assert_eq!(eff.baseline.turns, 2);
-    assert_eq!(eff.baseline.acks, 1);
-    assert_eq!(eff.baseline.usage.total(), 24);
 }

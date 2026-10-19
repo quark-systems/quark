@@ -1,13 +1,11 @@
 //! Coordinator token efficiency, folded from the log.
 //!
 //! For one Project over a window: turns, tokens and acknowledgement-only
-//! turns, per task, for the native coordinator (`coordinator.turn_ended`,
-//! with its acting tool calls from `coordinator.tool`) and for firstmate's
-//! (`coordinator.baseline`). In shadow mode the native side has no turns of
-//! its own yet; `would_wake` counts the turns it would have taken.
+//! turns, per task, for the coordinator (`coordinator.turn_ended`, with its
+//! acting tool calls from `coordinator.tool`).
 //!
-//! A task counts once it appears in the window under a task event, a
-//! firstmate spawn or a dispatch request.
+//! A task counts once it appears in the window under a task event or a
+//! dispatch request.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,14 +39,11 @@ impl Side {
     }
 }
 
-/// Native and baseline figures for one Project.
+/// The coordinator's figures for one Project.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Efficiency {
     pub tasks: u32,
     pub native: Side,
-    pub baseline: Side,
-    /// Shadow: turns the native coordinator would have taken.
-    pub would_wake: u32,
 }
 
 impl Efficiency {
@@ -63,9 +58,7 @@ impl Efficiency {
             let kind = e.kind.as_str();
             if let Some(task) = &e.task {
                 if in_window(e)
-                    && (kind == quark_core::event::kinds::TASK
-                        || kind == "firstmate.spawn"
-                        || kind == "dispatch.requested")
+                    && (kind == quark_core::event::kinds::TASK || kind == "dispatch.requested")
                 {
                     tasks.insert(task);
                 }
@@ -91,14 +84,6 @@ impl Efficiency {
                         out.native.usage.add(&usage);
                     }
                 }
-                CoordinatorEvent::Baseline { turn } if in_window(e) => {
-                    out.baseline.turns += 1;
-                    if turn.is_ack() {
-                        out.baseline.acks += 1;
-                    }
-                    out.baseline.usage.add(&turn.usage);
-                }
-                CoordinatorEvent::WouldWake { .. } if in_window(e) => out.would_wake += 1,
                 _ => {}
             }
         }
@@ -113,7 +98,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::baseline::{BaselineTurn, Cause};
     use crate::tools::ToolCall;
 
     fn ev(seq: u64, task: Option<&str>, e: serde_json::Value, kind: &str) -> Event {
@@ -144,16 +128,6 @@ mod tests {
             cache_read: 50,
             calls: 1,
         };
-        let base = |id: &str, cause, acts| CoordinatorEvent::Baseline {
-            turn: BaselineTurn {
-                id: id.into(),
-                at: String::new(),
-                cause,
-                usage,
-                tool_calls: 1,
-                acts,
-            },
-        };
         let events = vec![
             ev(
                 1,
@@ -161,11 +135,8 @@ mod tests {
                 json!({"type": "queued", "title": "x"}),
                 "task.transition",
             ),
-            ev(2, Some("t2"), json!({}), "firstmate.spawn"),
-            ev(3, Some("t2"), json!({}), "firstmate.status"),
-            c(4, base("a", Cause::Wake, false)),
-            c(5, base("b", Cause::Wake, true)),
-            c(6, base("c", Cause::User, true)),
+            ev(2, Some("t2"), json!({}), "dispatch.requested"),
+            ev(3, Some("t2"), json!({}), "worker.message"),
             c(
                 7,
                 CoordinatorEvent::Tool {
@@ -198,19 +169,15 @@ mod tests {
                     usage,
                 },
             ),
-            c(11, CoordinatorEvent::WouldWake { items: vec![] }),
         ];
         let e = Efficiency::fold(&events, |_| true);
         assert_eq!(e.tasks, 2);
-        assert_eq!(e.baseline.turns, 3);
-        assert_eq!(e.baseline.acks, 1);
-        assert_eq!(e.baseline.usage.total(), 330);
         assert_eq!(e.native.turns, 2);
         assert_eq!(e.native.acks, 1);
-        assert_eq!(e.would_wake, 1);
-        assert_eq!(e.baseline.ack_share(), Some(1.0 / 3.0));
-        assert_eq!(e.baseline.per_task(e.tasks), Some((1.5, 165.0)));
-        let none = Efficiency::fold(&events, |e| e.seq > Seq(11));
+        assert_eq!(e.native.usage.total(), 220);
+        assert_eq!(e.native.ack_share(), Some(0.5));
+        assert_eq!(e.native.per_task(e.tasks), Some((1.0, 110.0)));
+        let none = Efficiency::fold(&events, |e| e.seq > Seq(10));
         assert_eq!(none, Efficiency::default());
     }
 }

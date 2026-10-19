@@ -3,29 +3,19 @@
 //!
 //! [`Engine`] keeps its read models ([`Inboxes`], [`AwayState`],
 //! [`RuleSet`]) folded from the log and evaluates each new event once,
-//! after the last `trigger.cursor`. What it does with an event depends on
-//! its [`Mode`]:
-//!
-//! - **Shadow**: firstmate still runs the Project. The engine mirrors the
-//!   bash inbox and posture into the log ([`Engine::mirror_firstmate`]),
-//!   compares its route for every `firstmate.status` line with firstmate's
-//!   away classifier and records each disagreement as a
-//!   `shadow.divergence` event, and records `trigger.would_fire` instead of
-//!   running actions. It never wakes, notifies or steers anyone.
-//! - **Native**: the engine routes occasions through [`Effects`], fires
-//!   rules (claim, act, outcome) and sends digests and the return brief.
+//! after the last `trigger.cursor`: it routes occasions through
+//! [`Effects`], fires rules (claim, act, outcome) and sends digests and the
+//! return brief.
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_core::event::kinds;
-use quark_core::slice::Divergence;
 use quark_core::worker::{WorkerEnvelope, WorkerMessage};
 use quark_core::{
-    CoreError, Event, EventId, EventLog, HostId, NewEvent, ProjectId, Result, Seq, Slice, TaskId,
+    CoreError, Event, EventId, EventLog, HostId, NewEvent, ProjectId, Result, Seq, TaskId,
 };
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -34,24 +24,15 @@ use tokio::sync::Mutex;
 use crate::away::{AwayEvent, AwayPolicy, AwayState, Item, Occasion, Posture, Reach, Route};
 use crate::channel::{self, ChannelEvent, Inbound, Inboxes};
 use crate::commands::{Commands, Ran};
-use crate::firstmate;
 use crate::trigger::{
     self, event_matches, Action, Condition, Defined, Expect, Rule, RuleId, RuleSet, Status,
     TriggerEvent,
 };
 
-/// How the engine acts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    /// Record what native would do; act on nothing.
-    Shadow,
-    Native,
-}
-
 /// Who the engine records as the actor of its own changes.
 pub const ENGINE: &str = "engine";
 
-/// What native mode does in the world. quarkd implements it.
+/// What the engine does in the world. quarkd implements it.
 #[async_trait]
 pub trait Effects: Send + Sync {
     /// Wake the coordinator of `project` for judgment: a rule's `wake`
@@ -73,22 +54,22 @@ pub trait Effects: Send + Sync {
     async fn steer(&self, project: &ProjectId, task: &TaskId, text: &str) -> Result<()>;
 }
 
-/// Effects that refuse everything, for shadow mode.
+/// Effects that refuse every action, for tests that never act.
 pub struct NoEffects;
 
 #[async_trait]
 impl Effects for NoEffects {
     async fn wake(&self, _: &ProjectId, _: Option<&TaskId>, _: &str) -> Result<()> {
-        Err(CoreError::Unsupported("shadow mode does not act".into()))
+        Err(CoreError::Unsupported("no effects".into()))
     }
     async fn notify(&self, _: &ProjectId, _: Option<&TaskId>, _: Occasion, _: &str) -> Result<()> {
-        Err(CoreError::Unsupported("shadow mode does not act".into()))
+        Err(CoreError::Unsupported("no effects".into()))
     }
     async fn digest(&self, _: &ProjectId, _: &[Item], _: bool) -> Result<()> {
-        Err(CoreError::Unsupported("shadow mode does not act".into()))
+        Err(CoreError::Unsupported("no effects".into()))
     }
     async fn steer(&self, _: &ProjectId, _: &TaskId, _: &str) -> Result<()> {
-        Err(CoreError::Unsupported("shadow mode does not act".into()))
+        Err(CoreError::Unsupported("no effects".into()))
     }
 }
 
@@ -97,30 +78,12 @@ impl Effects for NoEffects {
 pub struct TickReport {
     /// Events evaluated.
     pub evaluated: usize,
-    /// Status lines whose route was compared with firstmate's (shadow).
-    pub compared: usize,
-    /// Of those, how many disagreed.
-    pub diverged: usize,
-    /// Rules fired (native) or that would have fired (shadow).
+    /// Rules fired.
     pub fired: usize,
-    /// Occasions routed to someone (native).
+    /// Occasions routed to someone.
     pub routed: usize,
-    /// Digests sent (native).
+    /// Digests sent.
     pub digests: usize,
-}
-
-/// What one [`Engine::mirror_firstmate`] pass appended.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MirrorReport {
-    pub received: usize,
-    pub acked: usize,
-    pub posture: bool,
-    /// When-then watches mirrored as new or changed rules.
-    pub watches: usize,
-    /// Watches whose end was compared with their rule's: how many agreed
-    /// and how many did not.
-    pub agreed: usize,
-    pub diverged: usize,
 }
 
 #[derive(Debug, Default)]
@@ -154,7 +117,6 @@ impl State {
 pub struct Engine {
     log: Arc<dyn EventLog>,
     host: HostId,
-    mode: Mode,
     effects: Arc<dyn Effects>,
     commands: Arc<dyn Commands>,
     state: Mutex<State>,
@@ -170,14 +132,12 @@ impl Engine {
     pub async fn open(
         log: Arc<dyn EventLog>,
         host: HostId,
-        mode: Mode,
         effects: Arc<dyn Effects>,
         commands: Arc<dyn Commands>,
     ) -> Result<Self> {
         let engine = Self {
             log,
             host,
-            mode,
             effects,
             commands,
             state: Mutex::new(State::default()),
@@ -209,10 +169,6 @@ impl Engine {
         engine.refresh_locked(&mut st).await?;
         drop(st);
         Ok(engine)
-    }
-
-    pub fn mode(&self) -> Mode {
-        self.mode
     }
 
     // ----------------------------------------------------------- writes
@@ -383,174 +339,6 @@ impl Engine {
         }
     }
 
-    /// Mirror the firstmate home of `project` into the log: new inbox
-    /// notes, notes firstmate handled, its away posture, and its when-then
-    /// watches as rules, comparing how each watch ended with its rule.
-    /// Safe to run again at any time.
-    pub async fn mirror_firstmate(&self, project: &ProjectId, home: &Path) -> Result<MirrorReport> {
-        self.mirror_firstmate_at(project, home, OffsetDateTime::now_utc())
-            .await
-    }
-
-    /// [`Engine::mirror_firstmate`] as of `now`.
-    pub async fn mirror_firstmate_at(
-        &self,
-        project: &ProjectId,
-        home: &Path,
-        now: OffsetDateTime,
-    ) -> Result<MirrorReport> {
-        let path = home.to_path_buf();
-        let home = tokio::task::spawn_blocking(move || firstmate::read_home(&path))
-            .await
-            .map_err(|e| CoreError::Backend(e.to_string()))??;
-        self.refresh().await?;
-        let mut report = MirrorReport::default();
-        let (new, to_ack, own_posture) = {
-            let st = self.state.lock().await;
-            let known = |m: &Inbound| {
-                st.inboxes.is_pending(project, &m.channel, &m.id)
-                    || st.inboxes.was_acked(project, &m.channel, &m.id)
-            };
-            let new: Vec<Inbound> = home
-                .pending
-                .iter()
-                .chain(home.handled.iter())
-                .filter(|m| !known(m))
-                .cloned()
-                .collect();
-            let to_ack: Vec<Inbound> = home
-                .handled
-                .iter()
-                .filter(|m| !st.inboxes.was_acked(project, &m.channel, &m.id))
-                .cloned()
-                .collect();
-            (new, to_ack, st.away.own_posture(project))
-        };
-        for m in new {
-            let ev = ChannelEvent::Received { message: m };
-            let id = ev.event_id(project);
-            self.append(project, None, &ev, ev.kind(), Some(id)).await?;
-            report.received += 1;
-        }
-        for m in to_ack {
-            let ev = ChannelEvent::Acked {
-                channel: m.channel,
-                id: m.id,
-                by: "firstmate".into(),
-            };
-            let id = ev.event_id(project);
-            self.append(project, None, &ev, ev.kind(), Some(id)).await?;
-            report.acked += 1;
-        }
-        if own_posture.unwrap_or_default() != home.posture {
-            let ev = AwayEvent::Posture {
-                posture: home.posture,
-                words: None,
-                expected_return: home.expected_return,
-                by: "firstmate".into(),
-            };
-            self.append(project, None, &ev, ev.kind(), None).await?;
-            report.posture = true;
-        }
-        self.refresh().await?;
-        self.mirror_watches(project, &home.watches, now, &mut report)
-            .await?;
-        Ok(report)
-    }
-
-    /// Keep one rule per firstmate when-then watch, defined by `firstmate`,
-    /// and compare how each ended. A disagreement is a `shadow.divergence`
-    /// for slice `sub_coordinators`, operation `trigger.when`. A rule
-    /// whose watch firstmate retired is removed once compared.
-    async fn mirror_watches(
-        &self,
-        project: &ProjectId,
-        watches: &[firstmate::Watch],
-        now: OffsetDateTime,
-        report: &mut MirrorReport,
-    ) -> Result<()> {
-        let by = "firstmate";
-        for w in watches {
-            let id = RuleId::new(&w.source);
-            let Some(spec) = &w.spec else { continue };
-            let rule = spec.rule(&w.source);
-            if rule.validate().is_err() {
-                continue;
-            }
-            let current = self.state.lock().await.rules.rule(project, &id).cloned();
-            if current.is_none_or(|d| d.rule != rule) {
-                self.define(project, rule, by).await?;
-                report.watches += 1;
-            }
-        }
-        let mirrored: Vec<Defined> = {
-            let st = self.state.lock().await;
-            st.rules
-                .rules(project)
-                .into_iter()
-                .filter(|d| firstmate::mirrored(&d.rule).is_some())
-                .cloned()
-                .collect()
-        };
-        for d in mirrored {
-            let (armed, grace) = firstmate::mirrored(&d.rule).expect("filtered");
-            let watch = watches.iter().find(|w| w.source == d.rule.id.0);
-            let retired = watch.is_none_or(|w| w.spec.is_none());
-            let Some(watch) = watch else {
-                self.remove(project, &d.rule.id, by).await?;
-                continue;
-            };
-            let native = {
-                let st = self.state.lock().await;
-                let at = |k: &str| st.rules.fired_at(project, &d.rule.id, &d.fire_id(k));
-                firstmate::NativeEnd {
-                    held: at("held"),
-                    error: at("error"),
-                    deadline: at("deadline"),
-                }
-            };
-            let verdict = firstmate::compare_watch(watch, armed, grace, native, now);
-            match &verdict {
-                firstmate::Verdict::Agree => report.agreed += 1,
-                firstmate::Verdict::Diverge { bash: b, native: n } => {
-                    report.diverged += 1;
-                    let outcome = watch.outcomes.iter().rev().find(|o| o.at >= armed);
-                    let div = Divergence {
-                        slice: Slice::SubCoordinators,
-                        operation: "trigger.when".into(),
-                        bash: serde_json::json!({
-                            "watch": watch.source,
-                            "end": b,
-                            "status": outcome.map(|o| o.status),
-                            "detail": outcome.map(|o| o.detail.clone()),
-                        }),
-                        native: serde_json::json!({ "rule": d.rule.id, "end": n }),
-                    };
-                    let armed_s = armed.unix_timestamp().to_string();
-                    self.append(
-                        project,
-                        None,
-                        &div,
-                        kinds::SHADOW_DIVERGENCE.into(),
-                        Some(crate::stable_id(&[
-                            "when",
-                            project.as_str(),
-                            &watch.source,
-                            &armed_s,
-                        ])),
-                    )
-                    .await?;
-                }
-                firstmate::Verdict::Pending | firstmate::Verdict::Skip => {}
-            }
-            let no_outcome = !watch.outcomes.iter().any(|o| o.at >= armed);
-            if retired && (verdict != firstmate::Verdict::Pending || no_outcome) {
-                self.remove(project, &d.rule.id, by).await?;
-            }
-        }
-        self.refresh().await
-    }
-
     /// Evaluate every new event once, then clocks and polled commands,
     /// then digests. Call it on a timer.
     pub async fn tick(&self, now: OffsetDateTime) -> Result<TickReport> {
@@ -577,19 +365,8 @@ impl Engine {
                 self.evaluate(&mut st, e, &mut report).await?;
             }
         }
-        if self.mode == Mode::Shadow && report.compared > 0 {
-            let ev = AwayEvent::Shadowed {
-                through,
-                compared: report.compared,
-                diverged: report.diverged,
-            };
-            self.append(&ProjectId::engine(), None, &ev, ev.kind(), None)
-                .await?;
-        }
         self.clocks(&mut st, now, &mut report).await?;
-        if self.mode == Mode::Native {
-            self.digests(&mut st, now, &mut report).await?;
-        }
+        self.digests(&mut st, now, &mut report).await?;
         if !bookkeeping_only {
             let ev = TriggerEvent::Cursor { through };
             self.append(&ProjectId::engine(), None, &ev, ev.kind(), None)
@@ -620,44 +397,8 @@ impl Engine {
         let Some((occasion, summary)) = occasion(e) else {
             return Ok(());
         };
-        match self.mode {
-            Mode::Shadow => {
-                if e.kind.as_str() != firstmate::STATUS_KIND {
-                    return Ok(());
-                }
-                let Ok(line) = e.decode::<firstmate::StatusLine>() else {
-                    return Ok(());
-                };
-                let route = st.away.route(&e.project, occasion);
-                let bash = firstmate::bash_escalates(&line.verb, &line.raw);
-                report.compared += 1;
-                if route.wake != bash {
-                    report.diverged += 1;
-                    let d = Divergence {
-                        slice: Slice::SubCoordinators,
-                        operation: "away.route".into(),
-                        bash: serde_json::json!({ "escalate": bash, "line": line.raw }),
-                        native: serde_json::json!({
-                            "wake": route.wake,
-                            "occasion": occasion,
-                            "posture": st.away.posture(&e.project).as_str(),
-                        }),
-                    };
-                    self.append(
-                        &e.project,
-                        e.task.clone(),
-                        &d,
-                        kinds::SHADOW_DIVERGENCE.into(),
-                        Some(crate::stable_id(&["divergence", &e.id.to_string()])),
-                    )
-                    .await?;
-                }
-            }
-            Mode::Native => {
-                let route = st.away.route(&e.project, occasion);
-                self.dispatch(e, occasion, route, &summary, report).await?;
-            }
-        }
+        let route = st.away.route(&e.project, occasion);
+        self.dispatch(e, occasion, route, &summary, report).await?;
         Ok(())
     }
 
@@ -703,7 +444,7 @@ impl Engine {
         Ok(())
     }
 
-    /// Claim, act, record. In shadow mode, only record what would fire.
+    /// Claim, act, record.
     #[allow(clippy::too_many_arguments)]
     async fn fire(
         &self,
@@ -719,16 +460,6 @@ impl Engine {
         let key_id = id.0.clone();
         let key = ["fire", project.as_str(), key_id.as_str(), &fire];
         report.fired += 1;
-        if self.mode == Mode::Shadow {
-            let ev = TriggerEvent::WouldFire {
-                id,
-                fire: fire.clone(),
-                cause,
-            };
-            self.append_stable(project, None, &ev, &key).await?;
-            self.refresh_locked(st).await?;
-            return Ok(());
-        }
         let claim = TriggerEvent::Fired {
             id: id.clone(),
             fire: fire.clone(),
@@ -1033,16 +764,6 @@ pub fn occasion(e: &Event) -> Option<(Occasion, String)> {
         .map(|t| format!("{t}: "))
         .unwrap_or_default();
     match e.kind.as_str() {
-        firstmate::STATUS_KIND => {
-            let line = e.decode::<firstmate::StatusLine>().ok()?;
-            let occ = firstmate::status_occasion(&line.verb, &line.raw);
-            let text = if line.note.is_empty() {
-                &line.raw
-            } else {
-                &line.note
-            };
-            Some((occ, format!("{task}{} {text}", line.verb)))
-        }
         kinds::WORKER => {
             let env = e.decode::<WorkerEnvelope>().ok()?;
             match env.message {

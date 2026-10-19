@@ -12,20 +12,16 @@ pub mod classifier;
 pub mod config;
 pub mod coordinator_hands;
 pub mod coordinator_http;
-pub mod coordinator_shadow;
 pub mod crew_dispatch;
-pub mod dashboard_shadow;
 pub mod dispatch;
 pub mod dispatch_test;
 pub mod engine;
-pub mod event_ingest;
 pub mod failover;
 pub mod forge;
 pub mod gates;
 pub mod harness;
 pub mod host_sources;
 pub mod hosts;
-pub mod log_shadow;
 pub mod memory;
 pub mod metrics;
 pub mod native;
@@ -41,14 +37,11 @@ pub mod provision;
 pub mod recovery;
 pub mod sessions;
 pub mod settings;
-pub mod shadows;
 pub mod spend;
 pub mod store;
 pub mod task_brief;
 pub mod transcripts;
 pub mod usage;
-pub mod verify_shadow;
-pub mod worker_shadow;
 pub mod worktree;
 
 use std::sync::Arc;
@@ -62,6 +55,14 @@ use crate::config::{Config, EngineKind};
 use crate::projector::Projector;
 use crate::sessions::Sessions;
 use crate::store::Store;
+
+/// This machine until host identity lands with the host registry.
+pub const LOCAL_HOST: &str = "local";
+
+/// The host this daemon records events as.
+pub fn host() -> quark_core::HostId {
+    quark_core::HostId::from(LOCAL_HOST)
+}
 
 /// Current UTC time as RFC 3339.
 pub fn now_rfc3339() -> String {
@@ -88,31 +89,21 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let native_engine = engine == EngineKind::Native;
     // The engine opens its windows on the shared server, so it must be up
     // before the first engine write.
-    if engine == EngineKind::Firstmate || native_engine {
+    if native_engine {
         if let Err(e) = sessions.ensure_server().await {
             tracing::warn!(error = %e, "terminal sessions unavailable");
         }
     }
-    let tmux = sessions.tmux_env().ok();
     let events_path = config.events_path();
     let events = quark_eventlog::SqliteEventLog::open(&events_path)
         .with_context(|| format!("opening {}", events_path.display()))?;
-    // First, so every event after it is this run's (slice 6's downtime).
-    shadows::record_daemon_started(&events, event_ingest::host()).await;
-    let bridge = quark_eventlog::FirstmateBridge::new(events.clone(), event_ingest::host());
-    let firstmate = engine == EngineKind::Firstmate;
     // The native engine is the native supervisor: it must run.
-    let native = if engine == EngineKind::Native || native::enabled() {
-        match native::NativeSupervision::start(&config, Arc::new(events.clone())).await {
-            Ok(n) => Some(n),
-            Err(e) if engine == EngineKind::Native => {
-                return Err(e.context("starting the native engine's supervisor"))
-            }
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "native supervisor not started");
-                None
-            }
-        }
+    let native = if native_engine {
+        Some(
+            native::NativeSupervision::start(&config, Arc::new(events.clone()))
+                .await
+                .context("starting the native engine's supervisor")?,
+        )
     } else {
         None
     };
@@ -123,10 +114,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         None => sessions,
     };
     let layout = provision::Layout::new(&config.home).with_user_memory(config.user_memory.clone());
-    let native_engine = engine == EngineKind::Native;
     // Native dispatch (slice 5) starts the native engine's tasks.
     let dispatch = match &native {
-        Some(n) if native_engine => {
+        Some(n) => {
             let parts = engine::native_dispatch_engine::DispatchParts::for_daemon(
                 &config,
                 Arc::new(events.clone()),
@@ -137,10 +127,10 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                     .context("starting native dispatch")?;
             Some(d)
         }
-        _ => None,
+        None => None,
     };
-    let mut engine: Arc<dyn EngineAdapter> = match (engine, &native, &dispatch) {
-        (EngineKind::Native, Some(n), Some(d)) => Arc::new(
+    let engine: Arc<dyn EngineAdapter> = match (&native, &dispatch) {
+        (Some(n), Some(d)) => Arc::new(
             engine::native::NativeEngine::new(Arc::new(events.clone()), n.supervisor.clone())
                 .with_dispatch(d.clone())
                 .with_project_setup(Arc::new(engine::native_project::ProjectSetup::new(
@@ -149,37 +139,8 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                     format!("http://{}", config.listen),
                 ))),
         ),
-        _ => config::build_engine(engine, &config, store.clone(), tmux)?,
+        _ => config::build_engine(engine)?,
     };
-    let dashboard_shadow = firstmate && dashboard_shadow::enabled();
-    if firstmate {
-        // Slice 1 in shadow: the fleet is read back from the event log too.
-        // Later slices' checks compare each firstmate snapshot.
-        let mut checks: Vec<Arc<dyn engine::shadow::SnapshotCheck>> = Vec::new();
-        if dashboard_shadow {
-            checks.push(Arc::new(dashboard_shadow::OverviewCheck::new(
-                events.clone(),
-                bridge.clone(),
-            )));
-        }
-        // Slice 4 also reads firstmate's panes through the native tmux
-        // backend on the shared server.
-        let switch = engine::shadow::slices_from_env()?;
-        let supervision = switch.mode(quark_core::Slice::Supervision);
-        if let (quark_core::SliceMode::Shadow, Ok(server)) = (supervision, sessions.server()) {
-            checks.push(Arc::new(engine::liveness::SessionLiveness::new(
-                server.clone(),
-            )));
-        }
-        engine = engine::eventlog::shadowed(
-            engine,
-            switch,
-            events.clone(),
-            bridge.clone(),
-            event_ingest::host(),
-            checks,
-        );
-    }
     let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
     let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
     let pr_task = tokio::spawn(pr_center.run(config.pr_refresh_interval));
@@ -208,18 +169,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         accounts.clone(),
         harnesses.clone(),
     );
-    let mut projector = Projector::new(store.clone(), engine.clone())
+    let projector = Projector::new(store.clone(), engine.clone())
         .with_sessions(sessions.clone())
         .with_command(layout.command_workspace())
         .with_user_config(layout.user_config())
         .with_failover(Arc::new(failover));
     let log: Arc<dyn quark_core::EventLog> = Arc::new(events.clone());
-    if native_dispatch::enabled() {
-        projector = projector.with_dispatch_shadow(Arc::new(native_dispatch::DispatchShadow::new(
-            &config,
-            log.clone(),
-        )));
-    }
     // Host telemetry feeds the Hosts view and admission control.
     let host_view = host_sources::EngineView::new(
         store.clone(),
@@ -229,10 +184,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     );
     // Admission control places the native engine's workers on registered,
     // sampled hosts.
-    let (telemetry, pools_task) = if host_sources::enabled()
-        || native_dispatch::enabled()
-        || native_engine
-    {
+    let (telemetry, pools_task) = if host_sources::enabled() || native_engine {
         let workloads = host_sources::EngineWorkloads(host_view.clone());
         let telemetry =
             match native_dispatch::HostTelemetry::start(&config, log.clone(), workloads).await {
@@ -245,8 +197,8 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         let pools = host_sources::PoolReporter::new(
             host_view,
             log.clone(),
-            event_ingest::host(),
-            native_worktrees::pool(log.clone(), event_ingest::host()).await,
+            host(),
+            native_worktrees::pool(log.clone(), host()).await,
         );
         (telemetry, Some(tokio::spawn(pools.run())))
     } else {
@@ -254,7 +206,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     };
     let projector_task = tokio::spawn(projector.run(config.refresh_interval));
     // Coordinators come back after the tmux server is lost or a reboot.
-    let recovery_task = (firstmate || native_engine).then(|| {
+    let recovery_task = native_engine.then(|| {
         let recovery = recovery::CoordinatorRecovery::new(
             store.clone(),
             engine.clone(),
@@ -262,78 +214,54 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             sessions.clone(),
             layout.command_workspace(),
             layout.home.clone(),
-        );
+        )
         // A Project created under firstmate has no native coordinator record.
-        let recovery = if native_engine {
-            recovery.adopting(engine::native_project::WINDOW_PREFIX)
-        } else {
-            recovery
-        };
+        .adopting(engine::native_project::WINDOW_PREFIX);
         tokio::spawn(recovery.run(recovery::INTERVAL))
     });
-    let ingest = event_ingest::EventIngest::new(store.clone(), bridge);
-    let ingest_task = tokio::spawn(ingest.run(config.refresh_interval));
     let usage_task = tokio::spawn(
         usage::UsageIngest::new(
             store.clone(),
             events.clone(),
-            event_ingest::host(),
+            host(),
             quark_transcript::SessionRoots::from_env(),
         )
         .run(config.refresh_interval),
     );
-    // The native engine has no firstmate inbox to mirror: its own channels
-    // and away policy act.
-    let (triggers, triggers_task) = if native_triggers::enabled() || native_engine {
-        let mode = if native_engine
-            || engine.slices().mode(quark_core::Slice::SubCoordinators)
-                == quark_core::SliceMode::Native
-        {
-            quark_triggers::Mode::Native
-        } else {
-            quark_triggers::Mode::Shadow
-        };
-        match native_triggers::Triggers::open(
-            store.clone(),
-            Arc::new(events.clone()),
-            engine.clone(),
-            mode,
-            &layout.home.join("channels"),
-        )
-        .await
-        {
-            Ok(t) => (
-                Some(t.engine()),
-                Some(tokio::spawn(t.run(config.refresh_interval))),
-            ),
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "slice 7 shadow not started");
-                (None, None)
-            }
+    // Channels, triggers and the away policy act on their own.
+    let (triggers, triggers_task) = match native_triggers::Triggers::open(
+        store.clone(),
+        Arc::new(events.clone()),
+        engine.clone(),
+        &layout.home.join("channels"),
+    )
+    .await
+    {
+        Ok(t) => (
+            Some(t.engine()),
+            Some(tokio::spawn(t.run(config.refresh_interval))),
+        ),
+        Err(e) => {
+            tracing::warn!(error = %format!("{e:#}"), "slice 7 engine not started");
+            (None, None)
         }
-    } else {
-        (None, None)
     };
     let chat_input: Arc<dyn chat::CoordinatorInput> = Arc::new(chat::SessionsInput::new(
         sessions.clone(),
         quark_transcript::SessionRoots::from_env(),
     ));
-    let coordinator_native = coordinator_native(native_engine, &engine::shadow::slices_from_env()?);
-    let (coordinator_routes, coordinator_task) = if native_coordinator::enabled() || native_engine {
-        let wiring = if coordinator_native {
-            native_coordinator::Wiring::Native {
-                brain: Arc::new(coordinator_hands::InputBrain::new(
-                    store.clone(),
-                    chat_input.clone(),
-                )),
-                hands: Arc::new(
-                    coordinator_hands::EngineHands::new(store.clone(), engine.clone())
-                        .with_channels(triggers.clone()),
-                ),
-                base_url: format!("http://{}", config.listen),
-            }
-        } else {
-            native_coordinator::Wiring::Shadow
+    // The native engine's coordinator wakes and acts.
+    let (coordinator_routes, coordinator_task) = if native_engine {
+        let wiring = native_coordinator::Wiring {
+            brain: Arc::new(coordinator_hands::InputBrain::new(
+                store.clone(),
+                chat_input.clone(),
+            )),
+            hands: Arc::new(
+                coordinator_hands::EngineHands::new(store.clone(), engine.clone())
+                    .with_channels(triggers.clone()),
+            ),
+            base_url: format!("http://{}", config.listen),
         };
         match native_coordinator::NativeCoordinator::open(
             store.clone(),
@@ -365,86 +293,6 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     } else {
         (None, None)
     };
-    let slices = engine::shadow::slices_from_env()?;
-    let verify_task = (slices.mode(quark_core::Slice::Verification)
-        == quark_core::SliceMode::Shadow)
-        .then(|| {
-            tracing::info!(
-                "slice 2 (verification) in shadow: comparing firstmate's guard decisions"
-            );
-            let shadow = quark_verify::ShadowVerifier::new(
-                Arc::new(verify_shadow::LogCheckpoints(events.clone())),
-                Some(Arc::new(quark_verify::GhForge::default())),
-                event_ingest::host(),
-            );
-            tokio::spawn(
-                verify_shadow::VerifyShadow::new(store.clone(), shadow)
-                    .run(config.refresh_interval),
-            )
-        });
-    let worker_task = (slices.mode(quark_core::Slice::WorkerProtocol)
-        == quark_core::SliceMode::Shadow)
-        .then(|| {
-            tracing::info!("slice 3 (worker protocol) in shadow: reading firstmate's status lines");
-            tokio::spawn(
-                log_shadow::LogShadow::new(
-                    events.clone(),
-                    event_ingest::host(),
-                    worker_shadow::StatusLines,
-                )
-                .run(config.refresh_interval),
-            )
-        });
-    {
-        use quark_core::Slice;
-        let running = [
-            (
-                Slice::EventLog,
-                slices.mode(Slice::EventLog) == quark_core::SliceMode::Shadow,
-            ),
-            (Slice::Verification, verify_task.is_some()),
-            (Slice::WorkerProtocol, worker_task.is_some()),
-            (
-                Slice::Supervision,
-                slices.mode(Slice::Supervision) == quark_core::SliceMode::Shadow,
-            ),
-            (Slice::Dispatch, native_dispatch::enabled()),
-            (
-                Slice::Coordinator,
-                coordinator_task.is_some() && !coordinator_native,
-            ),
-            (Slice::SubCoordinators, triggers_task.is_some()),
-            (Slice::Sandbox, dashboard_shadow),
-            (Slice::WorktreePool, native_worktrees::shadowing()),
-        ];
-        let on = running
-            .into_iter()
-            .filter(|(_, on)| *on)
-            .map(|(s, _)| s)
-            .collect();
-        let mut native: Vec<Slice> = slices
-            .modes()
-            .into_iter()
-            .filter(|(_, m)| *m == quark_core::SliceMode::Native)
-            .map(|(s, _)| s)
-            .collect();
-        if coordinator_native && coordinator_task.is_some() && !native.contains(&Slice::Coordinator)
-        {
-            native.push(Slice::Coordinator);
-        }
-        shadows::record_started(&events, event_ingest::host(), on, native).await;
-    }
-    // After the start is recorded, so the judge knows the shadow is watching.
-    let wake_task = (coordinator_task.is_some() && !coordinator_native).then(|| {
-        tokio::spawn(
-            log_shadow::LogShadow::new(
-                events.clone(),
-                event_ingest::host(),
-                coordinator_shadow::WakeTurns::default(),
-            )
-            .run(config.refresh_interval),
-        )
-    });
 
     let beads = Arc::new(
         beads::Beads::new(
@@ -491,22 +339,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     if let Some(t) = recovery_task {
         t.abort();
     }
-    ingest_task.abort();
     usage_task.abort();
     decision_beads_task.abort();
     if let Some(t) = triggers_task {
         t.abort();
     }
     if let Some(t) = coordinator_task {
-        t.abort();
-    }
-    if let Some(t) = verify_task {
-        t.abort();
-    }
-    if let Some(t) = worker_task {
-        t.abort();
-    }
-    if let Some(t) = wake_task {
         t.abort();
     }
     pr_task.abort();
@@ -528,13 +366,6 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Whether the native coordinator acts (Native wiring) rather than records
-/// beside firstmate's. The native engine has no other coordinator, so its
-/// own always acts, whatever `QUARK_ENGINE_SLICES` says.
-fn coordinator_native(native_engine: bool, slices: &quark_core::SliceSwitch) -> bool {
-    native_engine || slices.mode(quark_core::Slice::Coordinator) == quark_core::SliceMode::Native
-}
-
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -553,24 +384,4 @@ async fn shutdown_signal() {
         _ = term => {}
     }
     tracing::info!("shutting down");
-}
-
-#[cfg(test)]
-mod tests {
-    use quark_core::{Slice, SliceMode, SliceSwitch};
-
-    use super::coordinator_native;
-
-    #[test]
-    fn the_native_engine_always_wires_the_coordinator_natively() {
-        let bash = SliceSwitch::new();
-        let mut shadow = SliceSwitch::new();
-        for slice in Slice::ALL {
-            shadow.set(slice, SliceMode::Shadow, "test").unwrap();
-        }
-        for switch in [&bash, &shadow] {
-            assert!(coordinator_native(true, switch));
-            assert!(!coordinator_native(false, switch));
-        }
-    }
 }

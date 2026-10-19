@@ -10,7 +10,7 @@ It replaces firstmate's coordinator contract (`AGENTS.md`, the watcher's wake qu
 | Which events need judgment | `wake` | |
 | Wake queue: items batched into turns | `Coordinator` | `coordinator.woken`, `coordinator.turn_ended`, `coordinator.requested`, `coordinator.answered`, `coordinator.cursor` |
 | Native tools, over MCP | `tools`, `mcp` | `coordinator.tool`, `coordinator.tool_done` |
-| Token efficiency | `efficiency`, `baseline` | `coordinator.baseline`, `coordinator.transcript_read`, `coordinator.would_wake` |
+| Token efficiency | `efficiency` | |
 
 ## Layered prompt
 
@@ -28,7 +28,7 @@ The log keeps a `PromptRecord` (each layer's source, size and digest, never the 
 
 `wake::judgment` turns an event into a wake item or nothing:
 
-- Worker messages, firstmate status lines, inbound channel messages and rule outcomes follow the away policy (`docs/engine/triggers.md`): an occasion wakes the coordinator when the Project's route for it says so. By default that is a question, blocked, failed, done, an inbound message and a failed rule.
+- Worker messages, inbound channel messages and rule outcomes follow the away policy (`docs/engine/triggers.md`): an occasion wakes the coordinator when the Project's route for it says so. By default that is a question, blocked, failed, done, an inbound message and a failed rule.
 - Dispatch decisions left to the coordinator: `dispatch.escalated` (pick an agent), `dispatch.spawn_failed` and `dispatch.host_unhealthy`.
 - An explicit `Coordinator::request` (a rule's `wake` action, the API), recorded as `coordinator.requested`.
 - The user's answer to a decision the coordinator raised with `ask_user`, recorded as `coordinator.answered` (`events::record_answer`).
@@ -75,14 +75,13 @@ The coordinator holds nothing the log does not have.
 
 ## Token efficiency
 
-The requirement is that the coordinator spends near zero turns acknowledging status, measured against today's firstmate.
-`efficiency::Efficiency` folds both sides per Project: turns, tokens, turns and tokens per task, and the share of turns that changed nothing.
+The requirement is that the coordinator spends near zero turns acknowledging status.
+`efficiency::Efficiency` folds it per Project from `coordinator.turn_ended` and `coordinator.tool`: turns, tokens, turns and tokens per task, and the share of turns that changed nothing.
+A turn acknowledged status when it was woken and made no acting tool call (anything but `fleet`, `task` and `load_skill`).
+A task counts once a `task.transition` or `dispatch.requested` event names it in the window.
 
-- **Native:** a turn acknowledged status when it made no acting tool call (anything but `fleet`, `task` and `load_skill`).
-- **firstmate:** `baseline::read_turns` cuts the coordinator's Claude Code transcript into turns at each prompt that is not a tool result, sums each model call's usage once, and calls a turn started by a supervision notification an acknowledgement when it edited no file and ran none of firstmate's acting scripts (spawn, send, control, teardown, merge, hold, brief, backlog changes). This is a heuristic; the native side is exact. Codex and Pi coordinators are not read yet.
-
-The Project dashboard's Metrics tab shows both (`ProjectMetrics.coordinator`).
-When there is no Claude Code baseline (a Codex or Pi coordinator), the turns and tokens come from `usage.turn` events instead, without the acknowledgement split.
+The Project dashboard's Metrics tab shows it (`ProjectMetrics.coordinator`).
+Before firstmate was retired, the tab also read firstmate's coordinator transcript as a baseline; logs from then may still hold `coordinator.baseline` and `coordinator.would_wake` events, which nothing reads now.
 
 ## Token use and spend
 
@@ -90,24 +89,14 @@ quarkd's `usage` module mirrors every coordinator and worker turn's token use in
 A log quiet for two minutes has its open turn counted, so a worker's last turn lands before its working copy is cleaned up.
 The Metrics tab prices them at read time (`quarkd::spend`, API list prices, or Pi's own cost), so a price fix applies to past turns.
 
-## Shadow mode
-
-Slice 6 cannot switch on before slices 1 to 5, so firstmate's coordinator still runs every Project.
-Unless `QUARK_NATIVE_COORDINATOR=0`, quarkd runs the native coordinator in shadow on the projector's interval (`crates/quarkd/src/native_coordinator.rs`): for each Project it records the layered prompt, reads firstmate's coordinator transcript into `coordinator.baseline` turns, and records what would have woken the native coordinator as `coordinator.would_wake`.
-Nobody is woken and no tool runs.
-
-Deciding is the LLM's job, so there is no decision to compare one by one; what shadow mode measures is when the coordinator would be woken.
-Whether firstmate's coordinator would have been woken for the same status lines is already compared by the slice 7 shadow (`away.route` divergences).
-The slice 6 shadow checks the other direction: every wake turn in which firstmate's coordinator acted should have a native `would_wake` within 10 minutes, and each one without is a `shadow.divergence` (operation `acting_wake`; `crates/quarkd/src/coordinator_shadow.rs`, `docs/shadow-readiness.md`).
-
 ## In quarkd
 
-quarkd opens the coordinator in shadow, or native when the slice switch puts slice 6 on native (which it allows only after slices 1 to 5), in `crates/quarkd/src/native_coordinator.rs`.
+With `--engine native`, quarkd runs the coordinator for every Project on a timer, in `crates/quarkd/src/native_coordinator.rs`.
 
 | Piece | Where | Does |
 |---|---|---|
 | `InputBrain` | `coordinator_hands.rs` | Types each turn's briefing into the coordinator's session, the way the coordinator chat does. A typed but unconfirmed wake is not typed again; the turn timeout redelivers it. |
-| `EngineHands` | `coordinator_hands.rs` | `fleet`, `task`, `steer`, `answer`, `relaunch` and `cancel` go to the engine adapter. `ask_user` opens a decision in the store, `tell_user` puts a message in the coordinator chat (`coordinator.message`) and `remember` proposes a memory entry. `start_task` and `choose_profile` wait for native dispatch (slice 5) and `ack_message` for the channels API (slice 7); they are refused until then. |
+| `EngineHands` | `coordinator_hands.rs` | `fleet`, `task`, `steer`, `answer`, `relaunch` and `cancel` go to the engine adapter. `ask_user` opens a decision in the store, `tell_user` puts a message in the coordinator chat (`coordinator.message`) and `remember` proposes a memory entry. `start_task` and `choose_profile` go to the engine's dispatch, and `ack_message` to the triggers engine's channels (`with_channels`); without them it is refused. |
 | Routes | `coordinator_http.rs` | `POST /v1/coordinator/{project}/{token}/mcp` serves the tools over MCP; `POST /v1/coordinator/{project}/{token}/hooks/turn_end` (or `Stop`) closes the turn. |
 | Hook install | `coordinator_http::install_claude` | Native only: writes the MCP server into the workspace's `.mcp.json` (approved in `.claude/settings.local.json`) a `Stop` hook that POSTs the turn end, and a `SessionStart` hook that runs `bd prime --memories-only` so the Project's Beads memories (standing rules among them) are injected when the session starts, resumes or is compacted. Everything else in both files is kept. How a coordinator uses Beads (issues, the decision log, memory) is in the built-in prompt's Beads section; it reads through the `bd` CLI and `BEADS_DIR`. |
 
@@ -120,8 +109,4 @@ Answering one through `POST /v1/decisions/{id}:answer` (from the app, the phone,
 
 ## Not yet
 
-- A native `EngineAdapter::start_coordinator` that launches the coordinator with the layered prompt instead of firstmate's `AGENTS.md`.
 - Hooks and MCP config for Codex and Pi coordinators; only Claude Code is configured.
-- `start_task`, `choose_profile` and `ack_message` through native dispatch and channels.
-- In native slice 7, the triggers engine's `Effects::wake` should become `Coordinator::request` for rule actions only, since occasions already wake the coordinator from the log.
-- Baselines from Codex and Pi coordinator transcripts.

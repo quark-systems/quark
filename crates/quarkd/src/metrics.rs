@@ -1,11 +1,10 @@
 //! The Project dashboard's Metrics tab, computed from the event log.
 //!
-//! Each task's story is folded from its `firstmate.spawn` and
-//! `firstmate.status` events (see `quark_eventlog::firstmate`): when its
-//! first worker started, every status verb, and how often it was relaunched.
-//! A task is finished when its latest `working`, `needs-decision`,
-//! `blocked`, `done` or `failed` line is `done` or `failed`; a later
-//! `resolved` or `paused` line does not reopen it.
+//! Each task's story is folded from its `supervisor.launched` and
+//! `task.transition` events: when its first worker started, every
+//! transition, and how often it was relaunched. A task is finished when its
+//! latest start, decision, block, review, completion or failure is a review,
+//! completion or failure; a later answer or pause does not reopen it.
 //!
 //! Tokens and spend come from `usage.turn` events ([`crate::usage`]), each
 //! placed in time by when its turn started.
@@ -13,9 +12,10 @@
 use std::collections::BTreeMap;
 
 use quark_coordinator::{Efficiency, Side};
+use quark_core::event::kinds;
+use quark_core::TaskEvent;
 use quark_core::{Event, TaskId};
-use quark_engine::meta::SpawnMeta;
-use quark_eventlog::firstmate::{kinds, StatusPayload};
+use quark_supervisor::SupervisorEvent;
 use quark_systems::{
     AccountFailover, CoordinatorMetrics, CoordinatorTurns, DayCount, Failovers, GateMetrics,
     Interventions, LeadTime, ModelSpend, ProjectMetrics, SpendMetrics, Throughput, TokenSpend,
@@ -28,6 +28,13 @@ use time::{Duration, OffsetDateTime};
 pub const DEFAULT_DAYS: u32 = 7;
 pub const MAX_DAYS: u32 = 90;
 
+#[derive(Clone, Copy, PartialEq)]
+enum Outcome {
+    Open,
+    Done,
+    Failed,
+}
+
 #[derive(Default)]
 struct TaskStory {
     first_spawn: Option<OffsetDateTime>,
@@ -35,8 +42,8 @@ struct TaskStory {
     spawns: u32,
     saw_failed: bool,
     saw_blocked: bool,
-    /// The latest line that says where the task stands.
-    last: Option<(String, OffsetDateTime)>,
+    /// The latest transition that says where the task stands.
+    last: Option<(Outcome, OffsetDateTime)>,
 }
 
 fn rfc3339(t: OffsetDateTime) -> String {
@@ -80,41 +87,49 @@ pub fn compute(
         let story = tasks.entry(task).or_default();
         story.first_event.get_or_insert(e.ts);
         match e.kind.as_str() {
-            kinds::SPAWN => {
-                let at = e
-                    .decode::<SpawnMeta>()
-                    .ok()
-                    .and_then(|m| m.spawned_at())
-                    .and_then(|s| OffsetDateTime::from_unix_timestamp(s).ok())
-                    .unwrap_or(e.ts);
-                story.first_spawn = Some(story.first_spawn.map_or(at, |f| f.min(at)));
+            "supervisor.launched" => {
+                if !matches!(
+                    e.decode::<SupervisorEvent>(),
+                    Ok(SupervisorEvent::Launched { .. })
+                ) {
+                    continue;
+                }
+                story.first_spawn = Some(story.first_spawn.map_or(e.ts, |f| f.min(e.ts)));
                 story.spawns += 1;
                 if story.spawns > 1 && in_window(e.ts) {
                     interventions.relaunches += 1;
                 }
             }
-            kinds::STATUS => {
-                let Ok(line) = e.decode::<StatusPayload>() else {
+            kinds::TASK => {
+                let Ok(ev) = e.decode::<TaskEvent>() else {
                     continue;
                 };
-                match line.verb.as_str() {
-                    "failed" => story.saw_failed = true,
-                    "blocked" => story.saw_blocked = true,
+                match ev {
+                    TaskEvent::Failed { .. } => story.saw_failed = true,
+                    TaskEvent::Blocked { .. } => story.saw_blocked = true,
                     _ => {}
                 }
                 if in_window(e.ts) {
-                    match line.verb.as_str() {
-                        "needs-decision" => interventions.decisions += 1,
-                        "blocked" => interventions.blockers += 1,
+                    match ev {
+                        TaskEvent::DecisionNeeded { .. } => interventions.decisions += 1,
+                        TaskEvent::Blocked { .. } => interventions.blockers += 1,
                         _ => {}
                     }
                 }
-                if matches!(
-                    line.verb.as_str(),
-                    "working" | "needs-decision" | "blocked" | "done" | "failed"
-                ) {
-                    story.last = Some((line.verb, e.ts));
-                }
+                let outcome = match ev {
+                    TaskEvent::Started { .. }
+                    | TaskEvent::DecisionNeeded { .. }
+                    | TaskEvent::Blocked { .. } => Outcome::Open,
+                    // A merge after review finishes the same piece of work:
+                    // it stays done when it was reviewed.
+                    TaskEvent::Completed if story.last.is_some_and(|(o, _)| o == Outcome::Done) => {
+                        continue
+                    }
+                    TaskEvent::InReview { .. } | TaskEvent::Completed => Outcome::Done,
+                    TaskEvent::Failed { .. } | TaskEvent::Cancelled => Outcome::Failed,
+                    _ => continue,
+                };
+                story.last = Some((outcome, e.ts));
             }
             _ => {}
         }
@@ -132,15 +147,15 @@ pub fn compute(
     let mut lead = Vec::new();
     let mut first_time_green = 0;
     for (task, story) in &tasks {
-        let Some((verb, at)) = &story.last else {
+        let Some((outcome, at)) = &story.last else {
             continue;
         };
         if !in_window(*at) {
             continue;
         }
         let day = (at.date() - first_day).whole_days() as usize;
-        match verb.as_str() {
-            "done" => {
+        match outcome {
+            Outcome::Done => {
                 done_tasks.push(task);
                 throughput.done += 1;
                 if let Some(d) = per_day.get_mut(day) {
@@ -152,13 +167,13 @@ pub fn compute(
                     first_time_green += 1;
                 }
             }
-            "failed" => {
+            Outcome::Failed => {
                 throughput.failed += 1;
                 if let Some(d) = per_day.get_mut(day) {
                     d.failed += 1;
                 }
             }
-            _ => {}
+            Outcome::Open => {}
         }
     }
     throughput.per_day = per_day;
@@ -175,24 +190,8 @@ pub fn compute(
         }
     }
 
-    let mut coordinator = coordinator(events, in_window);
+    let coordinator = coordinator(events, in_window);
     let spend = spend(events, in_window, &done_tasks);
-    // firstmate's coordinator transcript is read for the baseline only when
-    // it runs Claude Code; its turns' tokens are known for any harness.
-    if coordinator.baseline.turns == 0 && spend.coordinator.turns > 0 {
-        let c = &spend.coordinator;
-        let per = |n: f64| (coordinator.tasks > 0).then(|| n / f64::from(coordinator.tasks));
-        coordinator.baseline = CoordinatorTurns {
-            turns: c.turns,
-            ack_turns: 0,
-            input_tokens: c.input_tokens,
-            output_tokens: c.output_tokens,
-            cache_read_tokens: c.cache_read_tokens,
-            turns_per_task: per(f64::from(c.turns)),
-            tokens_per_task: per((c.input_tokens + c.output_tokens) as f64),
-            ack_share: None,
-        };
-    }
     let mut unavailable = Vec::new();
     if spend.workers.turns == 0 && spend.coordinator.turns == 0 {
         unavailable.push(UnavailableMetric {
@@ -200,10 +199,10 @@ pub fn compute(
             reason: "No worker or coordinator turn with token counts is in the event log for this window yet. They are read from the agents' Claude Code, Codex and Pi session logs.".into(),
         });
     }
-    if coordinator.baseline.turns == 0 && coordinator.native.turns == 0 {
+    if coordinator.native.turns == 0 {
         unavailable.push(UnavailableMetric {
             metric: "coordinator_tokens".into(),
-            reason: "No coordinator turn is in the event log for this window yet. Turns are read from the coordinator's Claude Code transcript.".into(),
+            reason: "No coordinator turn is in the event log for this window yet. The coordinator records each of its turns as it takes it.".into(),
         });
     }
     ProjectMetrics {
@@ -325,8 +324,7 @@ fn spend(
     }
 }
 
-/// Turns and tokens of firstmate's coordinator (`coordinator.baseline`) and
-/// the native one, from `quark_coordinator::efficiency`.
+/// The coordinator's turns and tokens, from `quark_coordinator::efficiency`.
 fn coordinator(events: &[Event], in_window: impl Fn(OffsetDateTime) -> bool) -> CoordinatorMetrics {
     let e = Efficiency::fold(events, |e| in_window(e.ts));
     let side = |s: &Side| {
@@ -344,9 +342,7 @@ fn coordinator(events: &[Event], in_window: impl Fn(OffsetDateTime) -> bool) -> 
     };
     CoordinatorMetrics {
         tasks: e.tasks,
-        baseline: side(&e.baseline),
         native: side(&e.native),
-        would_wake_turns: e.would_wake,
     }
 }
 
@@ -377,23 +373,30 @@ mod tests {
         }
 
         fn spawn(&mut self, at: OffsetDateTime, task: &str) {
-            let generation = format!("s{}.1.1", at.unix_timestamp());
+            let generation = format!("g{}", at.unix_timestamp());
             self.push(
                 at,
                 task,
-                kinds::SPAWN,
-                serde_json::json!({"generation": generation, "harness": "claude", "model": null, "effort": null, "project": null, "kind": "ship"}),
+                "supervisor.launched",
+                serde_json::json!({"type": "launched", "generation": generation, "session": "s",
+                    "backend": "tmux", "cause": "spawn", "dir": "/tmp", "harness": "claude",
+                    "model": null, "effort": null}),
             );
         }
 
-        fn status(&mut self, at: OffsetDateTime, task: &str, verb: &str) {
-            self.push(
-                at,
-                task,
-                kinds::STATUS,
-                serde_json::json!({"verb": verb, "key": null, "corr": null, "note": "", "raw": verb, "offset": 0}),
-            );
+        fn task(&mut self, at: OffsetDateTime, task: &str, ev: TaskEvent) {
+            self.push(at, task, kinds::TASK, serde_json::to_value(ev).unwrap());
         }
+    }
+
+    fn started() -> TaskEvent {
+        TaskEvent::Started {
+            generation: "g".into(),
+        }
+    }
+
+    fn review() -> TaskEvent {
+        TaskEvent::InReview { pull_request: None }
     }
 
     #[test]
@@ -401,26 +404,50 @@ mod tests {
         let mut log = Log(Vec::new());
         // a: clean, 1h.
         log.spawn(datetime!(2026-10-06 09:00 UTC), "a");
-        log.status(datetime!(2026-10-06 09:01 UTC), "a", "working");
-        log.status(datetime!(2026-10-06 10:00 UTC), "a", "done");
+        log.task(datetime!(2026-10-06 09:01 UTC), "a", started());
+        log.task(datetime!(2026-10-06 10:00 UTC), "a", review());
+        log.task(datetime!(2026-10-06 11:00 UTC), "a", TaskEvent::Completed);
         // b: asked a decision, was relaunched, done after 3h.
         log.spawn(datetime!(2026-10-07 06:00 UTC), "b");
-        log.status(datetime!(2026-10-07 07:00 UTC), "b", "needs-decision");
-        log.status(datetime!(2026-10-07 07:30 UTC), "b", "resolved");
+        log.task(
+            datetime!(2026-10-07 07:00 UTC),
+            "b",
+            TaskEvent::DecisionNeeded {
+                key: "k".into(),
+                question: "q".into(),
+            },
+        );
+        log.task(
+            datetime!(2026-10-07 07:30 UTC),
+            "b",
+            TaskEvent::DecisionAnswered { key: "k".into() },
+        );
         log.spawn(datetime!(2026-10-07 08:00 UTC), "b");
-        log.status(datetime!(2026-10-07 09:00 UTC), "b", "done");
-        log.status(datetime!(2026-10-07 09:05 UTC), "b", "resolved");
+        log.task(datetime!(2026-10-07 09:00 UTC), "b", TaskEvent::Completed);
+        log.task(
+            datetime!(2026-10-07 09:05 UTC),
+            "b",
+            TaskEvent::Paused { reason: "".into() },
+        );
         // c: blocked, then failed.
         log.spawn(datetime!(2026-10-05 09:00 UTC), "c");
-        log.status(datetime!(2026-10-05 10:00 UTC), "c", "blocked");
-        log.status(datetime!(2026-10-05 11:00 UTC), "c", "failed");
+        log.task(
+            datetime!(2026-10-05 10:00 UTC),
+            "c",
+            TaskEvent::Blocked { reason: "".into() },
+        );
+        log.task(
+            datetime!(2026-10-05 11:00 UTC),
+            "c",
+            TaskEvent::Failed { reason: "".into() },
+        );
         // d: done, then picked up again; not finished.
         log.spawn(datetime!(2026-10-07 01:00 UTC), "d");
-        log.status(datetime!(2026-10-07 02:00 UTC), "d", "done");
-        log.status(datetime!(2026-10-07 03:00 UTC), "d", "working");
+        log.task(datetime!(2026-10-07 02:00 UTC), "d", review());
+        log.task(datetime!(2026-10-07 03:00 UTC), "d", started());
         // e: done before the window.
         log.spawn(datetime!(2026-09-01 01:00 UTC), "e");
-        log.status(datetime!(2026-09-01 02:00 UTC), "e", "done");
+        log.task(datetime!(2026-09-01 02:00 UTC), "e", TaskEvent::Completed);
 
         let failovers = [
             AccountFailover {
@@ -516,7 +543,7 @@ mod tests {
             crate::usage::KIND,
             usage("worker", "w1", "2026-10-07T09:00:00Z", "mystery-1", true),
         );
-        log.status(datetime!(2026-10-07 10:00 UTC), "a", "done");
+        log.task(datetime!(2026-10-07 10:00 UTC), "a", TaskEvent::Completed);
         let mut e = NewEvent::new(
             HostId::from("h"),
             ProjectId::from("p"),
@@ -545,54 +572,42 @@ mod tests {
         assert_eq!(s.by_model[0].model, "claude-opus-5-5");
         assert_eq!(s.done_tasks, 1);
         assert!((s.usd_per_done_task.unwrap() - 6.0).abs() < 1e-9);
-        // No transcript baseline: the coordinator's turns stand in for it.
-        assert_eq!(m.coordinator.baseline.turns, 1);
-        assert_eq!(m.coordinator.baseline.ack_share, None);
-        assert!(m.unavailable.is_empty());
+        // Spend is known; the coordinator recorded no turns of its own.
+        let missing: Vec<_> = m.unavailable.iter().map(|u| u.metric.as_str()).collect();
+        assert_eq!(missing, ["coordinator_tokens"]);
     }
 
     #[test]
-    fn coordinator_turns_come_from_the_baseline_in_the_window() {
+    fn coordinator_turns_come_from_its_turns_in_the_window() {
         let mut log = Log(Vec::new());
         log.spawn(datetime!(2026-10-07 09:00 UTC), "t1");
-        log.spawn(datetime!(2026-10-07 09:30 UTC), "t2");
-        let turn = |id: &str, cause: &str, acts: bool| {
-            serde_json::json!({"type": "baseline", "turn": {"id": id, "at": "", "cause": cause,
-                "usage": {"input": 900, "output": 100, "cache_read": 800, "calls": 2},
-                "tool_calls": 1, "acts": acts}})
-        };
-        for (i, (cause, acts)) in [
-            ("wake", false),
-            ("wake", false),
-            ("wake", true),
-            ("user", true),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        log.task(datetime!(2026-10-07 09:00 UTC), "t1", started());
+        log.task(datetime!(2026-10-07 09:30 UTC), "t2", started());
+        // Two woken turns that changed nothing, and two the user started.
+        for turn in [Some("w0"), Some("w1"), None, None] {
             let mut e = NewEvent::new(
                 HostId::from("h"),
                 ProjectId::from("p"),
                 None,
-                "coordinator.baseline",
-                turn(&i.to_string(), cause, acts),
+                "coordinator.turn_ended",
+                serde_json::json!({"type": "turn_ended", "turn": turn,
+                    "usage": {"input": 900, "output": 100, "cache_read": 800, "calls": 2}}),
             );
             e.ts = datetime!(2026-10-07 10:00 UTC);
             let seq = Seq(log.0.len() as u64 + 1);
             log.0.push(e.with_seq(seq));
         }
         let m = compute("p", &log.0, &[], NOW, 7);
-        let b = &m.coordinator.baseline;
+        let c = &m.coordinator.native;
         assert_eq!(m.coordinator.tasks, 2);
-        assert_eq!((b.turns, b.ack_turns), (4, 2));
+        assert_eq!((c.turns, c.ack_turns), (4, 2));
         assert_eq!(
-            (b.input_tokens, b.output_tokens, b.cache_read_tokens),
+            (c.input_tokens, c.output_tokens, c.cache_read_tokens),
             (3600, 400, 3200)
         );
-        assert_eq!(b.turns_per_task, Some(2.0));
-        assert_eq!(b.tokens_per_task, Some(2000.0));
-        assert_eq!(b.ack_share, Some(0.5));
-        assert_eq!(m.coordinator.native.turns, 0);
+        assert_eq!(c.turns_per_task, Some(2.0));
+        assert_eq!(c.tokens_per_task, Some(2000.0));
+        assert_eq!(c.ack_share, Some(0.5));
         assert!(m
             .unavailable
             .iter()

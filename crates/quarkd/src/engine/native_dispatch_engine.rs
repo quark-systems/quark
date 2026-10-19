@@ -91,7 +91,7 @@ impl DispatchParts {
     /// The daemon's: System One, `quota-axi`, the host registry in the
     /// event log, and the harness manifests in `<home>/harnesses`.
     pub fn for_daemon(config: &crate::config::Config, log: Arc<dyn EventLog>) -> Self {
-        let host = crate::event_ingest::host();
+        let host = crate::host();
         let key = std::env::var(quark_dispatch::classify::KEY_ENV).is_ok_and(|k| !k.is_empty());
         Self {
             hosts: Arc::new(quark_hosts::EventHosts::new(log.clone(), host.clone())),
@@ -459,7 +459,9 @@ fn profile_of(agent: &AgentConfig) -> Profile {
 }
 
 fn task_id(task: &str) -> Result<TaskId, EngineError> {
-    quark_engine::validate_task_id(task).map_err(|_| EngineError::TaskNotFound(task.into()))?;
+    if !super::valid_task_id(task) {
+        return Err(EngineError::TaskNotFound(task.into()));
+    }
     Ok(TaskId::from(task))
 }
 
@@ -475,7 +477,7 @@ fn engine_error(e: CoreError) -> EngineError {
 
 /// A task id made from `title`: lowercase letters, digits and dashes, at
 /// most [`MAX_SLUG`] long, `task` when nothing is left. It always passes
-/// [`quark_engine::validate_task_id`].
+/// [`super::valid_task_id`].
 pub fn slug(title: &str) -> String {
     let mut out = String::new();
     for c in title.chars() {
@@ -501,7 +503,7 @@ pub fn slug(title: &str) -> String {
 pub fn source_repo(root: &Path, name: Option<&str>) -> Result<PathBuf, EngineError> {
     let dirs = [root.join(REPOS_DIR), root.join(FIRSTMATE_REPOS_DIR)];
     if let Some(name) = name {
-        if quark_engine::validate_task_id(name).is_err() {
+        if !super::valid_task_id(name) {
             return Err(EngineError::Invalid(format!("{name:?} is not a repo name")));
         }
         return dirs
@@ -801,7 +803,7 @@ mod tests {
         ] {
             let s = slug(title);
             assert_eq!(s, want);
-            quark_engine::validate_task_id(&s).unwrap();
+            assert!(crate::engine::valid_task_id(&s));
         }
         let long = slug(&"word ".repeat(30));
         assert!(long.len() <= MAX_SLUG && !long.ends_with('-'), "{long}");

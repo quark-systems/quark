@@ -1,7 +1,6 @@
 //! The wake queue: judgment items batched into turns, every step an event.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -10,22 +9,10 @@ use quark_triggers::away::AwayState;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::Mutex;
 
-use crate::baseline::{self, BaselineTurn};
 use crate::events::{CoordinatorEvent, TurnEnd, Usage, PREFIX};
 use crate::prompt::{self, LayeredPrompt};
 use crate::tools::{Hands, ToolCall};
 use crate::wake::{judgment, WakeItem};
-
-/// Whether the coordinator acts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    /// Beside firstmate: record what would wake the coordinator and read
-    /// firstmate's transcript for the baseline. Nobody is woken and no tool
-    /// runs.
-    Shadow,
-    /// Wake the coordinator and run its tools.
-    Native,
-}
 
 /// Tunables.
 #[derive(Debug, Clone, Copy)]
@@ -104,13 +91,15 @@ pub trait Brain: Send + Sync {
     async fn wake(&self, project: &ProjectId, turn: &Turn) -> Result<()>;
 }
 
-/// A brain that refuses, for shadow mode.
+/// A brain that refuses, for tests.
 pub struct NoBrain;
 
 #[async_trait]
 impl Brain for NoBrain {
     async fn wake(&self, _: &ProjectId, _: &Turn) -> Result<()> {
-        Err(CoreError::Unsupported("shadow mode does not act".into()))
+        Err(CoreError::Unsupported(
+            "this brain does not wake anyone".into(),
+        ))
     }
 }
 
@@ -120,7 +109,7 @@ pub struct TickReport {
     pub evaluated: usize,
     /// New items that need judgment.
     pub items: usize,
-    /// Turns opened (native) or that would have been (shadow).
+    /// Turns opened.
     pub turns: usize,
     /// Turns delivered again after a restart or a timeout.
     pub redelivered: usize,
@@ -151,11 +140,10 @@ struct State {
     cursor: Seq,
     away: AwayState,
     projects: BTreeMap<ProjectId, ProjectState>,
-    /// Sources already in a turn (or a shadow batch), by Project.
+    /// Sources already in a turn, by Project.
     covered: BTreeSet<(ProjectId, Seq)>,
     /// Tool calls recorded without an outcome.
     tools_open: BTreeMap<String, ProjectId>,
-    transcripts: BTreeMap<String, u64>,
 }
 
 impl State {
@@ -197,14 +185,6 @@ impl State {
                     stale: false,
                 });
             }
-            CoordinatorEvent::WouldWake { items } => {
-                p.turns += 1;
-                for i in &items {
-                    self.covered.insert((e.project.clone(), i.source));
-                }
-                p.pending
-                    .retain(|x| !items.iter().any(|i| i.source == x.source));
-            }
             CoordinatorEvent::TurnEnded { turn, end, .. } => {
                 if let (Some(open), Some(turn)) = (&p.open, turn) {
                     if open.id == turn {
@@ -228,12 +208,7 @@ impl State {
                 self.cursor = through;
                 self.covered.retain(|(_, s)| *s > through);
             }
-            CoordinatorEvent::TranscriptRead { path, offset } => {
-                self.transcripts.insert(path, offset);
-            }
-            CoordinatorEvent::Requested { .. }
-            | CoordinatorEvent::Answered { .. }
-            | CoordinatorEvent::Baseline { .. } => {}
+            CoordinatorEvent::Requested { .. } | CoordinatorEvent::Answered { .. } => {}
         }
     }
 }
@@ -251,7 +226,6 @@ fn is_bookkeeping(e: &Event) -> bool {
 pub struct Coordinator {
     log: Arc<dyn EventLog>,
     host: HostId,
-    mode: Mode,
     config: Config,
     brain: Arc<dyn Brain>,
     hands: Arc<dyn Hands>,
@@ -269,7 +243,6 @@ impl Coordinator {
     pub async fn open(
         log: Arc<dyn EventLog>,
         host: HostId,
-        mode: Mode,
         config: Config,
         brain: Arc<dyn Brain>,
         hands: Arc<dyn Hands>,
@@ -277,7 +250,6 @@ impl Coordinator {
         let c = Self {
             log,
             host,
-            mode,
             config,
             brain,
             hands,
@@ -321,10 +293,6 @@ impl Coordinator {
         }
         drop(st);
         Ok(c)
-    }
-
-    pub fn mode(&self) -> Mode {
-        self.mode
     }
 
     async fn append(
@@ -420,8 +388,7 @@ impl Coordinator {
         self.append_for(project, task, &ev, None).await
     }
 
-    /// Evaluate new events, then open turns (native) or record what would
-    /// have been woken (shadow). Call it on a timer.
+    /// Evaluate new events, then open turns. Call it on a timer.
     pub async fn tick(&self, now: OffsetDateTime) -> Result<TickReport> {
         let mut st = self.state.lock().await;
         self.refresh_locked(&mut st).await?;
@@ -497,24 +464,6 @@ impl Coordinator {
     ) -> Result<bool> {
         let max = self.config.max_items.max(1);
         let p = st.projects.get(project).expect("listed project");
-        if self.mode == Mode::Shadow {
-            if p.pending.is_empty() {
-                return Ok(false);
-            }
-            let items: Vec<WakeItem> = p.pending.iter().take(max).cloned().collect();
-            let id = crate::stable_id(&[
-                "would_wake",
-                project.as_str(),
-                &items[0].source.0.to_string(),
-                &items[items.len() - 1].source.0.to_string(),
-            ]);
-            self.append(project, &CoordinatorEvent::WouldWake { items }, Some(id))
-                .await?;
-            self.refresh_locked(st).await?;
-            report.turns += 1;
-            return Ok(true);
-        }
-
         let mut wrote = false;
         if let Some(open) = p.open.clone() {
             if now - open.at >= self.config.turn_timeout {
@@ -632,13 +581,8 @@ impl Coordinator {
     // ------------------------------------------------------------- tools
 
     /// Run one tool call for `project`'s coordinator: recorded first, then
-    /// run, then its outcome recorded. Shadow mode refuses every call.
+    /// run, then its outcome recorded.
     pub async fn call(&self, project: &ProjectId, call: ToolCall) -> Result<String> {
-        if self.mode == Mode::Shadow {
-            return Err(CoreError::Unsupported(
-                "the native coordinator is in shadow mode".into(),
-            ));
-        }
         let turn = self.open_turn(project).await.map(|t| t.id);
         let id = EventId::new().to_string();
         let ev = CoordinatorEvent::Tool {
@@ -671,51 +615,6 @@ impl Coordinator {
             .and_then(|p| p.skill(name))
             .ok_or_else(|| CoreError::NotFound(format!("no skill {name}")))?;
         prompt::skill_body(skill).map_err(|e| CoreError::Backend(format!("skill {name}: {e}")))
-    }
-
-    // ---------------------------------------------------------- baseline
-
-    /// Shadow: read firstmate's coordinator transcript at `path` for
-    /// `project` from where the last read stopped, recording each finished
-    /// turn once. Returns the turns recorded.
-    pub async fn read_baseline(&self, project: &ProjectId, path: &Path) -> Result<usize> {
-        let key = path.display().to_string();
-        let offset = {
-            let mut st = self.state.lock().await;
-            self.refresh_locked(&mut st).await?;
-            st.transcripts.get(&key).copied().unwrap_or(0)
-        };
-        let p: PathBuf = path.to_path_buf();
-        let (turns, next) = tokio::task::spawn_blocking(move || baseline::read_turns(&p, offset))
-            .await
-            .map_err(|e| CoreError::Backend(e.to_string()))?
-            .map_err(|e| CoreError::Backend(format!("{key}: {e}")))?;
-        let n = turns.len();
-        for turn in turns {
-            self.record_baseline(project, &key, turn).await?;
-        }
-        if next != offset {
-            let ev = CoordinatorEvent::TranscriptRead {
-                path: key,
-                offset: next,
-            };
-            self.append(project, &ev, None).await?;
-            let mut st = self.state.lock().await;
-            self.refresh_locked(&mut st).await?;
-        }
-        Ok(n)
-    }
-
-    async fn record_baseline(
-        &self,
-        project: &ProjectId,
-        path: &str,
-        turn: BaselineTurn,
-    ) -> Result<()> {
-        let id = crate::stable_id(&["baseline", project.as_str(), path, &turn.id]);
-        self.append(project, &CoordinatorEvent::Baseline { turn }, Some(id))
-            .await?;
-        Ok(())
     }
 }
 

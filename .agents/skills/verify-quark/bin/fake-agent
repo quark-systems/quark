@@ -56,33 +56,17 @@ if [ "$name" = claude ] && [ -n "${QV_AGENT_JOURNAL:-}" ] && [ -n "${CLAUDE_CONF
     "$$" "$(json_str "$PWD")" "$resumed" >>"$log"
 fi
 
-# A firstmate worker: the engine wrote Claude Code hooks into the worktree
-# and named the status file and steering inbox in the launch brief (the last
-# argument). The agent then keeps the engine's turn bookkeeping the way
+# The engine may write Claude Code hooks into the agent's directory (the
+# coordinator's turn-end hook); the agent keeps that bookkeeping the way
 # Claude Code does: UserPromptSubmit when a line arrives, Stop when the turn
-# ends, so firstmate reads the status log instead of a pane stuck busy.
-hooks=.claude/settings.local.json brief=""
-[ $# -gt 0 ] && brief=${!#}
-status_file=$(printf '%s' "$brief" | grep -o ">> '[^']*\.status'" | head -1 | sed "s/^>> '//; s/'$//")
-# A native worker is told its status file in its environment.
-[ -n "$status_file" ] || status_file=${QUARK_STATUS_FILE:-}
-# shellcheck disable=SC2016 # the backquotes are literal brief text
-inbox=$(printf '%s' "$brief" | grep -o 'steering inbox is `[^`]*`' | head -1 | sed 's/^steering inbox is `//; s/`$//')
+# ends. A worker is told its status file in its environment.
+hooks=.claude/settings.local.json
+status_file=${QUARK_STATUS_FILE:-}
 
 hook() { # UserPromptSubmit | Stop | SessionEnd
   [ -f "$hooks" ] && command -v jq >/dev/null || return 0
   jq -r --arg e "$1" '.hooks[$e][]?.hooks[]?.command // empty' "$hooks" 2>/dev/null |
     while IFS= read -r c; do bash -c "$c" </dev/null >/dev/null 2>&1; done
-}
-
-# Acknowledge every steering message, as the worker contract asks.
-ack_inbox() {
-  [ -n "$inbox" ] && [ -d "$inbox" ] || return 0
-  local f
-  mkdir -p "$inbox/handled"
-  for f in "$inbox"/*; do
-    [ -f "$f" ] && mv "$f" "$inbox/handled/" 2>/dev/null
-  done
 }
 
 echo "Working..."
@@ -99,7 +83,6 @@ while IFS= read -r -p '❯ ' line; do
   fi
   hook UserPromptSubmit
   echo "fake-agent: got ${line}"
-  ack_inbox
   # A scripted worker turn: `QV-STATUS <line>` appends <line> to the task's
   # status file, as a worker reports (the journeys drive these), with
   # `{pid}` replaced by this process's pid so a journey can tell which

@@ -9,10 +9,7 @@
 //!
 //! Everything is an event first (`channel.*`, `trigger.*`, `away.*`) and
 //! the [`Engine`] folds its read models back from the log, so recovery is
-//! replay. Until slice 7 switches on, the engine runs in
-//! [`Mode::Shadow`]: it mirrors firstmate's inbox and posture, compares its
-//! routing with firstmate's away classifier, records the rules that would
-//! have fired, and acts on nothing.
+//! replay.
 //!
 //! `docs/engine/triggers.md` describes the events and guarantees.
 
@@ -20,13 +17,12 @@ pub mod away;
 pub mod channel;
 pub mod commands;
 mod engine;
-pub mod firstmate;
 pub mod trigger;
 
 pub use away::{AwayPolicy, Item, Occasion, Posture, Reach, Route};
 pub use channel::{Channel, ChannelManifest, CommandChannel, Inbound, INBOX};
 pub use commands::{Commands, Processes};
-pub use engine::{occasion, Effects, Engine, MirrorReport, Mode, NoEffects, TickReport, ENGINE};
+pub use engine::{occasion, Effects, Engine, NoEffects, TickReport, ENGINE};
 pub use trigger::{Action, Condition, Expect, Rule, RuleId};
 
 use quark_core::EventId;

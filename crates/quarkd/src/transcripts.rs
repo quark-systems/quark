@@ -117,9 +117,7 @@ pub fn roots_with_accounts(store: &Store, roots: &SessionRoots) -> SessionRoots 
         Vec::new()
     });
     for a in accounts {
-        let list = match SessionFormat::for_harness(crate::engine::firstmate::engine_harness(
-            &a.harness,
-        )) {
+        let list = match SessionFormat::for_harness(crate::engine::engine_harness(&a.harness)) {
             Some(SessionFormat::Claude) => &mut roots.claude,
             Some(SessionFormat::Codex) => &mut roots.codex,
             Some(SessionFormat::Pi) => &mut roots.pi,

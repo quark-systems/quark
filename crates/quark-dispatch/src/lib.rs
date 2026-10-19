@@ -10,7 +10,6 @@
 //! | which account | [`pools`] | quarkd's account leases |
 //! | which host, or wait | [`admission`] | nothing: firstmate has no admission control |
 //! | the whole path, as events | [`dispatcher`] | firstmate intake + `fm-spawn.sh` |
-//! | agreement with firstmate | [`shadow`] | |
 //!
 //! Everything the dispatcher decides is a `dispatch.*` event ([`events`])
 //! before it acts. Host telemetry comes from `telemetry.sample` events
@@ -28,7 +27,6 @@ pub mod pools;
 pub mod quota;
 pub mod resolve;
 pub mod rules;
-pub mod shadow;
 
 pub use admission::{admit, Admission, HostLimits, HostView, Limits, ProjectLimits};
 pub use classify::{Classification, Classifier, Given, SystemOne};

@@ -19,8 +19,8 @@ export interface CoordinatorTurns {
   turns: number; ack_turns: number; input_tokens: number; output_tokens: number; cache_read_tokens: number;
   turns_per_task?: number | null; tokens_per_task?: number | null; ack_share?: number | null;
 }
-/** firstmate's coordinator (read from its transcript) beside the native one. */
-export interface CoordinatorMetrics { tasks: number; baseline: CoordinatorTurns; native: CoordinatorTurns; would_wake_turns: number }
+/** The coordinator's turns, over the tasks seen in the window. */
+export interface CoordinatorMetrics { tasks: number; native: CoordinatorTurns }
 /** One kind of agent's tokens and cost. Cost is in US dollars at API list price, or the harness's own figure. */
 export interface TokenSpend {
   turns: number; input_tokens: number; output_tokens: number; cache_read_tokens: number;

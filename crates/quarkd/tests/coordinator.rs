@@ -72,7 +72,7 @@ async fn ask_the_user_and_wake_on_the_answer() {
         Arc::new(log.clone()),
         layout.clone(),
         SessionRoots::default(),
-        Wiring::Native {
+        Wiring {
             brain: Arc::new(InputBrain::new(store.clone(), typed.clone())),
             hands: Arc::new(EngineHands::new(store.clone(), engine.clone())),
             base_url: "http://127.0.0.1:7777".into(),

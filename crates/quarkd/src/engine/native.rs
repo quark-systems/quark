@@ -25,10 +25,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use quark_core::worker::{WorkerEnvelope, WorkerMessage};
 use quark_core::worktree::ReturnOutcome;
-use quark_core::{
-    replay, CoreError, Event, EventLog, ProjectId, ReadModel, Seq, Slice, SliceMode, SliceSwitch,
-    TaskId,
-};
+use quark_core::{replay, CoreError, Event, EventLog, ProjectId, ReadModel, Seq, TaskId};
 use quark_eventlog::TaskRecord;
 use quark_supervisor::{Relaunch, Supervisor, Worker};
 use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind};
@@ -154,7 +151,9 @@ fn project(ws: &WorkspaceRef) -> ProjectId {
 }
 
 fn task_id(task: &str) -> Result<TaskId, EngineError> {
-    quark_engine::validate_task_id(task).map_err(|_| EngineError::TaskNotFound(task.into()))?;
+    if !super::valid_task_id(task) {
+        return Err(EngineError::TaskNotFound(task.into()));
+    }
     Ok(TaskId::from(task))
 }
 
@@ -206,20 +205,6 @@ impl EngineAdapter for NativeEngine {
         "native"
     }
 
-    fn slices(&self) -> SliceSwitch {
-        let mut s = SliceSwitch::new();
-        for slice in [
-            Slice::EventLog,
-            Slice::Verification,
-            Slice::WorkerProtocol,
-            Slice::Supervision,
-        ] {
-            // Infallible for a fresh switch.
-            let _ = s.set(slice, SliceMode::Native, "native engine");
-        }
-        s
-    }
-
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
         self.catch_up().await?;
         let p = project(ws);
@@ -268,7 +253,7 @@ impl EngineAdapter for NativeEngine {
                     question,
                     answer: None,
                     answered_by: None,
-                    brief: super::firstmate::worker_brief(worker.task.as_str()),
+                    brief: super::worker_brief(worker.task.as_str()),
                 });
             }
         }

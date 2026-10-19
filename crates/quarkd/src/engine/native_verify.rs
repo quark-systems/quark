@@ -280,7 +280,7 @@ impl NativeVerify {
         task: &TaskId,
         path: &str,
     ) -> Result<PathBuf, EngineError> {
-        if !quark_engine::gates::safe_relative(path) {
+        if !safe_relative(path) {
             return Err(EngineError::Invalid(format!("no gate artifact {path:?}")));
         }
         let e = self
@@ -289,6 +289,15 @@ impl NativeVerify {
         super::listed_artifact(&e, path)?;
         Ok(task_dir(ws, task).join(path))
     }
+}
+
+/// A non-empty relative path of normal components only.
+fn safe_relative(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains('\0')
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 fn task_dir(ws: &WorkspaceRef, task: &TaskId) -> PathBuf {

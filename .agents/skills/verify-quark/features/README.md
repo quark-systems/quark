@@ -35,20 +35,19 @@ This table links each feature to the journey tests that script it and the modes 
 
 | Feature | Journey | Scripted by (`app/e2e/app.spec.ts`) | Live modes | Prerequisites |
 | :--- | :--- | :--- | :--- | :--- |
-| [Create a Project](create-project.md) | J2 | "creates a project and lands on its board" | real+stub, real+firstmate, mock | firstmate: a cloneable repo; `no-mistakes` for gated delivery |
-| [Project board and coordinator chat](board-and-chat.md) | J3 | "the board updates live when the coordinator queues a task", "command palette jumps to a task" | mock; real+firstmate | firstmate: a signed-in coordinator harness |
-| [Worker terminal](worker-terminal.md) | J4 | "worker view: terminal, steering, transcript, changes, cancel and relaunch", "worker view: why this agent ...", "a queued task explains ..." | mock; real+firstmate | firstmate: a running task window |
-| [Decisions inbox](decisions.md) | J5 | "decisions inbox: answer from the keyboard, then see who answered" | mock; real+firstmate | firstmate: an open hold or worker decision |
-| [Durability](durability.md) | DUR | none (`quark-verify journey durability` scripts it against the real daemon) | real+native+fake harness; real+firstmate+fake harness; real+stub for daemon checks | native: treehouse; firstmate: the checkout (the fake harness needs no account) |
-| [Native engine](native-engine.md) | NAT | none (`quark-verify journey native` scripts it against the real daemon) | real+native+fake harness | treehouse, no firstmate |
-| [Shadow readiness](shadows.md) | SHD | none (`quark-verify journey shadows` scripts it against the real daemon) | real+firstmate+fake harness | firstmate checkout, `tasks-axi`, `treehouse` (3.1.2 for slice 9) |
+| [Create a Project](create-project.md) | J2 | "creates a project and lands on its board" | real+stub, real+native, mock | native: a cloneable repo and treehouse; `no-mistakes` for gated delivery |
+| [Project board and coordinator chat](board-and-chat.md) | J3 | "the board updates live when the coordinator queues a task", "command palette jumps to a task" | mock; real+native | native: a signed-in coordinator harness |
+| [Worker terminal](worker-terminal.md) | J4 | "worker view: terminal, steering, transcript, changes, cancel and relaunch", "worker view: why this agent ...", "a queued task explains ..." | mock; real+native | native: a running worker |
+| [Decisions inbox](decisions.md) | J5 | "decisions inbox: answer from the keyboard, then see who answered" | mock; real+native | native: an open worker decision |
+| [Durability](durability.md) | DUR | none (`quark-verify journey durability` scripts it against the real daemon) | real+native+fake harness; real+stub for daemon checks | treehouse (the fake harness needs no account) |
+| [Native engine](native-engine.md) | NAT | none (`quark-verify journey native` scripts it against the real daemon) | real+native+fake harness | treehouse |
 | [Persona packs](personas.md) | N10 | "switching a project's persona relabels its board, chat and workers", "settings: pick the project's persona" | mock, real+stub | none |
-| [Daemon API and event stream](daemon-api.md) | API | none (the `daemon-api` holdout covers it from outside) | real+stub, real+firstmate | none |
+| [Daemon API and event stream](daemon-api.md) | API | none (the `daemon-api` holdout covers it from outside) | real+stub, real+native | none |
 | PR center (no file yet) | J6 | "PR center: list by state ...", "PR center: verification evidence ..." | mock | real: `gh` signed in and a task PR |
 | Accounts (no file yet) | ADR-11 | "accounts: add a second Claude account ..." | mock | |
 | Memory (no file yet) | J8 | "memory: review proposals ..." | mock | |
 | Dispatch rules (no file yet) | J9 | "dispatch: edit rules, test them ..." | mock | |
 | [Project settings](settings.md) | D1 | "settings: every Project switch in one place ..." | mock, real+stub | real: a Project with a Project repo |
-| [Project metrics](metrics.md) | D3 | "metrics: the dashboard's Metrics tab ..." | mock, real+stub | real: firstmate state files in the Project workspace |
-| [Project overview](overview.md) | D2 | "overview: live status now, and what changed since you last looked" | mock; real+stub (status lines written by hand); real+firstmate | none |
+| [Project metrics](metrics.md) | D3 | "metrics: the dashboard's Metrics tab ..." | mock, real+native+fake harness | real: a task that ran |
+| [Project overview](overview.md) | D2 | "overview: live status now, and what changed since you last looked" | mock; real+native+fake harness | none |
 | [App shell](shell.md) | A1-A6 | `e2e/shell.spec.ts`: "catalogue: ...", "left list: ...", "next attention: ...", "dock: ...", "routes: ...", "worker view: ..." | mock, real+stub | none |

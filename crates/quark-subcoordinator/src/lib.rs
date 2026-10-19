@@ -26,7 +26,6 @@
 //!
 //! Every change is a `subcoordinator.*` event ([`events`]) folded into the
 //! [`Registry`], so the log alone restores the engine's view after a crash.
-//! [`shadow`] compares that view with firstmate's registry.
 //! `docs/engine/sub-coordinators.md` describes the lifecycle.
 
 pub mod events;
@@ -35,7 +34,6 @@ mod manager;
 pub mod model;
 pub mod readiness;
 mod registry;
-pub mod shadow;
 
 pub use events::{Cause, Message, MessageKind, SubEvent};
 pub use manager::{

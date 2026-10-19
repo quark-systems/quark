@@ -832,7 +832,7 @@ pub(crate) async fn answer(
         // through the event log.
         quark_coordinator::events::record_answer(
             &state.events,
-            crate::event_ingest::host(),
+            crate::host(),
             &quark_core::ProjectId::new(ws.project_id.clone()),
             None,
             key,

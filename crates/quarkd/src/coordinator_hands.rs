@@ -603,7 +603,6 @@ mod tests {
             quark_triggers::Engine::open(
                 log,
                 quark_core::HostId::from("h"),
-                quark_triggers::Mode::Native,
                 Arc::new(quark_triggers::NoEffects),
                 Arc::new(quark_triggers::Processes),
             )

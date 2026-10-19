@@ -426,13 +426,13 @@ pub trait Hands: Send + Sync {
     async fn run(&self, project: &ProjectId, call: &ToolCall) -> Result<String>;
 }
 
-/// Hands that refuse everything, for shadow mode.
+/// Hands that refuse everything, for tests.
 pub struct NoHands;
 
 #[async_trait]
 impl Hands for NoHands {
     async fn run(&self, _: &ProjectId, _: &ToolCall) -> Result<String> {
-        Err(CoreError::Unsupported("shadow mode does not act".into()))
+        Err(CoreError::Unsupported("these hands do not act".into()))
     }
 }
 

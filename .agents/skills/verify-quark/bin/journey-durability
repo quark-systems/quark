@@ -12,7 +12,6 @@
 # that order). Launch args default to the stub engine; agent checks need an
 # engine that opens agent windows, for example
 #   -- --engine native --harness fake
-#   -- --engine firstmate --engine-dir ../firstmate --harness fake
 # Worker checks need a coordinator start_task tool (the native engine's
 # quark-coordinator MCP server), which the journeys call as a coordinator
 # agent would, since the fake harness is no LLM.
@@ -227,7 +226,7 @@ record_agents() {
 check_agents() {
   local expect=$1 a t role pid now
   if [ ${#agents[@]} -eq 0 ]; then
-    skip "agents: the engine opened no agent terminals for the Project (needs an engine with agent windows, e.g. --engine firstmate --harness fake)"
+    skip "agents: the engine opened no agent terminals for the Project (needs an engine with agent windows, e.g. --engine native --harness fake)"
     return
   fi
   for a in "${agents[@]}"; do

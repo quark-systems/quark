@@ -10,11 +10,22 @@
 use std::path::Path;
 
 use quark_dispatch::classify::{parse_answer, Classification};
-use quark_dispatch::shadow::decision;
 use quark_dispatch::{
-    resolve, ClassifierSettings, DispatchConfig, ProviderFamilies, QuotaSnapshot,
+    resolve, ClassifierSettings, DispatchConfig, ProviderFamilies, QuotaSnapshot, Resolution,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
+
+/// The compared decision of a resolution: its status, the selected profile
+/// and each candidate's eligibility. Reasons are prose and not compared.
+fn decision(r: &Resolution) -> Value {
+    json!({
+        "status": r.status.as_str(),
+        "profile": r.profile().map(|p| json!({"harness": p.harness, "model": p.model, "effort": p.effort})),
+        "candidates": r.candidates.iter().map(|c| json!({
+            "harness": c.profile.harness, "model": c.profile.model, "eligible": c.verdict.eligible()
+        })).collect::<Vec<_>>(),
+    })
+}
 
 #[test]
 fn matches_firstmate_on_every_recorded_case() {

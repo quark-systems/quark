@@ -119,7 +119,7 @@ function addProject(p) {
 // GET /v1/tasks/{id}/brief: the brief each task was dispatched with, and its delivery contract.
 // The issue is found as the daemon finds it: the first issue id in the title, then the brief.
 const briefs = new Map(); // task id -> { markdown, launch, delivery, merges_without_asking, dispatched_at }
-const BRIEF_SECTION = { intent: "captain's intent", spec: "firstmate spec" };
+const BRIEF_SECTION = { intent: "intent", spec: "spec" };
 function briefSection(markdown, title) {
   const lines = markdown.split("\n");
   const at = lines.findIndex((l) => /^#{1,6} /.test(l) && l.replace(/^#+ /, "").replace(/\u2019/g, "'").trim().toLowerCase() === title);
@@ -336,10 +336,8 @@ function metricsOf(proj, days) {
     }),
     coordinator: {
       tasks: mine.length,
-      baseline: { turns: 14, ack_turns: 0, input_tokens: 1_840_000, output_tokens: 26_000, cache_read_tokens: 1_610_000,
-        turns_per_task: mine.length ? 14 / mine.length : null, tokens_per_task: mine.length ? 1_866_000 / mine.length : null, ack_share: null },
-      native: { turns: 0, ack_turns: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
-      would_wake_turns: 0,
+      native: { turns: 14, ack_turns: 0, input_tokens: 1_840_000, output_tokens: 26_000, cache_read_tokens: 1_610_000,
+        turns_per_task: mine.length ? 14 / mine.length : null, tokens_per_task: mine.length ? 1_866_000 / mine.length : null, ack_share: 0 },
     },
     spend: {
       workers: { turns: 62, input_tokens: 9_400_000, output_tokens: 310_000, cache_read_tokens: 8_200_000, usd: 18.42, unpriced_tokens: 0 },
@@ -367,9 +365,8 @@ function settingsOf(proj) {
   };
 }
 
-// The Automation tab (slice 7): inbox, trigger rules and the away policy. Like quarkd before slice 7
-// switches on, the mock is not acting: rules only count would-be fires. A note lands in the inbox
-// at once (quarkd mirrors firstmate's on its next pass).
+// The Automation tab (slice 7): inbox, trigger rules and the away policy. A note lands in the inbox
+// at once.
 const ROUTE_WAKE = new Set(["done", "decision", "blocked", "failed", "inbound", "trigger_failed"]);
 const ROUTE_USER = {
   progress: ["silent", "silent", "silent"], paused: ["silent", "silent", "silent"], stale: ["silent", "silent", "silent"],
@@ -404,7 +401,7 @@ function awayOf(a) {
 }
 const automationOf = (proj) => {
   const a = automationState(proj);
-  return { project_id: proj.id, acting: false, inbox: a.inbox, rules: [...a.rules.values()], away: awayOf(a) };
+  return { project_id: proj.id, inbox: a.inbox, rules: [...a.rules.values()], away: awayOf(a) };
 };
 function ruleProblem(id, b) {
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(id)) return "a rule id is 1 to 64 letters, digits, '-', '_' or '.'";
@@ -866,9 +863,9 @@ function seed() {
     delivery: "gated", merges_without_asking: false,
     markdown: [
       "You are a crewmate: an autonomous worker agent. Work on your own; do not wait for a human.", "",
-      "# Task", "## Captain's intent",
+      "# Task", "## Intent",
       "Slow clients fall behind the event stream and miss events (qk-30). When a client lags, resync it from the store instead of dropping it.", "",
-      "## Firstmate spec",
+      "## Spec",
       "- Reproduce with a client that reads one event a second.",
       "- On lag, send a `resync` marker and replay from the store from the client's cursor.",
       "- Add a test in `crates/quarkd/tests/api.rs`.",

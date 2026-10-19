@@ -1141,47 +1141,6 @@ mod tests {
     }
 
     #[test]
-    fn a_transient_snapshot_result_keeps_the_last_known_state() {
-        let (store, project_id) = store_with_pr();
-        let mut snap = in_review_snapshot();
-        snap.tasks[0].state = TaskState::Unknown;
-        snap.tasks[0].state_note = Some(crate::engine::TRANSIENT_SNAPSHOT_NOTE.into());
-        let before = store.last_seq().unwrap();
-        store.apply_snapshot(&project_id, &snap).unwrap();
-        let task = pr_task(&store, &project_id);
-        assert_eq!(task.state, TaskState::InReview);
-        assert_eq!(task.state_note, None);
-        assert!(state_events(&store, before).is_empty());
-
-        // The next refresh reads the task's real state.
-        store
-            .apply_snapshot(&project_id, &in_review_snapshot())
-            .unwrap();
-        assert_eq!(
-            pr_task(&store, &project_id).state_note,
-            Some(format!("PR {URL}"))
-        );
-    }
-
-    #[test]
-    fn a_transient_result_for_a_merged_task_is_done_not_unknown() {
-        let (store, project_id) = store_with_pr();
-        let id = store.ensure_pull_requests().unwrap()[0].id.clone();
-        store.apply_forge_pr(&id, &merged_pr()).unwrap();
-        store
-            .write(|tx, _| {
-                tx.execute("UPDATE tasks SET state = 'unknown'", [])?;
-                Ok(())
-            })
-            .unwrap();
-        let mut snap = in_review_snapshot();
-        snap.tasks[0].state = TaskState::Unknown;
-        snap.tasks[0].state_note = Some(crate::engine::TRANSIENT_SNAPSHOT_NOTE.into());
-        store.apply_snapshot(&project_id, &snap).unwrap();
-        assert_eq!(pr_task(&store, &project_id).state, TaskState::Done);
-    }
-
-    #[test]
     fn standing_approval_selects_green_pull_requests() {
         let (store, project_id) = store_with_pr();
         let id = store.ensure_pull_requests().unwrap()[0].id.clone();

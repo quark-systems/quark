@@ -20,7 +20,6 @@ mod personas;
 pub mod pull_requests;
 mod repositories;
 mod routes;
-mod shadows;
 mod terminals;
 
 use std::sync::Arc;
@@ -141,10 +140,6 @@ const MODULES: &[Module] = &[
     Module {
         router: beads::router,
         openapi: <beads::Api as OpenApi>::openapi,
-    },
-    Module {
-        router: shadows::router,
-        openapi: <shadows::Api as OpenApi>::openapi,
     },
     Module {
         router: lifecycle::router,

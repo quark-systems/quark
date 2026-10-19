@@ -7,11 +7,11 @@
 # First installs treehouse 3.1.2 when this machine has no 3.x at or above it
 # (selfhost/treehouse.sh). Then runs selfhost/project-init.sh on this
 # directory, against a running quarkd (default http://127.0.0.1:7380, or
-# $QUARKD_URL) that should run the native engine:
-#   1. creates the Project "Quark" from project.json (quark and firstmate),
-#      or reuses it when one with that name exists, and waits until it is
+# $QUARKD_URL) running the native engine:
+#   1. creates the Project "Quark" from project.json (the quark repo), or
+#      reuses it when one with that name exists, and waits until it is
 #      ready (a failed one is retried once);
-#   2. commits project.yaml (verification gates for both repos) and
+#   2. commits project.yaml (the repo's verification gates) and
 #      instructions.md to the Project repo, plus holdout tests copied from
 #      --holdout <dir> (laid out as <source>/<category>/run) when given;
 #   3. asks the coordinator, once, to take the Phase 3 work items
@@ -32,7 +32,7 @@ case "${1:-}" in
   -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
-# Engine slice 9's shadow needs treehouse 3.1.2 or a later 3.x.
+# Worktrees come from treehouse 3.1.2 or a later 3.x.
 "$HERE/treehouse.sh" || { echo "selfhost: treehouse 3.1.2 is required: see selfhost/treehouse.sh --help" >&2; exit 1; }
 
 # Before project-init.sh, the kickoff marker lived under selfhost/; carry it

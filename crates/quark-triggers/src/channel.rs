@@ -78,8 +78,8 @@ pub enum ChannelEvent {
     Acked {
         channel: String,
         id: String,
-        /// Who handled it: `user`, `coordinator`, or `firstmate` when
-        /// mirrored from a bash home.
+        /// Who handled it: `user` or `coordinator` (`firstmate` in logs
+        /// from before its retirement).
         by: String,
     },
 }

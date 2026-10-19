@@ -1,6 +1,6 @@
 [package]
 name = "quark-eventlog"
-description = "The native engine's crash-safe event log (SQLite events.db), task state machine and replay, plus the firstmate ingest bridge."
+description = "The native engine's crash-safe event log (SQLite events.db), task state machine and replay."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 quark-core.workspace = true
-quark-engine.workspace = true
 quark-systems.workspace = true
 async-trait.workspace = true
 rusqlite.workspace = true

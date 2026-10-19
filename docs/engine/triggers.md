@@ -6,10 +6,11 @@ Everything it knows is an event in the log; `Engine` folds its read models back 
 | Piece | Events | Read model |
 |---|---|---|
 | Channels: one inbound API, the user's inbox and plug-ins | `channel.received`, `channel.acked` | `Inboxes`: pending messages per Project |
-| Triggers: typed sources plus condition-to-action rules | `trigger.defined`, `trigger.removed`, `trigger.fired`, `trigger.outcome`, `trigger.would_fire`, `trigger.cursor` | `RuleSet`: rules, fires, open claims |
-| Away policy: posture and routing, per Project or global | `away.posture`, `away.policy`, `away.routed`, `away.digest_sent`, `away.shadowed` | `AwayState`: posture, policy, digest and held items |
+| Triggers: typed sources plus condition-to-action rules | `trigger.defined`, `trigger.removed`, `trigger.fired`, `trigger.outcome`, `trigger.cursor` | `RuleSet`: rules, fires, open claims |
+| Away policy: posture and routing, per Project or global | `away.posture`, `away.policy`, `away.routed`, `away.digest_sent` | `AwayState`: posture, policy, digest and held items |
 
 A posture or policy recorded on the engine project (`_engine`) is global; a Project's own setting wins.
+Logs from while slice 7 ran in shadow beside firstmate may also hold `trigger.would_fire` and `away.shadowed` events; they are read back but change nothing.
 
 ## Channels
 
@@ -28,7 +29,7 @@ The one quarkd loads is a program, `CommandChannel`: one manifest per channel at
 Each poll runs `argv` without a shell and reads one JSON message per output line, `{"id", "body", "from"?, "at"?, "task"?}`.
 Exit 0 with no output is "nothing new"; any other exit is an error, logged, and retried on the next interval.
 Ids must be stable, so the program may return the same message again; it is received once.
-Until slice 7 is native, quarkd hands each new message to firstmate's inbox (`fm-inbox.sh`, as `<channel> from <from>: <body>`) and records it as handled there, so today's coordinator reads it once; a crash between the two hands it over again.
+Each new message lands in the engine's own inbox as `channel.received`, which wakes the coordinator; its `ack_message` tool records `channel.acked`.
 
 ## Triggers
 
@@ -42,7 +43,7 @@ A `Rule` is a condition, an action and a few switches (`once`, `enabled`).
 | `command`: argv polled on an interval, optional expected output | once, after `stable` true polls in a row; exit 1 is "not yet", anything else is an error, and `error_budget` errors in a row end the rule with a `condition_error` outcome; past an optional `until` it ends with `never_true` |
 
 Actions are deterministic: `wake` the coordinator with a note, leave an `inbox` note, `steer` a task, or run a bounded `command`.
-A `command` condition with a `command` action and an `until` is firstmate's when-then watch (`fm-procevent-when.sh`).
+A `command` condition with a `command` action and an `until` is the native form of firstmate's when-then watch (`fm-procevent-when.sh`).
 Commands run without a shell.
 Anything that needs judgment stays with the coordinator, which a rule can wake.
 Rules can't watch `trigger.*` events, so a rule never triggers itself.
@@ -77,30 +78,15 @@ The engine does not wake the coordinator for an occasion itself: the coordinator
 A Project overrides any cell with `away.policy`; a policy where a decision or failure would reach no one is refused.
 Digests go out every `digest_secs` (an hour by default) after the first waiting item; held items go out as the return brief when the user is present again.
 
-## Shadow mode
+## Effects
 
-Until slice 7 switches on, the engine runs in `Mode::Shadow` beside firstmate:
-
-- `Engine::mirror_firstmate` copies a home's inbox notes (`state/inbox/*.note`, and `handled/` as acknowledged) and posture (`state/.afk`, `state/.afk-contract`) into the log, so the native read models hold today's data from day one.
-- Each `firstmate.status` line the slice 1 bridge records is routed natively and compared with firstmate's classifier (`status_is_captain_relevant`, ported as `firstmate::bash_escalates`). A disagreement is a `shadow.divergence` event for slice `sub_coordinators`, operation `away.route`; every pass that compared something records `away.shadowed` with its counts.
-- Rules are evaluated and recorded as `trigger.would_fire`; no action runs and nobody is woken, notified or steered. Polled conditions do run their commands.
-- Each firstmate when-then watch (`state/when/when-<name>.spec`) is mirrored as a rule with the same id, defined by `firstmate`, that runs the same condition. When firstmate captures the watch's outcome (`state/procevent-inbox/when-<name>.<n>.result`), the two ends are compared: firstmate's `fired` or `action-failed` against the rule holding, `condition-error` against its error budget, `never-true` against its `until`. Either side may end up to two stable runs, one slow poll and five minutes after the other. A disagreement is a `shadow.divergence` for operation `trigger.when`; `ambiguous` and `rejected` outcomes are not compared. The rule goes once firstmate retires the watch and the comparison is settled.
-
-quarkd runs this pass on the projector's interval unless `QUARK_NATIVE_TRIGGERS=0` (`crates/quarkd/src/native_triggers.rs`).
-
-`crates/quark-triggers/tests/when.rs` holds the comparison to real firstmate: with `FIRSTMATE_ROOT` set to a checkout, `cargo test -p quark-triggers --test when -- --ignored` arms watches that hold, error and time out with `fm-procevent-when.sh`, runs them, and checks the native rules end the same way.
-
-## Native effects
-
-Once slice 7 is native (`QUARK_ENGINE_SLICES`, after slices 1 to 6), quarkd acts through `DaemonEffects`:
+quarkd runs the engine on the projector's interval (`crates/quarkd/src/native_triggers.rs`) and acts through `DaemonEffects`:
 
 | Effect | How |
 |---|---|
 | a rule's `wake` | `coordinator.requested` in the log; the coordinator wakes for it |
 | telling the user now, a digest, the return brief | a `notice.posted` event (`quark_systems::Notice`); the app lists the latest under Updates beside the Conversation |
 | a rule's `steer` | the engine adapter's `send_message` to the task's worker |
-
-Channel plug-ins then deliver to the engine's own inbox instead of firstmate's.
 
 ## API and dashboard
 
@@ -109,14 +95,15 @@ The Project dashboard's Automation tab (`app/src/screens/dashboard/Automation.ts
 | Endpoint | Does |
 |---|---|
 | `GET /v1/projects/{id}/automation` | inbox, rules with their fire counts, and the away policy with every cell |
-| `POST /v1/projects/{id}/inbox` | leaves a note for the coordinator; until slice 7 acts, through `fm-inbox.sh` so firstmate's coordinator reads it, and the next pass mirrors it |
+| `POST /v1/projects/{id}/inbox` | leaves a note for the coordinator in the engine's inbox |
 | `PUT`, `DELETE /v1/projects/{id}/triggers/{rule}` | defines, replaces or removes a rule |
 | `PUT /v1/projects/{id}/away/policy` | replaces the Project's policy; cells equal to the default are dropped, and one that loses a decision or failure is refused |
 
-Posture is not set here: firstmate's `/afk` and `/quiet` own it until slice 7 switches on, and the engine mirrors it.
+Posture is not set here yet; the engine records it (`Engine::set_posture`) but no endpoint calls that.
 With the engine off, these answer 503 `automation_off`.
 
 ## Not yet
 
 - Email, voice and public-mention programs for `CommandChannel`, and channel health in the Automation tab (a failing plug-in is only logged).
-- Commands run in the daemon's working directory; a when-watch whose condition uses relative paths fails natively and shows as a disagreement.
+- Commands run in the daemon's working directory, so a condition that uses relative paths fails.
+- An endpoint, and app control, for setting the posture.
