@@ -917,7 +917,7 @@ test("metrics: the dashboard's Metrics tab shows how the work went and changes i
   await expect(page.getByTestId("metrics-spend")).toContainText("$20.73");
   await expect(page.getByTestId("metrics-spend-workers")).toContainText("$18.42");
   await expect(page.getByTestId("metrics-spend-models")).toContainText("claude-opus-5-5");
-  await expect(page.getByTestId("metrics-coordinator-baseline")).toContainText("14");
+  await expect(page.getByTestId("metrics-coordinator-native")).toContainText("14");
   await expect(page.getByTestId("metrics-unavailable")).toHaveCount(0);
 
   await page.getByTestId("metrics-days-30").click();
@@ -930,7 +930,6 @@ test("automation: leave a note, add and remove a rule, change what reaches you w
   await page.getByTestId("nav-settings").click();
   await page.getByTestId("nav-automation").click();
   await expect(page).toHaveURL(/#\/p\/quark\/automation$/);
-  await expect(page.getByTestId("automation-shadow")).toBeVisible();
 
   // A note goes to the coordinator's inbox.
   const inbox = page.getByTestId("automation-inbox");

@@ -1,10 +1,10 @@
 //! A Project's automation over HTTP: the inbox, trigger rules and the away
-//! policy, served by the slice 7 engine in shadow.
+//! policy, served by the triggers engine.
 
 use std::sync::Arc;
 
 use quark_systems::CreateProject;
-use quarkd::engine::{StubEngine, StubWrite};
+use quarkd::engine::StubEngine;
 use quarkd::store::Store;
 use serde_json::{json, Value};
 
@@ -40,15 +40,14 @@ struct Rig {
     _dir: tempfile::TempDir,
     app: axum::Router,
     engine: Arc<StubEngine>,
-    shadow: quarkd::native_triggers::Triggers,
+    _triggers: quarkd::native_triggers::Triggers,
     project: String,
-    home: std::path::PathBuf,
 }
 
 async fn rig(with_triggers: bool) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("workspace");
-    std::fs::create_dir_all(home.join("state/inbox")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
     let store = Arc::new(Store::open_in_memory().unwrap());
     let engine = Arc::new(StubEngine::new());
     let harnesses = Arc::new(quarkd::harness::HarnessRegistry::new(
@@ -56,11 +55,10 @@ async fn rig(with_triggers: bool) -> Rig {
         quarkd::harness::HostEnv::default(),
     ));
     let events = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
-    let shadow = quarkd::native_triggers::Triggers::open(
+    let triggers = quarkd::native_triggers::Triggers::open(
         store.clone(),
         Arc::new(events.clone()),
         engine.clone(),
-        quark_triggers::Mode::Shadow,
         &dir.path().join("channels"),
     )
     .await
@@ -80,7 +78,7 @@ async fn rig(with_triggers: bool) -> Rig {
         chat: Arc::new(quarkd::chat::RecordingInput::new()),
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events,
-        triggers: with_triggers.then(|| shadow.engine()),
+        triggers: with_triggers.then(|| triggers.engine()),
         beads: Default::default(),
     });
     let project = store
@@ -94,9 +92,8 @@ async fn rig(with_triggers: bool) -> Rig {
         _dir: dir,
         app,
         engine,
-        shadow,
+        _triggers: triggers,
         project: project.id,
-        home,
     }
 }
 
@@ -106,22 +103,10 @@ async fn notes_go_to_the_coordinator_and_show_up_in_the_inbox() {
     let uri = format!("/v1/projects/{}/inbox", r.project);
     let (status, _) = call(&r.app, "POST", &uri, Some(json!({"body": "look at CI"}))).await;
     assert_eq!(status, 202);
-    assert_eq!(
-        r.engine.writes(),
-        vec![StubWrite::InboxNote {
-            text: "look at CI".into()
-        }]
-    );
+    assert!(r.engine.writes().is_empty(), "the engine is not written to");
     let (status, e) = call(&r.app, "POST", &uri, Some(json!({"body": "  "}))).await;
     assert_eq!(status, 400, "{e}");
 
-    // firstmate writes the note; the next shadow pass mirrors it.
-    std::fs::write(
-        r.home.join("state/inbox/1-a.note"),
-        "id=1-a\nat=2026-10-07T01:00:00Z\nsource=text\n--\nlook at CI\n",
-    )
-    .unwrap();
-    r.shadow.pass().await.unwrap();
     let (status, a) = call(
         &r.app,
         "GET",
@@ -130,9 +115,8 @@ async fn notes_go_to_the_coordinator_and_show_up_in_the_inbox() {
     )
     .await;
     assert_eq!(status, 200, "{a}");
-    assert_eq!(a["acting"], false);
     assert_eq!(a["inbox"][0]["body"], "look at CI");
-    assert_eq!(a["inbox"][0]["at"], "2026-10-07T01:00:00Z");
+    assert!(a["inbox"][0]["at"].is_string());
     assert_eq!(a["away"]["posture"], "present");
     assert_eq!(a["away"]["routes"].as_array().unwrap().len(), 30);
 }

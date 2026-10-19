@@ -19,15 +19,15 @@ A user opens a Project's Overview tab and sees its goal, four numbers (workers b
 Preconditions:
 
 - Mock: `$Q launch --daemon mock`; the mock folds its own tasks and task events, so cancel or relaunch a task to make a digest.
-- Real (stub engine): `$Q launch`, then create a Project whose `workspace_path` is a directory under `QV_HOME` with a `state/` folder (`$Q api POST /v1/projects '{"name":"...","workspace_path":"<dir>"}'`). Appending firstmate status lines to `<dir>/state/<task>.status` (`working: ...`, `needs-decision: [key=k] ...`, `resolved: [key=k] ...`, `done: PR <url> ...`, `failed: ...`) stands in for the engine; the daemon ingests them on its refresh interval.
+- Real: `$Q launch --engine native --harness fake`, a ready Project from a local bare repo, and a worker started through the coordinator's `start_task` tool as `bin/journey-native` does. A message `QV-STATUS <status line>` sent to the worker (`POST /v1/tasks/<id>/messages`; `needs-decision [key=k]: ...`, `blocked: ...`, `done: PR <url>`, `failed: ...`) makes it report, and the supervisor records the task's transitions in the event log.
 
 - **First visit.** Run `$Q browser open "#/p/<id>"` and `$Q browser click --testid nav-overview`; wait with `$Q browser wait --testid overview-summary`. Save `dashboard-overview/01-first-visit.png`.
-- **Away.** Run `$Q browser click --testid nav-settings`, append status lines (or cancel a task on the mock), and wait a few seconds.
+- **Away.** Run `$Q browser click --testid nav-settings`, have the worker report (or cancel a task on the mock), and wait a few seconds.
 - **Back.** Run `$Q browser click --testid nav-overview`; `$Q browser wait --testid overview-summary --contains failed`. Save `dashboard-overview/02-since-last-looked.png`.
-- **Side effects.** Run `$Q capture dashboard-overview/api -- $Q api GET "/v1/projects/<id>/overview?since=<head of the first visit>"`: the digest's counts and highlights match the lines appended.
+- **Side effects.** Run `$Q capture dashboard-overview/api -- $Q api GET "/v1/projects/<id>/overview?since=<head of the first visit>"`: the digest's counts and highlights match what the worker reported.
 
 ## Gotchas
 
-- An event's time is when the daemon logged it, so history ingested on the daemon's first start all shows that start's time.
+- Logs from before firstmate was retired hold firstmate's events, which the Overview no longer reads; those tasks do not show.
 - The last visit is remembered in the browser's local storage per Project, so a fresh browser profile starts with "Since the log began".
-- Tasks from a status file the daemon has no task for show their engine id and no link.
+- Tasks in the log the daemon has no task for show their engine id and no link.

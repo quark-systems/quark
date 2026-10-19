@@ -404,7 +404,7 @@ fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) -> std::io::Result<bool
 mod tests {
     use axum::body::Body;
     use axum::http::Request;
-    use quark_coordinator::{Config, Mode, NoBrain, NoHands};
+    use quark_coordinator::{Config, NoBrain, NoHands};
     use quark_core::{EventLog, Seq};
     use quark_systems::CreateProject;
     use tower::ServiceExt;
@@ -474,7 +474,6 @@ mod tests {
             Coordinator::open(
                 Arc::new(log.clone()),
                 quark_core::HostId::from("h"),
-                Mode::Shadow,
                 Config::default(),
                 Arc::new(NoBrain),
                 Arc::new(NoHands),

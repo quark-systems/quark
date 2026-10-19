@@ -54,8 +54,6 @@ pub struct Projector {
     /// The user-level settings file whose `classifier` block is the default
     /// for every Project.
     user_config: Option<PathBuf>,
-    /// Re-runs each dispatch resolution natively, in shadow, when set.
-    dispatch_shadow: Option<Arc<crate::native_dispatch::DispatchShadow>>,
 }
 
 impl Projector {
@@ -72,7 +70,6 @@ impl Projector {
             gates: Mutex::default(),
             dispatch: Mutex::default(),
             user_config: None,
-            dispatch_shadow: None,
         }
     }
 
@@ -94,15 +91,6 @@ impl Projector {
     /// to its tasks.
     pub fn with_sessions(mut self, sessions: Sessions) -> Self {
         self.sessions = Some(sessions);
-        self
-    }
-
-    /// Also compares each dispatch resolution with the native resolver's.
-    pub fn with_dispatch_shadow(
-        mut self,
-        shadow: Arc<crate::native_dispatch::DispatchShadow>,
-    ) -> Self {
-        self.dispatch_shadow = Some(shadow);
         self
     }
 
@@ -369,12 +357,7 @@ impl Projector {
             } else {
                 let project = spawn.project.as_deref();
                 let resolved = match self.engine.resolve_dispatch(ws, &engine_id, project).await {
-                    Ok(Some(r)) => {
-                        if let Some(shadow) = &self.dispatch_shadow {
-                            shadow.compare(ws, Some(&engine_id), &r).await;
-                        }
-                        Resolved::Ran(Box::new(r))
-                    }
+                    Ok(Some(r)) => Resolved::Ran(Box::new(r)),
                     Ok(None) => Resolved::NotRun(
                         "The engine reported no dispatch resolution for this task".into(),
                     ),

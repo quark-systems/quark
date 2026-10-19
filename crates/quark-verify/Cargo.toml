@@ -1,6 +1,6 @@
 [package]
 name = "quark-verify"
-description = "The native engine's verification workflow and merge guard (slice 2): gates, rebase and re-verify, the red-main guardrail, and the shadow that compares them with firstmate's decisions."
+description = "The native engine's verification workflow and merge guard (slice 2): gates, rebase and re-verify, and the red-main guardrail."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

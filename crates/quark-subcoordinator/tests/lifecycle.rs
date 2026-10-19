@@ -358,35 +358,3 @@ async fn refusals() {
     assert!(err.to_string().contains("not ready"), "{err}");
     assert!(!env.home("bare").exists());
 }
-
-#[tokio::test]
-async fn shadow_compares_with_the_bash_registry() {
-    use quark_subcoordinator::shadow::{compare, parse_registry};
-    let env = Env::new("shadow");
-    let subs = env.open().await;
-    subs.register(env.registration("web", RuntimeSpec::Local))
-        .await
-        .unwrap();
-    subs.register(env.registration("ios", env.ssh_spec()))
-        .await
-        .unwrap();
-    let bash = format!(
-        "- web - web domain (home: {}; scope: web work; projects: app; added 2026-10-07)\n\
-         - ios - ios domain (host: build-box; root: /r/fm; home: {}; scope: ios work; projects: app; added 2026-10-07)\n",
-        env.home("web").display(),
-        env.home("ios").display()
-    );
-    assert!(compare(&subs.registry().all(), &parse_registry(&bash)).is_empty());
-
-    let drifted = bash.replace("scope: web work", "scope: frontend work");
-    let d = compare(&subs.registry().all(), &parse_registry(&drifted));
-    assert_eq!(d.len(), 1);
-    assert_eq!(d[0].bash["scope"], "frontend work");
-    assert_eq!(d[0].native["scope"], "web work");
-
-    let only_web: String = bash.lines().take(1).collect();
-    let d = compare(&subs.registry().all(), &parse_registry(&only_web));
-    assert_eq!(d.len(), 1);
-    assert!(d[0].bash.is_null());
-    assert_eq!(d[0].native["id"], "ios");
-}

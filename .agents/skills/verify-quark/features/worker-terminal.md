@@ -22,7 +22,7 @@ A user opens a task from the board and sees the worker's live terminal (the engi
 Preconditions:
 
 - Mock: `$Q launch --daemon mock`; the `Quark MVP` Project has a running task titled `Event stream: resync slow clients from the store` whose fake terminal echoes input.
-- Real: `$Q launch --engine firstmate --engine-dir <firstmate checkout>`, a ready Project (see [create-project.md](create-project.md)) and a task whose window is up; `$Q tmux list-windows -a` lists it.
+- Real: `$Q launch --engine native` and a ready Project (see [create-project.md](create-project.md)). The native engine does not serve worker terminals in the app yet, so a real run proves the coordinator terminal only.
 
 - **Open the task.** Run `$Q browser open "#/p/quark"` (or the real Project id) and `$Q browser click --testid task-card --has-text "Event stream"`. `$Q browser url` ends in `#/t/<task-id>`.
 - **See the snapshot.** Run `$Q browser terminal <task-id> --contains "writing the failing test"` (mock), or the text `$Q tmux capture-pane -p -t <session:window>` shows (real). Save `$Q browser screenshot --path worker-terminal/01-open.png`.
@@ -36,5 +36,5 @@ Preconditions:
 - The terminal is drawn by WebGL outside Linux, so its rows are not in the DOM; read it with `browser terminal`, never with `browser text`.
 - A queued task has no window yet; its view says so instead of showing a terminal.
 - Without a signed-in harness the coordinator window shows the harness's own sign-in or onboarding screen and dispatches no tasks, so only the coordinator terminal is reachable.
-- The stub engine never opens windows, so this feature cannot be proved live without `--engine firstmate`.
+- The stub engine never opens windows, so the coordinator terminal cannot be proved live without `--engine native`.
 - Real windows run on the run's private tmux server only; `tmux` without `-S "$QV_TMUX_SOCKET"` looks at the user's own server.

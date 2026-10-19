@@ -20,7 +20,7 @@
 //! | [`Runtime`], [`HostRegistry`] | [`host`] | `quark-hosts` |
 //! | [`Telemetry`] | [`telemetry`] | `quark-hosts` |
 //! | [`PersonaPack`] | [`persona`] | `quark-persona` |
-//! | [`SliceSwitch`] | [`slice`] | quarkd `engine/shadow.rs` |
+//! | [`Slice`], [`Divergence`] | [`slice`] | `quark-worktree` shadow pool |
 //!
 //! Names are neutral throughout (user, coordinator, worker, sub-coordinator,
 //! investigation, decision); persona packs supply the flavor. Changing a
@@ -55,7 +55,7 @@ pub use isolation::{Isolation, IsolationMode};
 pub use persona::{PersonaPack, PersonaSource, Role};
 pub use read_model::{replay, ReadModel};
 pub use session::SessionBackend;
-pub use slice::{Slice, SliceMode, SliceSwitch};
+pub use slice::{Divergence, Slice};
 pub use task::{TaskEvent, TaskMachine};
 pub use telemetry::Telemetry;
 pub use verify::{MainHealth, MergeGuard, Permit, Verdict, VerifyPipeline};

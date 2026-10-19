@@ -2,7 +2,7 @@
 # quark-verify: launch, doctor, drive and clean up an isolated Quark instance
 # for verification. See ../SKILL.md for the full recipe.
 #
-#   quark-verify launch [--daemon real|mock] [--engine stub|firstmate|native] [--engine-dir DIR] [--harness real|fake] [--env K=V]... [--run ID]
+#   quark-verify launch [--daemon real|mock] [--engine stub|native] [--harness real|fake] [--env K=V]... [--run ID]
 #   quark-verify doctor
 #   quark-verify env                         print the run's variables (eval-able)
 #   quark-verify browser <command> ...       drive the app (bin/browser.mjs)
@@ -69,12 +69,11 @@ start_bg() { # name cmd... ; records instance/<name>.pid, appends to instance/<n
 }
 
 cmd_launch() {
-  local daemon=real engine=stub engine_dir="" harness=real id="" envs=()
+  local daemon=real engine=stub harness=real id="" envs=()
   while [ $# -gt 0 ]; do
     case $1 in
       --daemon) daemon=$2; shift 2 ;;
       --engine) engine=$2; shift 2 ;;
-      --engine-dir) engine_dir=$2; shift 2 ;;
       --harness) harness=$2; shift 2 ;;
       --run) id=$2; shift 2 ;;
       --env) [[ $2 =~ ^[A-Z_][A-Z0-9_]*= ]] || die "--env takes NAME=VALUE"; envs+=("$2"); shift 2 ;;
@@ -82,9 +81,8 @@ cmd_launch() {
     esac
   done
   case $daemon in real|mock) ;; *) die "--daemon must be real or mock" ;; esac
-  case $engine in stub|firstmate|native) ;; *) die "--engine must be stub, firstmate or native" ;; esac
+  case $engine in stub|native) ;; *) die "--engine must be stub or native" ;; esac
   case $harness in real|fake) ;; *) die "--harness must be real or fake" ;; esac
-  [ "$engine" = firstmate ] && [ -z "$engine_dir" ] && die "--engine firstmate needs --engine-dir <quark-systems/firstmate checkout>"
   id=${id:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
   run_dir=$base/$id
   inst=$run_dir/instance
@@ -109,9 +107,6 @@ cmd_launch() {
     # over ~104 bytes cannot be bound, and terminals would silently be off.
     [ ${#home} -le 80 ] || die "daemon home $home is too long for a tmux socket; set QUARK_VERIFY_HOME to a shorter directory"
     mkdir -p "$home"
-    if [ "$engine" = firstmate ]; then
-      git clone --quiet "$engine_dir" "$home/engine" || die "cloning the engine from $engine_dir failed"
-    fi
     # The daemon starts from a script so `restart` can start it again exactly
     # as launched. With --harness fake, agents the engine opens run
     # bin/fake-agent in place of the harness CLIs, and the tmux server (started

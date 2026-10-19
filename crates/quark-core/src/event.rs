@@ -58,11 +58,9 @@ pub mod kinds {
     pub const WORKER: &str = "worker.message";
     /// A worktree handout, return or lease. Payload: [`crate::worktree::WorktreeEvent`].
     pub const WORKTREE: &str = "worktree.change";
-    /// The shadow engine saw bash and native disagree. Payload:
+    /// A shadow comparison saw the reference and native disagree. Payload:
     /// [`crate::slice::Divergence`].
     pub const SHADOW_DIVERGENCE: &str = "shadow.divergence";
-    /// A slice changed mode. Payload: [`crate::slice::SliceChange`].
-    pub const SLICE_MODE: &str = "slice.mode";
 }
 
 /// An event before the log assigns it a sequence number.

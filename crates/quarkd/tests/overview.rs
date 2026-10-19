@@ -1,12 +1,13 @@
-//! The Project dashboard's Overview tab reads the event log the firstmate
-//! bridge fills: live status, and a digest after a given `seq`.
+//! The Project dashboard's Overview tab reads the native event log: live
+//! status, and a digest after a given `seq`.
 
 use std::sync::Arc;
 
-use quark_eventlog::{FirstmateBridge, SqliteEventLog};
+use quark_core::event::kinds;
+use quark_core::{EventLog, NewEvent, ProjectId, TaskEvent, TaskId};
+use quark_eventlog::SqliteEventLog;
 use quark_systems::{CreateProject, TaskKind, TaskState};
 use quarkd::engine::{EngineTask, FleetSnapshot};
-use quarkd::event_ingest::{self, EventIngest};
 use quarkd::store::Store;
 use serde_json::Value;
 
@@ -27,9 +28,6 @@ async fn get(app: &axum::Router, uri: &str) -> (axum::http::StatusCode, Value) {
 async fn overview_reports_live_status_and_what_changed_since() {
     let home = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    let state = workspace.path().join("state");
-    std::fs::create_dir_all(&state).unwrap();
-    std::fs::write(state.join("t1.status"), "working: started\n").unwrap();
 
     let store = Arc::new(Store::open_in_memory().unwrap());
     let project = store
@@ -43,7 +41,6 @@ async fn overview_reports_live_status_and_what_changed_since() {
         quarkd::harness::builtin(),
         quarkd::harness::HostEnv::default(),
     ));
-    // The daemon's ingest writes the file the endpoint reads.
     let log = SqliteEventLog::open(home.path().join(quark_eventlog::FILE_NAME)).unwrap();
     let app = quarkd::api::router(quarkd::api::AppState {
         store: store.clone(),
@@ -83,8 +80,25 @@ async fn overview_reports_live_status_and_what_changed_since() {
             },
         )
         .unwrap();
-    let ingest = EventIngest::new(store, FirstmateBridge::new(log, event_ingest::host()));
-    ingest.ingest_all().await.unwrap();
+    let add = |task: &str, ev: TaskEvent| {
+        let e = NewEvent::typed(
+            quarkd::host(),
+            ProjectId::new(project.id.clone()),
+            Some(TaskId::from(task)),
+            kinds::TASK,
+            &ev,
+        )
+        .unwrap();
+        let log = log.clone();
+        async move { log.append(e).await.unwrap() }
+    };
+    add(
+        "t1",
+        TaskEvent::Started {
+            generation: "g1".into(),
+        },
+    )
+    .await;
 
     let uri = format!("/v1/projects/{}/overview", project.id);
     let (status, first) = get(&app, &uri).await;
@@ -96,17 +110,21 @@ async fn overview_reports_live_status_and_what_changed_since() {
     assert!(first["live"]["tasks"][0]["task_id"].is_string());
     assert!(first["digest"].is_null());
 
-    std::fs::write(
-        state.join("t1.status"),
-        "working: started\nneeds-decision: [key=api] REST or gRPC?\n",
+    add(
+        "t1",
+        TaskEvent::DecisionNeeded {
+            key: "api".into(),
+            question: "REST or gRPC?".into(),
+        },
     )
-    .unwrap();
-    std::fs::write(
-        state.join("t2.status"),
-        "done: PR https://github.com/o/r/pull/3 checks green\n",
+    .await;
+    add(
+        "t2",
+        TaskEvent::InReview {
+            pull_request: Some("https://github.com/o/r/pull/3".into()),
+        },
     )
-    .unwrap();
-    ingest.ingest_all().await.unwrap();
+    .await;
 
     let (_, now) = get(&app, &format!("{uri}?since=1")).await;
     assert_eq!(now["head"], 3);

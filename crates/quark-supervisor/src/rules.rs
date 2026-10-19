@@ -1,6 +1,5 @@
 //! How worker messages and answers change a task: the supervisor's rules,
-//! as pure functions so the shadow can apply them to firstmate's workers
-//! ([`crate::shadow`]) exactly as the supervisor applies them to its own.
+//! as pure functions.
 
 use std::collections::BTreeSet;
 

@@ -1,6 +1,6 @@
 [package]
 name = "quark-triggers"
-description = "Triggers, channels (the inbox first) and the away policy for the native Quark engine (slice 7), recorded in the event log and shadowed against firstmate."
+description = "Triggers, channels (the inbox first) and the away policy for the native Quark engine (slice 7), recorded in the event log."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

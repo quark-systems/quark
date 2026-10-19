@@ -8,8 +8,6 @@
 
 use std::collections::HashSet;
 
-use quark_engine::meta::SpawnMeta;
-use quark_eventlog::firstmate::kinds;
 use quark_systems::{DispatchBrief, Issue, TaskBrief};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -17,10 +15,11 @@ use time::OffsetDateTime;
 use crate::api::{db, ApiError, AppState};
 use crate::engine::{EngineBrief, WorkspaceRef};
 
-/// The heading of the section restating what the person asked for.
-const INTENT: &str = "captain's intent";
-/// The heading of the section where the coordinator specifies the work.
-const SPEC: &str = "firstmate spec";
+/// Headings of the section restating what the person asked for; briefs
+/// written before the native engine use the second.
+const INTENT: &[&str] = &["intent", "captain's intent"];
+/// Headings of the section where the coordinator specifies the work.
+const SPEC: &[&str] = &["spec", "firstmate spec"];
 
 pub async fn read(state: &AppState, id: String) -> Result<TaskBrief, ApiError> {
     let task = {
@@ -58,20 +57,9 @@ pub async fn read(state: &AppState, id: String) -> Result<TaskBrief, ApiError> {
         text,
         launch,
         written_at,
-        mut delivery,
-        mut merges_without_asking,
+        delivery,
+        merges_without_asking,
     } = engine;
-    // The engine's record of the spawn goes with the worker; the event log
-    // keeps the last one.
-    if delivery.is_none() && merges_without_asking.is_none() {
-        if let Some(m) = last_spawn(state, &target.project_id, &target.engine_id).await {
-            delivery = m
-                .mode
-                .as_deref()
-                .and_then(crate::engine::firstmate::delivery);
-            merges_without_asking = m.yolo;
-        }
-    }
 
     let issue = match state
         .beads
@@ -119,16 +107,6 @@ pub async fn read(state: &AppState, id: String) -> Result<TaskBrief, ApiError> {
     })
 }
 
-async fn last_spawn(state: &AppState, project: &str, task: &str) -> Option<SpawnMeta> {
-    match state.events.latest(project, task, kinds::SPAWN).await {
-        Ok(e) => e?.decode().ok(),
-        Err(e) => {
-            tracing::warn!(task, error = %e, "reading a task's spawn from the event log failed");
-            None
-        }
-    }
-}
-
 fn rfc3339(secs: i64) -> Option<String> {
     OffsetDateTime::from_unix_timestamp(secs)
         .ok()?
@@ -160,11 +138,11 @@ pub fn sections(markdown: &str) -> (Option<String>, Option<String>) {
     (section(markdown, INTENT), section(markdown, SPEC))
 }
 
-fn section(markdown: &str, title: &str) -> Option<String> {
+fn section(markdown: &str, titles: &[&str]) -> Option<String> {
     let mut lines = markdown.lines();
     let level = lines.by_ref().find_map(|l| {
         let (level, text) = heading(l)?;
-        (normalize(text) == title).then_some(level)
+        titles.contains(&normalize(text).as_str()).then_some(level)
     })?;
     let body: Vec<&str> = lines
         .take_while(|l| heading(l).is_none_or(|(n, _)| n > level))
@@ -235,6 +213,10 @@ mod tests {
     #[test]
     fn a_brief_without_the_sections_has_none() {
         assert_eq!(sections("Fix the parser.\n## Notes\nx"), (None, None));
+        assert_eq!(
+            sections("## Intent\nDo it.\n## Spec\nLike so.\n"),
+            (Some("Do it.".into()), Some("Like so.".into()))
+        );
         assert_eq!(
             sections("## Captain’s Intent\n\n## Firstmate spec\n").0,
             None

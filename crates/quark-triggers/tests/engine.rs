@@ -1,6 +1,6 @@
-//! The slice 7 engine end to end over a real event log: shadow comparison
-//! with firstmate, rule fires and their at-most-once guarantee across
-//! restarts, polled conditions, routing, digests and the return brief.
+//! The slice 7 engine end to end over a real event log: rule fires and
+//! their at-most-once guarantee across restarts, polled conditions,
+//! routing, digests and the return brief.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -8,14 +8,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_core::event::kinds;
-use quark_core::slice::Divergence;
+use quark_core::worker::{Transport, WorkerEnvelope, WorkerMessage};
 use quark_core::{EventLog, HostId, NewEvent, ProjectId, Result, Seq, TaskId};
 use quark_eventlog::SqliteEventLog;
 use quark_triggers::commands::Ran;
 use quark_triggers::trigger::{Status, TriggerEvent};
 use quark_triggers::{
-    Action, AwayPolicy, Commands, Condition, Effects, Engine, Expect, Inbound, Item, Mode,
-    Occasion, Posture, Reach, Route, Rule, INBOX,
+    Action, AwayPolicy, Commands, Condition, Effects, Engine, Expect, Inbound, Item, Occasion,
+    Posture, Reach, Route, Rule, INBOX,
 };
 use time::OffsetDateTime;
 
@@ -117,11 +117,10 @@ impl Rig {
         }
     }
 
-    async fn engine(&self, mode: Mode) -> Engine {
+    async fn engine(&self) -> Engine {
         Engine::open(
             self.log.clone(),
             HostId::from("local"),
-            mode,
             self.effects.clone(),
             self.script.clone(),
         )
@@ -130,12 +129,11 @@ impl Rig {
     }
 
     /// A fresh log handle on the same file, as after a daemon restart.
-    async fn restarted(&self, mode: Mode) -> Engine {
+    async fn restarted(&self) -> Engine {
         let log = Arc::new(SqliteEventLog::open(&self.path).unwrap());
         Engine::open(
             log,
             HostId::from("local"),
-            mode,
             self.effects.clone(),
             self.script.clone(),
         )
@@ -143,22 +141,46 @@ impl Rig {
         .unwrap()
     }
 
-    /// A status line as the slice 1 bridge records it.
+    /// A worker message, written as a status line: `done` (its pull
+    /// request is the first URL), `needs-decision`, or a report.
     async fn status(&self, task: &str, line: &str) -> Seq {
-        let verb = line.split(':').next().unwrap().trim().to_string();
-        let note = line.split_once(':').map(|x| x.1.trim()).unwrap_or("");
-        let payload = serde_json::json!({
-            "verb": verb, "key": null, "corr": null,
-            "note": note, "raw": line, "offset": 0,
-        });
+        let (verb, note) = line.split_once(':').unwrap();
+        let note = note.trim().to_string();
+        let message = match verb.trim() {
+            "done" => WorkerMessage::Done {
+                pull_request: note
+                    .split_whitespace()
+                    .find(|w| w.starts_with("https://"))
+                    .map(str::to_string),
+                summary: note,
+            },
+            "needs-decision" => WorkerMessage::Ask {
+                key: "default".into(),
+                question: note,
+            },
+            state => WorkerMessage::Report {
+                state: state.into(),
+                note,
+                key: None,
+            },
+        };
+        let envelope = WorkerEnvelope {
+            task: TaskId::from(task),
+            generation: "g1".into(),
+            via: Transport::Mcp,
+            message,
+        };
         self.log
-            .append(NewEvent::new(
-                HostId::from("local"),
-                project(),
-                Some(TaskId::from(task)),
-                quark_eventlog::firstmate::kinds::STATUS,
-                payload,
-            ))
+            .append(
+                NewEvent::typed(
+                    HostId::from("local"),
+                    project(),
+                    Some(TaskId::from(task)),
+                    kinds::WORKER,
+                    &envelope,
+                )
+                .unwrap(),
+            )
             .await
             .unwrap()
     }
@@ -179,104 +201,9 @@ fn now() -> OffsetDateTime {
 }
 
 #[tokio::test]
-async fn shadow_agrees_with_firstmate_and_records_disagreement() {
-    let rig = Rig::new();
-    let engine = rig.engine(Mode::Shadow).await;
-    for line in [
-        "working: started",
-        "needs-decision: key=api which shape?",
-        "resolved: key=api answered",
-        "paused: waiting on CI",
-        "note: PR ready for review",
-        "done: PR https://example/pr/1 checks green",
-        "failed: tests red",
-    ] {
-        rig.status("t1", line).await;
-    }
-    let r = engine.tick(now()).await.unwrap();
-    assert_eq!(r.compared, 7);
-    assert_eq!(r.diverged, 0);
-    // Shadow mode never acts.
-    assert!(rig.effects.take().is_empty());
-    let shadowed = rig.of_kind("away.shadowed").await;
-    assert_eq!(shadowed.len(), 1);
-    assert_eq!(shadowed[0].payload["compared"], 7);
-
-    // A Project that stops waking on done disagrees with firstmate.
-    let mut policy = AwayPolicy::default();
-    for posture in [Posture::Present, Posture::Away, Posture::Quiet] {
-        policy.set(posture, Occasion::Done, Route::new(false, Reach::Digest));
-    }
-    engine.set_policy(&project(), policy, "user").await.unwrap();
-    rig.status("t2", "done: PR https://example/pr/2").await;
-    rig.status("t2", "working: next").await;
-    let r = engine.tick(now()).await.unwrap();
-    assert_eq!((r.compared, r.diverged), (2, 1));
-    let div = rig.of_kind(kinds::SHADOW_DIVERGENCE).await;
-    assert_eq!(div.len(), 1);
-    let d: Divergence = div[0].decode().unwrap();
-    assert_eq!(d.operation, "away.route");
-    assert_eq!(d.bash["escalate"], true);
-    assert_eq!(d.native["wake"], false);
-
-    // Nothing is compared twice, here or after a restart.
-    assert_eq!(engine.tick(now()).await.unwrap().compared, 0);
-    let again = rig.restarted(Mode::Shadow).await;
-    assert_eq!(again.tick(now()).await.unwrap().compared, 0);
-}
-
-#[tokio::test]
-async fn mirrors_the_firstmate_inbox_and_posture() {
-    let rig = Rig::new();
-    let engine = rig.engine(Mode::Shadow).await;
-    let home = tempfile::tempdir().unwrap();
-    let inbox = home.path().join("state/inbox");
-    std::fs::create_dir_all(&inbox).unwrap();
-    std::fs::write(
-        inbox.join("1-a.note"),
-        "id=1-a\nat=2026-10-07T01:00:00Z\nsource=cli\n--\nlook at the flaky test\n",
-    )
-    .unwrap();
-    let r = engine
-        .mirror_firstmate(&project(), home.path())
-        .await
-        .unwrap();
-    assert_eq!((r.received, r.acked, r.posture), (1, 0, false));
-    let pending = engine.inbox(&project()).await;
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].body, "look at the flaky test");
-
-    // firstmate acks it and the user goes away.
-    std::fs::create_dir_all(inbox.join("handled")).unwrap();
-    std::fs::rename(inbox.join("1-a.note"), inbox.join("handled/1-a.note")).unwrap();
-    std::fs::write(home.path().join("state/.afk"), "away\n").unwrap();
-    let r = engine
-        .mirror_firstmate(&project(), home.path())
-        .await
-        .unwrap();
-    assert_eq!((r.received, r.acked, r.posture), (0, 1, true));
-    assert!(engine.inbox(&project()).await.is_empty());
-    assert_eq!(engine.posture(&project()).await, Posture::Away);
-
-    // Running it again changes nothing.
-    let r = engine
-        .mirror_firstmate(&project(), home.path())
-        .await
-        .unwrap();
-    assert_eq!((r.received, r.acked, r.posture), (0, 0, false));
-
-    std::fs::remove_file(home.path().join("state/.afk")).unwrap();
-    engine
-        .mirror_firstmate(&project(), home.path())
-        .await
-        .unwrap();
-    assert_eq!(engine.posture(&project()).await, Posture::Present);
-}
-
-#[tokio::test]
 async fn inbox_is_one_inbound_api() {
     let rig = Rig::new();
-    let engine = rig.engine(Mode::Native).await;
+    let engine = rig.engine().await;
     let note = Inbound::note("user", "rebase the dashboard PR");
     let s1 = engine.receive(&project(), note.clone()).await.unwrap();
     // The same message again (a retry) lands once.
@@ -316,7 +243,7 @@ async fn inbox_is_one_inbound_api() {
         .unwrap();
     assert!(engine.ack(&project(), INBOX, "nope", "x").await.is_err());
     assert_eq!(engine.inbox(&project()).await.len(), 1);
-    let again = rig.restarted(Mode::Native).await;
+    let again = rig.restarted().await;
     assert_eq!(again.inbox(&project()).await.len(), 1);
 }
 
@@ -325,13 +252,13 @@ async fn event_rules_fire_once_per_event_and_survive_restarts() {
     let rig = Rig::new();
     // History before the engine first ran never fires anything.
     rig.status("old", "done: before the engine existed").await;
-    let engine = rig.engine(Mode::Native).await;
+    let engine = rig.engine().await;
     let mut fields = BTreeMap::new();
-    fields.insert("/verb".to_string(), serde_json::json!("done"));
+    fields.insert("/message/tool".to_string(), serde_json::json!("done"));
     let rule = Rule::new(
         "steer-on-done",
         Condition::Event {
-            kind: "firstmate.status".into(),
+            kind: kinds::WORKER.into(),
             task: None,
             fields,
         },
@@ -364,7 +291,7 @@ async fn event_rules_fire_once_per_event_and_survive_restarts() {
     assert!(rig.effects.take().is_empty());
 
     // A restart evaluates nothing twice.
-    let again = rig.restarted(Mode::Native).await;
+    let again = rig.restarted().await;
     let r = again.tick(now()).await.unwrap();
     assert_eq!(r.fired, 0);
     assert!(rig.effects.take().is_empty());
@@ -383,7 +310,7 @@ async fn event_rules_fire_once_per_event_and_survive_restarts() {
 #[tokio::test]
 async fn an_interrupted_fire_is_ambiguous_not_rerun() {
     let rig = Rig::new();
-    let engine = rig.engine(Mode::Native).await;
+    let engine = rig.engine().await;
     let rule = Rule::new(
         "deploy",
         Condition::At {
@@ -408,7 +335,7 @@ async fn an_interrupted_fire_is_ambiguous_not_rerun() {
     rig.log.append(ev).await.unwrap();
     drop(engine);
 
-    let again = rig.restarted(Mode::Native).await;
+    let again = rig.restarted().await;
     again.tick(now()).await.unwrap();
     assert!(rig.script.ran().is_empty(), "the action ran again");
     let outcomes = rig.of_kind("trigger.outcome").await;
@@ -430,7 +357,7 @@ async fn an_interrupted_fire_is_ambiguous_not_rerun() {
 #[tokio::test]
 async fn polled_conditions_need_a_stable_true_and_have_an_error_budget() {
     let rig = Rig::new();
-    let engine = rig.engine(Mode::Native).await;
+    let engine = rig.engine().await;
     let poll = |id: &str, expect| {
         Rule::new(
             id,
@@ -501,9 +428,9 @@ async fn polled_conditions_need_a_stable_true_and_have_an_error_budget() {
 }
 
 #[tokio::test]
-async fn clocks_fire_per_slot_and_shadow_only_records() {
+async fn clocks_fire_per_slot() {
     let rig = Rig::new();
-    let engine = rig.engine(Mode::Shadow).await;
+    let engine = rig.engine().await;
     let rule = Rule::new(
         "hourly",
         Condition::Every { secs: 3600 },
@@ -526,15 +453,20 @@ async fn clocks_fire_per_slot_and_shadow_only_records() {
             .fired,
         1
     );
-    assert_eq!(rig.of_kind("trigger.would_fire").await.len(), 2);
-    assert!(rig.of_kind("trigger.fired").await.is_empty());
-    assert!(rig.effects.take().is_empty());
+    assert_eq!(rig.of_kind("trigger.fired").await.len(), 2);
+    let wakes: Vec<_> = rig
+        .effects
+        .take()
+        .into_iter()
+        .filter(|c| c.starts_with("wake[] hourly check"))
+        .collect();
+    assert_eq!(wakes.len(), 2);
 }
 
 #[tokio::test]
 async fn away_holds_decisions_digests_the_rest_and_briefs_on_return() {
     let rig = Rig::new();
-    let engine = rig.engine(Mode::Native).await;
+    let engine = rig.engine().await;
     engine
         .set_posture(
             &ProjectId::engine(),
@@ -572,7 +504,7 @@ async fn away_holds_decisions_digests_the_rest_and_briefs_on_return() {
     engine.tick(t + time::Duration::hours(2)).await.unwrap();
     let calls = rig.effects.take();
     assert_eq!(calls.len(), 1, "{calls:?}");
-    assert!(calls[0].starts_with("digest returning=true t1: needs-decision"));
+    assert!(calls[0].starts_with("digest returning=true t1: asks"));
     assert!(engine.held(&project()).await.is_empty());
 
     // Present: a decision notifies the user right away.
@@ -588,7 +520,7 @@ async fn away_holds_decisions_digests_the_rest_and_briefs_on_return() {
 #[tokio::test]
 async fn policies_that_lose_a_decision_are_refused() {
     let rig = Rig::new();
-    let engine = rig.engine(Mode::Native).await;
+    let engine = rig.engine().await;
     let mut p = AwayPolicy::default();
     p.set(
         Posture::Away,

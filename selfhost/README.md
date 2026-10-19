@@ -1,6 +1,6 @@
 # Self-hosting
 
-Quark's own work runs as a Quark Project named "Quark", with `quark-systems/quark` and `quark-systems/firstmate` as its repos.
+Quark's own work runs as a Quark Project named "Quark", with `quark-systems/quark` as its repo.
 
 ```sh
 cargo run -p quarkd -- --engine native         # in one terminal
@@ -21,22 +21,15 @@ selfhost/project-init.sh <dir> [--holdout <dir>]
 
 `<dir>` holds `project.json` (the create request), `project.yaml` (gates, with `@ID@` and `@CREATED_AT@` filled in), `instructions.md`, optionally `files/` (copied to the Project repo's root, such as a spec) and optionally `kickoff.md` (sent to the coordinator once: a short first line that marks it as sent, then the message).
 
-## Moving from firstmate to the native engine
-
-The native engine needs no firstmate checkout ([`docs/engine/native-engine.md`](../docs/engine/native-engine.md)).
-To move an existing self-hosted Quark over:
-
-1. Let the tasks firstmate is running finish or cancel them: the native engine does not see firstmate's tasks.
-2. Stop quarkd, close firstmate's coordinator window for the Project on the `quark` tmux server, and start quarkd again with `--engine native`. The Project, its workspace and its repos stay; coordinator recovery starts a native coordinator for it.
-   quarkd starts the PTY supervisor that native workers run in (`quarkd ptyd`) itself; it keeps running after quarkd stops, so workers survive a restart.
-3. Keep `~/.quark/engine` (the firstmate clone) for seven days. If the native engine misbehaves, restart quarkd with `--engine firstmate` to go back.
+quarkd runs the native engine ([`docs/engine/native-engine.md`](../docs/engine/native-engine.md)) and starts the PTY supervisor that workers run in (`quarkd ptyd`) itself; it keeps running after quarkd stops, so workers survive a restart.
+firstmate, the engine Quark drove before, is retired: quarkd no longer reads a firstmate home, and `~/.quark/engine` (its clone) can be deleted.
+A self-hosted Project made before then may still list `firstmate` as a repo; detach it in the Project's settings.
 
 The verification gates (ADR-15) in `project.yaml`:
 
 | Repo | Checks | Journeys | Holdout |
 | :--- | :--- | :--- | :--- |
 | `quark` | rustfmt, clippy, `cargo test`, app build and unit tests | the app's Playwright suite against the demo daemon (`npm run e2e:serve`) | `holdout/quark/` when given |
-| `firstmate` | `bin/fm-lint.sh` with the pinned shellcheck and actionlint, `bin/fm-test-run.sh --changed` | none | none |
 
 Holdout tests never live in this repo, because every worker on `quark` sees it.
 Keep them in a directory outside any worktree, laid out as `<repo>/<category>/run`, and pass it with `--holdout`; they land in the Project repo under `holdout/`.

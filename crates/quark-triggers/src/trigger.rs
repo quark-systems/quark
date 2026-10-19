@@ -310,7 +310,8 @@ pub enum TriggerEvent {
         status: Status,
         detail: String,
     },
-    /// The rule would have fired; shadow mode records instead of acting.
+    /// The rule would have fired. Only the shadow mode quarkd ran beside
+    /// firstmate recorded these; old logs still fold them as spent fires.
     WouldFire {
         id: RuleId,
         fire: String,
@@ -552,27 +553,27 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("/verb".to_string(), serde_json::json!("done"));
         let c = Condition::Event {
-            kind: "firstmate.*".into(),
+            kind: "worker.*".into(),
             task: Some("t1".into()),
             fields,
         };
         let done = serde_json::json!({"verb": "done", "note": "PR"});
         assert!(event_matches(
             &c,
-            &event("firstmate.status", Some("t1"), done.clone())
+            &event("worker.status", Some("t1"), done.clone())
         ));
         assert!(!event_matches(
             &c,
-            &event("firstmate.status", Some("t2"), done.clone())
+            &event("worker.status", Some("t2"), done.clone())
         ));
         assert!(!event_matches(
             &c,
-            &event("firstmatex.status", Some("t1"), done.clone())
+            &event("workerx.status", Some("t1"), done.clone())
         ));
         assert!(!event_matches(
             &c,
             &event(
-                "firstmate.status",
+                "worker.status",
                 Some("t1"),
                 serde_json::json!({"verb": "working"})
             )

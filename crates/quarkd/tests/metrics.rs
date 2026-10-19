@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use quark_core::event::kinds;
 use quark_core::{EventLog, HostId, NewEvent, ProjectId, TaskId};
-use quark_eventlog::firstmate::kinds;
 use quark_eventlog::SqliteEventLog;
 use quark_systems::CreateProject;
 use quarkd::store::Store;
@@ -23,22 +23,34 @@ async fn get(app: &axum::Router, uri: &str) -> (axum::http::StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
-async fn append(log: &SqliteEventLog, project: &str, task: &str, kind: &str, payload: Value) {
-    log.append(NewEvent::new(
+async fn append(
+    log: &SqliteEventLog,
+    ago_s: i64,
+    project: &str,
+    task: &str,
+    kind: &str,
+    payload: Value,
+) {
+    let mut e = NewEvent::new(
         HostId::from("local"),
         ProjectId::from(project),
         Some(TaskId::from(task)),
         kind,
         payload,
-    ))
-    .await
-    .unwrap();
+    );
+    e.ts = OffsetDateTime::now_utc() - time::Duration::seconds(ago_s);
+    log.append(e).await.unwrap();
 }
 
-async fn status(log: &SqliteEventLog, project: &str, task: &str, verb: &str) {
-    let payload =
-        json!({"verb": verb, "key": "default", "corr": null, "note": "", "raw": verb, "offset": 0});
-    append(log, project, task, kinds::STATUS, payload).await;
+async fn spawn(log: &SqliteEventLog, ago_s: i64, project: &str, task: &str) {
+    let payload = json!({"type": "launched", "generation": "g1", "session": "s",
+        "backend": "tmux", "cause": "spawn", "dir": "/tmp", "harness": "claude",
+        "model": null, "effort": null});
+    append(log, ago_s, project, task, "supervisor.launched", payload).await;
+}
+
+async fn task(log: &SqliteEventLog, project: &str, task: &str, payload: Value) {
+    append(log, 0, project, task, kinds::TASK, payload).await;
 }
 
 #[tokio::test]
@@ -76,17 +88,28 @@ async fn metrics_count_the_projects_own_events() {
         .unwrap();
     let p = project.id.as_str();
 
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let spawn = |gen_at: i64| json!({"generation": format!("s{gen_at}.1.1"), "harness": "claude", "model": null, "effort": null, "project": null, "kind": "ship"});
-    append(&events, p, "a", kinds::SPAWN, spawn(now - 3600)).await;
-    status(&events, p, "a", "working").await;
-    status(&events, p, "a", "done").await;
-    append(&events, p, "b", kinds::SPAWN, spawn(now - 600)).await;
-    status(&events, p, "b", "needs-decision").await;
-    status(&events, p, "b", "resolved").await;
-    status(&events, p, "b", "failed").await;
+    spawn(&events, 3600, p, "a").await;
+    task(
+        &events,
+        p,
+        "a",
+        json!({"type": "started", "generation": "g1"}),
+    )
+    .await;
+    task(&events, p, "a", json!({"type": "completed"})).await;
+    spawn(&events, 600, p, "b").await;
+    let ask = json!({"type": "decision_needed", "key": "k", "question": "q"});
+    task(&events, p, "b", ask).await;
+    task(
+        &events,
+        p,
+        "b",
+        json!({"type": "decision_answered", "key": "k"}),
+    )
+    .await;
+    task(&events, p, "b", json!({"type": "failed", "reason": "x"})).await;
     // Another Project's work is not counted.
-    status(&events, "other", "a", "done").await;
+    task(&events, "other", "a", json!({"type": "completed"})).await;
 
     let (code, m) = get(&app, &format!("/v1/projects/{p}/metrics")).await;
     assert_eq!(code, 200, "{m}");

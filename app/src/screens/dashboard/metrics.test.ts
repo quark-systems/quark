@@ -25,8 +25,8 @@ describe("tokens", () => {
 describe("hasTurns", () => {
   const none = { turns: 0, ack_turns: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 };
   it("hides the coordinator section until a coordinator turn is known", () => {
-    expect(hasTurns({ tasks: 3, baseline: none, native: none, would_wake_turns: 0 })).toBe(false);
-    expect(hasTurns({ tasks: 3, baseline: { ...none, turns: 2 }, native: none, would_wake_turns: 0 })).toBe(true);
+    expect(hasTurns({ tasks: 3, native: none })).toBe(false);
+    expect(hasTurns({ tasks: 3, native: { ...none, turns: 2 } })).toBe(true);
   });
 });
 

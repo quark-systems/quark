@@ -19,7 +19,7 @@ fn create_request_is_valid() {
     let req: CreateProject = serde_json::from_str(&read("project.json")).unwrap();
     let req = quarkd::provision::normalize(req).unwrap();
     let names: Vec<_> = req.repos.iter().filter_map(|r| r.name.as_deref()).collect();
-    assert_eq!(names, ["quark", "firstmate"]);
+    assert_eq!(names, ["quark"]);
     assert!(req.agent_config.is_some());
 }
 
@@ -78,12 +78,7 @@ fn project_yaml_matches_the_request_and_compiles() {
     );
     assert_eq!(quark["journeys"]["start"], "npm run e2e:serve");
     assert_eq!(quark["holdout"]["path"], "holdout/quark");
-    let firstmate = &json["repos"]["firstmate"];
-    assert_eq!(firstmate["checks"].as_array().unwrap().len(), 2);
-    assert!(
-        firstmate.get("holdout").is_none(),
-        "holdout only where tests exist"
-    );
+    assert_eq!(json["repos"].as_object().unwrap().len(), 1);
 }
 
 #[test]

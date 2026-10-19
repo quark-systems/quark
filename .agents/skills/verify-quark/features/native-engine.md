@@ -1,10 +1,10 @@
 # Native engine
 
-A person runs Quark on its own engine (`quarkd --engine native`) with no firstmate checkout anywhere: they create a Project from a git repo, its coordinator starts a task, the worker shows on the board, they steer it, answer its decision, and cancel and relaunch it, all from the app.
+A person runs Quark on its own engine (`quarkd --engine native`): they create a Project from a git repo, its coordinator starts a task, the worker shows on the board, they steer it, answer its decision, and cancel and relaunch it, all from the app.
 
 ## Sub-features
 
-- `nat-project`: a Project created from a local git repo reaches `ready`, its repo cloned into the workspace, with no firstmate home and no engine checkout in the daemon's home.
+- `nat-project`: a Project created from a local git repo reaches `ready`, its repo cloned into the workspace, with no engine checkout in the daemon's home.
 - `nat-coordinator`: the coordinator runs in its own terminal (role `coordinator`) and answers typed input; its MCP route (`.mcp.json` in the workspace, server `quark-coordinator`) lists `start_task`.
 - `nat-dispatch`: `start_task` starts a worker in an isolated worktree on branch `quark/<task id>`, and the board's Running column shows its card.
 - `nat-steer`: a message sent from the worker view reaches the worker.
@@ -22,7 +22,7 @@ A person runs Quark on its own engine (`quarkd --engine native`) with no firstma
 
 Preconditions:
 
-- tmux, jq, git and treehouse 3.1.2 or later (`selfhost/treehouse.sh`); no firstmate checkout.
+- tmux, jq, git and treehouse 3.1.2 or later (`selfhost/treehouse.sh`).
 - No run needs to be up: the journey launches its own (`--engine native --harness fake`) and cleans it up; `--keep` leaves it up to look at.
 
 - **Run it.** Run `$Q journey native`. Every check prints `PASS`, `FAIL` or `SKIP` with its reason; the command exits non-zero on any `FAIL`. Extra launch args go after `--`.

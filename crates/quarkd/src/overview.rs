@@ -6,20 +6,21 @@
 //! history answers "since you last looked": everything after a `seq` the
 //! app saved on its previous visit.
 //!
-//! Today the log carries the firstmate bridge's `firstmate.status` and
-//! `firstmate.spawn` events (see `docs/engine/event-log.md`); other kinds
-//! count toward a digest's `events` and are otherwise skipped. An event's
-//! time is when it was logged, so a firstmate home's history ingested on
-//! the daemon's first start all carries that start's time.
+//! A task's state comes from its `task.transition` events, its harness and
+//! model from `supervisor.launched`, and its latest note from the worker's
+//! own messages (see `docs/engine/event-log.md`); other kinds count toward
+//! a digest's `events` and are otherwise skipped.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use quark_core::event::kinds;
+use quark_core::worker::{WorkerEnvelope, WorkerMessage};
+use quark_core::TaskEvent;
 use quark_core::{Event, EventLog, Result, Seq};
-use quark_engine::meta::SpawnMeta;
-use quark_eventlog::firstmate::{kinds, StatusPayload, TasksPayload};
 use quark_eventlog::SqliteEventLog;
+use quark_supervisor::{Cause, SupervisorEvent};
 use quark_systems::{
     DigestItem, DigestKind, LiveStatus, OverviewDigest, ProjectOverview, PulseState, StatusCounts,
     TaskPulse,
@@ -33,6 +34,7 @@ pub const FINISHED_FOR: Duration = Duration::days(1);
 pub const HIGHLIGHTS: usize = 50;
 const READ_BATCH: usize = 1000;
 const NOTE_MAX: usize = 500;
+const LAUNCHED: &str = "supervisor.launched";
 
 /// Every Project's fold of one event log.
 pub struct OverviewModel {
@@ -113,40 +115,44 @@ impl OverviewModel {
         p.last = Some(e.ts);
         let task = e.task.as_ref().map(|t| t.as_str().to_string());
         let what = match (e.kind.as_str(), &task) {
-            (kinds::SPAWN, Some(t)) => match e.decode::<SpawnMeta>() {
-                Ok(m) => {
-                    let text = match &m.model {
-                        Some(model) => format!("{} · {model}", m.harness),
-                        None => m.harness.clone(),
+            (LAUNCHED, Some(t)) => match e.decode::<SupervisorEvent>() {
+                Ok(SupervisorEvent::Launched {
+                    harness,
+                    model,
+                    cause,
+                    ..
+                }) => {
+                    let text = match &model {
+                        Some(model) => format!("{harness} · {model}"),
+                        None => harness.clone(),
                     };
                     let f = p
                         .tasks
                         .entry(t.clone())
                         .or_insert_with(|| TaskFold::new(e.ts));
-                    f.harness = Some(m.harness);
-                    f.model = m.model;
-                    What::Spawn { text }
+                    f.harness = Some(harness);
+                    f.model = model;
+                    if cause == Cause::Spawn {
+                        What::Spawn { text }
+                    } else {
+                        What::Other
+                    }
                 }
-                Err(_) => What::Other,
+                _ => What::Other,
             },
-            (kinds::STATUS, Some(t)) => match e.decode::<StatusPayload>() {
-                Ok(s) => {
+            (kinds::TASK, Some(t)) => match e.decode::<TaskEvent>() {
+                Ok(ev) => {
                     let f = p
                         .tasks
                         .entry(t.clone())
                         .or_insert_with(|| TaskFold::new(e.ts));
-                    f.status(&s, e.ts)
+                    f.transition(&ev, e.ts)
                 }
                 Err(_) => What::Other,
             },
-            (kinds::TASKS, _) => {
-                // A task firstmate removed while still open (cleaned up
-                // mid-work) is no longer live; finished ones stay for
-                // FINISHED_FOR on purpose.
-                if let Ok(t) = e.decode::<TasksPayload>() {
-                    let live: BTreeSet<&str> = t.live.iter().map(String::as_str).collect();
-                    p.tasks
-                        .retain(|id, f| live.contains(id.as_str()) || !f.state().is_open());
+            (kinds::WORKER, Some(t)) => {
+                if let (Ok(w), Some(f)) = (e.decode::<WorkerEnvelope>(), p.tasks.get_mut(t)) {
+                    f.message(&w.message);
                 }
                 What::Other
             }
@@ -202,26 +208,58 @@ impl TaskFold {
         }
     }
 
-    fn status(&mut self, s: &StatusPayload, at: OffsetDateTime) -> What {
+    /// A worker's note, shown until the next one; the transition it leads
+    /// to (if any) follows it in the log.
+    fn message(&mut self, m: &WorkerMessage) {
+        let note = match m {
+            WorkerMessage::Report { note, .. } => note,
+            WorkerMessage::Ask { question, .. } => question,
+            WorkerMessage::Done { summary, .. } => summary,
+            WorkerMessage::Learned { .. } | WorkerMessage::Signal { .. } => return,
+        };
+        if !note.is_empty() {
+            self.note = clip(note);
+        }
+    }
+
+    fn transition(&mut self, ev: &TaskEvent, at: OffsetDateTime) -> What {
         let (mut opened, mut closed) = (false, false);
-        if let Some(key) = &s.key {
-            if opens_decision(&s.verb) {
+        let mut url = None;
+        let (verb, note): (&str, Option<&str>) = match ev {
+            TaskEvent::Queued { title } => ("queued", Some(title)),
+            TaskEvent::Started { .. } | TaskEvent::Resumed => ("working", None),
+            TaskEvent::DecisionNeeded { key, question } => {
                 opened = self.open.insert(key.clone());
-            } else if closes_decision(&s.verb) {
-                closed = self.open.remove(key);
+                ("needs-decision", Some(question))
             }
+            TaskEvent::DecisionAnswered { key } => {
+                closed = self.open.remove(key);
+                ("resolved", None)
+            }
+            TaskEvent::Blocked { reason } => ("blocked", Some(reason)),
+            TaskEvent::Paused { reason } => ("paused", Some(reason)),
+            TaskEvent::InReview { pull_request } => {
+                url = pull_request.clone();
+                if url.is_some() {
+                    self.pull_request = url.clone();
+                }
+                ("done", None)
+            }
+            // A merge after review is the same piece of work finishing,
+            // not a second `done`.
+            TaskEvent::Completed if self.verb == "done" => ("completed", None),
+            TaskEvent::Completed => ("done", None),
+            TaskEvent::Failed { reason } => ("failed", Some(reason)),
+            TaskEvent::Cancelled => ("failed", Some("cancelled")),
+        };
+        if let Some(note) = note.filter(|n| !n.is_empty()) {
+            self.note = clip(note);
         }
-        let url = pull_request_url(&s.note);
-        if url.is_some() {
-            self.pull_request = url.clone();
-        }
-        let note = clip(&s.note);
-        self.verb = s.verb.clone();
-        self.note = note.clone();
+        self.verb = verb.to_string();
         self.at = at;
         What::Status {
-            verb: s.verb.clone(),
-            note,
+            verb: verb.to_string(),
+            note: self.note.clone(),
             url,
             opened,
             closed,
@@ -230,7 +268,7 @@ impl TaskFold {
 
     fn state(&self) -> PulseState {
         match self.verb.as_str() {
-            "done" => PulseState::Done,
+            "done" | "completed" => PulseState::Done,
             "failed" => PulseState::Failed,
             "blocked" => PulseState::Blocked,
             _ if !self.open.is_empty() => PulseState::NeedsDecision,
@@ -353,29 +391,6 @@ impl ProjectFold {
     }
 }
 
-/// Verbs that open a keyed decision, as the engine folds them
-/// (`quark_engine::status::StatusEvent::opens_decision`).
-fn opens_decision(verb: &str) -> bool {
-    matches!(verb, "needs-decision" | "blocked")
-}
-
-/// Verbs that close one (`StatusEvent::closes_decision`).
-fn closes_decision(verb: &str) -> bool {
-    matches!(verb, "resolved" | "captain-held")
-}
-
-/// The first `http(s)://.../pull/...` URL in `note`.
-fn pull_request_url(note: &str) -> Option<String> {
-    note.split_whitespace()
-        .map(|w| {
-            w.trim_matches(|c: char| {
-                matches!(c, '(' | ')' | '<' | '>' | ',' | '.' | ';' | '"' | '\'')
-            })
-        })
-        .find(|w| (w.starts_with("https://") || w.starts_with("http://")) && w.contains("/pull/"))
-        .map(str::to_string)
-}
-
 fn clip(s: &str) -> String {
     match s.char_indices().nth(NOTE_MAX) {
         Some((i, _)) => format!("{}…", &s[..i]),
@@ -411,105 +426,81 @@ pub fn shared(log: &SqliteEventLog) -> Arc<tokio::sync::Mutex<OverviewModel>> {
 
 #[cfg(test)]
 mod tests {
+    use quark_core::session::SessionId;
     use quark_core::{HostId, NewEvent, ProjectId, TaskId};
 
     use super::*;
 
-    fn status(verb: &str, key: Option<&str>, note: &str) -> StatusPayload {
-        StatusPayload {
-            verb: verb.into(),
-            key: key.map(str::to_string),
-            corr: None,
-            note: note.into(),
-            raw: format!("{verb}: {note}"),
-            offset: 0,
-        }
-    }
-
-    async fn add(log: &SqliteEventLog, project: &str, task: &str, s: StatusPayload) -> u64 {
+    async fn add(log: &SqliteEventLog, project: &str, task: &str, ev: TaskEvent) -> u64 {
         let e = NewEvent::typed(
             HostId::from("local"),
             ProjectId::new(project),
             Some(TaskId::from(task)),
-            kinds::STATUS,
-            &s,
+            kinds::TASK,
+            &ev,
         )
         .unwrap();
         log.append(e).await.unwrap().0
+    }
+
+    async fn launch(log: &SqliteEventLog, project: &str, task: &str, cause: Cause) {
+        let ev = SupervisorEvent::Launched {
+            generation: "g1".into(),
+            session: SessionId("s".into()),
+            backend: "tmux".into(),
+            cause,
+            dir: PathBuf::from("/tmp"),
+            harness: "claude".into(),
+            model: Some("opus".into()),
+            effort: None,
+        };
+        let e = NewEvent::typed(
+            HostId::from("local"),
+            ProjectId::new(project),
+            Some(TaskId::from(task)),
+            ev.kind().as_str(),
+            &ev,
+        )
+        .unwrap();
+        log.append(e).await.unwrap();
+    }
+
+    fn ask(key: &str, question: &str) -> TaskEvent {
+        TaskEvent::DecisionNeeded {
+            key: key.into(),
+            question: question.into(),
+        }
+    }
+
+    fn answer(key: &str) -> TaskEvent {
+        TaskEvent::DecisionAnswered { key: key.into() }
+    }
+
+    fn started() -> TaskEvent {
+        TaskEvent::Started {
+            generation: "g1".into(),
+        }
     }
 
     #[tokio::test]
     async fn folds_live_status_and_digest_since_a_seq() {
         let dir = tempfile::tempdir().unwrap();
         let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
-        let spawn = SpawnMeta {
-            generation: "s1790000000.1.1".into(),
-            harness: "claude".into(),
-            model: Some("opus".into()),
-            effort: None,
-            project: None,
-            kind: Some("ship".into()),
-            mode: None,
-            yolo: None,
-        };
-        log.append(
-            NewEvent::typed(
-                HostId::from("local"),
-                ProjectId::new("p1"),
-                Some(TaskId::from("a")),
-                kinds::SPAWN,
-                &spawn,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
+        launch(&log, "p1", "a", Cause::Spawn).await;
+        add(&log, "p1", "a", started()).await;
+        let seen = add(&log, "p1", "b", ask("api", "which shape?")).await;
+        add(&log, "p2", "x", started()).await;
+        add(&log, "p1", "b", answer("api")).await;
         add(
             &log,
             "p1",
             "a",
-            status("working", Some("default"), "building"),
+            TaskEvent::InReview {
+                pull_request: Some("https://github.com/o/r/pull/7".into()),
+            },
         )
         .await;
-        let seen = add(
-            &log,
-            "p1",
-            "b",
-            status("needs-decision", Some("api"), "which shape?"),
-        )
-        .await;
-        add(
-            &log,
-            "p2",
-            "x",
-            status("working", Some("default"), "other project"),
-        )
-        .await;
-        add(
-            &log,
-            "p1",
-            "b",
-            status("resolved", Some("api"), "went with A"),
-        )
-        .await;
-        add(
-            &log,
-            "p1",
-            "a",
-            status(
-                "done",
-                Some("default"),
-                "PR https://github.com/o/r/pull/7 checks green",
-            ),
-        )
-        .await;
-        add(
-            &log,
-            "p1",
-            "c",
-            status("needs-decision", Some("db"), "sqlite or postgres?"),
-        )
-        .await;
+        add(&log, "p1", "c", ask("db", "sqlite or postgres?")).await;
 
         let mut m = OverviewModel::new(log.clone());
         m.catch_up().await.unwrap();
@@ -532,6 +523,7 @@ mod tests {
             Some("https://github.com/o/r/pull/7")
         );
         assert_eq!(o.live.tasks[0].open_decisions, ["db"]);
+        assert_eq!(o.live.tasks[0].note, "sqlite or postgres?");
 
         let d = o.digest.unwrap();
         assert_eq!(d.events, 3, "only p1's events after `seen`");
@@ -555,7 +547,7 @@ mod tests {
         );
 
         // Catching up again reads only what is new.
-        add(&log, "p1", "c", status("resolved", Some("db"), "sqlite")).await;
+        add(&log, "p1", "c", answer("db")).await;
         m.catch_up().await.unwrap();
         let o = m.overview("p1", Some(o.head), now);
         assert_eq!(o.live.counts.needs_decision, 0);
@@ -569,43 +561,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_task_removed_while_open_leaves_the_live_list() {
+    async fn a_merge_after_review_is_not_a_second_done() {
         let dir = tempfile::tempdir().unwrap();
         let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
-        add(&log, "p1", "open", status("working", None, "building")).await;
-        add(&log, "p1", "finished", status("done", None, "shipped")).await;
-        add(&log, "p1", "kept", status("working", None, "still going")).await;
-        let tasks = TasksPayload {
-            live: vec!["kept".into()],
-        };
-        let e = NewEvent::typed(
-            HostId::from("local"),
-            ProjectId::new("p1"),
-            None,
-            kinds::TASKS,
-            &tasks,
+        launch(&log, "p1", "a", Cause::Spawn).await;
+        launch(&log, "p1", "a", Cause::Relaunch).await;
+        add(
+            &log,
+            "p1",
+            "a",
+            TaskEvent::InReview {
+                pull_request: Some("https://github.com/o/r/pull/1".into()),
+            },
         )
-        .unwrap();
-        log.append(e).await.unwrap();
+        .await;
+        add(&log, "p1", "a", TaskEvent::Completed).await;
+        add(&log, "p1", "b", TaskEvent::Completed).await;
         let mut m = OverviewModel::new(log);
         m.catch_up().await.unwrap();
-        let o = m.overview("p1", None, OffsetDateTime::now_utc());
-        let mut ids: Vec<&str> = o
-            .live
-            .tasks
-            .iter()
-            .map(|t| t.engine_task.as_str())
-            .collect();
-        ids.sort();
-        assert_eq!(ids, ["finished", "kept"], "{ids:?}");
-    }
-
-    #[test]
-    fn finds_pull_request_urls() {
-        assert_eq!(
-            pull_request_url("PR <https://github.com/o/r/pull/12>, green").as_deref(),
-            Some("https://github.com/o/r/pull/12")
-        );
-        assert_eq!(pull_request_url("see https://example.com/x"), None);
+        let o = m.overview("p1", Some(0), OffsetDateTime::now_utc());
+        assert_eq!(o.live.counts.done, 2);
+        let d = o.digest.unwrap();
+        assert_eq!((d.spawned, d.done, d.pull_requests), (1, 2, 1));
     }
 }

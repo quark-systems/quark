@@ -240,7 +240,8 @@ pub enum AwayEvent {
         #[serde(default)]
         returning: bool,
     },
-    /// Shadow mode compared routes for the events up to `through`.
+    /// The shadow mode quarkd ran beside firstmate compared routes for the
+    /// events up to `through`. Only old logs carry these.
     Shadowed {
         through: quark_core::Seq,
         compared: usize,

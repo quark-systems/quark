@@ -67,14 +67,9 @@ Channel report ids are derived from the sub-coordinator, byte offset and line, s
 
 The tests in `crates/quark-subcoordinator/tests/lifecycle.rs` drive this against real tmux, real git clones and the SQLite log with a shell script as the agent, on this machine and through a stand-in `ssh`, including an unreachable host and an engine restart.
 
-## Shadow
-
-Until slice 7 switches on, firstmate keeps its second mates in `data/secondmates.md`.
-`shadow::parse_registry` reads that file and `shadow::compare` sets it beside the native registry, one `shadow.divergence` per sub-coordinator the two record differently (id, host, home, scope, projects).
-
 ## Not yet
 
-- quarkd wiring: an opt-in flag that builds `SubCoordinators` over `events.db`, routes the slice 7 `EngineAdapter` operations (`add_source`, `seed_workspace`, `start_coordinator`) to it in native mode, and records shadow divergences.
+- quarkd wiring: building `SubCoordinators` over `events.db` and routing the slice 7 `EngineAdapter` operations (`add_source`, `seed_workspace`, `start_coordinator`) to it for a sub-coordinator's Projects.
 - A live output stream for tmux over a runtime, so the app can attach to a remote sub-coordinator's terminal.
 - Remote readiness repair (installing tools, wrappers, login items); the doctor reports the steps instead.
 - Hosted and private-cloud runtimes (Cloud mode).

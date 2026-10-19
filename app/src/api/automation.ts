@@ -16,7 +16,7 @@ export interface TriggerRule {
   once: boolean;
   when: TriggerCondition; then: TriggerAction;
   defined_at: string;
-  /** Fires so far, or would-be fires when the engine is not acting. */
+  /** Fires so far. */
   fires: number;
 }
 export interface PutTriggerRule { description?: string; enabled?: boolean; once?: boolean; when: TriggerCondition; then: TriggerAction }
@@ -30,8 +30,6 @@ export interface UpdateAwayPolicy { digest_secs: number; routes: AwayRoute[] }
 
 export interface ProjectAutomation {
   project_id: string;
-  /** The engine acts on rules and routes; otherwise it records what it would do beside the current engine. */
-  acting: boolean;
   inbox: InboxMessage[]; rules: TriggerRule[]; away: AwaySettings;
 }
 

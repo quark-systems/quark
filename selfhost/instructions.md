@@ -10,7 +10,6 @@ The spec is the "Quark MVP Spec" Claude Doc: https://claude.ai/code/artifact/f3d
 ## Repositories
 
 - `quark`: https://github.com/quark-systems/quark (the daemon `quarkd`, its crates, the desktop app under `app/`)
-- `firstmate`: https://github.com/quark-systems/firstmate (the engine fork Quark drives; engine changes go here, never upstream)
 
 ## Work items
 
@@ -24,7 +23,6 @@ Link each task to its issue and say `Closes #<n>` in the PR body.
 - Rebase every PR onto `main` before merging. Rebasing your own PR branch and force-pushing it with `--force-with-lease` needs no approval.
 - A PR is ready when CI is green and its verification gates passed. The Project's standing approval decides who merges: on, green PRs merge without asking; off, Matt merges from the PR center.
 - `quark`: `api/openapi.json` is the committed API contract. Regenerate it with `cargo run -p quarkd -- openapi > api/openapi.json` whenever the API changes, and keep `app/src/api/`, `app/mock/daemon.mjs` and `app/CONTRACT.md` in step.
-- `firstmate`: follow its `AGENTS.md` code and commit rules, but not its persona. Never add an agent co-author line to a commit. Bin scripts stay shellcheck-clean with a colocated `tests/<script>.test.sh`; list new scripts in `docs/scripts.md`. The fork has no CI, so the verification gates are its only checks.
 - quarkd runs one shared tmux server for every Project (`~/.quark/run/tmux/quark`); engine calls run with `TMUX` pointing at it.
 
 Learnings accepted from finished tasks land in `memory/`, one file per entry.

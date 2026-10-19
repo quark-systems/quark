@@ -13,25 +13,19 @@
 //!   replay.
 //! - [`tools`] and [`mcp`]: the coordinator's tool set, served over MCP.
 //! - [`efficiency`]: turns and tokens per task, and the share of turns spent
-//!   acknowledging status, for native turns and for firstmate's
-//!   ([`baseline`]).
+//!   acknowledging status.
 //!
-//! Until slice 6 switches on it runs in [`Mode::Shadow`]: it records what it
-//! would wake the coordinator for and reads firstmate's coordinator
-//! transcript for the baseline, and acts on nothing. See
-//! `docs/engine/coordinator.md`.
+//! See `docs/engine/coordinator.md`.
 
-pub mod baseline;
 mod coordinator;
 pub mod efficiency;
 pub mod events;
 pub mod mcp;
 pub mod prompt;
-pub mod shadow;
 pub mod tools;
 pub mod wake;
 
-pub use coordinator::{Brain, Config, Coordinator, Mode, NoBrain, TickReport, Turn};
+pub use coordinator::{Brain, Config, Coordinator, NoBrain, TickReport, Turn};
 pub use efficiency::{Efficiency, Side};
 pub use events::{CoordinatorEvent, Usage};
 pub use prompt::{LayeredPrompt, Sources};

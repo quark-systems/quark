@@ -1,6 +1,7 @@
 # Engine contracts
 
-The native engine is built as separate crates under `crates/`, one per subsystem, each switched on slice by slice beside the firstmate (bash) engine.
+The native engine is built as separate crates under `crates/`, one per subsystem.
+They were switched on slice by slice beside the firstmate (bash) engine, which is now retired.
 They meet only at the traits and types in `crates/quark-core`.
 This page says what each contract is for and the rules every implementation keeps; the doc comments in `quark-core` are the exact reference.
 
@@ -20,7 +21,7 @@ Every state change is appended to the `EventLog` first; everything else is a rea
   `id` is a UUIDv7, so logs from several hosts merge without renumbering. `seq` is per log, starting at 1, with no gaps.
 - `append` is durable before it returns and idempotent by `id`: appending a known id returns its original `seq`.
 - `read(after, limit)` and `subscribe(after)` start after a `seq`; `Seq::ZERO` means from the beginning.
-- `kind` is dotted (`task.transition`, `worker.message`, `worktree.change`, `shadow.divergence`, `slice.mode`). Each subsystem owns its prefix; the payload type is documented next to each constant in `quark_core::event::kinds`.
+- `kind` is dotted (`task.transition`, `worker.message`, `worktree.change`, `shadow.divergence`). Each subsystem owns its prefix; the payload type is documented next to each constant in `quark_core::event::kinds`.
 - Events about the engine itself, not one Project, use the project `_engine` (`ProjectId::engine()`).
 - `ReadModel` implementations apply events in order and must tolerate a replayed event. `quark_core::replay` brings one up to the log's head.
 
@@ -42,20 +43,13 @@ Every state change is appended to the `EventLog` first; everything else is a rea
 | `Runtime`, `HostRegistry` | `host` | local, SSH, hosted and private-cloud hosts with identity, platform, capacity and health | `quark-runtime` (local, SSH; see `sub-coordinators.md`), `quark-hosts` |
 | `Telemetry` | `telemetry` | one sample per call: CPU, memory, pressure, disk, Quark's own disk use, per-Project and per-task usage | `quark-hosts` |
 | `PersonaPack`, `PersonaSource` | `persona` | role labels, address, voice, vocabulary, UI labels and prompt fragments; global with per-Project override | `quark-persona` |
-| `SliceSwitch` | `slice` | per-slice `bash`, `shadow` or `native`, switched on strictly in order, with history and rollback | quarkd `engine/shadow.rs` |
+| `Slice`, `Divergence` | `slice` | the port's slices, and what a shadow comparison records when the reference and native disagree | `quark-worktree`'s `ShadowPool` |
 
-## Slice switch and shadow mode
+## Slices and shadow comparisons
 
-Slices switch on in the order of the requirements: 1 event log, 2 verification, 3 worker protocol, 4 supervision, 5 dispatch, 6 coordinator, 7 sub-coordinators, 8 sandbox, 9 worktree pool.
-`SliceSwitch` refuses a slice in `shadow` before every earlier slice is at least `shadow`, and in `native` before every earlier slice is `native`.
-Rolling a slice back also rolls back any later slice that would otherwise be ahead of it.
+The port ran in the order of the requirements: 1 event log, 2 verification, 3 worker protocol, 4 supervision, 5 dispatch, 6 coordinator, 7 sub-coordinators, 8 sandbox, 9 worktree pool, 10 retiring firstmate.
+Each slice ran in shadow beside firstmate, its disagreements recorded as `shadow.divergence` events, until it agreed and the verify-quark journeys passed.
+Slice 10 removed the firstmate adapter, its ingest bridge and those comparisons; quarkd now runs only the native engine (`--engine native`, or the stub for tests).
+Event logs from before then still hold `firstmate.*` events and those slices' `shadow.divergence` events; nothing reads them any more.
 
-quarkd's `ShadowEngine` is an `EngineAdapter` that routes each operation by its slice (the table is in `crates/quarkd/src/engine/shadow.rs`):
-
-- `bash`: firstmate only.
-- `shadow`: firstmate answers. Reads also run on the native engine and any disagreement that survives a second read of both is appended as a `shadow.divergence` event. Writes go to firstmate only, so nothing acts twice; a native slice that wants to compare its decision for a write (a merge verdict, a dispatch choice) does so inside its own crate without acting.
-- `native`: the native engine only.
-
-Mode changes are logged as `slice.mode` events. Startup modes come from `QUARK_ENGINE_SLICES`, such as `1=shadow`; quarkd accepts `shadow` for slice 1 (the event log ingest, and the fleet read back from it), slice 2 (the verification shadow, `docs/engine/verify.md`), slice 3 (status lines read by the native protocol) and slice 4 (the native supervisor's rules replayed over firstmate's workers), and refuses any other non-`bash` mode until that slice's native side lands.
-A slice moves from `shadow` to `native` only after its divergences are gone and the verify-quark journeys pass.
-`QUARK_SHADOWS=all` turns on every shadow at once, and `quarkd shadows` (or `GET /v1/shadows`) reports each slice's divergences; see `docs/shadow-readiness.md`.
+One comparison remains: the native worktree pool against treehouse, with `QUARK_NATIVE_WORKTREES=1` ([worktrees.md](worktrees.md)).

@@ -49,20 +49,15 @@ Two engine-wide actions come from the same pass, recorded under the engine proje
 The dispatcher holds no state the log does not have. A new dispatcher on the same log resolves requests a crash left unresolved and, for a placement never confirmed, asks the host whether it has the task before spawning it again, so a task is never started twice.
 The supervisor records `Queued` itself when it takes a task, so a task waiting in dispatch shows in the `dispatch.*` events, not yet in the task ledger.
 
-## Shadow mode
+## Parity with firstmate
 
-Slice 5 cannot switch on before slices 1 to 4, so firstmate still resolves and spawns every worker. With `QUARK_NATIVE_DISPATCH=1`, quarkd:
+The native resolver was compared with firstmate's on every dispatch while slice 5 ran in shadow; quarkd no longer runs that comparison.
+`crates/quark-dispatch/tests/parity.rs` still holds the resolver to firstmate's decisions on recorded cases; `tests/parity/record/record.py <firstmate checkout>` re-records them by running `fm-dispatch-resolve.sh` with stub `curl` and `quota-axi`.
 
-- registers this host and records a telemetry sample every minute;
-- re-runs every dispatch resolution firstmate makes on the native resolver, with the classifier answer firstmate got (the classifier is asked once) and a fresh quota snapshot, and appends a `shadow.divergence` event (slice `dispatch`, operation `resolve_dispatch`) whenever the status, the selected profile or any candidate's eligibility differ.
-
-`crates/quark-dispatch/tests/parity.rs` holds the native resolver to firstmate's decisions on recorded cases; `tests/parity/record/record.py <firstmate checkout>` re-records them by running `fm-dispatch-resolve.sh` with stub `curl` and `quota-axi`.
-
-Admission has no bash counterpart to compare against, so it is exercised by the dispatcher's tests until the slice switches on.
+With `--engine native`, quarkd registers this host and records a telemetry sample every minute, and the native engine serves `resolve_dispatch`, `resolve_description` and `set_crew_dispatch` from the dispatcher (`crates/quarkd/src/engine/native_dispatch_engine.rs`), with accounts from quarkd's accounts store.
 
 ## Not yet
 
-- The native `EngineAdapter` for `resolve_dispatch`, `resolve_description` and `set_crew_dispatch`, and the dispatcher running for real, once slices 1 to 4 are native.
-- An `Accounts` source over quarkd's accounts store, and an `IdlePool` over treehouse's prune, for the native path.
+- An `IdlePool` over treehouse's prune, for the native path.
 - Spawners for SSH and hosted runtimes (slice 7).
 - Recording the task as `Queued` in the ledger while it waits in dispatch needs a small `quark-core` amendment so the supervisor accepts a queued task.

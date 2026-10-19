@@ -23,28 +23,12 @@ workspace:
           start: "npm run e2e:serve"
           url: "http://127.0.0.1:1421/"
           ready_timeout_s: 120
-    - name: "firstmate"
-      url: "git@github.com:quark-systems/firstmate.git"
-      verification:
-        checks:
-          # Lint needs CI's pinned shellcheck and actionlint; install each pin once into a cache.
-          - name: "lint"
-            run: |
-              c="${XDG_CACHE_HOME:-$HOME/.cache}/quark-gates"
-              sc="$c/shellcheck-$(bin/fm-lint.sh --required-version)"
-              al="$c/actionlint-$(bin/fm-lint-workflows.sh --required-version)"
-              [ -x "$sc/shellcheck" ] || bin/fm-install-shellcheck.sh "$sc"
-              [ -x "$al/actionlint" ] || bin/fm-install-actionlint.sh "$al"
-              PATH="$sc:$al:$PATH" bin/fm-lint.sh
-          - { name: "changed tests", run: "bin/fm-test-run.sh --changed", timeout_s: 1800 }
 agent_config:
   harness: "claude-code"
   effort: "high"
 trackers:
   - kind: "github_issues"
     repo: "quark-systems/quark"
-  - kind: "github_issues"
-    repo: "quark-systems/firstmate"
 delivery:
   policy: "direct"
   standing_approval: false

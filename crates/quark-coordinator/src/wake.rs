@@ -321,23 +321,6 @@ mod tests {
     }
 
     #[test]
-    fn firstmate_status_lines_follow_the_away_route() {
-        let away = AwayState::default();
-        let line = |verb: &str, raw: &str| {
-            ev(
-                9,
-                Some("t2"),
-                "firstmate.status",
-                json!({"verb": verb, "key": "k1", "note": "", "raw": raw, "offset": 0}),
-            )
-        };
-        assert_eq!(judgment(&line("working", "working: build"), &away), None);
-        let d = judgment(&line("needs-decision", "needs-decision: pick"), &away).unwrap();
-        assert_eq!(d.need, Need::Decision);
-        assert_eq!(d.key, "ask:t2:k1");
-    }
-
-    #[test]
     fn dispatch_and_explicit_requests_wake() {
         let away = AwayState::default();
         let esc = judgment(

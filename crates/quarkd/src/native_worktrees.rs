@@ -22,12 +22,11 @@ use std::sync::Arc;
 use quark_core::{EventLog, HostId};
 use quark_worktree::{Pool, ShadowPool, TreehouseCli, TREEHOUSE_VERSION};
 
-/// Set to `1` to shadow treehouse with the native pool; unset, it follows
-/// `QUARK_SHADOWS=all`.
+/// Set to `1` to shadow treehouse with the native pool.
 pub const ENV: &str = "QUARK_NATIVE_WORKTREES";
 
 pub fn enabled() -> bool {
-    crate::shadows::opt_in(ENV)
+    std::env::var(ENV).is_ok_and(|v| v == "1")
 }
 
 static SHADOWING: AtomicBool = AtomicBool::new(false);

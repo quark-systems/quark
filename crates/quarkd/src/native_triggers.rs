@@ -1,86 +1,47 @@
 //! Triggers, channels and the away policy (slice 7).
 //!
-//! Slice 7 switches on after slices 1 to 6, so until then firstmate owns
-//! every Project's inbox, away posture and watches. Unless [`ENV`] is `0`,
-//! quarkd runs the engine on a timer. In shadow mode (the default) it:
-//!
-//! - mirrors each Project's firstmate inbox notes and away posture into
-//!   the event log;
-//! - mirrors each firstmate when-then watch as a rule, runs its condition
-//!   too, and records a `shadow.divergence` when the two end differently;
-//! - compares its route for each firstmate status line with firstmate's
-//!   away classifier, recording disagreements as `shadow.divergence`;
-//! - evaluates trigger rules and records what would have fired;
-//! - polls the channel plug-ins in `<home>/channels` and hands what
-//!   arrives to firstmate's inbox, so today's coordinator reads it.
-//!
-//! It never wakes, notifies or steers anyone. Once slice 7 is native
-//! (`QUARK_ENGINE_SLICES`), it acts through [`DaemonEffects`] and keeps
-//! channel messages in its own inbox instead. The same engine serves the
-//! Automation API (`api/automation.rs`). See `docs/engine/triggers.md`.
+//! With the native engine, quarkd runs the engine on a timer. It polls the
+//! channel plug-ins in `<home>/channels` into the engine's inbox, evaluates
+//! trigger rules, and routes each event by the away policy, acting through
+//! [`DaemonEffects`]. The same engine serves the Automation API
+//! (`api/automation.rs`). See `docs/engine/triggers.md`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_core::{CoreError, EventLog, NewEvent, ProjectId, TaskId};
 use quark_systems::{EventType, Notice, NoticeItem, NoticeKind};
-use quark_triggers::{
-    Channel, CommandChannel, Effects, Engine, Item, Mode, NoEffects, Occasion, Processes,
-};
+use quark_triggers::{Channel, CommandChannel, Effects, Engine, Item, Occasion, Processes};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex;
 
 use crate::engine::{EngineAdapter, WorkspaceRef};
 use crate::store::Store;
 
-/// Set to `0` to turn the slice 7 engine off.
-pub const ENV: &str = "QUARK_NATIVE_TRIGGERS";
-/// Who the engine records as handling a channel message it handed to
-/// firstmate's inbox.
-const FORWARDED: &str = "firstmate";
-
-pub fn enabled() -> bool {
-    !std::env::var(ENV).is_ok_and(|v| v == "0")
-}
-
-/// The slice 7 engine, its channel plug-ins and the Projects it mirrors.
+/// The slice 7 engine and its channel plug-ins.
 pub struct Triggers {
     engine: Arc<Engine>,
-    store: Arc<Store>,
-    adapter: Arc<dyn EngineAdapter>,
     channels: Vec<CommandChannel>,
     next_poll: Mutex<HashMap<String, tokio::time::Instant>>,
 }
 
 impl Triggers {
-    /// Open the engine in `mode`, with the channel plug-ins in
-    /// `channels_dir`.
+    /// Open the engine, with the channel plug-ins in `channels_dir`.
     pub async fn open(
         store: Arc<Store>,
         log: Arc<dyn EventLog>,
         adapter: Arc<dyn EngineAdapter>,
-        mode: Mode,
         channels_dir: &Path,
     ) -> anyhow::Result<Self> {
-        let effects: Arc<dyn Effects> = match mode {
-            Mode::Shadow => Arc::new(NoEffects),
-            Mode::Native => Arc::new(DaemonEffects {
-                store: store.clone(),
-                log: log.clone(),
-                adapter: adapter.clone(),
-            }),
-        };
-        let engine = Engine::open(
-            log,
-            crate::event_ingest::host(),
-            mode,
-            effects,
-            Arc::new(Processes),
-        )
-        .await?;
+        let effects: Arc<dyn Effects> = Arc::new(DaemonEffects {
+            store,
+            log: log.clone(),
+            adapter,
+        });
+        let engine = Engine::open(log, crate::host(), effects, Arc::new(Processes)).await?;
         let (channels, errors) = CommandChannel::load_dir(channels_dir, Arc::new(Processes));
         for e in errors {
             tracing::warn!(error = %e, "channel plug-in skipped");
@@ -91,8 +52,6 @@ impl Triggers {
         }
         Ok(Self {
             engine: Arc::new(engine),
-            store,
-            adapter,
             channels,
             next_poll: Mutex::new(HashMap::new()),
         })
@@ -103,47 +62,10 @@ impl Triggers {
         self.engine.clone()
     }
 
-    /// Mirror every Project's firstmate home (shadow), poll the channels
-    /// that are due, then evaluate.
+    /// Poll the channels that are due, then evaluate.
     pub async fn pass(&self) -> anyhow::Result<()> {
-        if self.engine.mode() == Mode::Shadow {
-            self.mirror().await?;
-        }
         self.poll_channels().await;
-        let r = self.engine.tick(time::OffsetDateTime::now_utc()).await?;
-        if r.diverged > 0 {
-            tracing::info!(
-                compared = r.compared,
-                diverged = r.diverged,
-                "slice 7 shadow disagreed with firstmate"
-            );
-        }
-        Ok(())
-    }
-
-    async fn mirror(&self) -> anyhow::Result<()> {
-        let store = self.store.clone();
-        let projects = tokio::task::spawn_blocking(move || store.list_projects()).await??;
-        for project in projects {
-            let Some(path) = project.workspace_path else {
-                continue;
-            };
-            let id = ProjectId::new(project.id);
-            match self
-                .engine
-                .mirror_firstmate(&id, &PathBuf::from(path))
-                .await
-            {
-                Ok(r) if r.diverged > 0 => tracing::info!(
-                    project = %id,
-                    agreed = r.agreed,
-                    diverged = r.diverged,
-                    "slice 7 when-watch shadow disagreed with firstmate"
-                ),
-                Ok(_) => {}
-                Err(e) => tracing::warn!(project = %id, error = %e, "slice 7 mirror failed"),
-            }
-        }
+        self.engine.tick(time::OffsetDateTime::now_utc()).await?;
         Ok(())
     }
 
@@ -163,27 +85,14 @@ impl Triggers {
         }
     }
 
-    /// Receive what `channel` has that the engine has not seen. In shadow
-    /// mode each new message first goes to firstmate's inbox, then is
-    /// recorded as handled there, so it reaches today's coordinator once.
-    /// A crash between the two hands it to firstmate again on the next
-    /// poll.
+    /// Receive what `channel` has that the engine has not seen.
     async fn poll_channel(&self, channel: &CommandChannel) -> anyhow::Result<()> {
         let project = channel.project().clone();
         for m in channel.poll().await? {
             if self.engine.knows(&project, &m.channel, &m.id).await {
                 continue;
             }
-            if self.engine.mode() == Mode::Shadow {
-                let ws = workspace(&self.store, &project).await?;
-                let text = format!("{} from {}: {}", m.channel, m.from, m.body);
-                self.adapter.inbox_note(&ws, &text).await?;
-                let (ch, id) = (m.channel.clone(), m.id.clone());
-                self.engine.receive(&project, m).await?;
-                self.engine.ack(&project, &ch, &id, FORWARDED).await?;
-            } else {
-                self.engine.receive(&project, m).await?;
-            }
+            self.engine.receive(&project, m).await?;
         }
         Ok(())
     }
@@ -257,7 +166,7 @@ impl Effects for DaemonEffects {
             by: "trigger".into(),
         };
         let event = NewEvent::typed(
-            crate::event_ingest::host(),
+            crate::host(),
             project.clone(),
             task.cloned(),
             ev.kind(),
@@ -335,21 +244,13 @@ impl Effects for DaemonEffects {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use quark_core::Seq;
     use quark_systems::CreateProject;
 
     use super::*;
     use crate::engine::{StubEngine, StubWrite};
-
-    fn notes(stub: &StubEngine) -> Vec<String> {
-        stub.writes()
-            .into_iter()
-            .filter_map(|w| match w {
-                StubWrite::InboxNote { text } => Some(text),
-                _ => None,
-            })
-            .collect()
-    }
 
     fn messages(stub: &StubEngine) -> Vec<(String, String)> {
         stub.writes()
@@ -399,73 +300,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_shadow_pass_mirrors_each_project_and_acts_on_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        std::fs::create_dir_all(home.join("state/inbox")).unwrap();
-        std::fs::write(
-            home.join("state/inbox/1-a.note"),
-            "id=1-a\nat=2026-10-07T01:00:00Z\nsource=cli\n--\ncheck the nightly\n",
-        )
-        .unwrap();
-        std::fs::write(home.join("state/.afk"), "quiet\n").unwrap();
-        let store = Arc::new(Store::open_in_memory().unwrap());
-        let pid = project(&store, &home);
-        let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
-        let triggers = Triggers::open(
-            store,
-            Arc::new(log.clone()),
-            Arc::new(StubEngine::default()),
-            Mode::Shadow,
-            &dir.path().join("no-channels"),
-        )
-        .await
-        .unwrap();
-        triggers.pass().await.unwrap();
-        triggers.pass().await.unwrap();
-        let kinds: Vec<String> = log
-            .read(Seq::ZERO, 100)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|e| e.project.as_str() == pid)
-            .map(|e| e.kind.0)
-            .collect();
-        assert_eq!(kinds, ["channel.received", "away.posture"]);
-    }
-
-    #[tokio::test]
-    async fn shadow_hands_channel_messages_to_firstmate_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        let store = Arc::new(Store::open_in_memory().unwrap());
-        let pid = project(&store, &home);
-        let chans = channel(dir.path(), &pid);
-        let stub = Arc::new(StubEngine::default());
-        let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
-        let triggers = Triggers::open(
-            store,
-            Arc::new(log.clone()),
-            stub.clone(),
-            Mode::Shadow,
-            &chans,
-        )
-        .await
-        .unwrap();
-        triggers.poll_channel(&triggers.channels[0]).await.unwrap();
-        triggers.poll_channel(&triggers.channels[0]).await.unwrap();
-        assert_eq!(notes(&stub), ["mail from ops: disk alert"]);
-        let engine = triggers.engine();
-        assert!(
-            engine
-                .knows(&ProjectId::new(pid.clone()), "mail", "m1")
-                .await
-        );
-        assert!(engine.inbox(&ProjectId::new(pid)).await.is_empty());
-    }
-
-    #[tokio::test]
     async fn native_effects_reach_the_coordinator_the_user_and_the_worker() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
@@ -475,15 +309,9 @@ mod tests {
         let stub = Arc::new(StubEngine::default());
         let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
         let chans = channel(dir.path(), &pid);
-        let triggers = Triggers::open(
-            store.clone(),
-            Arc::new(log.clone()),
-            stub.clone(),
-            Mode::Native,
-            &chans,
-        )
-        .await
-        .unwrap();
+        let triggers = Triggers::open(store.clone(), Arc::new(log.clone()), stub.clone(), &chans)
+            .await
+            .unwrap();
         let effects = DaemonEffects {
             store: store.clone(),
             log: Arc::new(log.clone()),
@@ -523,9 +351,8 @@ mod tests {
             [("t1".to_string(), "rebase please".to_string())]
         );
 
-        // Native channels land in the engine's own inbox, not firstmate's.
+        // Channel messages land in the engine's own inbox.
         triggers.pass().await.unwrap();
-        assert!(notes(&stub).is_empty());
         assert_eq!(triggers.engine().inbox(&p).await.len(), 1);
     }
 }

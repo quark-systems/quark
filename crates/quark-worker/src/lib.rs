@@ -24,7 +24,6 @@ pub mod hook;
 pub mod http;
 pub mod mcp;
 pub mod recorder;
-pub mod shadow;
 
 pub use file::{parse_status_line, StatusFile};
 pub use hook::hook_message;

@@ -1,10 +1,5 @@
 //! A Project's automation: its inbox, trigger rules and away policy, served
 //! from the slice 7 engine (`quark-triggers`).
-//!
-//! Until slice 7 switches on, that engine runs in shadow: rules and the
-//! away policy are recorded and evaluated, but only what the engine would
-//! have done is logged. A note posted to the inbox still reaches today's
-//! coordinator, through the engine adapter.
 
 use std::sync::Arc;
 
@@ -17,11 +12,10 @@ use quark_systems::{
     NewInboxNote, ProjectAutomation, PutTriggerRule, TriggerRule, UpdateAwayPolicy,
 };
 use quark_triggers::trigger::Defined;
-use quark_triggers::{AwayPolicy, Engine, Mode, Occasion, Posture, Reach, Route, Rule, RuleId};
+use quark_triggers::{AwayPolicy, Engine, Occasion, Posture, Reach, Route, Rule, RuleId};
 use time::format_description::well_known::Rfc3339;
 
 use super::{db, ApiError, AppState};
-use crate::engine::WorkspaceRef;
 
 /// Who the API records as making a change.
 const BY: &str = "user";
@@ -87,7 +81,6 @@ async fn read(engine: &Engine, project: &ProjectId) -> ProjectAutomation {
     }
     ProjectAutomation {
         project_id: project.to_string(),
-        acting: engine.mode() == Mode::Native,
         inbox,
         rules,
         away: away_view(engine, project).await,
@@ -146,7 +139,6 @@ async fn away_view(engine: &Engine, project: &ProjectId) -> AwaySettings {
         (status = 202, description = "Queued for the coordinator"),
         (status = 400, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "The Project has no workspace yet (`workspace_missing`)", body = ErrorBody),
         (status = 503, description = "The automation engine is off (`automation_off`)", body = ErrorBody)
     )
 )]
@@ -160,26 +152,11 @@ pub async fn post_note(
     }
     let project = db(&state, move |s| s.get_project(&id)).await?;
     let engine = engine(&state)?;
-    if engine.mode() == Mode::Native {
-        let message = quark_triggers::Inbound::note(BY, note.body);
-        engine
-            .receive(&ProjectId::new(project.id), message)
-            .await
-            .map_err(core)?;
-        return Ok(StatusCode::ACCEPTED);
-    }
-    let Some(root) = project.workspace_path else {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "workspace_missing",
-            "the Project has no workspace yet; retry once it is provisioned",
-        ));
-    };
-    let ws = WorkspaceRef {
-        project_id: project.id,
-        root: root.into(),
-    };
-    state.engine.inbox_note(&ws, &note.body).await?;
+    let message = quark_triggers::Inbound::note(BY, note.body);
+    engine
+        .receive(&ProjectId::new(project.id), message)
+        .await
+        .map_err(core)?;
     Ok(StatusCode::ACCEPTED)
 }
 
