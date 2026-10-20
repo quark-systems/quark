@@ -24,9 +24,13 @@ use tokio::sync::OwnedMutexGuard;
 use crate::events::{Assignment, Cause, SupervisorEvent};
 use crate::fleet::{is_worker_message, Fleet, Generation, Worker};
 use crate::launch::{self, WorkerUrls};
+use crate::ready;
 
 /// Events read per batch when replaying or handling worker messages.
 const BATCH: usize = 512;
+/// Most keys sent answering start-up questions in one launch, so a dialog
+/// that never clears cannot be driven forever.
+const MAX_DIALOG_KEYS: usize = 12;
 
 /// Tunables. [`Config::new`] has the defaults.
 #[derive(Debug, Clone)]
@@ -415,6 +419,24 @@ impl Supervisor {
             .ok_or_else(|| CoreError::Invalid(format!("task {task} has no worktree")))?;
         assert_isolated(&worktree.path, &a.repo)?;
 
+        if let Some(model) = model.as_deref() {
+            match quark_harness::catalog::check(&manifest, model, quark_harness::catalog::TIMEOUT)
+                .await
+            {
+                quark_harness::catalog::Listing::Listed => {}
+                quark_harness::catalog::Listing::Unlisted(ids) => {
+                    return Err(CoreError::Invalid(format!(
+                        "{} does not list model {model} (it lists {}); it would start its default model instead",
+                        manifest.name,
+                        ids.join(", ")
+                    )));
+                }
+                quark_harness::catalog::Listing::Unreadable(why) => {
+                    tracing::warn!(%task, harness = %manifest.id, %model, %why, "model catalog unreadable; launching with the model unchecked");
+                }
+            }
+        }
+
         let generation = uuid::Uuid::new_v4().simple().to_string();
         let dir = self
             .config
@@ -452,6 +474,10 @@ impl Supervisor {
             self.config.agent_home.as_deref(),
         ) {
             tracing::warn!(%project, %task, error = %e, "could not pre-trust the worker's worktree");
+        }
+        for warning in quark_harness::launch_warnings(&manifest, self.config.agent_home.as_deref())
+        {
+            tracing::warn!(%project, %task, harness = %manifest.id, "{warning}");
         }
         let mut policy = a.policy.clone();
         for p in [&worktree.path, &dir] {
@@ -509,8 +535,7 @@ impl Supervisor {
             .await?;
         }
         if plan.type_brief {
-            self.wait_ready(&info.id, &manifest.turn_signals.idle_patterns)
-                .await;
+            self.wait_ready(&info.id, &manifest).await;
             self.sessions
                 .input(&info.id, &launch::paste(&plan.brief))
                 .await?;
@@ -539,25 +564,43 @@ impl Supervisor {
 
     /// Wait until the agent looks ready for input: an idle pattern is on
     /// screen, or the screen has something on it and has stopped changing.
-    async fn wait_ready(&self, session: &SessionId, idle_patterns: &[String]) {
+    /// Start-up questions the manifest lists (`launch.dialogs`) are answered
+    /// first, and the screen never counts as ready while one shows.
+    async fn wait_ready(&self, session: &SessionId, manifest: &HarnessManifest) {
         let deadline = Instant::now() + self.config.ready_timeout;
         let mut last: Option<(u64, Instant)> = None;
+        let mut keys = 0;
         while Instant::now() < deadline {
             let Ok(snap) = self.sessions.snapshot(session).await else {
                 return;
             };
             let text = String::from_utf8_lossy(&snap.bytes);
-            if idle_patterns.iter().any(|p| text.contains(p.as_str())) {
-                return;
-            }
-            let h = hash(&snap.bytes);
-            match last {
-                Some((prev, since)) if prev == h => {
-                    if visible(&text) && since.elapsed() >= self.config.ready_quiet {
+            match ready::judge(manifest, &snap, &text) {
+                ready::Screen::Idle => return,
+                ready::Screen::Answer(key) if keys < MAX_DIALOG_KEYS => {
+                    keys += 1;
+                    if let Err(e) = self.sessions.input(session, key).await {
+                        tracing::warn!(session = %session.0, error = %e, "could not answer a start-up question");
                         return;
                     }
+                    last = None;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    continue;
                 }
-                _ => last = Some((h, Instant::now())),
+                ready::Screen::Answer(_) | ready::Screen::Busy => {
+                    last = None;
+                }
+                ready::Screen::Unknown => {
+                    let h = hash(&snap.bytes);
+                    match last {
+                        Some((prev, since)) if prev == h => {
+                            if visible(&text) && since.elapsed() >= self.config.ready_quiet {
+                                return;
+                            }
+                        }
+                        _ => last = Some((h, Instant::now())),
+                    }
+                }
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

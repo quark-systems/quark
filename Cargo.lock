@@ -969,8 +969,10 @@ dependencies = [
  "quark-hosts",
  "quark-supervisor",
  "quark-systems",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "time",
  "tokio",
  "tracing",
@@ -1108,6 +1110,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "vt100",
 ]
 
 [[package]]

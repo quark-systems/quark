@@ -29,7 +29,11 @@ events = { UserPromptSubmit = "busy", Stop = "turn_end" }
 busy = "hooks"
 turn_end = "hooks"
 summary = "Bob hooks (UserPromptSubmit, Stop)"
+idle_patterns = ["❯"]
 
 [keys]
 interrupt = ["Escape"]
 exit = "/exit"
+
+[quota]
+provider = "bob"

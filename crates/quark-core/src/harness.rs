@@ -86,6 +86,13 @@ pub struct Models {
     /// Where a person can see the list, shown in the app.
     #[serde(default)]
     pub discovery: Option<String>,
+    /// A command printing the harness's model catalog as JSON (a `models`
+    /// list of objects with `model_id` or `id`, or of strings). When set, a
+    /// launch naming a model the catalog does not list is refused, for
+    /// harnesses that silently start their default on an unknown id. A
+    /// catalog that cannot be read lets the launch go ahead.
+    #[serde(default)]
+    pub list: Vec<String>,
 }
 
 fn default_selection() -> String {
@@ -99,6 +106,7 @@ impl Default for Models {
             known: Vec::new(),
             default: None,
             discovery: None,
+            list: Vec::new(),
         }
     }
 }
@@ -127,6 +135,26 @@ pub struct Launch {
     /// when the harness cannot.
     #[serde(default)]
     pub resume: Vec<String>,
+    /// Questions the harness asks on start that the engine answers before
+    /// typing anything in.
+    #[serde(default)]
+    pub dialogs: Vec<Dialog>,
+}
+
+/// A start-up question answered by moving a selector, such as Kiro's
+/// trust-all-tools confirmation. It is read from the visible screen only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dialog {
+    /// Text that, all on screen together, is the dialog. Any one of them on
+    /// screen alone means it is still drawing, so nothing is typed.
+    pub detect: Vec<String>,
+    /// The options in on-screen order, top first.
+    pub options: Vec<String>,
+    /// The option to pick; Enter is pressed only with the selector on it.
+    pub choose: String,
+    /// The selector shown before the highlighted option, such as `❯`.
+    pub cursor: String,
 }
 
 fn default_prompt_via() -> String {
@@ -264,6 +292,11 @@ impl HarnessManifest {
                 .any(|a| a.contains("{prompt}") || a.contains("{prompt_file}"))
         {
             return bad("launch.prompt_via is argv but no argument has {prompt}".into());
+        }
+        for d in &self.launch.dialogs {
+            if d.detect.is_empty() || d.cursor.is_empty() || !d.options.contains(&d.choose) {
+                return bad("launch.dialogs needs detect, cursor and choose among options".into());
+            }
         }
         if !matches!(
             self.models.selection.as_str(),

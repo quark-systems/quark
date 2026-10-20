@@ -11,6 +11,12 @@
 //! `skipDangerousModePermissionPrompt` in `settings.json`. Nothing is
 //! written into the folder itself, so a worker's worktree stays clean.
 //!
+//! IBM Bob asks before every read, write or edit outside its workspace,
+//! whatever `--auto-approve` says, unless the person opted those tool groups
+//! in; a worker writes its status file outside its worktree, so it would
+//! stall on its first report. That opt-in is the person's trust boundary,
+//! so [`launch_warnings`] only checks it, read-only.
+//!
 //! Other harnesses need nothing here yet.
 
 use std::collections::BTreeMap;
@@ -22,6 +28,10 @@ use serde_json::{json, Value};
 /// The `[hooks] install` value of harnesses with Claude Code's config.
 const CLAUDE: &str = "claude-settings";
 const CONFIG_ENV: &str = "CLAUDE_CONFIG_DIR";
+/// The `[hooks] install` value of IBM Bob.
+const BOB: &str = "bob-settings";
+/// The tool groups a Bob worker needs outside its workspace.
+const BOB_GROUPS: [&str; 3] = ["read", "write", "edit"];
 
 /// Record that `folder` is trusted and the bypass-permissions warning was
 /// accepted, for the account `env` selects (its `CLAUDE_CONFIG_DIR`, else
@@ -69,6 +79,51 @@ pub fn prepare_folder(
     edit_json(&settings, |v| {
         v["skipDangerousModePermissionPrompt"] = json!(true);
     })
+}
+
+/// What a person should fix before `m` can work unattended under `home`,
+/// one sentence each; empty when nothing is known to be missing.
+pub fn launch_warnings(m: &HarnessManifest, home: Option<&Path>) -> Vec<String> {
+    if m.hooks.as_ref().is_none_or(|h| h.install != BOB) {
+        return Vec::new();
+    }
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let path = home.join(".bob").join("settings").join("settings.json");
+    let v: Value = match std::fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
+    {
+        Ok(v) => v,
+        Err(e) => {
+            return vec![format!(
+                "could not read {} ({e}), so IBM Bob may stop to ask before writing its status file outside the worktree",
+                path.display()
+            )]
+        }
+    };
+    let opted: Vec<&str> = v["approval"]["permissionOptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|o| o["enableOutsideWorkspace"] == true)
+        .filter_map(|o| o["groupId"].as_str())
+        .collect();
+    let missing: Vec<&str> = BOB_GROUPS
+        .into_iter()
+        .filter(|g| !opted.contains(g))
+        .collect();
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    vec![format!(
+        "IBM Bob will stop to ask before touching files outside the worktree: add an \
+         approval.permissionOptions entry {{\"groupId\": <group>, \"enableOutsideWorkspace\": true}} \
+         for {} in {}",
+        missing.join(", "),
+        path.display()
+    )]
 }
 
 /// Apply `edit` to the JSON object at `path` (an empty object when the file
@@ -158,6 +213,31 @@ mod tests {
         );
         assert!(home.join(".claude/settings.json").is_file());
         assert!(!folder.join(".claude").exists());
+    }
+
+    #[test]
+    fn bob_needs_the_outside_workspace_opt_in() {
+        let reg = ManifestRegistry::builtin();
+        let bob = reg.get("bob").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let w = launch_warnings(bob, Some(dir.path()));
+        assert!(w[0].starts_with("could not read"), "{w:?}");
+        let settings = dir.path().join(".bob/settings/settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings,
+            r#"{"approval":{"permissionOptions":[{"groupId":"read","enableOutsideWorkspace":true},{"groupId":"edit","enableOutsideWorkspace":false}]}}"#,
+        )
+        .unwrap();
+        let w = launch_warnings(bob, Some(dir.path()));
+        assert!(w[0].contains("for write, edit in "), "{w:?}");
+        std::fs::write(
+            &settings,
+            r#"{"approval":{"permissionOptions":[{"groupId":"read","enableOutsideWorkspace":true},{"groupId":"write","enableOutsideWorkspace":true},{"groupId":"edit","enableOutsideWorkspace":true}]}}"#,
+        )
+        .unwrap();
+        assert!(launch_warnings(bob, Some(dir.path())).is_empty());
+        assert!(launch_warnings(reg.get("kiro").unwrap(), Some(dir.path())).is_empty());
     }
 
     #[test]

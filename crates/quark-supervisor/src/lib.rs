@@ -26,6 +26,7 @@
 pub mod events;
 mod fleet;
 pub mod launch;
+mod ready;
 pub mod rules;
 mod supervisor;
 
