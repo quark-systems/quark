@@ -405,3 +405,110 @@ async fn interrupted_spawn_is_finished_and_orphans_are_killed() {
     assert!(worker.worktree.is_some());
     assert!(matches!(sup.spawn(req).await, Err(CoreError::Invalid(_))));
 }
+
+/// A Kiro-style start: a selector dialog defaulting to "No, exit", read
+/// one key at a time, before the agent's prompt.
+const DIALOG_AGENT: &str = r#"#!/bin/sh
+dir=$(dirname "$QUARK_STATUS_FILE")
+stty -icanon -echo
+sel=0
+draw() {
+  printf '\033[2J\033[H'
+  echo "You are running in trust all tools mode."
+  for i in 0 1 2; do
+    case $i in 0) o="No, exit" ;; 1) o="Yes, I accept" ;; 2) o="Yes, and don't ask again" ;; esac
+    if [ "$i" = "$sel" ]; then echo "  ❯ $o"; else echo "    $o"; fi
+  done
+  echo " ↑↓ to navigate · enter to select"
+}
+draw
+while :; do
+  k=$(dd bs=1 count=1 2>/dev/null)
+  if [ -z "$k" ]; then break; fi
+  if [ "$k" = "$(printf '\033')" ]; then
+    rest=$(dd bs=1 count=2 2>/dev/null)
+    case "$rest" in "[A") [ $sel -gt 0 ] && sel=$((sel - 1)) ;; "[B") [ $sel -lt 2 ] && sel=$((sel + 1)) ;; esac
+    draw
+  fi
+done
+echo "chose $sel" >> "$dir/received"
+[ "$sel" = 1 ] || exit 9
+stty icanon echo
+printf '\033[2J\033[H'
+echo "ready for work"
+while IFS= read -r line; do
+  printf '%s\n' "$line" | tr -d '\033\r' | sed 's/\[20[01]~//g' >> "$dir/received"
+done
+"#;
+
+#[tokio::test]
+async fn start_up_dialogs_are_answered_before_the_brief() {
+    let mut env = Env::new();
+    let agent = env.dir.path().join("dialog.sh");
+    std::fs::write(&agent, DIALOG_AGENT).unwrap();
+    let manifest = quark_harness::parse(&format!(
+        r#"
+schema = 1
+id = "fake"
+name = "Fake agent"
+efforts = ["low", "high"]
+[detect]
+bins = ["sh"]
+[launch]
+argv = ["sh", "{agent}"]
+prompt_via = "paste"
+[[launch.dialogs]]
+detect = ["running in trust all tools mode", "No, exit", "Yes, I accept", "to navigate"]
+options = ["No, exit", "Yes, I accept", "Yes, and don't ask again"]
+choose = "Yes, I accept"
+cursor = "❯"
+[turn_signals]
+busy = "none"
+turn_end = "none"
+idle_patterns = ["ready for work"]
+[keys]
+interrupt = ["C-c"]
+exit = "/exit"
+"#,
+        agent = agent.display()
+    ))
+    .unwrap();
+    env.manifests = Arc::new(quark_harness::ManifestRegistry::with([manifest]));
+    let pty = Arc::new(PtySupervisor::new());
+    let sup = env.supervisor(pty.clone()).await;
+    let w = sup.spawn(env.request("t1")).await.unwrap();
+    let g = w.current.unwrap();
+    eventually("the brief after the dialog", async || {
+        let got = received(&env, "t1", &g.id);
+        got.first().map(String::as_str) == Some("chose 1")
+            && got.iter().any(|l| l == "Fix the parser.")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_model_the_catalog_does_not_list_is_refused() {
+    let mut env = Env::new();
+    let mut fake = (**env.manifests.get("fake").unwrap()).clone();
+    fake.models.list = vec![
+        "sh".into(),
+        "-c".into(),
+        r#"echo '{"models":[{"model_id":"auto"}]}'"#.into(),
+    ];
+    env.manifests = Arc::new(quark_harness::ManifestRegistry::with([fake]));
+    let pty = Arc::new(PtySupervisor::new());
+    let sup = env.supervisor(pty.clone()).await;
+    let mut req = env.request("t1");
+    req.assignment.model = Some("gpt-9".into());
+    let err = sup.spawn(req).await.unwrap_err().to_string();
+    assert!(
+        err.contains("does not list model gpt-9 (it lists auto)"),
+        "{err}"
+    );
+    let (p, t) = ids("t1");
+    assert_eq!(sup.task(&p, &t).unwrap().0.state, TaskState::Failed);
+
+    let mut req = env.request("t2");
+    req.assignment.model = Some("auto".into());
+    sup.spawn(req).await.unwrap();
+}

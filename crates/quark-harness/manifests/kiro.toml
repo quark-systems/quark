@@ -13,11 +13,21 @@ install_hint = "Install the Kiro CLI and put `kiro-cli` on PATH"
 [models]
 selection = "free_form"
 discovery = "kiro-cli chat --list-models --format json"
+list = ["kiro-cli", "chat", "--list-models", "--format", "json"]
 
 [launch]
 argv = ["kiro-cli", "chat", "--v3", "--trust-all-tools"]
 optional = [["--model", "{model}"], ["--effort", "{effort}"]]
 prompt_via = "paste"
+
+# --trust-all-tools asks on every launch, with the selector on "No, exit".
+# Only the session-scoped answer is picked; "don't ask again" would change
+# the person's Kiro settings.
+[[launch.dialogs]]
+detect = ["running in trust all tools mode", "No, exit", "Yes, I accept", "to navigate"]
+options = ["No, exit", "Yes, I accept", "Yes, and don't ask again"]
+choose = "Yes, I accept"
+cursor = "❯"
 
 [hooks]
 install = "kiro-hooks"
@@ -27,8 +37,12 @@ events = { UserPromptSubmit = "busy", Stop = "turn_end" }
 busy = "hooks"
 turn_end = "hooks"
 summary = "Kiro hooks (UserPromptSubmit, Stop)"
+idle_patterns = ["ask a question or describe a task"]
 
 # Ctrl+C exits Kiro, so interrupt is Escape only.
 [keys]
 interrupt = ["Escape"]
 exit = "/quit"
+
+[quota]
+provider = "kiro"

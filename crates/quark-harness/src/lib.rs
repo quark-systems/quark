@@ -8,9 +8,11 @@
 //! This crate owns parsing and validation ([`parse`], [`load_dir`]), the
 //! registry ([`ManifestRegistry`]), and the logic that reads a manifest
 //! against a machine: executable detection ([`host`]), account directories
-//! and credential health ([`account`]), and the launch command ([`launch`]).
+//! and credential health ([`account`]), the launch command ([`launch`]), and
+//! model catalogs ([`catalog`]).
 
 pub mod account;
+pub mod catalog;
 pub mod host;
 pub mod launch;
 pub mod prepare;
@@ -25,7 +27,7 @@ use quark_core::{CoreError, HarnessRegistry, Result};
 pub use account::{auth_status, config_dir};
 pub use host::{probe_version, resolve_bin, HostEnv};
 pub use launch::{argv, LaunchVars};
-pub use prepare::prepare_folder;
+pub use prepare::{launch_warnings, prepare_folder};
 
 /// The built-in manifests as `(file name, TOML)`, in display order.
 pub const BUILTIN_SOURCES: &[(&str, &str)] = &[

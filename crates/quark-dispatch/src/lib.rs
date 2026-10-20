@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | the Project's rules | [`rules`] | `config/crew-dispatch.json` |
 //! | which rule fits the task | [`classify`] | the System-1 call in `fm-dispatch-resolve.sh` |
-//! | quota evidence | [`quota`] | `quota-axi --json` plus local readers |
+//! | quota evidence | [`quota`], [`local`] | `quota-axi --json` plus `fm-bob-quota.sh` and `fm-kiro-quota.sh` |
 //! | which profile runs it | [`resolve`] | the `jq` selection in `fm-dispatch-resolve.sh` |
 //! | which account | [`pools`] | quarkd's account leases |
 //! | which host, or wait | [`admission`] | nothing: firstmate has no admission control |
@@ -23,6 +23,7 @@ pub mod admission;
 pub mod classify;
 pub mod dispatcher;
 pub mod events;
+pub mod local;
 pub mod pools;
 pub mod quota;
 pub mod resolve;

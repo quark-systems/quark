@@ -6,12 +6,15 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_core::harness::HarnessManifest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::local::LocalReading;
 
 /// One applicable quota window of a provider.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -255,16 +258,37 @@ impl QuotaSource for FixedQuota {
     }
 }
 
-/// `quota-axi --json`, plus a local reading command for a provider it does
-/// not report (firstmate's Bob and Kiro readers). A local reading joins the
-/// snapshot only when it parses and holds exactly that provider; any failure
-/// leaves the provider unmeasured.
-#[derive(Debug, Clone)]
+/// `quota-axi --json`, plus local readings for providers it does not report:
+/// a built-in reader ([`crate::local`], IBM Bob and Kiro) or a command that
+/// prints one. A local reading joins the snapshot only when it is a valid
+/// snapshot holding exactly that provider; any failure leaves the provider
+/// unmeasured.
+#[derive(Clone)]
 pub struct QuotaAxi {
     pub bin: PathBuf,
     /// Provider to the argv that prints its reading.
     pub local: BTreeMap<String, Vec<String>>,
+    /// Built-in readers, consulted before `local`.
+    pub readings: Vec<Arc<dyn LocalReading>>,
     pub timeout: Duration,
+}
+
+impl std::fmt::Debug for QuotaAxi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuotaAxi")
+            .field("bin", &self.bin)
+            .field("local", &self.local)
+            .field(
+                "readings",
+                &self
+                    .readings
+                    .iter()
+                    .map(|r| r.provider())
+                    .collect::<Vec<_>>(),
+            )
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl QuotaAxi {
@@ -272,8 +296,29 @@ impl QuotaAxi {
         Self {
             bin: bin.into(),
             local: BTreeMap::new(),
+            readings: Vec::new(),
             timeout: Duration::from_secs(15),
         }
+    }
+
+    /// Adds a built-in local reader.
+    pub fn with_reading(mut self, reading: Arc<dyn LocalReading>) -> Self {
+        self.readings.push(reading);
+        self
+    }
+
+    async fn local_reading(&self, provider: &str) -> Option<QuotaSnapshot> {
+        let out = if let Some(r) = self.readings.iter().find(|r| r.provider() == provider) {
+            tokio::time::timeout(self.timeout, r.read())
+                .await
+                .ok()?
+                .to_string()
+        } else {
+            self.run(self.local.get(provider)?).await.ok()?
+        };
+        QuotaSnapshot::parse_checked(&out)
+            .ok()
+            .filter(|r| r.providers.len() == 1 && r.providers[0].provider == provider)
     }
 
     async fn run(&self, argv: &[String]) -> Result<String, String> {
@@ -310,17 +355,8 @@ impl QuotaSource for QuotaAxi {
             if snap.provider(p).is_some() {
                 continue;
             }
-            let Some(argv) = self.local.get(p) else {
-                continue;
-            };
-            let Ok(out) = self.run(argv).await else {
-                continue;
-            };
-            match QuotaSnapshot::parse_checked(&out) {
-                Ok(r) if r.providers.len() == 1 && &r.providers[0].provider == p => {
-                    snap.merge_missing(r)
-                }
-                _ => {}
+            if let Some(r) = self.local_reading(p).await {
+                snap.merge_missing(r);
             }
         }
         Ok(snap)
@@ -339,6 +375,7 @@ const FAMILIES: &[(&str, &str)] = &[
     ("agy", "agy"),
     ("muse", "meta"),
     ("kiro", "kiro"),
+    ("bob", "bob"),
 ];
 
 /// Which quota provider family each harness name belongs to.
@@ -408,6 +445,47 @@ mod tests {
     fn families_follow_aliases() {
         let f = ProviderFamilies::builtin();
         assert_eq!(f.get("muse"), Some("meta"));
+        assert_eq!(f.get("bob"), Some("bob"));
         assert_eq!(f.get("pi"), None);
+    }
+
+    struct Reading(&'static str, Value);
+
+    #[async_trait]
+    impl LocalReading for Reading {
+        fn provider(&self) -> &str {
+            self.0
+        }
+        async fn read(&self) -> Value {
+            self.1.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn local_readings_fill_missing_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("quota-axi");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nprintf '%s' '{\"schemaVersion\":5,\"providers\":[{\"provider\":\"claude\",\"quotaSemantics\":{\"status\":\"unknown\",\"effectiveAvailability\":[]}}]}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let one = |p: &str, status: &str| {
+            serde_json::json!({"schemaVersion": 5, "providers": [{"provider": p,
+                "quotaSemantics": {"status": status, "effectiveAvailability": []}}]})
+        };
+        let q = QuotaAxi::new(&bin)
+            .with_reading(Arc::new(Reading("kiro", one("kiro", "unknown"))))
+            // A reading naming another provider is dropped.
+            .with_reading(Arc::new(Reading("bob", one("kimi", "unknown"))))
+            .with_reading(Arc::new(Reading("claude", one("claude", "partial"))));
+        let providers = ["claude", "kiro", "bob"].map(String::from);
+        let snap = q.snapshot(&providers).await.unwrap();
+        let names: Vec<_> = snap.providers.iter().map(|p| p.provider.as_str()).collect();
+        assert_eq!(names, ["claude", "kiro"]);
+        // quota-axi's own answer wins.
+        assert_eq!(snap.provider("claude").unwrap().status, "unknown");
     }
 }

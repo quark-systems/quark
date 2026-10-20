@@ -9,13 +9,43 @@ It sits in front of the slice 4 supervisor (`docs/engine/supervision.md`) and ke
 2. **Resolve.** The Project's rules (`dispatch.yaml`, compiled to `crew-dispatch.json`) are resolved exactly as firstmate resolves them, and the result is recorded as `dispatch.resolved`:
    - the classifier (the System-1 API; `classify::SystemOne`) picks a rule or `default` from the brief, with a confidence;
    - a rule needing approval, or whose floor cannot be verified, escalates; a rule floor below falls through to the default profiles; below the confidence floor the result is `ambiguous`, unless `on_failure: default` sends it (and any classifier failure) to the default profiles;
-   - each candidate is judged on one `quota-axi --json` snapshot (plus firstmate's local Bob and Kiro readers): exhausted runway, 0% left without overage, or a profile floor below rule it out; missing or unverifiable evidence leaves it eligible but unranked; `pricing: budget` needs no quota;
+   - each candidate is judged on one `quota-axi --json` snapshot, plus IBM Bob's and Kiro CLI's own readings ([Bob and Kiro quota](#bob-and-kiro-quota)): exhausted runway, 0% left without overage, or a profile floor below rule it out; missing or unverifiable evidence leaves it eligible but unranked; `pricing: budget` needs no quota;
    - `ordered` takes the first eligible candidate (escalating if its evidence is unverifiable), `quota-balanced` takes the highest spend priority, a budget candidate only when none ranks, and escalates on a tie.
 3. **Choose.** A clear resolution picks an account from the profile's pool and records `dispatch.chosen`. Pool rules are quarkd's: sticky while the account stays launchable and in the pool, otherwise the ready account with the fewest running tasks, then the most quota left. Anything not clear (off, ambiguous, escalated, error, an empty or exhausted pool) is `dispatch.escalated` until the coordinator calls `Dispatcher::choose` with a profile.
 4. **Admit.** Each `Dispatcher::tick` (oldest first) asks the red-main guard (`MergeGuard::may_dispatch`) and then admission control for a host. A held task records `dispatch.held` once per distinct reason.
 5. **Place and spawn.** A placed task records `dispatch.placed` and goes to that host's `Spawner` (the local supervisor; other hosts arrive with their runtimes), then `dispatch.spawned` or `dispatch.spawn_failed`.
 
 A task can be taken back with `Dispatcher::withdraw` until it is placed.
+
+## Bob and Kiro quota
+
+quota-axi reports neither IBM Bob nor Kiro CLI, so `quark_dispatch::local` reads them itself (ports of firstmate's `fm-bob-quota.sh` and `fm-kiro-quota.sh`), each as a one-provider schema-5 snapshot merged when quota-axi lacks the provider. Both harnesses' manifests name their provider (`[quota]`), so a profile needs no `provider`. A reading that cannot be had leaves the provider unmeasured (eligible, unranked); it never invents a number. Both rows carry quota-axi's own `spendPriority` for the month, so they rank against quota-axi's rows under `quota-balanced`.
+
+`quarkd quota bob` and `quarkd quota kiro` print the reading in one line (`--json` for the snapshot dispatch sees).
+
+**Kiro** runs `kiro-cli chat --v2 --no-interactive /usage` in `<home>/run/kiro-usage-probe` (12 s bound), which prints the plan's credits without a model call. It always passes `--v2`: under `--v3` the same text is a prompt, and spends credits. `<home>/quota/kiro.json` is optional:
+
+```json
+{ "overage_allowed": true }
+```
+
+Overage is a budget, never a block: when it is allowed (that file, or `/usage` showing use past the plan) the row never reads exhausted, its runway is `through_reset`, and use past the plan drives `spendPriority` negative. Without it, a spent plan is `exhausted_now` and a month's pace that runs out before the reset is `projected_exhaustion`. A profile floor still applies either way.
+
+**Bob** reads, in order:
+
+1. the live Bob admin API when `BOBSHELL_API_KEY` is set in quarkd's environment (the profile, then each team's usage, summed; the key goes to curl on stdin, never on its command line), which is exact;
+2. otherwise this machine's ledger, the per-session coins in `~/.bob/db/bob.db` (opened read-only), plus an anchor: one "Monthly Usage" figure from Bob's `/status`, recorded with `quarkd quota bob --anchor <coins> [--budget <coins>]`. The estimate is the anchor plus ledger growth since, while the anchor is from this charge month and younger than `anchor_max_age_hours`. Without a fresh anchor the reading is `partial`: a floor on Bob is unverifiable, so an `ordered` list escalates rather than skipping past Bob, and a ledger that alone reaches the allowance reads `exhausted_now`.
+
+`<home>/quota/bob.json` is optional; an unknown key is refused:
+
+| Field | Default | |
+|---|---|---|
+| `monthly_coins` | `1500` | the allowance when the API reports none |
+| `reset_day` | `1` | 1 to 28 |
+| `reset_timezone` | `UTC` | `UTC` or a fixed offset such as `+05:30` |
+| `anchor_max_age_hours` | `24` | |
+
+firstmate's opt-in per-session cap (`spawn_max_cost`) has no setting here: put `--max-cost <coins>` on `launch.argv` in a `<home>/harnesses/bob.toml` copy of the built-in manifest instead.
 
 ## Admission control
 
@@ -61,3 +91,5 @@ With `--engine native`, quarkd registers this host and records a telemetry sampl
 - An `IdlePool` over treehouse's prune, for the native path.
 - Spawners for SSH and hosted runtimes (slice 7).
 - Recording the task as `Queued` in the ledger while it waits in dispatch needs a small `quark-core` amendment so the supervisor accepts a queued task.
+- Anchoring Bob from a throwaway `/status` session, as firstmate's `fm-bob-quota.sh anchor --from-status` did; type the figure in with `--anchor` for now.
+- Bob and Kiro in the Accounts view: it lists harnesses with per-account config directories only.

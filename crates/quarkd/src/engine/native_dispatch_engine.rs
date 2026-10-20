@@ -88,7 +88,8 @@ pub struct DispatchParts {
 }
 
 impl DispatchParts {
-    /// The daemon's: System One, `quota-axi`, the host registry in the
+    /// The daemon's: System One, `quota-axi` with the Bob and Kiro readers,
+    /// the host registry in the
     /// event log, and the harness manifests in `<home>/harnesses`.
     pub fn for_daemon(config: &crate::config::Config, log: Arc<dyn EventLog>) -> Self {
         let host = crate::host();
@@ -98,7 +99,7 @@ impl DispatchParts {
             log,
             host,
             classifier: Arc::new(quark_dispatch::SystemOne::default()),
-            quota: Arc::new(quark_dispatch::QuotaAxi::new(&config.quota_axi)),
+            quota: Arc::new(crate::native_dispatch::quota(config)),
             families: crate::native_dispatch::families(config),
             settings: Settings {
                 key_present: key,
