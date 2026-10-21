@@ -332,6 +332,7 @@ fn read_bob(
                     credits: Some((now.coins - was.coins).max(0.0)),
                     credit_unit: Some(BOBCOIN.to_string()),
                 }],
+                context: None,
             },
         ));
         logs.bob.insert(t.id, now);

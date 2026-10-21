@@ -5,6 +5,7 @@
 // commands get readable titles too, and the ones that only wait for events
 // mark the agent as listening rather than working.
 import type { Step } from "./turns";
+import { commandNoteTitle } from "../../commands";
 
 export type EventKind = "wake" | "background" | "engine" | "warning";
 
@@ -54,9 +55,9 @@ export function engineEvent(text: string): EngineEvent | null {
   // `ENGINE_NOTE` in quarkd's chat.rs: the engine telling the coordinator something outside a wake.
   if (t.startsWith("Engine note: ")) {
     const what = t.slice("Engine note: ".length);
-    const title = /^Project memory:/.test(what) ? "Project memory updated"
+    const title = commandNoteTitle(what) ?? (/^Project memory:/.test(what) ? "Project memory updated"
       : /^Memory shared by every Project:/.test(what) ? "Shared memory updated"
-      : /^the user set this Project's persona to /.test(what) ? "Persona changed" : "Engine note";
+      : /^the user set this Project's persona to /.test(what) ? "Persona changed" : "Engine note");
     return { kind: "engine", title, raw };
   }
 

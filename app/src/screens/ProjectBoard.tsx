@@ -11,6 +11,8 @@ import { lastId, PendingMessage, stillPending, Transcript, UserMessage } from ".
 import { PersonaPicker } from "../components/PersonaPicker";
 import { useLabels } from "../persona";
 import { useDraft } from "../drafts";
+import { CommandButton, useRunCommand } from "../components/CoordinatorCommand";
+import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
 
@@ -108,6 +110,8 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const l = useLabels(cid);
   const coordinator = l.role("coordinator");
+  const commands = useRunCommand(cid);
+  const matches = slashMatches(text);
 
   useEffect(() => {
     loadChat(cid).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
@@ -122,6 +126,12 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const send = async () => {
     const t = text.trim();
     if (!t || sending) return;
+    // A slash command is a request, not a message: its note shows up in the conversation instead.
+    const command = fromSlash(t);
+    if (command) {
+      if (await commands.run(command)) setText("");
+      return;
+    }
     setSending(true); setErr(null);
     // Only entries recorded after this point can be this message.
     const after = lastId(items);
@@ -135,7 +145,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
 
   return (
     <aside className="side-chat" data-testid="coordinator-chat">
-      <div className="panel-head">{l.Role("coordinator")}<span className="spacer" /><PersonaPicker projectId={cid} /></div>
+      <div className="panel-head">{l.Role("coordinator")}<span className="spacer" /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} /></div>
       {status === "unavailable" ? (
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
@@ -148,8 +158,18 @@ export function CoordinatorChat({ cid }: { cid: string }) {
                 note={p.confirmed ? "sent" : "typed, not confirmed; check before sending again"} />
             ))}
           </Transcript>
-          {err && <div className="form-error">{err}</div>}
-          <Composer value={text} onChange={setText} onSend={() => void send()} sending={sending}
+          {(err ?? commands.err) && <div className="form-error">{err ?? commands.err}</div>}
+          {matches.length > 0 && (
+            <div className="slash-menu" role="listbox" aria-label="Slash commands" data-testid="slash-menu">
+              {matches.map((m) => (
+                <button key={m.command} role="option" aria-selected={false} className="slash-item" disabled={commands.busy !== null}
+                  onClick={async () => { if (await commands.run(m.command)) setText(""); }}>
+                  <span className="mono">/{m.alias}</span><b>{commandLabel(l, m.command)}</b><span className="faint">{HINTS[m.command]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <Composer value={text} onChange={setText} onSend={() => void send()} sending={sending || commands.busy !== null}
             label={`Message the ${coordinator}`} placeholder={`Message the ${coordinator} (Enter to send, Shift+Enter for a newline)`} />
         </>
       )}

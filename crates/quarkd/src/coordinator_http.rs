@@ -33,6 +33,8 @@ use quark_core::ProjectId;
 use quark_transcript::{locate, read_turns, SessionFormat, SessionRoots, UsageCursor};
 use serde_json::{json, Value};
 
+use crate::chat::CoordinatorInput;
+use crate::coordinator_commands::{self, Asked, ContextWatch};
 use crate::store::Store;
 
 /// Where the routes are nested.
@@ -142,6 +144,14 @@ struct Routes {
     roots: SessionRoots,
     /// Where each coordinator session log was last read for turn usage.
     cursors: Mutex<HashMap<PathBuf, UsageCursor>>,
+    wrap_up: Option<WrapUp>,
+}
+
+/// What asking a coordinator to wrap up takes.
+pub struct WrapUp {
+    pub chat: Arc<dyn CoordinatorInput>,
+    pub events: quark_eventlog::SqliteEventLog,
+    pub watch: ContextWatch,
 }
 
 /// The routes, to nest under [`PREFIX`].
@@ -151,6 +161,27 @@ pub fn router(
     store: Arc<Store>,
     roots: SessionRoots,
 ) -> Router {
+    routes(coordinator, tokens, store, roots, None)
+}
+
+/// The routes, asking a coordinator to wrap up when its context fills.
+pub fn router_wrapping_up(
+    coordinator: Arc<Coordinator>,
+    tokens: Tokens,
+    store: Arc<Store>,
+    roots: SessionRoots,
+    wrap_up: WrapUp,
+) -> Router {
+    routes(coordinator, tokens, store, roots, Some(wrap_up))
+}
+
+fn routes(
+    coordinator: Arc<Coordinator>,
+    tokens: Tokens,
+    store: Arc<Store>,
+    roots: SessionRoots,
+    wrap_up: Option<WrapUp>,
+) -> Router {
     let routes = Routes {
         mcp: CoordinatorMcp::new(coordinator.clone()),
         coordinator,
@@ -158,6 +189,7 @@ pub fn router(
         store,
         roots,
         cursors: Mutex::new(HashMap::new()),
+        wrap_up,
     };
     Router::new()
         .route("/{project}/{token}/mcp", post(mcp))
@@ -225,20 +257,25 @@ async fn hook(
             _ => return bad("Idempotency-Key must be text".into()),
         },
     };
-    let usage = match body.get("usage") {
+    let (usage, context) = match body.get("usage") {
         Some(u) => match serde_json::from_value::<Usage>(u.clone()) {
-            Ok(u) => u,
+            Ok(u) => (u, None),
             Err(e) => return bad(format!("usage: {e}")),
         },
         None => r.logged_usage(&project).await,
     };
-    let id = ProjectId::new(project);
+    let id = ProjectId::new(project.clone());
     match r
         .coordinator
         .turn_ended(&id, usage, source.as_deref())
         .await
     {
-        Ok(turn) => Json(json!({ "turn": turn })).into_response(),
+        Ok(turn) => {
+            if let Some(tokens) = context {
+                r.clone().wrap_up_if_full(project, tokens);
+            }
+            Json(json!({ "turn": turn })).into_response()
+        }
         Err(e) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": e.to_string() })),
@@ -248,24 +285,52 @@ async fn hook(
 }
 
 impl Routes {
+    /// After a turn that ended with `tokens` in context, ask for a wrap up
+    /// in the background when the context crossed the threshold.
+    fn wrap_up_if_full(self: Arc<Self>, project: String, tokens: u64) {
+        let Some(w) = &self.wrap_up else { return };
+        if !w.watch.crossed(&project, tokens) {
+            return;
+        }
+        tokio::spawn(async move {
+            let Some(w) = &self.wrap_up else { return };
+            let ran = coordinator_commands::run(
+                &self.store,
+                &w.events,
+                w.chat.as_ref(),
+                &project,
+                quark_systems::CoordinatorCommand::WrapUp,
+                Asked::ContextFull { tokens },
+            )
+            .await;
+            match ran {
+                Ok(_) => tracing::info!(%project, tokens, "asked the coordinator to wrap up"),
+                Err(e) => {
+                    tracing::warn!(%project, error = %e, "could not ask the coordinator to wrap up")
+                }
+            }
+        });
+    }
+
     /// The token use logged by the coordinator since its last turn end,
-    /// from its newest session log in the Project workspace. Zero when
-    /// there is no log to read. The first read of a log counts only its
-    /// last turn, not the whole history.
-    async fn logged_usage(&self, project: &str) -> Usage {
+    /// from its newest session log in the Project workspace, and the
+    /// context its last turn ended on. Zero when there is no log to read.
+    /// The first read of a log counts only its last turn, not the whole
+    /// history.
+    async fn logged_usage(&self, project: &str) -> (Usage, Option<u64>) {
         let store = self.store.clone();
         let id = project.to_string();
         let Ok(Ok(p)) = tokio::task::spawn_blocking(move || store.get_project(&id)).await else {
-            return Usage::default();
+            return (Usage::default(), None);
         };
         let Some(root) = p.workspace_path.map(PathBuf::from) else {
-            return Usage::default();
+            return (Usage::default(), None);
         };
         let roots = self.roots.clone();
         let Ok(Some((path, format))) =
             tokio::task::spawn_blocking(move || newest_log(&roots, &root)).await
         else {
-            return Usage::default();
+            return (Usage::default(), None);
         };
         let known = self.cursors.lock().unwrap().get(&path).cloned();
         let first = known.is_none();
@@ -273,9 +338,10 @@ impl Routes {
         let p = path.clone();
         let read = tokio::task::spawn_blocking(move || read_turns(&p, &cursor, format, true)).await;
         let Ok(Ok((turns, next))) = read else {
-            return Usage::default();
+            return (Usage::default(), None);
         };
         self.cursors.lock().unwrap().insert(path, next);
+        let context = turns.last().and_then(|t| t.context);
         let counted = if first {
             &turns[turns.len().saturating_sub(1)..]
         } else {
@@ -290,7 +356,7 @@ impl Routes {
                 calls: m.calls,
             });
         }
-        usage
+        (usage, context)
     }
 }
 

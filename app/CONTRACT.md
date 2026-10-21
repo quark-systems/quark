@@ -13,6 +13,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Steering and control | `POST /v1/tasks/{id}/messages`, `:cancel`, `:relaunch` | quark#5 |
 | Harnesses | `GET /v1/harnesses`, `POST /v1/harnesses:validate` | quark#6 |
 | Transcripts and coordinator chat | `GET /v1/tasks/{id}/transcript`, `GET/POST /v1/coordinators/{id}/messages` | quark#7 |
+| Catch up, Status report, Wrap up | `POST /v1/coordinators/{id}:run` with `{"command": "catch_up" \| "status_report" \| "wrap_up"}`; `MessageAccepted.command` | this PR |
 | Changes and diff | `GET /v1/tasks/{id}/changes`, `GET /v1/tasks/{id}/diff[?path=]`, `task.event` events | quark#8 |
 | Terminals | `GET /v1/terminals/{id}`, `POST /v1/terminals/{id}/snapshot`, `/input`, `/resize` | quark#9 |
 | Answering decisions | `POST /v1/decisions/{id}:answer` with `answer` and optional `answered_by`; `Decision.answered_by`, `answered_at` | Phase 2 workstream 1 (decisions answer path) |

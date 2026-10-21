@@ -390,6 +390,87 @@
         }
       }
     },
+    "/v1/coordinators/{id}:run": {
+      "post": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Ask a Project's coordinator for a catch up, a status report or a wrap up.",
+        "description": "The same as sending the command's slash command (`/catchup`, `/status`,\n`/wrapup`, or firstmate's `/ahoy`, `/bearings`, `/stow`) as a message.\nThe engine types the request into the coordinator's session with the\nfacts it needs: for a catch up, everything notable logged since the\nuser's last message and the open decisions; for a status report, every\ntask's live status and the open decisions. A catch up with no earlier\nmessage runs as a status report, and `command` says which ran.",
+        "operationId": "run_coordinator_command",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorMessageAccepted"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Project has no workspace yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Typing into the session failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No live coordinator session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/decisions": {
       "get": {
         "tags": [
@@ -5929,6 +6010,27 @@
           }
         }
       },
+      "CoordinatorCommand": {
+        "type": "string",
+        "description": "A request the user makes of a coordinator with one control: a button in\nthe app, or a slash command typed as the whole message.",
+        "enum": [
+          "catch_up",
+          "status_report",
+          "wrap_up"
+        ]
+      },
+      "CoordinatorCommandRequest": {
+        "type": "object",
+        "description": "Run a [`CoordinatorCommand`].",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/CoordinatorCommand"
+          }
+        }
+      },
       "CoordinatorMessage": {
         "type": "object",
         "description": "A message for a coordinator, typed into its session as if at the keyboard.",
@@ -5952,6 +6054,17 @@
         "properties": {
           "accepted_at": {
             "type": "string"
+          },
+          "command": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CoordinatorCommand",
+                "description": "The command that ran, when the message was one (or a command was\nasked for): a catch up with nothing to recap from runs as a status\nreport."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "confirmed": {
             "type": "boolean",

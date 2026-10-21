@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// The built-in prompt.
 pub const BUILTIN: &str = include_str!("../prompts/coordinator.md");
 /// Bumped whenever [`BUILTIN`] changes meaning.
-pub const BUILTIN_REVISION: u32 = 5;
+pub const BUILTIN_REVISION: u32 = 6;
 
 /// Most bytes taken from one repo's instructions.
 pub const MAX_INSTRUCTIONS_BYTES: usize = 48 * 1024;

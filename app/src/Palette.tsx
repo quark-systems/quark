@@ -1,6 +1,9 @@
 import React, { useEffect } from "react";
 import { Command } from "cmdk";
-import { go } from "./nav";
+import { go, useRoute } from "./nav";
+import { api } from "./api";
+import { COMMANDS, commandLabel, HINTS } from "./commands";
+import { useLabels } from "./persona";
 import { useStore } from "./store";
 import { stateMeta } from "./util";
 import { setThemePreference, themePreference, ThemePreference } from "./theme";
@@ -17,6 +20,11 @@ export function Palette({ onClose }: { onClose: () => void }) {
     const prev = document.activeElement as HTMLElement | null;
     return () => { prev?.focus?.(); };
   }, []);
+
+  const route = useRoute();
+  // The project you are in, whose coordinator the commands go to.
+  const here = route.name === "project" ? route.id : "project" in route && typeof route.project === "string" ? route.project : null;
+  const l = useLabels(here);
 
   const pick = (fn: () => void) => { fn(); onClose(); };
   const pname = (id: string) => projects[id]?.name ?? id;
@@ -43,6 +51,16 @@ export function Palette({ onClose }: { onClose: () => void }) {
               <Command.Item value="accounts logins pools quota" onSelect={() => pick(() => go({ name: "accounts" }))}>Accounts</Command.Item>
               <Command.Item value="component catalogue design system ui parts" onSelect={() => pick(() => go({ name: "catalogue" }))}>Component catalogue</Command.Item>
             </Command.Group>
+            {here && projects[here] && (
+              <Command.Group heading={`Ask the ${l.role("coordinator")}`}>
+                {COMMANDS.map((c) => (
+                  <Command.Item key={c} value={`${commandLabel(l, c)} ${c.replace("_", " ")} ${HINTS[c]}`}
+                    onSelect={() => pick(() => { go({ name: "project", id: here }); void api.runCommand(here, c).catch((e) => console.warn("command", e)); })}>
+                    {commandLabel(l, c)}<span className="sub">{HINTS[c]}</span>
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
             <Command.Group heading="Appearance">
               {(["system", "dark", "light"] as ThemePreference[]).map((t) => (
                 <Command.Item key={t} value={`theme ${t} appearance color scheme`} onSelect={() => pick(() => setThemePreference(t))}>

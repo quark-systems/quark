@@ -136,4 +136,86 @@ pub struct CoordinatorMessageAccepted {
     /// confirm the submit; check the transcript before sending again.
     pub confirmed: bool,
     pub accepted_at: String,
+    /// The command that ran, when the message was one (or a command was
+    /// asked for): a catch up with nothing to recap from runs as a status
+    /// report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CoordinatorCommand>,
+}
+
+/// A request the user makes of a coordinator with one control: a button in
+/// the app, or a slash command typed as the whole message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinatorCommand {
+    /// Recap what happened since the user's last message, then go through
+    /// the open decisions one at a time.
+    CatchUp,
+    /// The Project's state in four sections: needs you, recently landed,
+    /// underway, next.
+    StatusReport,
+    /// Save what the coordinator knows only from its conversation (memory,
+    /// unfiled work) before its context is compacted.
+    WrapUp,
+}
+
+impl CoordinatorCommand {
+    pub const ALL: [CoordinatorCommand; 3] = [Self::CatchUp, Self::StatusReport, Self::WrapUp];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CatchUp => "catch_up",
+            Self::StatusReport => "status_report",
+            Self::WrapUp => "wrap_up",
+        }
+    }
+
+    /// The slash commands that run it: its own names, then the names
+    /// firstmate's users already type (`/ahoy`, `/bearings`, `/stow`).
+    pub fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::CatchUp => &["catchup", "catch-up", "ahoy"],
+            Self::StatusReport => &["status", "status-report", "bearings"],
+            Self::WrapUp => &["wrapup", "wrap-up", "stow"],
+        }
+    }
+
+    /// The command a message is, when the whole message is one of the
+    /// slash commands (case and surrounding space ignored).
+    pub fn from_slash(text: &str) -> Option<Self> {
+        let word = text.trim().strip_prefix('/')?.to_ascii_lowercase();
+        Self::ALL
+            .into_iter()
+            .find(|c| c.aliases().contains(&word.as_str()))
+    }
+}
+
+/// Run a [`CoordinatorCommand`].
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CoordinatorCommandRequest {
+    pub command: CoordinatorCommand,
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::CoordinatorCommand;
+
+    #[test]
+    fn a_whole_message_slash_command_is_a_command() {
+        assert_eq!(
+            CoordinatorCommand::from_slash(" /Ahoy "),
+            Some(CoordinatorCommand::CatchUp)
+        );
+        assert_eq!(
+            CoordinatorCommand::from_slash("/bearings"),
+            Some(CoordinatorCommand::StatusReport)
+        );
+        assert_eq!(
+            CoordinatorCommand::from_slash("/wrap-up"),
+            Some(CoordinatorCommand::WrapUp)
+        );
+        assert_eq!(CoordinatorCommand::from_slash("/stow now"), None);
+        assert_eq!(CoordinatorCommand::from_slash("stow"), None);
+        assert_eq!(CoordinatorCommand::from_slash("/compact"), None);
+    }
 }

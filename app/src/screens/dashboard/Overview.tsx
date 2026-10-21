@@ -3,11 +3,12 @@
 // the digest stays anchored there for the whole visit until "Mark as read".
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, DigestItem, DigestKind, NotAvailable, ProjectOverview, PulseState, TaskPulse } from "../../api";
-import { href } from "../../nav";
+import { go, href } from "../../nav";
 import { externalLink } from "../../links";
 import { useStore } from "../../store";
 import { ago, errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
+import { CommandButton } from "../../components/CoordinatorCommand";
 import { HarnessLogo } from "../../components/WorkerCard/HarnessLogo";
 import { ProjectHostSlice } from "../../components/hosts/ProjectHostSlice";
 import { lastSeen, PULSE, saveSeen, summarize } from "./summary";
@@ -105,6 +106,8 @@ export function Overview({ project: pid }: { project: string }) {
             <div className="ov-head">
               <h2>Workers now</h2>
               {o?.live.last_activity && <span className="faint" data-testid="overview-last-activity">last activity {ago(o.live.last_activity)}</span>}
+              <span className="spacer" />
+              <CommandButton cid={pid} command="status_report" kind="secondary" onRan={() => go({ name: "project", id: pid })} />
             </div>
             {o && o.live.tasks.length === 0 && <p className="faint">No task has reported anything yet.</p>}
             {o && o.live.tasks.length > 0 && (

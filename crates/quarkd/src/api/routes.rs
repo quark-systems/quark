@@ -3,10 +3,10 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    ActOnDecision, AgentRole, AnswerDecision, CoordinatorMessage, CoordinatorMessageAccepted,
-    CreateProject, Decision, DecisionState, DispatchRecord, ErrorBody, Health, Project,
-    ProjectStatus, RelaunchTask, SendTaskMessage, Task, TaskBrief, TaskChanges, TaskDiff,
-    TaskEvent, TranscriptItem, UpdateProject,
+    ActOnDecision, AgentRole, AnswerDecision, CoordinatorCommand, CoordinatorCommandRequest,
+    CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
+    DispatchRecord, ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task,
+    TaskBrief, TaskChanges, TaskDiff, TaskEvent, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -1064,6 +1064,9 @@ pub async fn send_coordinator_message(
     Json(input): Json<CoordinatorMessage>,
 ) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
     chat::validate(&input.text).map_err(ApiError::invalid)?;
+    if let Some(command) = CoordinatorCommand::from_slash(&input.text) {
+        return run_command(&state, &id, command).await;
+    }
     let project_id = id.clone();
     let project = db(&state, move |s| s.get_project(&project_id)).await?;
     let Some(root) = project.workspace_path else {
@@ -1098,6 +1101,95 @@ pub async fn send_coordinator_message(
             coordinator_id: project.id,
             confirmed,
             accepted_at: crate::now_rfc3339(),
+            command: None,
+        }),
+    ))
+}
+
+/// Ask a Project's coordinator for a catch up, a status report or a wrap up.
+///
+/// The same as sending the command's slash command (`/catchup`, `/status`,
+/// `/wrapup`, or firstmate's `/ahoy`, `/bearings`, `/stow`) as a message.
+/// The engine types the request into the coordinator's session with the
+/// facts it needs: for a catch up, everything notable logged since the
+/// user's last message and the open decisions; for a status report, every
+/// task's live status and the open decisions. A catch up with no earlier
+/// message runs as a status report, and `command` says which ran.
+#[utoipa::path(
+    post,
+    path = "/v1/coordinators/{id}:run",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    request_body = CoordinatorCommandRequest,
+    responses(
+        (status = 202, body = CoordinatorMessageAccepted),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The Project has no workspace yet", body = ErrorBody),
+        (status = 502, description = "Typing into the session failed", body = ErrorBody),
+        (status = 503, description = "No live coordinator session", body = ErrorBody)
+    )
+)]
+pub async fn run_coordinator_command(
+    State(state): State<AppState>,
+    Path(target): Path<String>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
+    let Some((id, "run")) = target.rsplit_once(':') else {
+        return Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "use POST /v1/coordinators/{id}:run",
+        ));
+    };
+    let input: CoordinatorCommandRequest = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::invalid(format!("invalid command: {e}")))?;
+    run_command(&state, id, input.command).await
+}
+
+async fn run_command(
+    state: &AppState,
+    id: &str,
+    command: CoordinatorCommand,
+) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
+    use crate::coordinator_commands::{run, Asked, CommandError};
+    let ran = run(
+        &state.store,
+        &state.events,
+        state.chat.as_ref(),
+        id,
+        command,
+        Asked::User,
+    )
+    .await;
+    let (command, delivery) = match ran {
+        Ok(r) => r,
+        Err(CommandError::Store(e)) => return Err(e.into()),
+        Err(CommandError::NoWorkspace) => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "no_workspace",
+                CommandError::NoWorkspace.to_string(),
+            ))
+        }
+        Err(CommandError::Chat(ChatError::Unavailable(m))) => {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session_unavailable",
+                m,
+            ))
+        }
+        Err(CommandError::Chat(ChatError::Failed(m))) => {
+            tracing::warn!(coordinator = %id, error = %m, "coordinator command not delivered");
+            return Err(ApiError::new(StatusCode::BAD_GATEWAY, "delivery_failed", m));
+        }
+    };
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CoordinatorMessageAccepted {
+            coordinator_id: id.to_string(),
+            confirmed: delivery == Delivery::Confirmed,
+            accepted_at: crate::now_rfc3339(),
+            command: Some(command),
         }),
     ))
 }
@@ -1129,7 +1221,8 @@ pub async fn send_coordinator_message(
         act_on_decision,
         task_transcript,
         coordinator_messages,
-        send_coordinator_message
+        send_coordinator_message,
+        run_coordinator_command
     ),
     components(schemas(
         quark_systems::TaskState,
@@ -1188,4 +1281,6 @@ pub(super) fn router() -> axum::Router<AppState> {
             "/v1/coordinators/{id}/messages",
             get(coordinator_messages).post(send_coordinator_message),
         )
+        // POST serves the custom method `/v1/coordinators/{id}:run`.
+        .route("/v1/coordinators/{id}", post(run_coordinator_command))
 }

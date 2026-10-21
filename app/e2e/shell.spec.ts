@@ -203,3 +203,22 @@ test("updates: each says what happened, which worker, and the detail in plain wo
   await expect(items.nth(1)).toContainText("PR quark#2 checks green");
   await expect(items.nth(1).getByRole("img", { name: "Finished" })).toBeVisible();
 });
+
+test("coordinator commands: Catch up from the Since-you-looked column, slash commands in the message box", async ({ page }) => {
+  await open(page, "#/p/quark");
+  const chat = page.getByTestId("coordinator-chat");
+  await page.getByTestId("since-you-looked").getByTestId("command-catch_up").click();
+  await expect(chat.getByTestId("engine-event").filter({ hasText: "You asked to catch up" })).toBeVisible();
+  await expect(chat).toContainText("Since your last message");
+
+  // A half-typed slash command offers what it can become; Enter on a whole one runs it.
+  const box = chat.getByRole("textbox");
+  await box.fill("/st");
+  const menu = chat.getByTestId("slash-menu");
+  await expect(menu.getByRole("option")).toHaveCount(2);
+  await box.fill("/bearings");
+  await box.press("Enter");
+  await expect(box).toHaveValue("");
+  await expect(chat.getByTestId("engine-event").filter({ hasText: "You asked for a status report" })).toBeVisible();
+  await expect(chat.getByTestId("command-wrap_up")).toBeVisible();
+});
