@@ -30,7 +30,7 @@ mod memory;
 mod migrations;
 mod pull_requests;
 
-pub use accounts::{default_account_id, AccountRow};
+pub use accounts::{default_account_id, AccountRow, KEYCHAIN_PREFIX};
 pub use coordinator::{coordinator_decision_id, coordinator_decision_key};
 pub use failover::is_daemon_decision;
 pub use memory::{NewProposal, PendingLearning};

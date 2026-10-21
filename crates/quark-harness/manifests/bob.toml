@@ -13,6 +13,8 @@ selection = "automatic"
 
 [launch]
 argv = ["bob", "chat", "--auto-approve", "--trust", "--max-turns", "500"]
+# A key account's team (Quark sets BOB_TEAM_ID from the account).
+optional = [["--team-id", "{env:BOB_TEAM_ID}"]]
 prompt_via = "paste"
 # The newest top-level task started in the worktree (bob.db `tasks`).
 resume = ["--resume", "latest"]
@@ -22,6 +24,9 @@ config_dir = ".bob"
 auth_env = ["BOB_API_KEY"]
 auth_files = ["settings/auth-secrets.json"]
 auth_exhaustive = true
+# Extra accounts are API keys: Bob always keeps its login in ~/.bob.
+key_env = "BOB_API_KEY"
+team_env = "BOB_TEAM_ID"
 
 [hooks]
 install = "bob-settings"

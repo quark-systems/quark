@@ -330,6 +330,7 @@ fn launch_argv(
         prompt: None,
         prompt_file: None,
         cwd: Some(root.to_string_lossy().into_owned()),
+        ..Default::default()
     };
     let mut argv = vec![
         "/bin/sh".to_string(),

@@ -35,6 +35,7 @@ pub mod project_repo;
 pub mod projector;
 pub mod provision;
 pub mod recovery;
+pub mod secrets;
 pub mod sessions;
 pub mod settings;
 pub mod spend;

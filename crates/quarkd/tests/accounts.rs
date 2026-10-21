@@ -16,6 +16,7 @@ use quarkd::engine::{EngineTask, FleetSnapshot, StubEngine, StubWrite, TaskContr
 use quarkd::harness::{HarnessRegistry, HostEnv};
 use quarkd::projector::Projector;
 use quarkd::provision::Layout;
+use quarkd::secrets::MemorySecrets;
 use quarkd::store::Store;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -26,6 +27,7 @@ struct Setup {
     store: Arc<Store>,
     engine: Arc<StubEngine>,
     quota: Arc<StubQuota>,
+    secrets: Arc<MemorySecrets>,
     accounts: Arc<Accounts>,
     projector: Projector,
 }
@@ -69,12 +71,11 @@ fn setup_with(forwarded: &'static [&'static str]) -> Setup {
     let engine = Arc::new(StubEngine::new());
     let harnesses = Arc::new(HarnessRegistry::new(quarkd::harness::builtin(), env));
     let quota = Arc::new(StubQuota::new());
-    let accounts = Arc::new(Accounts::new(
-        store.clone(),
-        harnesses.clone(),
-        quota.clone(),
-        forwarded,
-    ));
+    let secrets = Arc::new(MemorySecrets::new());
+    let accounts = Arc::new(
+        Accounts::new(store.clone(), harnesses.clone(), quota.clone(), forwarded)
+            .with_secrets(secrets.clone()),
+    );
     let app = api::router(AppState {
         store: store.clone(),
         engine: engine.clone(),
@@ -96,6 +97,7 @@ fn setup_with(forwarded: &'static [&'static str]) -> Setup {
         store,
         engine,
         quota,
+        secrets,
         accounts,
     }
 }
@@ -739,7 +741,10 @@ async fn single_account_harnesses_list_their_default_login_with_quota() {
     assert_eq!(kiro["quota"]["state"], "known");
     assert_eq!(kiro["quota"]["remaining_percent"], 62.5);
     assert_eq!(kiro["quota"]["plan"], "KIRO PRO");
-    assert_eq!(kiro["quota"]["windows"][0]["resets_at"], "2026-11-01T00:00:00Z");
+    assert_eq!(
+        kiro["quota"]["windows"][0]["resets_at"],
+        "2026-11-01T00:00:00Z"
+    );
 
     let reads: Vec<_> = s
         .quota
@@ -767,4 +772,105 @@ async fn single_account_harnesses_list_their_default_login_with_quota() {
     let pool = s.accounts.pool_accounts("bob").await.unwrap();
     assert_eq!(pool.len(), 1);
     assert!(pool[0].default && pool[0].ready && pool[0].env.is_empty());
+}
+
+#[tokio::test]
+async fn bob_takes_more_accounts_as_api_keys_kept_out_of_the_database() {
+    let s = setup_with(&[
+        "CLAUDE_CONFIG_DIR",
+        "QUARK_SECRET_BOB_API_KEY",
+        "BOB_TEAM_ID",
+    ]);
+    exe(&s.dir.path().join("bin/bob"), "echo 2.0.8");
+    const KEY: &str = "bob_ak_secret1234";
+    s.quota.set(
+        format!("key:{KEY}"),
+        Ok(json!({
+            "schemaVersion": 5,
+            "providers": [{
+                "provider": "bob",
+                "state": {"status": "fresh"},
+                "quotaSemantics": {"status": "known", "effectiveAvailability": [
+                    {"scope": "all_models", "status": "known", "effectivePercentRemaining": 80}]},
+                "bob": {"allowanceCoins": 3000, "periodEnd": "2026-11-01T00:00:00Z"}
+            }]
+        })
+        .to_string()),
+    );
+
+    // A directory is not a Bob account, and a key is not a Claude one.
+    let (status, _) = call(
+        &s.app,
+        "POST",
+        "/v1/accounts",
+        Some(json!({"harness": "bob", "config_dir": s.dir.path().join("b")})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(
+        &s.app,
+        "POST",
+        "/v1/accounts",
+        Some(json!({"harness": "claude-code", "api_key": KEY})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let added = add(
+        &s,
+        json!({"harness": "bob", "api_key": KEY, "team_id": "team-7", "pools": ["bob"]}),
+    )
+    .await;
+    let id = added["id"].as_str().unwrap().to_string();
+    assert!(!added.to_string().contains(KEY), "{added}");
+    assert_eq!(added["api_key"], true);
+    assert_eq!(added["team_id"], "team-7");
+    assert_eq!(added["config_dir"], Value::Null);
+    assert_eq!(added["label"], "API key …1234");
+    assert_eq!(added["launchable"], true);
+    assert_eq!(added["health"]["state"], "configured");
+    let service = format!("quark/accounts/{id}");
+    assert_eq!(s.secrets.services(), std::slice::from_ref(&service));
+    let rows = s.store.account_rows().unwrap();
+    assert!(rows.iter().all(|r| !r.config_dir.contains(KEY)), "{rows:?}");
+
+    // Its quota is read with its own key.
+    s.accounts.refresh_quota(Some(&id)).await.unwrap();
+    let account = s.accounts.get(&id).await.unwrap();
+    assert_eq!(account.quota.remaining_percent, Some(80.0));
+    assert_eq!(account.quota.plan.as_deref(), Some("3000 Bobcoins a month"));
+
+    // A pool runs under it with a reference to the key, never the key.
+    let pid = project(&s, "quark").await;
+    let lease = s
+        .accounts
+        .lease(
+            &Holder::Coordinator(pid.clone()),
+            &AgentConfig {
+                harness: "bob".into(),
+                model: None,
+                effort: None,
+                pool: Some("bob".into()),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(lease.account_id, id);
+    assert_eq!(
+        lease.env,
+        [
+            (
+                "QUARK_SECRET_BOB_API_KEY".to_string(),
+                format!("keychain:{service}")
+            ),
+            ("BOB_TEAM_ID".to_string(), "team-7".to_string()),
+        ]
+    );
+
+    // Removing it, once nothing runs under it, removes its key too.
+    s.store.set_coordinator_account(&pid, None).unwrap();
+    let (status, _) = call(&s.app, "DELETE", &format!("/v1/accounts/{id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(s.secrets.services().is_empty());
 }

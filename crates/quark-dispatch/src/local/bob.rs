@@ -240,8 +240,13 @@ impl BobUsage {
             Ok(l) => l,
             Err(mut e) => {
                 if let Some(api) = api_error {
-                    e.push_str("; API fallback also unavailable: ");
-                    e.push_str(&api);
+                    if self.db.as_os_str().is_empty() {
+                        // A key account has only the API.
+                        e = api;
+                    } else {
+                        e.push_str("; API fallback also unavailable: ");
+                        e.push_str(&api);
+                    }
                 }
                 bob["reason"] = json!(e);
                 return snapshot(PROVIDER, "quarkd", now, "unknown", vec![], bob);
@@ -457,6 +462,17 @@ impl super::LocalReading for BobUsage {
 
     async fn read(&self) -> Value {
         self.reading_at(OffsetDateTime::now_utc()).await
+    }
+
+    /// Another key's live API reading. Bob's local ledger and anchor are
+    /// the default login's, so they are not used for it.
+    async fn read_with_key(&self, key: &str) -> Option<Value> {
+        let reader = Self {
+            db: PathBuf::new(),
+            api_key: clean_key(key),
+            ..self.clone()
+        };
+        Some(reader.reading_at(OffsetDateTime::now_utc()).await)
     }
 }
 
@@ -723,8 +739,7 @@ fn read_only<T>(
         Err(e) if !wal.exists() && is_wal(db) && !matches!(e, rusqlite::Error::InvalidQuery) => {
             let v = run(true).map_err(Ok)?;
             if wal.exists() {
-                run(false)
-                    .map_err(|e| Err(format!("bob database changed during the read: {e}")))
+                run(false).map_err(|e| Err(format!("bob database changed during the read: {e}")))
             } else {
                 Ok(v)
             }
@@ -868,8 +883,11 @@ mod tests {
         )
         .unwrap();
         assert!(!has_task(&db, &wt));
-        con.execute("INSERT INTO tasks VALUES ('d', NULL, ?1, 'normal')", [&wt_s])
-            .unwrap();
+        con.execute(
+            "INSERT INTO tasks VALUES ('d', NULL, ?1, 'normal')",
+            [&wt_s],
+        )
+        .unwrap();
         drop(con);
         assert!(has_task(&db, &wt));
         assert!(!has_task(&db, &dir.path().join("other")));

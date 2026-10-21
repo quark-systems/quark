@@ -162,6 +162,23 @@ pub trait Harness: Send + Sync {
     /// config directory, when it supports more than one account.
     fn account_env(&self) -> Option<&str>;
 
+    /// The variable that signs the harness in with an API key, when its
+    /// extra accounts are keys kept in the Keychain rather than
+    /// directories.
+    fn key_env(&self) -> Option<&str> {
+        None
+    }
+
+    /// The variable a key account's team is passed in, for a launch flag.
+    fn team_env(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether the harness takes accounts beyond its default.
+    fn multi_account(&self) -> bool {
+        self.account_env().is_some() || self.key_env().is_some()
+    }
+
     /// The default account's config directory: the account variable when it
     /// is set in the daemon's environment, else the harness's usual place.
     fn default_config_dir(&self, _env: &HostEnv) -> Option<PathBuf> {
@@ -255,7 +272,7 @@ fn default_validate<H: Harness + ?Sized>(
                 "invalid_pool",
                 format!("pool `{pool}` must be lowercase letters, digits and dashes"),
             ));
-        } else if h.account_env().is_none() {
+        } else if !h.multi_account() {
             errors.push(issue(
                 "pool",
                 "pool_unsupported",
@@ -439,6 +456,7 @@ impl HarnessRegistry {
                     },
                     transcript: h.transcript(&self.env, &account).is_some(),
                     account_env: h.account_env().map(Into::into),
+                    key_env: h.key_env().map(Into::into),
                 }
             })
             .collect();

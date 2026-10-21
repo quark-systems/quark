@@ -551,6 +551,31 @@ test("PR center: verification evidence with failing journeys, screenshots and tr
   await expect(page.getByTestId("pr-diff")).toBeVisible();
 });
 
+test("accounts: Bob and Kiro show their logins, and Bob takes an API key account", async ({ page }) => {
+  await open(page, "#/accounts");
+  const bob = page.getByTestId("accounts-bob");
+  await expect(bob.getByTestId("account-row")).toHaveCount(1);
+  await expect(bob.getByTestId("account-quota")).toContainText("71% left");
+  const kiro = page.getByTestId("accounts-kiro");
+  await expect(kiro.getByTestId("account-row")).toContainText("the harness's own login");
+  await expect(kiro.getByTestId("account-quota")).toContainText("54% left");
+
+  const form = page.getByTestId("add-account-form");
+  await expect(form.getByLabel("Harness").locator("option", { hasText: "Kiro CLI" })).toHaveCount(0);
+  await form.getByLabel("Harness").selectOption("bob");
+  await expect(form.getByLabel("Config directory")).toHaveCount(0);
+  await form.getByLabel("API key").fill("has space");
+  await expect(form).toContainText("no spaces");
+  await form.getByLabel("API key").fill("bob_ak_secret9876");
+  await form.getByLabel("Team ID").fill("team-7");
+  await form.getByRole("button", { name: "Add account" }).click();
+  await expect(form.getByTestId("account-added")).toContainText("API key …9876");
+  const key = bob.getByTestId("account-row").filter({ hasText: "API key …9876" });
+  await expect(key).toContainText("API key in the Keychain, team team-7");
+  await expect(key.getByTestId("account-quota")).toContainText("92% left");
+  await expect(page.locator("body")).not.toContainText("bob_ak_secret9876");
+});
+
 test("accounts: add a second Claude account and see both with health and quota", async ({ page }) => {
   await open(page, "#/");
   await page.getByTestId("nav-accounts").click();

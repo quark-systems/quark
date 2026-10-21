@@ -485,6 +485,8 @@ default:
             harness: harness.into(),
             label: id.into(),
             config_dir: None,
+            api_key: false,
+            team_id: None,
             default: id.starts_with("default-"),
             pools: pools.iter().map(|p| p.to_string()).collect(),
             health: HarnessAuth {

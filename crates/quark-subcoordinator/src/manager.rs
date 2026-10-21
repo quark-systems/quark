@@ -775,6 +775,7 @@ impl SubCoordinators {
                 prompt: on_argv.then(|| brief.clone()),
                 prompt_file: on_argv.then(|| layout.brief().display().to_string()),
                 cwd: Some(r.placement.home.display().to_string()),
+                ..Default::default()
             },
         );
         let mut env_vars = m.launch.env.clone();

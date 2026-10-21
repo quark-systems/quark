@@ -152,6 +152,14 @@ impl Harness for ManifestHarness {
         self.m.account.as_ref()?.env.as_deref()
     }
 
+    fn key_env(&self) -> Option<&str> {
+        self.m.account.as_ref()?.key_env.as_deref()
+    }
+
+    fn team_env(&self) -> Option<&str> {
+        self.m.account.as_ref()?.team_env.as_deref()
+    }
+
     fn default_config_dir(&self, env: &HostEnv) -> Option<PathBuf> {
         self.config_dir(env, &Account::default())
     }

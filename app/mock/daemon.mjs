@@ -832,6 +832,14 @@ function seed() {
     quota: quotaReading(62, "max") });
   addAccount({ id: "default-codex", harness: "codex", label: "Default", config_dir: "/home/demo/.codex", default: true,
     health: { state: "configured", detail: "found /home/demo/.codex/auth.json" }, quota: quotaReading(88, "plus") });
+  addAccount({ id: "default-bob", harness: "bob", label: "Default", config_dir: "/home/demo/.bob", default: true,
+    health: { state: "configured", detail: "found /home/demo/.bob/settings/auth-secrets.json" },
+    quota: { state: "known", remaining_percent: 71, plan: "1500 Bobcoins a month", detail: null, checked_at: now(),
+      windows: [{ id: "monthly", label: "month", percent_remaining: 71, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString() }] } });
+  addAccount({ id: "default-kiro", harness: "kiro", label: "Default", config_dir: null, default: true,
+    health: { state: "unknown", detail: "Kiro CLI has no credential Quark can check" },
+    quota: { state: "known", remaining_percent: 54, plan: "KIRO PRO", detail: null, checked_at: now(),
+      windows: [{ id: "monthly", label: "month", percent_remaining: 54, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString() }] } });
 
   const quark = addProject({
     id: "quark", name: "Quark MVP", goal: "Ship Phase 1: one Project end to end, from creation to a reviewed PR.",
@@ -1258,7 +1266,9 @@ function terminalInput(task, data) {
 
 // Harnesses that take an account directory, like quarkd's harness registry.
 const ACCOUNT_ENV = { "claude-code": "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", pi: "PI_CODING_AGENT_DIR" };
-const QUOTA_PROVIDER = { "claude-code": "claude", codex: "codex" };
+const QUOTA_PROVIDER = { "claude-code": "claude", codex: "codex", bob: "bob" };
+// Harnesses whose extra accounts are API keys kept in the Keychain.
+const KEY_ENV = { bob: "BOB_API_KEY" };
 
 const quotaReading = (remaining, plan, minutesToReset = 140) => ({
   state: "known", remaining_percent: remaining, plan, detail: null, checked_at: now(),
@@ -1274,8 +1284,9 @@ function addAccount(a) {
     pools: [...new Set(a.pools ?? [])].sort(), health: a.health ?? { state: "configured", detail: `found ${a.config_dir}/.credentials.json` },
     quota: a.quota ?? (QUOTA_PROVIDER[a.harness]
       ? { state: "pending", remaining_percent: null, plan: null, windows: [], detail: null, checked_at: null }
-      : { state: "unsupported", remaining_percent: null, plan: null, windows: [], detail: "quota is read per account for Claude Code and Codex only", checked_at: null }),
-    active_tasks: 0, launchable: a.launchable ?? (a.default || a.harness === "claude-code" || a.harness === "codex"), created_at: a.default ? null : now(),
+      : { state: "unsupported", remaining_percent: null, plan: null, windows: [], detail: "Quark has no quota reading for this harness", checked_at: null }),
+    api_key: !!a.api_key, team_id: a.team_id ?? null,
+    active_tasks: 0, launchable: a.launchable ?? (a.default || a.harness === "claude-code" || a.harness === "codex" || !!a.api_key), created_at: a.default ? null : now(),
   };
   accounts.set(account.id, account);
   return account;
@@ -1291,7 +1302,7 @@ function accountList() {
   const busy = {};
   for (const t of tasks.values()) if (t.account_id && t.state !== "done" && t.state !== "failed") busy[t.account_id] = (busy[t.account_id] ?? 0) + 1;
   // Grouped by harness in the registry's order, default first, like quarkd.
-  const order = Object.keys(ACCOUNT_ENV);
+  const order = HARNESSES.map((h) => h.id);
   return [...accounts.values()]
     .map((a) => ({ ...a, active_tasks: busy[a.id] ?? 0 }))
     .sort((a, b) => order.indexOf(a.harness) - order.indexOf(b.harness) || Number(b.default) - Number(a.default));
@@ -1309,9 +1320,11 @@ const HARNESSES = [
     models: { selection: "provider_qualified", discovery: "pi --list-models" } },
   { id: "bob", name: "IBM Bob", roles: ["worker"], efforts: [],
     install: { installed: true, version: "1.0", install_hint: "" }, models: { selection: "automatic" } },
+  { id: "kiro", name: "Kiro CLI", roles: ["worker"], efforts: ["low", "medium", "high"],
+    install: { installed: true, version: "2.1.0", install_hint: "" }, models: { selection: "free_form", discovery: null } },
 ].map((h) => ({
   auth: { state: "configured", detail: null }, supervision: { confidence: "high", source: "hooks" }, transcript: true,
-  account_env: ACCOUNT_ENV[h.id] ?? null, ...h,
+  account_env: ACCOUNT_ENV[h.id] ?? null, key_env: KEY_ENV[h.id] ?? null, ...h,
 }));
 
 function provision(proj) {
@@ -1817,12 +1830,26 @@ const server = http.createServer(async (req, res) => {
     const b = await readJson(req);
     const h = HARNESSES.find((x) => x.id === b?.harness);
     if (!h) return invalid(res, `unknown harness \`${b?.harness}\``);
-    if (!ACCOUNT_ENV[h.id]) return invalid(res, `${h.name} supports only its default account`);
-    const dir = typeof b.config_dir === "string" ? b.config_dir.trim().replace(/(.)\/+$/, "$1") : "";
-    if (!dir.startsWith("/") || dir.split("/").includes("..")) return invalid(res, `config_dir must be an absolute directory path, got "${b.config_dir ?? ""}"`);
     const pools = [...new Set((b.pools ?? []).map((x) => String(x).trim()))];
     const bad = pools.find((x) => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(x));
     if (bad !== undefined) return invalid(res, `pool \`${bad}\` must be lowercase letters, digits and dashes`);
+    if (b.api_key != null) {
+      // Like quarkd: the key goes to the Keychain and is never returned.
+      if (!KEY_ENV[h.id]) return invalid(res, `${h.name} accounts are config directories, not API keys`);
+      const key = String(b.api_key).trim();
+      if (!key || /[\s"\\]/.test(key)) return invalid(res, "api_key must be one word: no spaces, quotes or backslashes");
+      const label = b.label?.trim() || `API key …${key.slice(-4)}`;
+      const account = addAccount({ harness: h.id, label, config_dir: null, api_key: true, team_id: b.team_id?.trim() || null, pools,
+        health: { state: "configured", detail: "API key kept in the Keychain" } });
+      setTimeout(() => readQuota(account, { state: "known", remaining_percent: 92, plan: "3000 Bobcoins a month", detail: null, checked_at: now(),
+        windows: [{ id: "monthly", label: "month", percent_remaining: 92, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString() }] }), QUIET ? 150 : 900);
+      return send(res, 201, accountList().find((a) => a.id === account.id));
+    }
+    if (!ACCOUNT_ENV[h.id]) return invalid(res, KEY_ENV[h.id]
+      ? `${h.name} accounts beyond the default are API keys: give api_key, not config_dir`
+      : `${h.name} supports only its default account`);
+    const dir = typeof b.config_dir === "string" ? b.config_dir.trim().replace(/(.)\/+$/, "$1") : "";
+    if (!dir.startsWith("/") || dir.split("/").includes("..")) return invalid(res, `config_dir must be an absolute directory path, got "${b.config_dir ?? ""}"`);
     const taken = [...accounts.values()].find((a) => a.harness === h.id && a.config_dir === dir);
     if (taken) return send(res, 409, { error: { code: "conflict", message: taken.default ? `${dir} is ${h.name}'s default account` : `${dir} is already an account for ${h.id}` } });
     const label = b.label?.trim() || dir.split("/").pop();

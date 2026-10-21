@@ -1,10 +1,11 @@
 // J9 accounts (quark#23): every harness account with its login health and quota, grouped
 // by harness. Add another config directory as an account (log in once with the harness
-// pointed at it), put accounts in pools that dispatch profiles name, or remove one.
+// pointed at it), or for IBM Bob an API key kept in the Keychain; put accounts in pools
+// that dispatch profiles name, or remove one.
 // Quota readings arrive live as `account.quota_changed`.
 import React, { useEffect, useMemo, useState } from "react";
 import { Account, api, HarnessInfo, NotAvailable } from "../api";
-import { groupByHarness, healthMeta, loginHint, parsePools, POOL_RE, quotaCls, quotaText } from "../accounts";
+import { addable, groupByHarness, healthMeta, loginHint, parsePools, POOL_RE, quotaCls, quotaText, whereText } from "../accounts";
 import { loadAccounts, setAccounts, useStore } from "../store";
 import { ago, errText } from "../util";
 import { Unavailable } from "../components/Unavailable";
@@ -55,7 +56,7 @@ export function Accounts() {
             ))}
             {!groups.length && (
               <div className="empty">
-                {available === null ? (connected ? "Loading…" : "Waiting for the daemon…") : "No harness with accounts is installed."}
+                {available === null ? (connected ? "Loading…" : "Waiting for the daemon…") : "No harness is installed."}
               </div>
             )}
             <AddAccount harnesses={harnesses} accounts={accounts} />
@@ -102,7 +103,7 @@ function AccountRow({ account: a, onError }: { account: Account; onError: (e: st
           {a.default && <span className="pill">Default</span>}
           {!a.launchable && <span className="pill yellow" title="The engine cannot start this harness under another account yet">Quota only</span>}
         </div>
-        <div className="mono faint ellipsis" title={a.config_dir ?? undefined}>{a.config_dir ?? "no config directory"}</div>
+        <div className="mono faint ellipsis" title={a.config_dir ?? undefined}>{whereText(a)}</div>
       </div>
       <div className="account-health">
         <span className={"pill " + h.cls} title={a.health.detail ?? undefined} data-testid="account-health">{h.label}</span>
@@ -155,15 +156,17 @@ function AccountRow({ account: a, onError }: { account: Account; onError: (e: st
 }
 
 function AddAccount({ harnesses, accounts }: { harnesses: HarnessInfo[]; accounts: Account[] }) {
-  // Only harnesses that take an account directory; before /v1/harnesses answers, the ones listed.
+  // Only harnesses that take more accounts; before /v1/harnesses answers, the ones listed.
   const options = useMemo(() => {
-    const multi = harnesses.filter((h) => h.account_env);
+    const multi = addable(harnesses);
     if (multi.length) return multi.map((h) => ({ id: h.id, name: h.name, h }));
     return [...new Set(accounts.map((a) => a.harness))].map((id) => ({ id, name: id, h: undefined }));
   }, [harnesses, accounts]);
   const [harness, setHarness] = useState("");
   const [label, setLabel] = useState("");
   const [dir, setDir] = useState("");
+  const [key, setKey] = useState("");
+  const [team, setTeam] = useState("");
   const [pools, setPools] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,19 +176,25 @@ function AddAccount({ harnesses, accounts }: { harnesses: HarnessInfo[]; account
   const current = options.find((o) => o.id === harness);
   const parsed = parsePools(pools);
   const badPool = parsed.find((p) => !POOL_RE.test(p));
-  const badDir = dir.trim() !== "" && !dir.trim().startsWith("/");
-  const canSubmit = !!harness && dir.trim() !== "" && !badDir && !badPool && !busy;
-  const hint = loginHint(current?.h, dir.trim());
+  // A harness that takes keys and no directories (IBM Bob) adds an API key.
+  const keyed = !!current?.h?.key_env && !current.h.account_env;
+  const badDir = !keyed && dir.trim() !== "" && !dir.trim().startsWith("/");
+  const badKey = keyed && /[\s"\\]/.test(key.trim());
+  const filled = keyed ? key.trim() !== "" : dir.trim() !== "";
+  const canSubmit = !!harness && filled && !badDir && !badKey && !badPool && !busy;
+  const hint = keyed ? null : loginHint(current?.h, dir.trim());
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
     setBusy(true); setError(null); setAdded(null);
     try {
-      const a = await api.addAccount({ harness, label: label.trim() || null, config_dir: dir.trim(), pools: parsed });
+      const a = await api.addAccount(keyed
+        ? { harness, label: label.trim() || null, api_key: key.trim(), team_id: team.trim() || null, pools: parsed }
+        : { harness, label: label.trim() || null, config_dir: dir.trim(), pools: parsed });
       setAccounts(await api.accounts());
       setAdded(a.label);
-      setLabel(""); setDir(""); setPools("");
+      setLabel(""); setDir(""); setKey(""); setTeam(""); setPools("");
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -202,9 +211,21 @@ function AddAccount({ harnesses, accounts }: { harnesses: HarnessInfo[]; account
         </select>
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label, e.g. Work" aria-label="Label" />
       </div>
-      <input value={dir} onChange={(e) => setDir(e.target.value)} placeholder="/Users/you/.claude-work"
-        aria-label="Config directory" className={badDir ? "invalid" : ""} />
-      {badDir && <div className="field-error">The config directory must be an absolute path.</div>}
+      {keyed ? (
+        <>
+          <input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
+            placeholder={`${current?.h?.key_env ?? "API key"}`} aria-label="API key" className={badKey ? "invalid" : ""} />
+          {badKey && <div className="field-error">An API key has no spaces, quotes or backslashes.</div>}
+          <input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="Team ID (only for a general key)" aria-label="Team ID" />
+          <div className="hint-line">The key is kept in your Keychain, never in Quark's database or logs.</div>
+        </>
+      ) : (
+        <>
+          <input value={dir} onChange={(e) => setDir(e.target.value)} placeholder="/Users/you/.claude-work"
+            aria-label="Config directory" className={badDir ? "invalid" : ""} />
+          {badDir && <div className="field-error">The config directory must be an absolute path.</div>}
+        </>
+      )}
       <input value={pools} onChange={(e) => setPools(e.target.value)} placeholder="Pools, e.g. max (optional)"
         aria-label="Pools" className={badPool ? "invalid" : ""} />
       {badPool && <div className="field-error">“{badPool}” is not a pool name: use lowercase letters, digits and dashes.</div>}

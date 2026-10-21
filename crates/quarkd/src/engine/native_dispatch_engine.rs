@@ -66,6 +66,9 @@ pub const ACCOUNT_ENVS: &[&str] = &[
     "CODEX_HOME",
     "GROK_HOME",
     "PI_CODING_AGENT_DIR",
+    // IBM Bob key accounts: the key's reference and its team.
+    "QUARK_SECRET_BOB_API_KEY",
+    "BOB_TEAM_ID",
 ];
 /// Longest task id made from a title, before any `-<n>` suffix.
 const MAX_SLUG: usize = 40;

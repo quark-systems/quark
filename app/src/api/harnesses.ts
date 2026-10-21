@@ -14,6 +14,8 @@ export interface HarnessInfo {
   transcript: boolean;
   /** Variable that selects an account's config directory; null when the harness has only its default account. */
   account_env?: string | null;
+  /** Variable that signs the harness in with an API key, when its extra accounts are keys (IBM Bob). */
+  key_env?: string | null;
 }
 export type AuthState = "configured" | "not_configured" | "unknown";
 export interface HarnessAuth { state: AuthState; detail?: string | null }

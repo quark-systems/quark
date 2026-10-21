@@ -86,7 +86,8 @@ impl NativeSupervision {
                 sup_config,
             )
             .await?
-            .with_conversations(Arc::new(Transcripts::from_env())),
+            .with_conversations(Arc::new(Transcripts::from_env()))
+            .with_secrets(Arc::new(crate::secrets::Keychain::default())),
         );
         let orphans = supervisor.recover().await?;
         tracing::info!(socket = %socket.display(), orphans, "native supervisor running");
@@ -217,8 +218,10 @@ mod tests {
         let wt = dir.path().join("wt");
         assert!(!t.exists(bob, &wt, &BTreeMap::new()));
         let con = rusqlite::Connection::open(&t.bob_db).unwrap();
-        con.execute_batch("CREATE TABLE tasks (id TEXT, parent_id TEXT, directory TEXT, task_type TEXT)")
-            .unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT, parent_id TEXT, directory TEXT, task_type TEXT)",
+        )
+        .unwrap();
         con.execute(
             "INSERT INTO tasks VALUES ('t1', NULL, ?1, 'normal')",
             [wt.to_string_lossy()],
