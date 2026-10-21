@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByHarness, loginHint, parsePools, poolsFor, POOL_RE, quotaCls, quotaText } from "./accounts";
+import { addable, groupByHarness, loginHint, parsePools, poolsFor, POOL_RE, quotaCls, quotaText, whereText } from "./accounts";
 import type { Account, AccountQuota, HarnessInfo } from "./api";
 
 const quota = (over: Partial<AccountQuota> = {}): AccountQuota => ({ state: "known", remaining_percent: 62.4, windows: [], ...over });
@@ -49,5 +49,20 @@ describe("accounts", () => {
     expect(loginHint(harness("claude-code", "Claude Code", "CLAUDE_CONFIG_DIR"), "/a/work")).toBe("CLAUDE_CONFIG_DIR=/a/work claude");
     expect(loginHint(harness("codex", "Codex", "CODEX_HOME"), "")).toBe("CODEX_HOME=<dir> codex");
     expect(loginHint(harness("gemini", "Gemini CLI", null), "/x")).toBeNull();
+  });
+});
+
+describe("single-account and key harnesses", () => {
+  it("offers harnesses with directories or API keys for more accounts", () => {
+    const bob = { ...harness("bob", "IBM Bob", null), key_env: "BOB_API_KEY" };
+    const kiro = harness("kiro", "Kiro CLI", null);
+    expect(addable([harness("claude-code", "Claude Code", "CLAUDE_CONFIG_DIR"), bob, kiro]).map((h) => h.id))
+      .toEqual(["claude-code", "bob"]);
+  });
+  it("says where each login is", () => {
+    expect(whereText({ ...account("acc_1", "bob"), config_dir: null, api_key: true, team_id: "t-7" }))
+      .toBe("API key in the Keychain, team t-7");
+    expect(whereText({ ...account("default-kiro", "kiro"), config_dir: null })).toBe("the harness's own login");
+    expect(whereText(account("acc_2", "claude-code"))).toBe("/a/acc_2");
   });
 });

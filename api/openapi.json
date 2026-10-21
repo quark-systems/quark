@@ -5079,7 +5079,7 @@
       },
       "Account": {
         "type": "object",
-        "description": "An account a harness runs under: its own config directory, holding what\nthe harness writes after its own login. Every harness with accounts also\nhas a default account (`default: true`), its usual config directory, which\nis listed but cannot be removed.",
+        "description": "An account a harness runs under: its own config directory, holding what\nthe harness writes after its own login, or for a harness that signs in\nwith keys (IBM Bob), an API key kept in the Keychain. Every installed\nharness has a default account (`default: true`), its usual login, which\nis listed but cannot be removed.",
         "required": [
           "id",
           "harness",
@@ -5098,12 +5098,16 @@
             "description": "Tasks and coordinators currently running under the account.",
             "minimum": 0
           },
+          "api_key": {
+            "type": "boolean",
+            "description": "True for an account that signs in with an API key kept in the\nKeychain. The key is never returned."
+          },
           "config_dir": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The config directory the harness is pointed at (`CLAUDE_CONFIG_DIR`,\n`CODEX_HOME` and equivalents)."
+            "description": "The config directory the harness is pointed at (`CLAUDE_CONFIG_DIR`,\n`CODEX_HOME` and equivalents). Absent for a key account."
           },
           "created_at": {
             "type": [
@@ -5142,6 +5146,13 @@
           },
           "quota": {
             "$ref": "#/components/schemas/AccountQuota"
+          },
+          "team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The team a key account's key belongs to, when the harness needs one."
           }
         }
       },
@@ -5997,13 +6008,19 @@
         "type": "object",
         "description": "Add an account for a harness.",
         "required": [
-          "harness",
-          "config_dir"
+          "harness"
         ],
         "properties": {
+          "api_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The API key, for a harness whose extra accounts are keys\n(`HarnessInfo.key_env`). Stored in the Keychain, never returned."
+          },
           "config_dir": {
             "type": "string",
-            "description": "Absolute path of the account's config directory. Log in once with the\nharness pointed at it, e.g. `CLAUDE_CONFIG_DIR=<dir> claude`."
+            "description": "Absolute path of the account's config directory. Log in once with the\nharness pointed at it, e.g. `CLAUDE_CONFIG_DIR=<dir> claude`.\nLeave empty for a key account."
           },
           "harness": {
             "type": "string"
@@ -6020,6 +6037,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key's team, e.g. for an IBM Bob key of type \"general\"."
           }
         }
       },
@@ -7733,6 +7757,13 @@
           },
           "install": {
             "$ref": "#/components/schemas/HarnessInstall"
+          },
+          "key_env": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Environment variable that signs the harness in with an API key, when\nits extra accounts are keys rather than config directories."
           },
           "models": {
             "$ref": "#/components/schemas/HarnessModels"

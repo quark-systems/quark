@@ -45,6 +45,18 @@ Overage is a budget, never a block: when it is allowed (that file, or `/usage` s
 | `reset_timezone` | `UTC` | `UTC` or a fixed offset such as `+05:30` |
 | `anchor_max_age_hours` | `24` | |
 
+The Accounts view shows the same readings: each installed harness's default login is listed with its quota, Bob's and Kiro's from these readers (`account.quota_changed` as for the others).
+
+## Bob and Kiro accounts
+
+Kiro has one login, its default account. Bob always keeps its login in `~/.bob`, so its extra accounts are API keys instead of config directories (manifest `account.key_env`, `account.team_env`):
+
+- `POST /v1/accounts` with `api_key` (and `team_id` for a key of type "general") stores the key in the macOS Keychain under `quark/accounts/<account id>` (`quarkd::secrets`, through `security -i` on stdin so the key is never on a command line). The database keeps only that Keychain name; the API never returns the key; removing the account removes the Keychain item.
+- A worker starts under it with `QUARK_SECRET_BOB_API_KEY=keychain:<service>` and `BOB_TEAM_ID=<team>` in its environment, which is what dispatch and the event log record. The supervisor reads the key only when it starts the session (`quark_supervisor::secrets`), and the manifest passes the team as `--team-id`.
+- Its quota is the live Bob API read with its own key; the ledger and anchor belong to the default login.
+
+Key accounts join pools like any other, so a profile naming a pool balances Bob tasks across keys.
+
 firstmate's opt-in per-session cap (`spawn_max_cost`) has no setting here: put `--max-cost <coins>` on `launch.argv` in a `<home>/harnesses/bob.toml` copy of the built-in manifest instead.
 
 ## Admission control
@@ -92,4 +104,5 @@ With `--engine native`, quarkd registers this host and records a telemetry sampl
 - Spawners for SSH and hosted runtimes (slice 7).
 - Recording the task as `Queued` in the ledger while it waits in dispatch needs a small `quark-core` amendment so the supervisor accepts a queued task.
 - Anchoring Bob from a throwaway `/status` session, as firstmate's `fm-bob-quota.sh anchor --from-status` did; type the figure in with `--anchor` for now.
-- Bob and Kiro in the Accounts view: it lists harnesses with per-account config directories only.
+- Bob and Kiro usage and spend: the usage ingest reads JSONL session logs, and Bob's are in its database (`tasks.costs`), Kiro's not located yet.
+- Kiro conversation resume: its session store is not located yet, so a lost Kiro worker starts fresh with its brief.

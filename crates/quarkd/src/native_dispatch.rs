@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use quark_core::host::{Capacity, Health, Host, HostRegistry, Platform, RuntimeKind};
 use quark_core::EventLog;
-use quark_dispatch::local::{BobUsage, KiroUsage};
+use quark_dispatch::local::{BobUsage, KiroUsage, LocalReading};
 use quark_dispatch::{ProviderFamilies, QuotaAxi};
 use quark_hosts::{EventHosts, HostSampler, Probe, SamplerConfig, SystemProbe, Workloads};
 
@@ -38,13 +38,18 @@ pub fn families(config: &Config) -> ProviderFamilies {
 /// Kiro CLI's own readings, which quota-axi does not report. Their settings
 /// live in `<home>/quota` (`docs/engine/dispatch.md`).
 pub fn quota(config: &Config) -> QuotaAxi {
+    local_readings(config)
+        .into_iter()
+        .fold(QuotaAxi::new(&config.quota_axi), QuotaAxi::with_reading)
+}
+
+/// quarkd's own quota readings: IBM Bob and Kiro CLI.
+pub fn local_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
-    QuotaAxi::new(&config.quota_axi)
-        .with_reading(Arc::new(BobUsage::for_home(
-            &config.home,
-            user_home.as_deref(),
-        )))
-        .with_reading(Arc::new(KiroUsage::for_home(&config.home)))
+    vec![
+        Arc::new(BobUsage::for_home(&config.home, user_home.as_deref())),
+        Arc::new(KiroUsage::for_home(&config.home)),
+    ]
 }
 
 /// This host in the registry, sampled on a timer.

@@ -180,6 +180,15 @@ pub struct Account {
     /// `auth_env` and `auth_files` are the only credential sources.
     #[serde(default)]
     pub auth_exhaustive: bool,
+    /// Variable that signs the harness in with an API key, for a harness
+    /// whose extra accounts are keys rather than directories. Quark keeps
+    /// each key in the Keychain and sets it only on the worker's launch.
+    #[serde(default)]
+    pub key_env: Option<String>,
+    /// Variable Quark sets to a key account's team, for a launch flag such
+    /// as `["--team-id", "{env:BOB_TEAM_ID}"]` in `launch.optional`.
+    #[serde(default)]
+    pub team_env: Option<String>,
 }
 
 /// Harness hooks that post events to quarkd.
@@ -292,6 +301,11 @@ impl HarnessManifest {
                 .any(|a| a.contains("{prompt}") || a.contains("{prompt_file}"))
         {
             return bad("launch.prompt_via is argv but no argument has {prompt}".into());
+        }
+        if let Some(a) = &self.account {
+            if a.team_env.is_some() && a.key_env.is_none() {
+                return bad("account.team_env needs account.key_env".into());
+            }
         }
         for d in &self.launch.dialogs {
             if d.detect.is_empty() || d.cursor.is_empty() || !d.options.contains(&d.choose) {

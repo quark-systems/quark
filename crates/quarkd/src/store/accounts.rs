@@ -30,8 +30,21 @@ pub struct AccountRow {
     pub id: String,
     pub harness: String,
     pub label: String,
+    /// The config directory, or `keychain:<service>` for a key account.
     pub config_dir: String,
     pub created_at: String,
+    /// A key account's team.
+    pub team_id: Option<String>,
+}
+
+/// How a key account's `config_dir` names its Keychain item.
+pub const KEYCHAIN_PREFIX: &str = "keychain:";
+
+impl AccountRow {
+    /// The Keychain service a key account's key is in.
+    pub fn key_service(&self) -> Option<&str> {
+        self.config_dir.strip_prefix(KEYCHAIN_PREFIX)
+    }
 }
 
 fn row_from(r: &rusqlite::Row) -> rusqlite::Result<AccountRow> {
@@ -41,10 +54,12 @@ fn row_from(r: &rusqlite::Row) -> rusqlite::Result<AccountRow> {
         label: r.get(2)?,
         config_dir: r.get(3)?,
         created_at: r.get(4)?,
+        team_id: r.get(5)?,
     })
 }
 
-const ACCOUNT_SELECT: &str = "SELECT id, harness, label, config_dir, created_at FROM accounts";
+const ACCOUNT_SELECT: &str =
+    "SELECT id, harness, label, config_dir, created_at, team_id FROM accounts";
 
 /// Tasks in these states have finished with their worker.
 const IDLE_TASK_STATES: &str = "('done', 'failed')";
@@ -98,14 +113,15 @@ impl Store {
                 )));
             }
             tx.execute(
-                "INSERT INTO accounts (id, harness, label, config_dir, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO accounts (id, harness, label, config_dir, created_at, team_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     row.id,
                     row.harness,
                     row.label,
                     row.config_dir,
-                    row.created_at
+                    row.created_at,
+                    row.team_id
                 ],
             )?;
             set_pools(tx, &row.id, pools)

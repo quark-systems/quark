@@ -28,11 +28,13 @@ mod fleet;
 pub mod launch;
 mod ready;
 pub mod rules;
+pub mod secrets;
 mod supervisor;
 
 pub use events::{Assignment, Cause, SupervisorEvent};
 pub use fleet::{Fleet, Generation, Steer, Worker};
 pub use launch::WorkerUrls;
+pub use secrets::Secrets;
 pub use supervisor::{
     assert_isolated, Config, Conversations, Relaunch, SpawnRequest, Supervisor, Tick,
 };

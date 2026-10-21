@@ -626,6 +626,9 @@ const STUB_ACCOUNT_ENVS: &[&str] = &[
     "CODEX_HOME",
     "PI_CODING_AGENT_DIR",
     "GROK_HOME",
+    // IBM Bob key accounts: the key's reference and its team.
+    "QUARK_SECRET_BOB_API_KEY",
+    "BOB_TEAM_ID",
 ];
 
 /// A write the [`StubEngine`] received.

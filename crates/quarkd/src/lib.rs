@@ -35,6 +35,7 @@ pub mod project_repo;
 pub mod projector;
 pub mod provision;
 pub mod recovery;
+pub mod secrets;
 pub mod sessions;
 pub mod settings;
 pub mod spend;
@@ -149,6 +150,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     ));
     let quota_axi = accounts::QuotaAxi {
         bin: config.quota_axi.clone(),
+        local: native_dispatch::local_readings(&config),
     };
     let accounts = Arc::new(accounts::Accounts::new(
         store.clone(),

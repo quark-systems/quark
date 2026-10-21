@@ -161,6 +161,7 @@ pub struct Supervisor {
     recorder: Arc<Recorder>,
     config: Config,
     conversations: Option<Arc<dyn Conversations>>,
+    secrets: Option<Arc<dyn crate::Secrets>>,
     locks: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
     watches: Mutex<HashMap<Key, Watch>>,
     handling: tokio::sync::Mutex<Seq>,
@@ -197,6 +198,7 @@ impl Supervisor {
             recorder,
             config,
             conversations: None,
+            secrets: None,
             locks: Mutex::default(),
             watches: Mutex::default(),
             handling: tokio::sync::Mutex::new(handled),
@@ -207,6 +209,13 @@ impl Supervisor {
     /// finds one and the harness can resume.
     pub fn with_conversations(mut self, conversations: Arc<dyn Conversations>) -> Self {
         self.conversations = Some(conversations);
+        self
+    }
+
+    /// Where secret references in a worker's environment are read
+    /// ([`crate::secrets`]).
+    pub fn with_secrets(mut self, secrets: Arc<dyn crate::Secrets>) -> Self {
+        self.secrets = Some(secrets);
         self
     }
 
@@ -485,12 +494,15 @@ impl Supervisor {
                 policy.writable.push(p.clone());
             }
         }
+        let plan_env = crate::secrets::resolve(plan.env, self.secrets.as_deref())
+            .await
+            .map_err(CoreError::Invalid)?;
         let (argv, env) = self
             .isolation
             .wrap(&ProcessSpec {
                 argv: plan.argv,
                 cwd: worktree.path.clone(),
-                env: plan.env,
+                env: plan_env,
                 mode: a.isolation,
                 policy,
             })

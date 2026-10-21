@@ -116,20 +116,21 @@ pub fn plan(i: &Inputs<'_>) -> Result<Plan> {
         _ => i.model.map(str::to_string).or(m.models.default.clone()),
     };
     let on_argv = m.launch.prompt_via == "argv";
+    let mut env = m.launch.env.clone();
+    env.extend(i.extra_env.clone());
     let vars = LaunchVars {
         model,
         effort: i.effort.map(str::to_string),
         prompt: on_argv.then(|| brief.clone()),
         prompt_file: on_argv.then(|| path_str(&brief_path)),
         cwd: Some(path_str(i.worktree)),
+        env: env.clone(),
     };
     let mut argv = quark_harness::argv(m, &vars);
     if i.resume {
         argv.extend(m.launch.resume.iter().cloned());
     }
 
-    let mut env = m.launch.env.clone();
-    env.extend(i.extra_env.clone());
     env.insert(env::PROJECT.into(), i.project.to_string());
     env.insert(env::TASK.into(), i.task.to_string());
     env.insert(env::GENERATION.into(), i.generation.into());

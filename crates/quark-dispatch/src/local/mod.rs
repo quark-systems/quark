@@ -28,6 +28,11 @@ pub trait LocalReading: Send + Sync {
     fn provider(&self) -> &str;
     /// A schema-5 snapshot holding only [`Self::provider`].
     async fn read(&self) -> Value;
+    /// The same reading for another account that signs in with `key`, or
+    /// `None` when the provider has no per-key reading.
+    async fn read_with_key(&self, _key: &str) -> Option<Value> {
+        None
+    }
 }
 
 /// The longest quota-axi lets a window run before its reset and still

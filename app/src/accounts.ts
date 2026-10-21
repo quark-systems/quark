@@ -55,6 +55,17 @@ export function poolsFor(accounts: Account[], harness: string): string[] {
   return [...new Set(accounts.filter((a) => a.harness === harness).flatMap((a) => a.pools))].sort();
 }
 
+/** Harnesses that take accounts beyond the default: config directories or API keys. */
+export function addable(harnesses: HarnessInfo[]): HarnessInfo[] {
+  return harnesses.filter((h) => h.account_env || h.key_env);
+}
+
+/** Where an account's login is, for its row. */
+export function whereText(a: Account): string {
+  if (a.api_key) return a.team_id ? `API key in the Keychain, team ${a.team_id}` : "API key in the Keychain";
+  return a.config_dir ?? (a.default ? "the harness's own login" : "no config directory");
+}
+
 /** The shell line that logs a harness in under a new config directory. */
 export function loginHint(h: HarnessInfo | undefined, dir: string): string | null {
   if (!h?.account_env) return null;

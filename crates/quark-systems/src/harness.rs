@@ -164,4 +164,8 @@ pub struct HarnessInfo {
     /// Environment variable that selects an account's config directory, when
     /// the harness supports more than one account.
     pub account_env: Option<String>,
+    /// Environment variable that signs the harness in with an API key, when
+    /// its extra accounts are keys rather than config directories.
+    #[serde(default)]
+    pub key_env: Option<String>,
 }

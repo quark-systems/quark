@@ -11,6 +11,8 @@ pub struct LaunchVars {
     pub prompt: Option<String>,
     pub prompt_file: Option<String>,
     pub cwd: Option<String>,
+    /// The launch environment, for `{env:NAME}`.
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 impl LaunchVars {
@@ -21,7 +23,11 @@ impl LaunchVars {
             "prompt" => self.prompt.as_deref(),
             "prompt_file" => self.prompt_file.as_deref(),
             "cwd" => self.cwd.as_deref(),
-            _ => None,
+            _ => self
+                .env
+                .get(name.strip_prefix("env:")?)
+                .map(String::as_str)
+                .filter(|v| !v.is_empty()),
         }
     }
 
@@ -83,7 +89,20 @@ mod tests {
             prompt: Some("do it".into()),
             prompt_file: None,
             cwd: Some("/w/t1".into()),
+            env: Default::default(),
         }
+    }
+
+    #[test]
+    fn env_placeholders_fill_from_the_launch_environment() {
+        let reg = ManifestRegistry::builtin();
+        let bob = reg.get("bob").unwrap();
+        let mut v = vars(None, None);
+        assert!(!argv(bob, &v).contains(&"--team-id".to_string()));
+        v.env.insert("BOB_TEAM_ID".into(), "team-7".into());
+        let a = argv(bob, &v);
+        let at = a.iter().position(|x| x == "--team-id").unwrap();
+        assert_eq!(a[at + 1], "team-7");
     }
 
     #[test]

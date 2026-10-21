@@ -13,7 +13,11 @@ export interface AccountQuota {
 export interface Account {
   /** `acc_...`, or `default-<harness>` for a harness's default account. */
   id: string; harness: string; label: string; config_dir?: string | null;
-  /** The harness's usual config directory; listed but cannot be removed. */
+  /** Signs in with an API key kept in the Keychain; the key is never returned. */
+  api_key?: boolean;
+  /** A key account's team. */
+  team_id?: string | null;
+  /** The harness's usual login; listed but cannot be removed. */
   default: boolean;
   pools: string[];
   /** Credential health from the harness adapter. */
@@ -24,7 +28,10 @@ export interface Account {
   launchable: boolean;
   created_at?: string | null;
 }
-export interface CreateAccount { harness: string; label?: string | null; config_dir: string; pools?: string[] }
+/** A config directory, or for a key harness an API key (kept in the Keychain) and its team. */
+export interface CreateAccount {
+  harness: string; label?: string | null; config_dir?: string; api_key?: string | null; team_id?: string | null; pools?: string[];
+}
 export interface UpdateAccount { label?: string | null; pools?: string[] | null }
 /** Payload of `account.quota_changed`. */
 export interface AccountQuotaChanged { account_id: string; harness: string; quota: AccountQuota }

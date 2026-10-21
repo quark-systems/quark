@@ -38,8 +38,9 @@ pub struct AccountFailover {
 }
 
 /// An account a harness runs under: its own config directory, holding what
-/// the harness writes after its own login. Every harness with accounts also
-/// has a default account (`default: true`), its usual config directory, which
+/// the harness writes after its own login, or for a harness that signs in
+/// with keys (IBM Bob), an API key kept in the Keychain. Every installed
+/// harness has a default account (`default: true`), its usual login, which
 /// is listed but cannot be removed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Account {
@@ -49,8 +50,15 @@ pub struct Account {
     pub harness: String,
     pub label: String,
     /// The config directory the harness is pointed at (`CLAUDE_CONFIG_DIR`,
-    /// `CODEX_HOME` and equivalents).
+    /// `CODEX_HOME` and equivalents). Absent for a key account.
     pub config_dir: Option<String>,
+    /// True for an account that signs in with an API key kept in the
+    /// Keychain. The key is never returned.
+    #[serde(default)]
+    pub api_key: bool,
+    /// The team a key account's key belongs to, when the harness needs one.
+    #[serde(default)]
+    pub team_id: Option<String>,
     pub default: bool,
     /// Pools the account belongs to. A dispatch profile naming a pool runs
     /// each task under one of the pool's accounts for its harness.
@@ -74,7 +82,16 @@ pub struct CreateAccount {
     pub label: Option<String>,
     /// Absolute path of the account's config directory. Log in once with the
     /// harness pointed at it, e.g. `CLAUDE_CONFIG_DIR=<dir> claude`.
+    /// Leave empty for a key account.
+    #[serde(default)]
     pub config_dir: String,
+    /// The API key, for a harness whose extra accounts are keys
+    /// (`HarnessInfo.key_env`). Stored in the Keychain, never returned.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// The key's team, e.g. for an IBM Bob key of type "general".
+    #[serde(default)]
+    pub team_id: Option<String>,
     #[serde(default)]
     pub pools: Vec<String>,
 }
