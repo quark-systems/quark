@@ -91,6 +91,11 @@ pub struct TurnUsage {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub continued: bool,
     pub models: Vec<ModelUsage>,
+    /// The input of the turn's last model call: how full the conversation's
+    /// context was when the turn ended. `None` when the log has no token
+    /// counts (Kiro).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<u64>,
 }
 
 /// The unit of Kiro's billing.
@@ -239,6 +244,8 @@ struct Builder {
     anon: u32,
     /// Codex: the last running total seen.
     codex_total: Option<u64>,
+    /// The input of the last call seen.
+    context: Option<u64>,
 }
 
 impl Builder {
@@ -250,10 +257,14 @@ impl Builder {
             calls: BTreeMap::new(),
             anon: 0,
             codex_total: None,
+            context: None,
         }
     }
 
     fn call(&mut self, id: Option<&str>, usage: ModelUsage) {
+        if usage.input > 0 {
+            self.context = Some(usage.input);
+        }
         let id = match id {
             Some(id) => id.to_string(),
             None => {
@@ -399,6 +410,7 @@ impl Builder {
             at: self.at,
             continued: self.continued,
             models: by_model.into_values().collect(),
+            context: self.context,
         })
     }
 }
@@ -464,6 +476,8 @@ mod tests {
         assert_eq!((t.id.as_str(), t.continued), ("u1", false));
         assert_eq!(t.at.as_deref(), Some("2026-10-07T10:00:00Z"));
         assert_eq!(t.models.len(), 2);
+        // The context the turn ended on is its last call's input.
+        assert_eq!(t.context, Some(3));
         let opus = t
             .models
             .iter()

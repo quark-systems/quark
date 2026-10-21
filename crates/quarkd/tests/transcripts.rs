@@ -364,3 +364,90 @@ async fn without_a_session_client_messages_are_refused() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], "session_unavailable");
 }
+
+#[tokio::test]
+async fn coordinator_commands_carry_what_the_coordinator_needs() {
+    let h = harness();
+    let workspace = h.dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (_, project) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Quark", "workspace_path": workspace})),
+    )
+    .await;
+    let pid = project["id"].as_str().unwrap().to_string();
+
+    // No message from the user yet: a catch up has nothing to recap from,
+    // so it runs as a status report.
+    let uri = format!("/v1/coordinators/{pid}/messages");
+    let (status, body) = call(&h.app, "POST", &uri, Some(json!({"text": " /ahoy "}))).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["command"], "status_report");
+    let sent = h.chat.sent();
+    assert!(
+        sent[0]
+            .1
+            .starts_with("Engine note: The user asked for a status report"),
+        "{}",
+        sent[0].1
+    );
+    assert!(sent[0].1.contains("No decisions are open."));
+
+    // The user wrote, then a wake arrived; the wake is not the user.
+    let claude_log = h
+        .dir
+        .path()
+        .join(format!("claude/projects/{}/c.jsonl", slug(&workspace)));
+    let wake = json!({"type": "user", "timestamp": "2026-10-02T11:00:00Z",
+        "message": {"role": "user", "content": format!("Wake {pid}#1: 1 item needs your judgment.")}});
+    append(
+        &claude_log,
+        &[claude_user("ship the parser"), claude_reply("On it."), wake],
+    );
+    h.projector().refresh_all().await.unwrap();
+
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/coordinators/{pid}:run"),
+        Some(json!({"command": "catch_up"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["command"], "catch_up");
+    let note = &h.chat.sent()[1].1;
+    assert!(
+        note.starts_with("Engine note: The user asked to catch up"),
+        "{note}"
+    );
+    assert!(note.contains("was at 2026-10-02T10:00:00Z"), "{note}");
+    assert!(note.contains("Nothing notable was logged since then."));
+
+    let (_, body) = call(&h.app, "POST", &uri, Some(json!({"text": "/stow"}))).await;
+    assert_eq!(body["command"], "wrap_up");
+    assert!(h.chat.sent()[2]
+        .1
+        .starts_with("Engine note: The user asked you to wrap up"));
+
+    // Anything else is an ordinary message.
+    let (_, body) = call(
+        &h.app,
+        "POST",
+        &uri,
+        Some(json!({"text": "/stow the logs"})),
+    )
+    .await;
+    assert!(body.get("command").is_none());
+    assert_eq!(h.chat.sent()[3].1, "/stow the logs");
+
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        "/v1/coordinators/prj_missing:run",
+        Some(json!({"command": "wrap_up"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

@@ -54,6 +54,12 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: policy, standing approval, auto-approve, yolo.
 - **Memory**: what the project learned and every agent reads.
   _Avoid_: learnings, notes, knowledge base.
+- **Catch up**: ask the coordinator what happened since your last message, then go through open decisions one at a time. A button on Since you looked, or `/catchup`.
+  _Avoid_: recap, digest (as the button), ahoy (outside the nautical persona).
+- **Status report**: ask the coordinator for what needs you, what landed, what is underway and what is next. A button on Overview, or `/status`.
+  _Avoid_: bearings, brief, standup.
+- **Wrap up**: ask the coordinator to save what its conversation learned to memory and file unfinished work as issues. The coordinator's header, `/wrapup`, and on its own before its conversation is compacted.
+  _Avoid_: stow, save, checkpoint.
 
 ## State words
 

@@ -41,6 +41,9 @@ pub const UI_LABELS: &[(&str, &str)] = &[
     ("state.stalled", "Stalled"),
     ("instructions", "Instructions"),
     ("memory", "Memory"),
+    ("command.catch_up", "Catch up"),
+    ("command.status_report", "Status report"),
+    ("command.wrap_up", "Wrap up"),
 ];
 
 /// A built-in pack's files: its id, `pack.toml` and prompt fragments.

@@ -10,6 +10,7 @@ pub mod beads;
 pub mod chat;
 pub mod classifier;
 pub mod config;
+pub mod coordinator_commands;
 pub mod coordinator_hands;
 pub mod coordinator_http;
 pub mod crew_dispatch;
@@ -277,11 +278,16 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         {
             Ok(c) => {
                 let c = c.with_sessions(sessions.clone());
-                let routes = coordinator_http::router(
+                let routes = coordinator_http::router_wrapping_up(
                     c.coordinator(),
                     c.tokens(),
                     store.clone(),
                     quark_transcript::SessionRoots::from_env(),
+                    coordinator_http::WrapUp {
+                        chat: chat_input.clone(),
+                        events: events.clone(),
+                        watch: coordinator_commands::ContextWatch::from_env(),
+                    },
                 );
                 (
                     Some(routes),

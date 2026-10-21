@@ -1268,6 +1268,33 @@ impl Store {
         })
     }
 
+    /// The newest user entry of a Project's coordinator conversation that
+    /// `wanted` accepts, read newest first so only the tail is decoded.
+    pub fn last_coordinator_prompt(
+        &self,
+        project_id: &str,
+        wanted: impl Fn(&quark_systems::TranscriptEntry) -> bool,
+    ) -> Result<Option<quark_systems::TranscriptEntry>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT json_extract(payload, '$.entry') FROM events
+                 WHERE type = ?1 AND json_extract(payload, '$.coordinator_id') = ?2
+                   AND json_extract(payload, '$.entry.role') = 'user'
+                 ORDER BY seq DESC",
+            )?;
+            let mut rows =
+                stmt.query(params![EventType::CoordinatorMessage.as_str(), project_id])?;
+            while let Some(row) = rows.next()? {
+                let entry: quark_systems::TranscriptEntry =
+                    serde_json::from_str(&row.get::<_, String>(0)?)?;
+                if !recorded_compaction_summary(&entry) && wanted(&entry) {
+                    return Ok(Some(entry));
+                }
+            }
+            Ok(None)
+        })
+    }
+
     /// Appends one event per entry read from `path` and moves the source's
     /// cursor to `next_offset`, atomically, so a restart neither repeats nor
     /// skips an entry.

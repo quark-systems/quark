@@ -10,6 +10,7 @@ import { SectionLabel, StatusDot, taskTone } from "../ui";
 import { lastSeen, summarize } from "../screens/dashboard/summary";
 import { useAttention } from "./NextAttention";
 import { describeUpdate } from "./updates";
+import { CommandButton } from "../components/CoordinatorCommand";
 
 type Posted = Notice & { seq: number; ts: string };
 
@@ -80,12 +81,12 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
 
   return (
     <aside className="since" aria-label="Since you looked" data-testid="since-you-looked">
-      {digest && (
-        <section>
-          <SectionLabel>{seen === null ? "Since the log began" : `Since you looked · ${ago(digest.from)}`}</SectionLabel>
-          <p className="since-summary" data-testid="since-summary">{summarize(digest)} <a href={href({ name: "overview", project: pid })}>Overview</a></p>
-        </section>
-      )}
+      <section>
+        <SectionLabel right={<CommandButton cid={pid} command="catch_up" />}>
+          {!digest ? "Since you looked" : seen === null ? "Since the log began" : `Since you looked · ${ago(digest.from)}`}
+        </SectionLabel>
+        {digest && <p className="since-summary" data-testid="since-summary">{summarize(digest)} <a href={href({ name: "overview", project: pid })}>Overview</a></p>}
+      </section>
       <section>
         <SectionLabel>Needs you</SectionLabel>
         {mine.length ? mine.map((i) => (

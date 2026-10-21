@@ -78,7 +78,7 @@ const PERSONAS = [
   {
     id: "nautical", name: "Nautical", builtin: true, address: "captain", voice: "Address the user as captain.", vocabulary: ["aye", "shipshape"],
     roles: { user: "captain", coordinator: "first mate", worker: "crewmate", sub_coordinator: "second mate", investigation: "scout", decision: "captain's call" },
-    ui_labels: { decisions: "Captain's calls", standing_approval: "Standing orders", memory: "Logbook" },
+    ui_labels: { decisions: "Captain's calls", standing_approval: "Standing orders", memory: "Logbook", "command.catch_up": "Ahoy", "command.status_report": "Bearings", "command.wrap_up": "Stow" },
   },
   {
     id: "kitchen-brigade", name: "Kitchen brigade", builtin: true, address: "chef", voice: "Calm, brisk service talk.", vocabulary: ["heard", "all day"],
@@ -1931,6 +1931,28 @@ const server = http.createServer(async (req, res) => {
       accounts.delete(a.id);
       return send(res, 204);
     }
+  }
+
+  if ((r = m(/^\/v1\/coordinators\/([^/:]+):run$/)) && req.method === "POST") {
+    const cid = decodeURIComponent(r[1]);
+    if (!chats.has(cid)) return notFound(res);
+    const b = await readJson(req);
+    const notes = {
+      catch_up: "The user asked to catch up (with a button or a slash command in the app).",
+      status_report: "The user asked for a status report (with a button or a slash command in the app).",
+      wrap_up: "The user asked you to wrap up (with a button or a slash command in the app).",
+    };
+    const replies = {
+      catch_up: "Since your last message: nothing merged, and no decisions are open.",
+      status_report: "**Needs you**: nothing.\n\n**Recently landed**: nothing.\n\n**Underway**: nothing.\n\n**Next**: nothing is queued.",
+      wrap_up: "Nothing new to remember; nothing unfiled.",
+    };
+    if (!notes[b?.command]) return invalid(res, "unknown command");
+    setTimeout(() => {
+      chat(cid, "user", `Engine note: ${notes[b.command]}`);
+      chat(cid, "assistant", replies[b.command]);
+    }, QUIET ? 50 : 500);
+    return send(res, 202, { coordinator_id: cid, confirmed: true, accepted_at: now(), command: b.command });
   }
 
   if ((r = m(/^\/v1\/coordinators\/([^/]+)\/messages$/))) {

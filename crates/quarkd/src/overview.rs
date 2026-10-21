@@ -193,6 +193,16 @@ impl OverviewModel {
             error: None,
         }
     }
+
+    /// `project`'s digest of everything logged after `at`.
+    pub fn digest_after(&self, project: &str, at: OffsetDateTime) -> OverviewDigest {
+        let Some(p) = self.projects.get(project) else {
+            return OverviewDigest::default();
+        };
+        let before = p.history.partition_point(|e| e.at <= at);
+        let since = before.checked_sub(1).map_or(0, |i| p.history[i].seq);
+        p.digest(since)
+    }
 }
 
 impl TaskFold {
@@ -480,6 +490,22 @@ mod tests {
         TaskEvent::Started {
             generation: "g1".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn digests_everything_logged_after_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let before = OffsetDateTime::now_utc() - Duration::minutes(1);
+        add(&log, "p1", "b", ask("api", "which shape?")).await;
+        add(&log, "p1", "b", answer("api")).await;
+        let mut m = OverviewModel::new(log.clone());
+        m.catch_up().await.unwrap();
+        let all = m.digest_after("p1", before);
+        assert_eq!((all.decisions_opened, all.decisions_resolved), (1, 1));
+        let after = OffsetDateTime::now_utc() + Duration::minutes(1);
+        assert_eq!(m.digest_after("p1", after).highlights.len(), 0);
+        assert_eq!(m.digest_after("nope", before).events, 0);
     }
 
     #[tokio::test]

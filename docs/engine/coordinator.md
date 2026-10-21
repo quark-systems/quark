@@ -62,6 +62,23 @@ Each call is recorded as `coordinator.tool` before it runs and `coordinator.tool
 
 Gates, rebase, merge and cleanup are deliberately not tools.
 
+## Commands from the user
+
+The user asks a coordinator for three things with one control: a button in the app, a slash command typed as the whole message, or `POST /v1/coordinators/{id}:run` with `{"command": ...}` (`crates/quarkd/src/coordinator_commands.rs`).
+Each is typed into the session as an engine note that begins `The user asked`, which the built-in prompt tells the coordinator to treat as the user's request, followed by the facts it needs.
+
+| Command | Slash commands | The note carries |
+|---|---|---|
+| `catch_up` | `/catchup`, `/catch-up`, `/ahoy` | When the user last wrote to the coordinator (wakes, engine notes and harness output do not count), everything notable the event log holds after it, and the open decisions. The coordinator recaps that interval, then presents the open decisions one at a time, most impactful first. With no earlier message it runs as `status_report`. |
+| `status_report` | `/status`, `/status-report`, `/bearings` | Every task's live status and the open decisions, for four sections that are always present: Needs you, Recently landed, Underway, Next (from `bd ready` and `bd blocked`). |
+| `wrap_up` | `/wrapup`, `/wrap-up`, `/stow` | Nothing: the coordinator proposes memory entries with `remember` for what only its conversation holds, files undone work with `bd create`, corrects stale issues, and replies with what it saved. |
+
+The firstmate names are kept so the commands people already type keep working; the nautical persona pack also shows them on the buttons.
+A message that is a slash command plus more text (`/stow the logs`) is an ordinary message.
+
+The engine asks for `wrap_up` by itself before the harness compacts the coordinator's context: when a turn ends with the context (its last model call's input) past a multiple of `QUARK_COORDINATOR_WRAP_UP_TOKENS` (default 150,000; `0` turns it off), once per multiple, starting over when compaction shrinks it.
+Only harnesses with a turn-end hook (Claude Code) report the context.
+
 ## Durability
 
 The coordinator holds nothing the log does not have.

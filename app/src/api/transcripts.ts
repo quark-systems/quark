@@ -18,10 +18,17 @@ export interface TranscriptEntry {
 }
 /** A transcript entry with its id: the `seq` of the event that carried it. */
 export interface TranscriptItem extends TranscriptEntry { id: number }
-export interface MessageAccepted { coordinator_id: string; confirmed: boolean; accepted_at: string }
+/** What the user asks a coordinator for with one control (`CoordinatorCommand` in quarkd). */
+export type CoordinatorCommand = "catch_up" | "status_report" | "wrap_up";
+export interface MessageAccepted {
+  coordinator_id: string; confirmed: boolean; accepted_at: string;
+  /** The command that ran, when the message was one: a catch up with nothing to recap from runs as a status report. */
+  command?: CoordinatorCommand;
+}
 
 export const transcriptsApi = {
   chat: (cid: string) => req<TranscriptItem[]>("GET", `/v1/coordinators/${enc(cid)}/messages?limit=1000`),
   sendChat: (cid: string, text: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}/messages`, { text }),
+  runCommand: (cid: string, command: CoordinatorCommand) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:run`, { command }),
   transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
 };

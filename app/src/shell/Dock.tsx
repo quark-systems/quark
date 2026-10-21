@@ -6,6 +6,7 @@ import { go, href, Route, useRoute } from "../nav";
 import { useStore } from "../store";
 import { useLabels } from "../persona";
 import { errText } from "../util";
+import { fromSlash } from "../commands";
 import { Button, CoordinatorMark, Kbd } from "../ui";
 
 export interface DockContext {
@@ -67,7 +68,12 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
     const t = text.trim();
     if (!t || !projectId || sending) return;
     setSending(true); setErr(null); setSent(null);
-    try { await api.sendChat(projectId, dockMessage(t, ctx)); setText(""); setSent(projectId); }
+    // A slash command asks for a catch up, status report or wrap up; it carries no context.
+    const command = fromSlash(t);
+    try {
+      await (command ? api.runCommand(projectId, command) : api.sendChat(projectId, dockMessage(t, ctx)));
+      setText(""); setSent(projectId);
+    }
     catch (e) { setErr(errText(e)); }
     finally { setSending(false); }
   };
