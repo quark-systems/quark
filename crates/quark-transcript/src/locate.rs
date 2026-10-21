@@ -25,6 +25,8 @@ pub struct SessionRoots {
     pub codex: Vec<PathBuf>,
     /// Pi agent directories (`~/.pi/agent`, or `$PI_CODING_AGENT_DIR`).
     pub pi: Vec<PathBuf>,
+    /// Kiro CLI homes (`~/.kiro`, or `$KIRO_HOME`).
+    pub kiro: Vec<PathBuf>,
 }
 
 impl SessionRoots {
@@ -44,6 +46,7 @@ impl SessionRoots {
             claude: pick("CLAUDE_CONFIG_DIR", &[".claude"]),
             codex: pick("CODEX_HOME", &[".codex"]),
             pi: pick("PI_CODING_AGENT_DIR", &[".pi", "agent"]),
+            kiro: pick("KIRO_HOME", &[".kiro"]),
         }
     }
 
@@ -52,6 +55,17 @@ impl SessionRoots {
             SessionFormat::Claude => &self.claude,
             SessionFormat::Codex => &self.codex,
             SessionFormat::Pi => &self.pi,
+            SessionFormat::Kiro => &self.kiro,
+        }
+    }
+
+    /// The roots of `format`, to add an account's directory to.
+    pub fn for_format_mut(&mut self, format: SessionFormat) -> &mut Vec<PathBuf> {
+        match format {
+            SessionFormat::Claude => &mut self.claude,
+            SessionFormat::Codex => &mut self.codex,
+            SessionFormat::Pi => &mut self.pi,
+            SessionFormat::Kiro => &mut self.kiro,
         }
     }
 }
@@ -74,6 +88,7 @@ pub fn locate(format: SessionFormat, cwd: &Path, roots: &SessionRoots) -> Option
                 }
                 SessionFormat::Pi => newest_jsonl(&root.join("sessions").join(pi_slug(cwd))),
                 SessionFormat::Codex => codex_rollout(&root.join("sessions"), cwd),
+                SessionFormat::Kiro => kiro_session(&root.join("sessions"), cwd),
             };
             if let Some(path) = found {
                 let mtime = modified(&path);
@@ -169,6 +184,51 @@ fn codex_rollout(sessions: &Path, cwd: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Kiro keeps one directory per session, `<workspace hash>/sess_<id>/`,
+/// whose `session.json` lists its `workspacePaths`; the newest log of a
+/// session started in `cwd` wins. `cli/` holds the older 2.x store.
+fn kiro_session(sessions: &Path, cwd: &Path) -> Option<PathBuf> {
+    let want = cwd.to_string_lossy();
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+    for hash in sorted_dirs_desc(sessions) {
+        if hash.file_name().is_some_and(|n| n == "cli") {
+            continue;
+        }
+        for sess in sorted_dirs_desc(&hash) {
+            if !sess
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("sess_"))
+            {
+                continue;
+            }
+            let log = sess.join("messages.jsonl");
+            if !log.is_file() || !kiro_workspaces(&sess).iter().any(|w| *w == want) {
+                continue;
+            }
+            let mtime = modified(&log);
+            if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                best = Some((mtime, log));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+fn kiro_workspaces(sess: &Path) -> Vec<String> {
+    let Ok(raw) = fs::read(sess.join("session.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    v.get("workspacePaths")
+        .and_then(|w| w.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|w| w.as_str().map(|w| w.trim_end_matches('/').to_string()))
+        .collect()
 }
 
 fn codex_cwd(path: &Path) -> Option<String> {

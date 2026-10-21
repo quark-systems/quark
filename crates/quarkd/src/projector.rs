@@ -422,7 +422,7 @@ impl Projector {
             let coordinator = TranscriptSource::Coordinator {
                 project_id: project_id.clone(),
             };
-            if let Err(e) = tap.poll(project_id, coordinator, &ws.root, &SessionFormat::ALL) {
+            if let Err(e) = tap.poll(project_id, coordinator, &ws.root, &SessionFormat::COORDINATOR) {
                 tracing::warn!(project = %project_id, error = %e, "coordinator transcript");
             }
             for t in tasks {

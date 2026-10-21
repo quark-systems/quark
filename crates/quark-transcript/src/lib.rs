@@ -14,9 +14,13 @@
 //!   `<codex home>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`.
 //! - [`SessionFormat::Pi`]: Pi coding agent,
 //!   `<agent dir>/sessions/--<cwd slug>--/<ts>_<id>.jsonl`.
+//! - [`SessionFormat::Kiro`]: Kiro CLI's V3 engine,
+//!   `<kiro home>/sessions/<workspace hash>/sess_<id>/messages.jsonl`, beside a
+//!   `session.json` naming its working directories.
 
 mod claude;
 mod codex;
+mod kiro;
 mod locate;
 mod pi;
 mod rate_limit;
@@ -31,7 +35,7 @@ pub use quark_systems::{
 pub use rate_limit::RateLimit;
 pub use reader::{read_from, ReadBatch, MAX_BATCH_BYTES};
 pub use tool::MAX_DIFF_LINES;
-pub use usage::{read_turns, ModelUsage, TurnUsage, UsageCursor};
+pub use usage::{read_turns, ModelUsage, TurnUsage, UsageCursor, BOBCOIN, KIRO_CREDIT};
 
 use serde_json::Value;
 
@@ -45,10 +49,20 @@ pub enum SessionFormat {
     Claude,
     Codex,
     Pi,
+    Kiro,
 }
 
 impl SessionFormat {
-    pub const ALL: [SessionFormat; 3] = [
+    pub const ALL: [SessionFormat; 4] = [
+        SessionFormat::Claude,
+        SessionFormat::Codex,
+        SessionFormat::Pi,
+        SessionFormat::Kiro,
+    ];
+
+    /// The formats of harnesses that can run a coordinator, searched for a
+    /// Project's coordinator log. Kiro CLI runs workers only.
+    pub const COORDINATOR: [SessionFormat; 3] = [
         SessionFormat::Claude,
         SessionFormat::Codex,
         SessionFormat::Pi,
@@ -61,6 +75,7 @@ impl SessionFormat {
             "claude" | "claude-code" => Some(SessionFormat::Claude),
             "codex" => Some(SessionFormat::Codex),
             "pi" | "pi-signed" => Some(SessionFormat::Pi),
+            "kiro" => Some(SessionFormat::Kiro),
             _ => None,
         }
     }
@@ -70,6 +85,7 @@ impl SessionFormat {
             SessionFormat::Claude => "claude",
             SessionFormat::Codex => "codex",
             SessionFormat::Pi => "pi",
+            SessionFormat::Kiro => "kiro",
         }
     }
 
@@ -88,6 +104,7 @@ impl SessionFormat {
             SessionFormat::Claude => claude::parse(v),
             SessionFormat::Codex => codex::parse(v),
             SessionFormat::Pi => pi::parse(v),
+            SessionFormat::Kiro => kiro::parse(v),
         }
     }
 
@@ -98,7 +115,7 @@ impl SessionFormat {
         match self {
             SessionFormat::Claude => rate_limit::claude(v),
             SessionFormat::Codex => rate_limit::codex(v),
-            SessionFormat::Pi => None,
+            SessionFormat::Pi | SessionFormat::Kiro => None,
         }
     }
 }
@@ -260,6 +277,10 @@ mod tests {
             Some(SessionFormat::Claude)
         );
         assert_eq!(SessionFormat::for_harness("pi"), Some(SessionFormat::Pi));
+        assert_eq!(
+            SessionFormat::for_harness("kiro"),
+            Some(SessionFormat::Kiro)
+        );
         assert_eq!(SessionFormat::for_harness("bob"), None);
     }
 }

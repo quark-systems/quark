@@ -110,9 +110,12 @@ impl NativeSupervision {
 /// harness would to continue it: the manifest's transcript format, under the
 /// account's config directory when the worker runs on one, else the
 /// harness's default. IBM Bob keeps its conversations in a database
-/// instead, `~/.bob/db/bob.db`.
+/// instead, `~/.bob/db/bob.db`; Kiro CLI one directory per session under
+/// `~/.kiro/sessions`.
 pub struct Transcripts {
     pub bob_db: PathBuf,
+    /// Each harness's default session roots.
+    pub roots: SessionRoots,
 }
 
 impl Transcripts {
@@ -122,6 +125,7 @@ impl Transcripts {
             bob_db: std::env::var_os("HOME")
                 .map(|h| PathBuf::from(h).join(".bob").join("db").join("bob.db"))
                 .unwrap_or_default(),
+            roots: SessionRoots::from_env(),
         }
     }
 }
@@ -131,26 +135,24 @@ impl Conversations for Transcripts {
         if quark_harness::engine_name(m) == "bob" {
             return quark_dispatch::local::bob::has_task(&self.bob_db, cwd);
         }
+        // Kiro CLI has no account directory, so no `transcript` locator: its
+        // sessions are found under `$KIRO_HOME` by working directory.
         let Some(format) = m
             .transcript
             .as_ref()
             .and_then(|t| session_format(&t.format))
+            .or_else(|| (quark_harness::engine_name(m) == "kiro").then_some(SessionFormat::Kiro))
         else {
             return false;
         };
-        let mut roots = SessionRoots::from_env();
+        let mut roots = self.roots.clone();
         let account = m
             .account
             .as_ref()
             .and_then(|a| a.env.as_ref())
             .and_then(|var| env.get(var));
         if let Some(dir) = account {
-            let list = match format {
-                SessionFormat::Claude => &mut roots.claude,
-                SessionFormat::Codex => &mut roots.codex,
-                SessionFormat::Pi => &mut roots.pi,
-            };
-            list.insert(0, PathBuf::from(dir));
+            roots.for_format_mut(format).insert(0, PathBuf::from(dir));
         }
         locate(format, cwd, &roots).is_some()
     }
@@ -181,6 +183,7 @@ mod tests {
         let account = dir.path().join("account");
         let t = Transcripts {
             bob_db: dir.path().join("bob.db"),
+            roots: SessionRoots::default(),
         };
         let env = BTreeMap::from([(
             "CLAUDE_CONFIG_DIR".to_string(),
@@ -214,6 +217,7 @@ mod tests {
         assert!(!bob.launch.resume.is_empty());
         let t = Transcripts {
             bob_db: dir.path().join("bob.db"),
+            roots: SessionRoots::default(),
         };
         let wt = dir.path().join("wt");
         assert!(!t.exists(bob, &wt, &BTreeMap::new()));
@@ -238,5 +242,34 @@ mod tests {
             assert_eq!(program, std::env::current_exe().unwrap());
             assert_eq!(args, ["ptyd"]);
         }
+    }
+
+    #[test]
+    fn finds_a_kiro_session_in_the_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let kiro = quark_harness::builtin()
+            .iter()
+            .find(|m| m.id == "kiro")
+            .unwrap();
+        assert!(!kiro.launch.resume.is_empty());
+        let home = dir.path().join(".kiro");
+        let t = Transcripts {
+            bob_db: dir.path().join("bob.db"),
+            roots: SessionRoots {
+                kiro: vec![home.clone()],
+                ..Default::default()
+            },
+        };
+        let wt = dir.path().join("wt");
+        assert!(!t.exists(kiro, &wt, &BTreeMap::new()));
+        let sess = home.join("sessions").join("3f2a").join("sess_1");
+        std::fs::create_dir_all(&sess).unwrap();
+        std::fs::write(
+            sess.join("session.json"),
+            serde_json::json!({"id": "sess_1", "workspacePaths": [wt]}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(sess.join("messages.jsonl"), "").unwrap();
+        assert!(t.exists(kiro, &wt, &BTreeMap::new()));
     }
 }

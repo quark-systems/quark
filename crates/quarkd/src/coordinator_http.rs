@@ -295,7 +295,7 @@ impl Routes {
 }
 
 fn newest_log(roots: &SessionRoots, cwd: &Path) -> Option<(PathBuf, SessionFormat)> {
-    SessionFormat::ALL
+    SessionFormat::COORDINATOR
         .iter()
         .filter_map(|&f| locate(f, cwd, roots).map(|p| (p, f)))
         .max_by_key(|(p, _)| {

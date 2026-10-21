@@ -9,6 +9,11 @@
 //! counted before its working copy is cleaned up; anything it writes later
 //! comes as a continuation of that turn.
 //!
+//! IBM Bob keeps no session log: its database (`~/.bob/db/bob.db`) holds
+//! each task's running spend in Bobcoins. A Bob worker's tasks in its
+//! working copy each count as one turn, reported again as a continuation
+//! whenever its spend grows. Kiro CLI logs credits, not tokens, per turn.
+//!
 //! Read positions are kept per log file in one checkpoint per agent,
 //! written in the same transaction as the events, so a turn lands exactly
 //! once however the daemon dies. A relaunched agent's earlier log is
@@ -22,7 +27,9 @@ use std::time::{Duration, SystemTime};
 
 use quark_core::{HostId, NewEvent, ProjectId, TaskId};
 use quark_eventlog::SqliteEventLog;
-use quark_transcript::{read_turns, SessionFormat, SessionRoots, TurnUsage, UsageCursor};
+use quark_transcript::{
+    read_turns, ModelUsage, SessionFormat, SessionRoots, TurnUsage, UsageCursor, BOBCOIN,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::store::Store;
@@ -46,16 +53,33 @@ pub enum Agent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageTurn {
     pub agent: Agent,
-    /// The session-log format: `claude`, `codex` or `pi`.
+    /// The session-log format (`claude`, `codex`, `pi`, `kiro`), or `bob`.
     pub harness: String,
     #[serde(flatten)]
     pub turn: TurnUsage,
 }
 
-/// One agent's read positions, by log path.
+/// One agent's read positions, by log path, and for a Bob worker what
+/// each of its Bob tasks had spent when last read.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Logs {
     logs: BTreeMap<String, LogPos>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    bob: BTreeMap<String, BobSpent>,
+}
+
+/// A Bob task's spend so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+struct BobSpent {
+    coins: f64,
+    #[serde(default)]
+    input: u64,
+    #[serde(default)]
+    output: u64,
+    #[serde(default)]
+    cache_read: u64,
+    #[serde(default)]
+    cache_write: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +98,8 @@ pub struct UsageIngest {
     log: SqliteEventLog,
     host: HostId,
     roots: SessionRoots,
+    /// IBM Bob's database.
+    bob_db: PathBuf,
 }
 
 impl UsageIngest {
@@ -83,7 +109,16 @@ impl UsageIngest {
             log,
             host,
             roots,
+            bob_db: std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".bob").join("db").join("bob.db"))
+                .unwrap_or_default(),
         }
+    }
+
+    /// Reads Bob's spend from `db` instead of `~/.bob/db/bob.db`.
+    pub fn with_bob_db(mut self, db: PathBuf) -> Self {
+        self.bob_db = db;
+        self
     }
 
     /// One pass over every Project with a workspace.
@@ -112,15 +147,18 @@ impl UsageIngest {
         // Locating scans harness directories: off the async threads.
         let (coordinator, workers) = tokio::task::spawn_blocking(move || {
             let roots = roots_with_accounts(&store, &roots);
-            let coordinator = locate_any(&ws, &SessionFormat::ALL, &roots);
+            let coordinator = locate_any(&ws, &SessionFormat::COORDINATOR, &roots);
             let workers = store
                 .task_agents(&pid)?
                 .into_iter()
                 .filter_map(|(id, harness, worktree)| {
+                    if crate::engine::engine_harness(&harness) == "bob" {
+                        return Some((id, Source::Bob(worktree.map(PathBuf::from))));
+                    }
                     let format = SessionFormat::for_harness(&harness)?;
                     let log =
                         worktree.and_then(|w| locate_any(&PathBuf::from(w), &[format], &roots));
-                    Some((id, log))
+                    Some((id, Source::Log(log)))
                 })
                 .collect::<Vec<_>>();
             Ok::<_, anyhow::Error>((coordinator, workers))
@@ -128,7 +166,7 @@ impl UsageIngest {
         .await??;
         let project = ProjectId::new(project_id);
         let mut n = self
-            .ingest_agent(&project, None, Agent::Coordinator, coordinator)
+            .ingest_agent(&project, None, Agent::Coordinator, Source::Log(coordinator))
             .await?
             .0;
         for (task, log) in workers {
@@ -158,7 +196,7 @@ impl UsageIngest {
         project: &ProjectId,
         task: Option<TaskId>,
         agent: Agent,
-        current: Option<(PathBuf, SessionFormat)>,
+        source: Source,
     ) -> anyhow::Result<(usize, Option<String>)> {
         let name = match &task {
             Some(t) => format!("usage/{project}/task/{t}"),
@@ -170,15 +208,24 @@ impl UsageIngest {
             .await?
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default();
-        if current.is_none() && saved.logs.is_empty() {
-            return Ok((0, None));
-        }
-        let read = {
-            let saved = saved.clone();
-            tokio::task::spawn_blocking(move || read_new(saved, current))
-        }
-        .await??;
-        let (logs, turns) = read;
+        let read = match source {
+            Source::Log(current) => {
+                if current.is_none() && saved.logs.is_empty() {
+                    return Ok((0, None));
+                }
+                let saved = saved.clone();
+                tokio::task::spawn_blocking(move || read_new(saved, current))
+                    .await?
+                    .map_err(anyhow::Error::from)
+            }
+            Source::Bob(None) => return Ok((0, None)),
+            Source::Bob(Some(worktree)) => {
+                let saved = saved.clone();
+                let db = self.bob_db.clone();
+                tokio::task::spawn_blocking(move || read_bob(saved, &db, &worktree)).await?
+            }
+        };
+        let (logs, turns) = read?;
         if logs == saved {
             return Ok((0, None));
         }
@@ -190,10 +237,10 @@ impl UsageIngest {
                 .map(|m| m.model.clone())
         });
         let mut events = Vec::with_capacity(turns.len());
-        for (format, turn) in &turns {
+        for (harness, turn) in &turns {
             let payload = UsageTurn {
                 agent,
-                harness: format.as_str().to_string(),
+                harness: harness.to_string(),
                 turn: turn.clone(),
             };
             events.push(NewEvent::typed(
@@ -223,13 +270,82 @@ impl UsageIngest {
     }
 }
 
+/// Where an agent's usage is read from.
+enum Source {
+    /// Its session log, if one is found.
+    Log(Option<(PathBuf, SessionFormat)>),
+    /// IBM Bob's database, for the worker's working copy if it has one.
+    Bob(Option<PathBuf>),
+}
+
+/// The growth in spend of each Bob task run in `worktree` since `logs` was
+/// saved, one turn per task that spent more. Blocking.
+fn read_bob(
+    mut logs: Logs,
+    db: &std::path::Path,
+    worktree: &std::path::Path,
+) -> anyhow::Result<(Logs, Vec<(&'static str, TurnUsage)>)> {
+    let tasks =
+        quark_dispatch::local::bob::task_costs(db, worktree).map_err(|e| anyhow::anyhow!(e))?;
+    let mut turns = Vec::new();
+    for t in tasks {
+        let before = logs.bob.get(&t.id).copied();
+        let was = before.unwrap_or_default();
+        let now = BobSpent {
+            coins: t.coins,
+            input: t.input,
+            output: t.output,
+            cache_read: t.cache_read,
+            cache_write: t.cache_write,
+        };
+        // Spend only grows; a smaller figure is a rewritten row, not a refund.
+        if now.coins <= was.coins + 1e-9 && before.is_some() {
+            continue;
+        }
+        let (read, write) = (
+            now.cache_read.saturating_sub(was.cache_read),
+            now.cache_write.saturating_sub(was.cache_write),
+        );
+        let at = t
+            .created_ms
+            .and_then(|ms| {
+                time::OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000).ok()
+            })
+            .and_then(|d| {
+                d.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            });
+        turns.push((
+            "bob",
+            TurnUsage {
+                id: t.id.clone(),
+                at,
+                continued: before.is_some(),
+                models: vec![ModelUsage {
+                    model: t.model.clone().unwrap_or_else(|| "bob".to_string()),
+                    input: now.input.saturating_sub(was.input) + read + write,
+                    output: now.output.saturating_sub(was.output),
+                    cache_read: read,
+                    cache_write: write,
+                    calls: u32::from(before.is_none()),
+                    cost_usd: None,
+                    credits: Some((now.coins - was.coins).max(0.0)),
+                    credit_unit: Some(BOBCOIN.to_string()),
+                }],
+            },
+        ));
+        logs.bob.insert(t.id, now);
+    }
+    Ok((logs, turns))
+}
+
 /// Reads every log of one agent: the one it writes now, and any earlier
 /// one with a turn still open, which is closed. A log that is gone is
 /// forgotten. Blocking.
 fn read_new(
     mut logs: Logs,
     current: Option<(PathBuf, SessionFormat)>,
-) -> std::io::Result<(Logs, Vec<(SessionFormat, TurnUsage)>)> {
+) -> std::io::Result<(Logs, Vec<(&'static str, TurnUsage)>)> {
     let current_path = current
         .as_ref()
         .map(|(p, _)| p.to_string_lossy().into_owned());
@@ -273,7 +389,7 @@ fn read_new(
             !is_current || quiet,
         )?;
         pos.cursor = next;
-        turns.extend(new.into_iter().map(|t| (format, t)));
+        turns.extend(new.into_iter().map(|t| (format.as_str(), t)));
     }
     Ok((logs, turns))
 }
@@ -400,5 +516,122 @@ mod tests {
 
         let task = store.list_tasks(&project.id).unwrap().remove(0);
         assert_eq!(task.model.as_deref(), Some("claude-sonnet-5-5"));
+    }
+
+    #[tokio::test]
+    async fn mirrors_bob_spend_and_kiro_credits() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        let bob_wt = dir.path().join("bob-wt");
+        let kiro_wt = dir.path().join("kiro-wt");
+        for d in [&ws, &bob_wt, &kiro_wt] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let bob_db = dir.path().join("bob.db");
+        let con = rusqlite::Connection::open(&bob_db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+                task_type TEXT, created_at INTEGER, costs TEXT);",
+        )
+        .unwrap();
+        con.execute(
+            "INSERT INTO tasks VALUES ('t1', NULL, ?1, 'normal', 1792576800000, '{\"cost\": 2}')",
+            [bob_wt.to_string_lossy()],
+        )
+        .unwrap();
+        let kiro_home = dir.path().join(".kiro");
+        let sess = kiro_home.join("sessions/ab12/sess_1");
+        std::fs::create_dir_all(&sess).unwrap();
+        std::fs::write(
+            sess.join("session.json"),
+            json!({"id": "sess_1", "modelId": "auto", "workspacePaths": [kiro_wt]}).to_string(),
+        )
+        .unwrap();
+        append(
+            &sess.join("messages.jsonl"),
+            &[
+                json!({"id": "k1", "payload": {"type": "user", "content": "go"}}),
+                json!({"id": "s", "payload": {"type": "usage_summary", "executionId": "e1",
+                    "promptTurnSummaries": [{"unit": "credit", "usage": 1.25}]}}),
+                json!({"id": "k2", "payload": {"type": "user", "content": "more"}}),
+            ],
+        );
+
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let project = store
+            .create_project(CreateProject {
+                name: "Quark".into(),
+                goal: None,
+                workspace_path: Some(ws.display().to_string()),
+                repos: vec![],
+                agent_config: None,
+                dispatch_preset: None,
+                delivery: None,
+            })
+            .unwrap();
+        let task = |id: &str, harness: &str, wt: &PathBuf| crate::engine::EngineTask {
+            id: id.into(),
+            title: id.into(),
+            kind: None,
+            state: quark_systems::TaskState::Running,
+            state_note: None,
+            state_source: None,
+            harness: Some(harness.into()),
+            pull_request_url: None,
+            terminal: None,
+            worktree: Some(wt.clone()),
+        };
+        store
+            .apply_snapshot(
+                &project.id,
+                &crate::engine::FleetSnapshot {
+                    tasks: vec![task("b", "bob", &bob_wt), task("k", "kiro", &kiro_wt)],
+                },
+            )
+            .unwrap();
+        let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let ingest = UsageIngest::new(
+            store.clone(),
+            log.clone(),
+            HostId::from("h"),
+            SessionRoots {
+                kiro: vec![kiro_home],
+                ..Default::default()
+            },
+        )
+        .with_bob_db(bob_db);
+        assert_eq!(ingest.ingest_all().await.unwrap(), 2);
+        assert_eq!(ingest.ingest_all().await.unwrap(), 0);
+        // Bob's task spends more: counted as a continuation of its turn.
+        con.execute("UPDATE tasks SET costs = '{\"cost\": 3.5}'", [])
+            .unwrap();
+        assert_eq!(ingest.ingest_all().await.unwrap(), 1);
+
+        let events = log.read(Seq::ZERO, 100).await.unwrap();
+        let turns: Vec<(String, UsageTurn)> = events
+            .iter()
+            .filter(|e| e.kind.as_str() == KIND)
+            .map(|e| (e.task.as_ref().unwrap().to_string(), e.decode().unwrap()))
+            .collect();
+        let of = |task: &str| -> Vec<&UsageTurn> {
+            turns
+                .iter()
+                .filter(|(t, _)| t == task)
+                .map(|(_, u)| u)
+                .collect()
+        };
+        let bob = of("b");
+        assert_eq!(bob.len(), 2);
+        assert_eq!(bob[0].harness, "bob");
+        assert_eq!(bob[0].turn.id, "t1");
+        assert_eq!(bob[0].turn.at.as_deref(), Some("2026-10-21T10:00:00Z"));
+        assert!(!bob[0].turn.continued && bob[1].turn.continued);
+        assert_eq!(bob[0].turn.models[0].credits, Some(2.0));
+        assert_eq!(bob[1].turn.models[0].credits, Some(1.5));
+        let kiro = of("k");
+        assert_eq!(kiro.len(), 1);
+        assert_eq!(kiro[0].harness, "kiro");
+        assert_eq!(kiro[0].turn.models[0].model, "kiro-auto");
+        assert_eq!(kiro[0].turn.models[0].credits, Some(1.25));
     }
 }

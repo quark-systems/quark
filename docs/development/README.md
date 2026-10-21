@@ -35,7 +35,7 @@ The `quark-*` crates are the native engine, one per subsystem, meeting at the co
 | [`quark-subcoordinator`](../../crates/quark-subcoordinator) | Sub-coordinators for the native Quark engine (slice 7): persistent coordinator homes on this machine or an SSH host, seeded, launched, supervised, steered and handed work, with every change in the event log. |
 | [`quark-supervisor`](../../crates/quark-supervisor) | Spawn, steer and supervise workers for the native Quark engine (slice 4): worktree, harness manifest, isolation and session composed behind one supervisor, with every change in the event log. |
 | [`quark-systems`](../../crates/quark-systems) | Neutral /v1 API and event types for the Quark control plane |
-| [`quark-transcript`](../../crates/quark-transcript) | Parsers for harness session logs (Claude Code, Codex, Pi) into neutral transcript entries. |
+| [`quark-transcript`](../../crates/quark-transcript) | Parsers for harness session logs (Claude Code, Codex, Pi, Kiro CLI) into neutral transcript entries. |
 | [`quark-triggers`](../../crates/quark-triggers) | Triggers, channels (the inbox first) and the away policy for the native Quark engine (slice 7), recorded in the event log. |
 | [`quark-verify`](../../crates/quark-verify) | The native engine's verification workflow and merge guard (slice 2): gates, rebase and re-verify, and the red-main guardrail. |
 | [`quark-worker`](../../crates/quark-worker) | The worker protocol: MCP tools, harness hook ingest and a status-file fallback, all recorded in the event log. |

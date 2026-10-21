@@ -117,12 +117,11 @@ pub fn roots_with_accounts(store: &Store, roots: &SessionRoots) -> SessionRoots 
         Vec::new()
     });
     for a in accounts {
-        let list = match SessionFormat::for_harness(crate::engine::engine_harness(&a.harness)) {
-            Some(SessionFormat::Claude) => &mut roots.claude,
-            Some(SessionFormat::Codex) => &mut roots.codex,
-            Some(SessionFormat::Pi) => &mut roots.pi,
-            None => continue,
+        let Some(format) = SessionFormat::for_harness(crate::engine::engine_harness(&a.harness))
+        else {
+            continue;
         };
+        let list = roots.for_format_mut(format);
         let dir = PathBuf::from(a.config_dir);
         if !list.contains(&dir) {
             list.push(dir);

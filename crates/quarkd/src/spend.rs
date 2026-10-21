@@ -5,7 +5,9 @@
 //! million tokens. Work run under a subscription is not billed per token,
 //! so for it the figure is what the same work would cost through the API.
 //! A harness that records its own cost (Pi) is believed over this table.
-//! A model not listed here is counted in tokens but not priced.
+//! A harness that bills in its own credits (Kiro, IBM Bob) is priced by
+//! what one credit costs ([`credit_price`]), not by tokens. A model not
+//! listed here is counted in tokens but not priced.
 
 use quark_transcript::ModelUsage;
 
@@ -77,11 +79,25 @@ pub fn price(model: &str) -> Option<Price> {
         .map(|(_, p)| *p)
 }
 
+/// US dollars per credit of a harness that bills in credits: Kiro's
+/// published overage price, and IBM Bob's Pro plan (50 Bobcoins for $20).
+pub fn credit_price(unit: &str) -> Option<f64> {
+    match unit {
+        quark_transcript::KIRO_CREDIT => Some(0.04),
+        quark_transcript::BOBCOIN => Some(0.40),
+        _ => None,
+    }
+}
+
 /// What `u` cost in US dollars: the harness's own figure when it recorded
-/// one, else list price. `None` when neither is known.
+/// one, else its credits at their price, else list price. `None` when none
+/// is known.
 pub fn cost(u: &ModelUsage) -> Option<f64> {
     if let Some(c) = u.cost_usd {
         return Some(c);
+    }
+    if let (Some(credits), Some(unit)) = (u.credits, u.credit_unit.as_deref()) {
+        return credit_price(unit).map(|p| credits * p);
     }
     let p = price(&u.model)?;
     let fresh = u.input.saturating_sub(u.cache_read + u.cache_write);
@@ -119,6 +135,7 @@ mod tests {
             cache_write: 1_000_000,
             calls: 3,
             cost_usd: None,
+            ..Default::default()
         };
         // 1M fresh at 2, 1M written at 2.5, 1M read at 0.2, 1M out at 10.
         assert!((cost(&u).unwrap() - 14.7).abs() < 1e-9);
@@ -132,5 +149,29 @@ mod tests {
             ..u
         };
         assert_eq!(cost(&unknown), None);
+    }
+
+    #[test]
+    fn credits_are_priced_by_their_unit_not_tokens() {
+        let kiro = ModelUsage {
+            model: "claude-sonnet-5-5".into(),
+            credits: Some(2.5),
+            credit_unit: Some(quark_transcript::KIRO_CREDIT.into()),
+            ..Default::default()
+        };
+        assert!((cost(&kiro).unwrap() - 0.10).abs() < 1e-9);
+        let bob = ModelUsage {
+            model: "bob".into(),
+            input: 1_000_000,
+            credits: Some(3.0),
+            credit_unit: Some(quark_transcript::BOBCOIN.into()),
+            ..Default::default()
+        };
+        assert!((cost(&bob).unwrap() - 1.2).abs() < 1e-9);
+        let odd = ModelUsage {
+            credit_unit: Some("doubloon".into()),
+            ..bob
+        };
+        assert_eq!(cost(&odd), None);
     }
 }
