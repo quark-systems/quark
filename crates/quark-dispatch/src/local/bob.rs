@@ -593,23 +593,11 @@ type LedgerRow = (Option<f64>, Option<String>);
 
 /// Coins in rows created since `since_ms`, and in every row.
 fn ledger(db: &Path, since_ms: f64) -> Result<(f64, f64), String> {
-    use rusqlite::{Connection, OpenFlags};
     if db.as_os_str().is_empty() || !db.is_file() {
         return Err(format!("bob database absent ({})", db.display()));
     }
-    let query = |immutable: bool| -> Result<Vec<LedgerRow>, rusqlite::Error> {
-        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
-        let uri = format!(
-            "file:{}?{}",
-            percent_path(db),
-            if immutable { "immutable=1" } else { "mode=ro" }
-        );
-        let con = Connection::open_with_flags(uri, flags)?;
-        con.busy_timeout(Duration::from_secs(2))?;
-        let cols: Vec<String> = con
-            .prepare("PRAGMA table_info(tasks)")?
-            .query_map([], |r| r.get::<_, String>(1))?
-            .collect::<Result<_, _>>()?;
+    let query = |con: &rusqlite::Connection| -> Result<Vec<LedgerRow>, rusqlite::Error> {
+        let cols = columns(con)?;
         let has = |c: &str| cols.iter().any(|x| x == c);
         if !has("costs") || !has("created_at") {
             return Err(rusqlite::Error::InvalidQuery);
@@ -637,31 +625,13 @@ fn ledger(db: &Path, since_ms: f64) -> Result<(f64, f64), String> {
             .collect::<Result<_, _>>()?;
         Ok(rows)
     };
-    let describe = |e: rusqlite::Error| match e {
-        rusqlite::Error::InvalidQuery => {
+    let rows = read_only(db, query).map_err(|e| match e {
+        Ok(rusqlite::Error::InvalidQuery) => {
             "bob database has no tasks table with costs and created_at".to_string()
         }
-        e => format!("bob database not readable read-only: {e}"),
-    };
-    let wal = db.with_file_name(format!(
-        "{}-wal",
-        db.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let rows = match query(false) {
-        Ok(rows) => rows,
-        // A WAL database without its -wal file cannot open mode=ro without
-        // creating -shm; every committed page is then in the main file, so
-        // an immutable read is exact.
-        Err(e) if !wal.exists() && is_wal(db) && !matches!(e, rusqlite::Error::InvalidQuery) => {
-            let rows = query(true).map_err(describe)?;
-            if wal.exists() {
-                query(false).map_err(|e| format!("bob database changed during the read: {e}"))?
-            } else {
-                rows
-            }
-        }
-        Err(e) => return Err(describe(e)),
-    };
+        Ok(e) => format!("bob database not readable read-only: {e}"),
+        Err(e) => e,
+    })?;
     let (mut month, mut total) = (0.0, 0.0);
     for (created, costs) in rows {
         let cost = costs
@@ -675,6 +645,92 @@ fn ledger(db: &Path, since_ms: f64) -> Result<(f64, f64), String> {
         }
     }
     Ok((month, total))
+}
+
+/// Whether Bob has a conversation to continue in `dir`: a top-level task
+/// started there, which `bob chat --resume latest` picks up. Read from
+/// Bob's database at `db` (`~/.bob/db/bob.db`).
+pub fn has_task(db: &Path, dir: &Path) -> bool {
+    if db.as_os_str().is_empty() || !db.is_file() {
+        return false;
+    }
+    let mut dirs = vec![dir.to_string_lossy().into_owned()];
+    if let Ok(real) = std::fs::canonicalize(dir) {
+        let real = real.to_string_lossy().into_owned();
+        if real != dirs[0] {
+            dirs.push(real);
+        }
+    }
+    let query = |con: &rusqlite::Connection| -> Result<bool, rusqlite::Error> {
+        let cols = columns(con)?;
+        let has = |c: &str| cols.iter().any(|x| x == c);
+        if !has("directory") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let mut sql = "SELECT 1 FROM tasks WHERE directory = ?1".to_string();
+        if has("task_type") {
+            sql.push_str(" AND (task_type IS NULL OR task_type = 'normal')");
+        }
+        if has("parent_id") {
+            sql.push_str(" AND parent_id IS NULL");
+        }
+        sql.push_str(" LIMIT 1");
+        let mut stmt = con.prepare(&sql)?;
+        for d in &dirs {
+            if stmt.exists([d])? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    read_only(db, query).unwrap_or(false)
+}
+
+/// The `tasks` table's columns.
+fn columns(con: &rusqlite::Connection) -> Result<Vec<String>, rusqlite::Error> {
+    con.prepare("PRAGMA table_info(tasks)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect()
+}
+
+/// `query` run on `db` opened read-only, never writing beside it. The error
+/// is the query's (`Ok`), or why the database changed under the read.
+fn read_only<T>(
+    db: &Path,
+    query: impl Fn(&rusqlite::Connection) -> Result<T, rusqlite::Error>,
+) -> Result<T, Result<rusqlite::Error, String>> {
+    use rusqlite::{Connection, OpenFlags};
+    let run = |immutable: bool| -> Result<T, rusqlite::Error> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+        let uri = format!(
+            "file:{}?{}",
+            percent_path(db),
+            if immutable { "immutable=1" } else { "mode=ro" }
+        );
+        let con = Connection::open_with_flags(uri, flags)?;
+        con.busy_timeout(Duration::from_secs(2))?;
+        query(&con)
+    };
+    let wal = db.with_file_name(format!(
+        "{}-wal",
+        db.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    match run(false) {
+        Ok(v) => Ok(v),
+        // A WAL database without its -wal file cannot open mode=ro without
+        // creating -shm; every committed page is then in the main file, so
+        // an immutable read is exact.
+        Err(e) if !wal.exists() && is_wal(db) && !matches!(e, rusqlite::Error::InvalidQuery) => {
+            let v = run(true).map_err(Ok)?;
+            if wal.exists() {
+                run(false)
+                    .map_err(|e| Err(format!("bob database changed during the read: {e}")))
+            } else {
+                Ok(v)
+            }
+        }
+        Err(e) => Err(Ok(e)),
+    }
 }
 
 fn is_wal(db: &Path) -> bool {
@@ -790,6 +846,34 @@ mod tests {
         ("2026-10-06T00:00:00Z", r#"{"cost": 50}"#, Some("subagent")),
         ("2026-10-07T00:00:00Z", r#"not json"#, None),
     ];
+
+    #[test]
+    fn a_top_level_task_in_the_worktree_can_be_resumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("bob.db");
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        assert!(!has_task(&db, &wt), "no database");
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, task_type TEXT);",
+        )
+        .unwrap();
+        let wt_s = wt.to_string_lossy().into_owned();
+        // A subtask or subagent there is not something to resume.
+        con.execute(
+            "INSERT INTO tasks VALUES ('a', 'p', ?1, 'subtask'), ('b', NULL, ?1, 'subagent'), ('c', NULL, '/elsewhere', 'normal')",
+            [&wt_s],
+        )
+        .unwrap();
+        assert!(!has_task(&db, &wt));
+        con.execute("INSERT INTO tasks VALUES ('d', NULL, ?1, 'normal')", [&wt_s])
+            .unwrap();
+        drop(con);
+        assert!(has_task(&db, &wt));
+        assert!(!has_task(&db, &dir.path().join("other")));
+    }
 
     #[tokio::test]
     async fn ledger_alone_is_partial() {

@@ -678,3 +678,93 @@ async fn a_project_coordinator_starts_under_its_pool() {
     let (_, list) = call(&s.app, "GET", "/v1/accounts", None).await;
     assert_eq!(list[1]["active_tasks"], 1, "{list}");
 }
+
+#[tokio::test]
+async fn single_account_harnesses_list_their_default_login_with_quota() {
+    let s = setup();
+    let bin = s.dir.path().join("bin");
+    exe(&bin.join("bob"), "echo 2.0.8");
+    exe(&bin.join("kiro-cli"), "echo 'kiro-cli 2.1.0'");
+    let bob_dir = s.home().join(".bob");
+    std::fs::create_dir_all(bob_dir.join("settings")).unwrap();
+    std::fs::write(bob_dir.join("settings/auth-secrets.json"), "{}").unwrap();
+    // quarkd's own readings, as `quark_dispatch::local` prints them.
+    s.quota.set(
+        "",
+        Ok(json!({
+            "schemaVersion": 5,
+            "providers": [{
+                "provider": "kiro",
+                "state": {"status": "fresh"},
+                "quotaSemantics": {"status": "known", "effectiveAvailability": [
+                    {"scope": "all_models", "status": "known", "effectivePercentRemaining": 62.5}]},
+                "kiro": {"plan": "KIRO PRO", "resetsAt": "2026-11-01T00:00:00Z"}
+            }]
+        })
+        .to_string()),
+    );
+    s.quota.set(
+        &bob_dir,
+        Ok(json!({
+            "schemaVersion": 5,
+            "providers": [{
+                "provider": "bob",
+                "state": {"status": "unknown"},
+                "quotaSemantics": {"status": "unknown", "effectiveAvailability": []},
+                "bob": {"reason": "no anchor recorded", "allowanceCoins": 1500}
+            }]
+        })
+        .to_string()),
+    );
+
+    let (_, list) = call(&s.app, "GET", "/v1/accounts?refresh=true", None).await;
+    let by_id = |id: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .unwrap_or_else(|| panic!("no {id} in {list}"))
+            .clone()
+    };
+    let bob = by_id("default-bob");
+    assert_eq!(bob["default"], true);
+    assert_eq!(bob["launchable"], true);
+    assert_eq!(bob["config_dir"], bob_dir.to_str().unwrap());
+    assert_eq!(bob["health"]["state"], "configured");
+    assert_eq!(bob["quota"]["state"], "unavailable");
+    assert_eq!(bob["quota"]["detail"], "no anchor recorded");
+    assert_eq!(bob["quota"]["plan"], "1500 Bobcoins a month");
+    let kiro = by_id("default-kiro");
+    assert_eq!(kiro["config_dir"], Value::Null);
+    assert_eq!(kiro["quota"]["state"], "known");
+    assert_eq!(kiro["quota"]["remaining_percent"], 62.5);
+    assert_eq!(kiro["quota"]["plan"], "KIRO PRO");
+    assert_eq!(kiro["quota"]["windows"][0]["resets_at"], "2026-11-01T00:00:00Z");
+
+    let reads: Vec<_> = s
+        .quota
+        .calls()
+        .into_iter()
+        .filter(|(p, ..)| p == "bob" || p == "kiro")
+        .collect();
+    assert_eq!(
+        reads,
+        [
+            ("bob".into(), "".into(), bob_dir.clone(), true),
+            ("kiro".into(), "".into(), PathBuf::new(), true),
+        ]
+    );
+
+    // Only the default login: no more accounts, and no pool to pick from.
+    let (status, err) = call(
+        &s.app,
+        "POST",
+        "/v1/accounts",
+        Some(json!({"harness": "bob", "config_dir": s.dir.path().join("bob2")})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    let pool = s.accounts.pool_accounts("bob").await.unwrap();
+    assert_eq!(pool.len(), 1);
+    assert!(pool[0].default && pool[0].ready && pool[0].env.is_empty());
+}

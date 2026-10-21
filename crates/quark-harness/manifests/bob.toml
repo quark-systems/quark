@@ -14,6 +14,8 @@ selection = "automatic"
 [launch]
 argv = ["bob", "chat", "--auto-approve", "--trust", "--max-turns", "500"]
 prompt_via = "paste"
+# The newest top-level task started in the worktree (bob.db `tasks`).
+resume = ["--resume", "latest"]
 
 [account]
 config_dir = ".bob"

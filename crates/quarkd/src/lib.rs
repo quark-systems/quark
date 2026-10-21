@@ -149,6 +149,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     ));
     let quota_axi = accounts::QuotaAxi {
         bin: config.quota_axi.clone(),
+        local: native_dispatch::local_readings(&config),
     };
     let accounts = Arc::new(accounts::Accounts::new(
         store.clone(),

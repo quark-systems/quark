@@ -86,7 +86,7 @@ impl NativeSupervision {
                 sup_config,
             )
             .await?
-            .with_conversations(Arc::new(Transcripts)),
+            .with_conversations(Arc::new(Transcripts::from_env())),
         );
         let orphans = supervisor.recover().await?;
         tracing::info!(socket = %socket.display(), orphans, "native supervisor running");
@@ -108,11 +108,28 @@ impl NativeSupervision {
 /// Finds a worker's conversation in its harness's own session logs, as the
 /// harness would to continue it: the manifest's transcript format, under the
 /// account's config directory when the worker runs on one, else the
-/// harness's default.
-pub struct Transcripts;
+/// harness's default. IBM Bob keeps its conversations in a database
+/// instead, `~/.bob/db/bob.db`.
+pub struct Transcripts {
+    pub bob_db: PathBuf,
+}
+
+impl Transcripts {
+    /// Bob's database under `$HOME`.
+    pub fn from_env() -> Self {
+        Self {
+            bob_db: std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".bob").join("db").join("bob.db"))
+                .unwrap_or_default(),
+        }
+    }
+}
 
 impl Conversations for Transcripts {
     fn exists(&self, m: &HarnessManifest, cwd: &Path, env: &BTreeMap<String, String>) -> bool {
+        if quark_harness::engine_name(m) == "bob" {
+            return quark_dispatch::local::bob::has_task(&self.bob_db, cwd);
+        }
         let Some(format) = m
             .transcript
             .as_ref()
@@ -161,11 +178,14 @@ mod tests {
             .unwrap();
         let worktree = dir.path().join("wt");
         let account = dir.path().join("account");
+        let t = Transcripts {
+            bob_db: dir.path().join("bob.db"),
+        };
         let env = BTreeMap::from([(
             "CLAUDE_CONFIG_DIR".to_string(),
             account.to_string_lossy().into_owned(),
         )]);
-        assert!(!Transcripts.exists(claude, &worktree, &env));
+        assert!(!t.exists(claude, &worktree, &env));
 
         let slug: String = worktree
             .to_string_lossy()
@@ -175,12 +195,37 @@ mod tests {
         let logs = account.join("projects").join(slug);
         std::fs::create_dir_all(&logs).unwrap();
         std::fs::write(logs.join("s1.jsonl"), "{}\n").unwrap();
-        assert!(Transcripts.exists(claude, &worktree, &env));
+        assert!(t.exists(claude, &worktree, &env));
 
         // A harness with no transcript format has nothing to continue.
         let mut none = (**claude).clone();
         none.transcript = None;
-        assert!(!Transcripts.exists(&none, &worktree, &env));
+        assert!(!t.exists(&none, &worktree, &env));
+    }
+
+    #[test]
+    fn finds_a_bob_task_in_the_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let bob = quark_harness::builtin()
+            .iter()
+            .find(|m| m.id == "bob")
+            .unwrap();
+        assert!(!bob.launch.resume.is_empty());
+        let t = Transcripts {
+            bob_db: dir.path().join("bob.db"),
+        };
+        let wt = dir.path().join("wt");
+        assert!(!t.exists(bob, &wt, &BTreeMap::new()));
+        let con = rusqlite::Connection::open(&t.bob_db).unwrap();
+        con.execute_batch("CREATE TABLE tasks (id TEXT, parent_id TEXT, directory TEXT, task_type TEXT)")
+            .unwrap();
+        con.execute(
+            "INSERT INTO tasks VALUES ('t1', NULL, ?1, 'normal')",
+            [wt.to_string_lossy()],
+        )
+        .unwrap();
+        drop(con);
+        assert!(t.exists(bob, &wt, &BTreeMap::new()));
     }
 
     #[test]

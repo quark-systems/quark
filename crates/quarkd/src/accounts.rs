@@ -1,9 +1,9 @@
 //! Accounts and pools per harness, with per-account quota (ADR-11).
 //!
 //! An account is a harness config directory (`CLAUDE_CONFIG_DIR`,
-//! `CODEX_HOME` and equivalents). Every harness with accounts has a default
-//! one, its usual directory; more are added through the API and grouped
-//! into named pools. A dispatch profile (an [`AgentConfig`]) naming a pool
+//! `CODEX_HOME` and equivalents). Every installed harness has a default
+//! one, its usual login; harnesses with an account variable take more,
+//! added through the API, and any account can be grouped into named pools. A dispatch profile (an [`AgentConfig`]) naming a pool
 //! runs under one of the pool's accounts: the same one for the life of a
 //! task (sticky), and the least busy one when a task or coordinator starts
 //! (balanced).
@@ -17,7 +17,9 @@
 //! account with the account variable naming its directory (unset for the
 //! default account), and changes stream as `account.quota_changed`. Not
 //! `--profile-only`: it reads only a credential file, and Claude Code on
-//! macOS keeps its credentials in the Keychain.
+//! macOS keeps its credentials in the Keychain. Providers quota-axi does
+//! not report, IBM Bob and Kiro CLI, are read by quarkd itself
+//! ([`quark_dispatch::local`]).
 
 use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
@@ -25,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use quark_dispatch::local::LocalReading;
 use quark_systems::{
     Account, AccountQuota, AgentConfig, AuthState, CreateAccount, QuotaState, QuotaWindow,
     UpdateAccount,
@@ -103,16 +106,30 @@ pub trait QuotaReader: Send + Sync {
     ) -> std::result::Result<String, String>;
 }
 
-/// The `quota-axi` command.
-#[derive(Debug, Clone)]
+/// The `quota-axi` command, and quarkd's own readings for the providers it
+/// does not report.
+#[derive(Clone)]
 pub struct QuotaAxi {
     pub bin: PathBuf,
+    /// Read instead of quota-axi for their provider.
+    pub local: Vec<Arc<dyn LocalReading>>,
+}
+
+impl std::fmt::Debug for QuotaAxi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let local: Vec<&str> = self.local.iter().map(|r| r.provider()).collect();
+        f.debug_struct("QuotaAxi")
+            .field("bin", &self.bin)
+            .field("local", &local)
+            .finish()
+    }
 }
 
 impl Default for QuotaAxi {
     fn default() -> Self {
         Self {
             bin: PathBuf::from("quota-axi"),
+            local: Vec::new(),
         }
     }
 }
@@ -126,6 +143,9 @@ impl QuotaReader for QuotaAxi {
         config_dir: &Path,
         default: bool,
     ) -> std::result::Result<String, String> {
+        if let Some(r) = self.local.iter().find(|r| r.provider() == provider) {
+            return Ok(r.read().await.to_string());
+        }
         let mut cmd = tokio::process::Command::new(&self.bin);
         cmd.args(["--provider", provider, "--json"]);
         if !default {
@@ -244,9 +264,9 @@ impl Accounts {
         }
     }
 
-    /// Every account: per harness with accounts, its default account (when
-    /// the harness is installed or has added accounts) and then the added
-    /// ones, oldest first.
+    /// Every account: per harness, its default account (when the harness is
+    /// installed or has added accounts) and then the added ones, oldest
+    /// first. A harness without an account variable has only its default.
     pub async fn list(&self) -> Result<Vec<Account>> {
         let infos = self.harnesses.list(false).await;
         let store = self.store.clone();
@@ -264,9 +284,7 @@ impl Accounts {
         let env = self.harnesses.env();
         let mut out = Vec::new();
         for h in self.harnesses.all() {
-            let Some(var) = h.account_env() else {
-                continue;
-            };
+            let var = h.account_env();
             let installed = infos.iter().any(|i| i.id == h.id() && i.install.installed);
             let added: Vec<&AccountRow> = rows.iter().filter(|r| r.harness == h.id()).collect();
             if !installed && added.is_empty() {
@@ -280,10 +298,7 @@ impl Accounts {
                         Some(_) => AccountQuota::empty(QuotaState::Pending, None),
                         None => AccountQuota::empty(
                             QuotaState::Unsupported,
-                            Some(format!(
-                                "quota is read per account for Claude Code and Codex only, not {}",
-                                h.name()
-                            )),
+                            Some(format!("Quark has no quota reading for {}", h.name())),
                         ),
                     })
             };
@@ -315,7 +330,7 @@ impl Accounts {
                     health: h.auth_status(env, &account),
                     quota: quota_for(&r.id),
                     active_tasks: leases.get(&r.id).copied().unwrap_or(0),
-                    launchable: self.forwarded.contains(&var),
+                    launchable: var.is_some_and(|v| self.forwarded.contains(&v)),
                     created_at: Some(r.created_at.clone()),
                 });
             }
@@ -418,15 +433,7 @@ impl Accounts {
         let Some(h) = self.harnesses.resolve(&config.harness).cloned() else {
             return Ok(None);
         };
-        let Some(var) = h.account_env() else {
-            if config.pool.is_some() {
-                return Err(AccountError::Invalid(format!(
-                    "{} supports only its default account",
-                    h.name()
-                )));
-            }
-            return Ok(None);
-        };
+        let var = h.account_env();
         let accounts: Vec<Account> = self
             .list()
             .await?
@@ -474,8 +481,8 @@ impl Accounts {
         let env = accounts
             .iter()
             .find(|a| a.id == chosen && !a.default)
-            .and_then(|a| a.config_dir.clone())
-            .map(|dir| vec![(var.to_string(), dir)])
+            .and_then(|a| Some((var?, a.config_dir.clone()?)))
+            .map(|(var, dir)| vec![(var.to_string(), dir)])
             .unwrap_or_default();
         let (store, who, id) = (self.store.clone(), holder.clone(), chosen.clone());
         blocking(move || match &who {
@@ -491,14 +498,12 @@ impl Accounts {
 
     /// The accounts of `harness` (its id or engine name) as native dispatch
     /// chooses among them, default first. Empty for a harness without
-    /// accounts. Nothing is leased.
+    /// accounts listed. Nothing is leased.
     pub async fn pool_accounts(&self, harness: &str) -> Result<Vec<quark_dispatch::PoolAccount>> {
         let Some(h) = self.harnesses.resolve(harness).cloned() else {
             return Ok(Vec::new());
         };
-        let Some(var) = h.account_env() else {
-            return Ok(Vec::new());
-        };
+        let var = h.account_env();
         Ok(self
             .list()
             .await?
@@ -506,8 +511,8 @@ impl Accounts {
             .filter(|a| a.harness == h.id())
             .map(|a| quark_dispatch::PoolAccount {
                 ready: ready(&a),
-                env: match (&a.config_dir, a.default) {
-                    (Some(dir), false) => [(var.to_string(), dir.clone())].into(),
+                env: match (var, &a.config_dir, a.default) {
+                    (Some(var), Some(dir), false) => [(var.to_string(), dir.clone())].into(),
                     _ => Default::default(),
                 },
                 id: a.id,
@@ -573,9 +578,8 @@ impl Accounts {
         }))
     }
 
-    /// Reads quota for every account of a harness quota-axi supports, or
-    /// only `only`, one quota-axi call per account, and stores each
-    /// reading. Changed readings stream as `account.quota_changed`.
+    /// Reads quota for every account of a harness with a quota provider, or
+    /// only `only`, one read per account, and stores each reading. Changed readings stream as `account.quota_changed`.
     pub async fn refresh_quota(&self, only: Option<&str>) -> Result<()> {
         for account in self.list().await? {
             if only.is_some_and(|id| id != account.id) {
@@ -584,10 +588,17 @@ impl Accounts {
             let Some(h) = self.harnesses.get(&account.harness).cloned() else {
                 continue;
             };
-            let (Some(provider), Some(var)) = (h.quota_provider(), h.account_env()) else {
+            let Some(provider) = h.quota_provider() else {
                 continue;
             };
-            let quota = match &account.config_dir {
+            let var = h.account_env().unwrap_or_default();
+            // A single-account harness's login is wherever the harness
+            // keeps it, with or without a directory Quark knows.
+            let dir = match (&account.config_dir, var.is_empty()) {
+                (None, true) => Some(String::new()),
+                (dir, _) => dir.clone(),
+            };
+            let quota = match &dir {
                 None => AccountQuota::empty(
                     QuotaState::Error,
                     Some("the account has no config directory".into()),
@@ -719,6 +730,22 @@ struct ProviderReport {
     windows: Vec<WindowReport>,
     state: Option<StateReport>,
     quota_semantics: Option<Semantics>,
+    /// The rest, where a quarkd reading keeps its provider's own detail
+    /// ([`quark_dispatch::local`]).
+    #[serde(flatten)]
+    rest: serde_json::Map<String, serde_json::Value>,
+}
+
+/// What a quarkd reading says beside its row: the plan, the period's
+/// reset, and why it is not known when it is not.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalDetail {
+    plan: Option<String>,
+    allowance_coins: Option<f64>,
+    resets_at: Option<String>,
+    period_end: Option<String>,
+    reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -778,6 +805,11 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
             Some(format!("quota-axi reported nothing for {provider}")),
         );
     };
+    let local: LocalDetail = p
+        .rest
+        .get(provider)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
     let effective = p
         .quota_semantics
         .iter()
@@ -794,7 +826,7 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
     let remaining = effective
         .or_else(|| tightest(&|w| matches!(w.kind.as_deref(), Some("session" | "weekly"))))
         .or_else(|| tightest(&|_| true));
-    let windows = p
+    let mut windows: Vec<QuotaWindow> = p
         .windows
         .iter()
         .map(|w| QuotaWindow {
@@ -804,6 +836,21 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
             resets_at: w.resets_at.clone(),
         })
         .collect();
+    // A quarkd reading is one monthly allowance.
+    let resets_at = local.resets_at.or(local.period_end);
+    if windows.is_empty() && remaining.is_some() && resets_at.is_some() {
+        windows.push(QuotaWindow {
+            id: "monthly".into(),
+            label: "month".into(),
+            percent_remaining: remaining,
+            resets_at,
+        });
+    }
+    let plan = p.plan.or(local.plan).or_else(|| {
+        local
+            .allowance_coins
+            .map(|c| format!("{} Bobcoins a month", c.round()))
+    });
     let error = p.state.as_ref().and_then(|s| {
         let error = s.error.clone()?;
         Some(match &s.remedy_command {
@@ -814,6 +861,7 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
     let detail = match remaining {
         Some(_) => error,
         None => error
+            .or(local.reason)
             .or_else(|| {
                 let status = p.state.as_ref()?.status.clone()?;
                 (status != "fresh").then_some(status)
@@ -827,7 +875,7 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
             QuotaState::Unavailable
         },
         remaining_percent: remaining,
-        plan: p.plan,
+        plan,
         windows,
         detail,
         checked_at: None,
