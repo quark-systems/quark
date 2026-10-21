@@ -7,6 +7,8 @@ curl -s localhost:7380/v1/imports/firstmate -H 'content-type: application/json' 
   -d '{"home": "/Users/you/firstmate", "dry_run": true}' | jq
 ```
 
+From a terminal, `quarkd import firstmate <home>` sends the same request to the running daemon and prints the report; `--dry-run`, `--project <name>`, `--route <prefix>=<project>`, `--include-archive` and `--json` match the request's fields.
+
 In the app, **Import** on All projects (or *Import projects* in the command palette) does the same: choose the folder, preview, assign work that has no project, then import. A project still being set up shows *Waiting*, and *Check again* finishes it.
 
 Run it with `dry_run` first: the report says what will land where and lists the backlog items it could not route.
@@ -19,7 +21,7 @@ The import opens files in the home and nothing else. It never runs firstmate's `
 
 | firstmate | Quark |
 | :--- | :--- |
-| Projects: `data/projects.md`, each clone's origin URL | One Project per firstmate project, with its repo and delivery (`direct-PR` is `direct`, `no-mistakes` and `local-only` are `gated`). Quark's dispatch, Beads and workspace are per Project, which is why a firstmate project is not folded into one. Coordinators start as `claude-code` at `high` effort; change it in Settings. A project without an origin URL is recorded without a repo. |
+| Projects: `data/projects.md`, each clone's origin URL | One Project per firstmate project, with its repo and delivery (`direct-PR` is `direct`, `no-mistakes` and `local-only` are `gated`). Quark's dispatch, Beads and workspace are per Project, which is why a firstmate project is not folded into one. Coordinators start at `high` effort on `config/crew-harness` when Quark can run a coordinator on it, otherwise on `claude-code` (the native engine starts coordinators on `claude-code` only so far), and a note says why; change it in Settings. A Project that already exists keeps its coordinator. A project without an origin URL is recorded without a repo. |
 | Dispatch: `config/crew-dispatch.json` | Each Project's `dispatch.yaml`, committed to the Project repo on its own. Harness ids are mapped (`claude` to `claude-code`), and `why`, `floor`, `provider`, `pricing`, `select` and `default` are kept. The `classifier` block is not: choose it again and keep its key in the keychain. A `dispatch.yaml` you have edited is kept. `crew-dispatch-*.json` and `.bak-*` files are alternatives and history, not imported. |
 | Accounts | firstmate keeps none; harness logins live in each CLI's config directory. Add them under Settings > Accounts. |
 | Quota: `config/kiro-quota.json` | `<quark home>/quota/kiro.json`, same field. |

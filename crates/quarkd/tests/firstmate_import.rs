@@ -145,6 +145,7 @@ fn firstmate_home() -> tempfile::TempDir {
     put(r, "config/crew-dispatch-alt.json", "{\"rules\":[]}");
     put(r, "config/kiro-quota.json", "{\"overage_allowed\": true}");
     put(r, "config/backend", "herdr");
+    put(r, "config/crew-harness", "codex\n");
     put(
         r,
         "state/bob-quota-anchor.json",
@@ -301,6 +302,24 @@ async fn dry_run_reports_everything_and_changes_nothing() {
     assert_eq!(category(&r, "memory", "captain.md")["count"], 2);
     assert_eq!(category(&r, "memory", "learnings.md")["count"], 1);
     assert_eq!(category(&r, "status", "no backlog item")["count"], 1);
+    // codex can't run a native coordinator yet, so claude-code does.
+    let coordinator = category(&r, "coordinator", "crew-harness");
+    assert_eq!(coordinator["outcome"], "not_imported", "{r}");
+    assert!(
+        coordinator["target"]
+            .as_str()
+            .unwrap()
+            .contains("claude-code"),
+        "{r}"
+    );
+    assert!(
+        r["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("codex")),
+        "{r}"
+    );
     assert!(!r.to_string().contains(SECRET));
     assert!(!r.to_string().contains("hunter2"));
     // Nothing was written, to firstmate or to Quark.
@@ -309,6 +328,38 @@ async fn dry_run_reports_everything_and_changes_nothing() {
     let (_, projects) = call(&h.app, "GET", "/v1/projects", None).await;
     assert_eq!(projects.as_array().unwrap().len(), 0);
     assert!(!Path::new("/tmp/MUST-NOT-RUN").exists());
+}
+
+#[tokio::test]
+async fn a_crew_harness_quark_can_coordinate_with_runs_the_coordinator() {
+    let h = harness();
+    let fm = firstmate_home();
+    put(fm.path(), "config/crew-harness", "claude\n");
+    let (status, r) = call(
+        &h.app,
+        "POST",
+        "/v1/imports/firstmate",
+        Some(json!({"home": fm.path(), "dry_run": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    let coordinator = category(&r, "coordinator", "crew-harness");
+    assert_eq!(coordinator["outcome"], "imported", "{r}");
+    assert!(
+        coordinator["target"]
+            .as_str()
+            .unwrap()
+            .contains("claude-code"),
+        "{r}"
+    );
+    assert!(
+        !r["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("crew-harness")),
+        "{r}"
+    );
 }
 
 #[tokio::test]
