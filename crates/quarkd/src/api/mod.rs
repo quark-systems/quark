@@ -11,6 +11,7 @@ mod error;
 mod events;
 mod harnesses;
 mod hosts;
+mod imports;
 mod lifecycle;
 mod memory;
 mod metrics;
@@ -84,6 +85,10 @@ const MODULES: &[Module] = &[
     Module {
         router: decisions::router,
         openapi: <decisions::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: imports::router,
+        openapi: <imports::Api as OpenApi>::openapi,
     },
     Module {
         router: memory::router,

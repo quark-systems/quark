@@ -28,6 +28,15 @@ export interface CreateProject {
   name: string; goal?: string | null; workspace_path?: string | null;
   repos?: RepoSource[]; agent_config?: AgentConfig; dispatch_preset?: DispatchPreset; delivery?: DeliveryPolicy;
 }
+/** `POST /v1/imports/firstmate`: seed a new Project from a firstmate home. */
+export interface ImportFirstmate { path: string; name?: string | null; harness?: string | null; dry_run?: boolean }
+export interface ImportItem { what: string; files: string[]; count: number; outcome: "imported" | "skipped"; note: string }
+export interface FirstmateImportPlan {
+  path: string; project: CreateProject; standing_approval: boolean; issues: number;
+  items: ImportItem[]; warnings: string[];
+}
+/** The plan, and the Project once one is created (it provisions, then the import lands). */
+export interface FirstmateImport { plan: FirstmateImportPlan; project?: Project | null }
 export interface Health { status: string; version: string; engine: string; last_seq: number }
 
 export const projectsApi = {
@@ -37,6 +46,7 @@ export const projectsApi = {
   projects: () => req<Project[]>("GET", "/v1/projects?include_archived=true"),
   project: (id: string) => req<Project>("GET", `/v1/projects/${enc(id)}`),
   createProject: (p: CreateProject) => req<Project>("POST", "/v1/projects", p),
+  importFirstmate: (input: ImportFirstmate) => req<FirstmateImport>("POST", "/v1/imports/firstmate", input),
   provision: (id: string) => req<void>("POST", `/v1/projects/${enc(id)}:provision`),
   archiveProject: (id: string) => req<Project>("POST", `/v1/projects/${enc(id)}:archive`),
   unarchiveProject: (id: string) => req<Project>("POST", `/v1/projects/${enc(id)}:unarchive`),

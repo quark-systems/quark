@@ -167,6 +167,47 @@ pub fn commit_file<E: From<RepoError>>(
     Ok(Some(commit_path(checkout, rel, &body, message)?))
 }
 
+/// Write `files` (relative path, body) in one commit on `main`, through the
+/// checkout as [`commit_new_file`] does, replacing files already at those
+/// paths. Returns the commit id, or `None` when no file changed.
+pub fn commit_files(
+    bare: &Path,
+    checkout: &Path,
+    files: &[(String, String)],
+    message: &str,
+) -> Result<Option<String>, RepoError> {
+    update_checkout(bare, checkout)?;
+    let mut paths = Vec::new();
+    for (rel, body) in files {
+        let path = checkout.join(rel);
+        if let Some(dir) = path.parent() {
+            mkdir(dir)?;
+        }
+        std::fs::write(&path, body).map_err(|source| RepoError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        paths.push(rel.as_str());
+    }
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let mut add = vec!["add", "--"];
+    add.extend(&paths);
+    git(Some(checkout), &add)?;
+    let mut staged = vec!["diff", "--cached", "--name-only", "--"];
+    staged.extend(&paths);
+    if git(Some(checkout), &staged)?.is_empty() {
+        return Ok(None);
+    }
+    let mut rest = vec!["--"];
+    rest.extend(&paths);
+    commit(checkout, message, &rest)?;
+    let sha = git(Some(checkout), &["rev-parse", "HEAD"])?;
+    git(Some(checkout), &["push", "--quiet", "origin", "HEAD:main"])?;
+    Ok(Some(sha))
+}
+
 /// Clone the checkout when it is missing, and fast-forward it to the bare
 /// repo's `main`.
 fn update_checkout(bare: &Path, checkout: &Path) -> Result<(), RepoError> {

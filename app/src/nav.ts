@@ -7,6 +7,7 @@ import { useSyncExternalStore } from "react";
 export const ROUTES = {
   projects: "", // All projects: what needs you, open PRs, one card per project
   new: "new", // create a Project
+  importFirstmate: "new/firstmate", // create a Project from a firstmate install
   project: "p/:id", // the project's Conversation tab: its coordinator, and what changed since you looked
   work: "p/:project/work", // the project's Work tab: one column per worker state
   issues: "p/:project/issues/:id?", // the project's Issues tab: its Beads issues, optionally with one selected

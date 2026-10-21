@@ -820,6 +820,58 @@
         }
       }
     },
+    "/v1/imports/firstmate": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Import a firstmate home into a new Project.",
+        "description": "Reads the home at `path` (firstmate's `FM_HOME`: `data/`, `config/`,\n`state/`, `projects/`) without changing it, and plans the Project: each\nproject with a clone under `projects/` is a repo, cloned from its\n`origin`; ship modes set delivery and `+yolo` on every project standing\napproval; the crew harness runs the coordinator. With `dry_run` only the\nplan is answered. Otherwise the Project is created and provisions in the\nbackground, and once it is ready the import commits `dispatch.yaml` from\n`config/crew-dispatch.json`, its notes to `instructions.md`, learnings to\n`memory/` and firstmate's registry files, briefs, reports and status logs\nto `library/firstmate/`; adds captain preferences to user-level memory;\ncopies `config/bob-quota.json` when Quark has none; and creates a bead\nper backlog task with its status, brief, waits and captain holds.\n`library/firstmate/IMPORT.md` records what was imported.",
+        "operationId": "import_firstmate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportFirstmate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Dry run: the plan; nothing was created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirstmateImport"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The Project was created and is provisioning; the import lands once it is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirstmateImport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a firstmate home, nothing to import, or the Project would be invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/issue-drafts/{id}": {
       "put": {
         "tags": [
@@ -7455,6 +7507,72 @@
           "untracked"
         ]
       },
+      "FirstmateImport": {
+        "type": "object",
+        "description": "The answer to an import: the plan, and the Project when one was created.\nThe Project is created at once and provisions in the background; the\nrest of the import (dispatch rules, memory, library files, beads) lands\nonce it is ready, and `library/firstmate/IMPORT.md` in its Project repo\nrecords what was imported.",
+        "required": [
+          "plan"
+        ],
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/FirstmateImportPlan"
+          },
+          "project": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Project"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "FirstmateImportPlan": {
+        "type": "object",
+        "description": "What a firstmate import creates.",
+        "required": [
+          "path",
+          "project",
+          "standing_approval",
+          "issues",
+          "items"
+        ],
+        "properties": {
+          "issues": {
+            "type": "integer",
+            "description": "Beads the backlog becomes.",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportItem"
+            },
+            "description": "Every kind of firstmate data found, imported or not."
+          },
+          "path": {
+            "type": "string",
+            "description": "The firstmate home read, as given."
+          },
+          "project": {
+            "$ref": "#/components/schemas/CreateProject",
+            "description": "The Project the import creates."
+          },
+          "standing_approval": {
+            "type": "boolean",
+            "description": "Whether the Project gets standing approval to merge (firstmate's\n`+yolo` on every project)."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Problems that do not stop the import."
+          }
+        }
+      },
       "ForgeRepository": {
         "type": "object",
         "description": "A repository the forge account can reach, offered when adding\nrepositories to a Project.",
@@ -8210,6 +8328,80 @@
             "minimum": 0
           }
         }
+      },
+      "ImportFirstmate": {
+        "type": "object",
+        "description": "Import a firstmate home into a new Project.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Only read the home and answer the plan; nothing is created."
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The coordinator's harness id, when not the firstmate crew harness."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The new Project's name; derived from the firstmate projects when\nabsent."
+          },
+          "path": {
+            "type": "string",
+            "description": "The firstmate home (its `FM_HOME`, usually the firstmate clone):\nthe directory holding `data/`, `config/`, `state/` and `projects/`."
+          }
+        }
+      },
+      "ImportItem": {
+        "type": "object",
+        "description": "One kind of firstmate data and what the import does with it.",
+        "required": [
+          "what",
+          "count",
+          "outcome",
+          "note"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many records or files were found.",
+            "minimum": 0
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Where firstmate keeps it, relative to its home."
+          },
+          "note": {
+            "type": "string",
+            "description": "Where it goes in Quark, or why it does not."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ImportOutcome"
+          },
+          "what": {
+            "type": "string",
+            "description": "What it is, in plain words, e.g. `Backlog`."
+          }
+        }
+      },
+      "ImportOutcome": {
+        "type": "string",
+        "description": "Where one kind of firstmate data goes in Quark.",
+        "enum": [
+          "imported",
+          "skipped"
+        ]
       },
       "InboxMessage": {
         "type": "object",

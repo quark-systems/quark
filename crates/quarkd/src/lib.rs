@@ -17,6 +17,7 @@ pub mod dispatch;
 pub mod dispatch_test;
 pub mod engine;
 pub mod failover;
+pub mod firstmate_import;
 pub mod forge;
 pub mod gates;
 pub mod harness;

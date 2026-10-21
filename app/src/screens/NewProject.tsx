@@ -125,6 +125,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
       <div className="header">
         <h1>New project</h1>
         <span className="spacer" />
+        <ButtonLink kind="quiet" href={href({ name: "importFirstmate" })} data-testid="import-firstmate-link">Import from firstmate</ButtonLink>
         <ButtonLink href={href({ name: "projects" })}>Cancel</ButtonLink>
       </div>
       <div className="screen scroll">

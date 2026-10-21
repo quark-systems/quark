@@ -50,6 +50,8 @@ npm run tauri dev                         # the desktop app
 
 Click **New project**, give it a name, a goal and a repository, and pick the default agent. The coordinator starts in the Project's Conversation tab; tell it what to do.
 
+Coming from firstmate? **New project › Import from firstmate** (or `quarkd import firstmate <your firstmate folder> --dry-run`) previews and then creates a Project from it: its projects become the Project's repositories, the backlog becomes issues, and dispatch rules, briefs, preferences and learnings come over. The firstmate folder is only read.
+
 Without `--engine native`, quarkd runs an in-memory stub engine meant for tests. To try the app with no agents at all, `npm run mock` in `app/` serves demo data on the same port.
 
 The full walkthrough, with optional pieces (Beads issues, account quota) and where things live on disk, is in [Build from source](docs/getting-started/build-from-source.md).
