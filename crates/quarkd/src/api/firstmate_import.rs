@@ -294,7 +294,8 @@ async fn project(
         };
         return out;
     }
-    let project = match ready(state, &project.id, wait).await {
+    let deadline = Instant::now() + wait;
+    let project = match ready(state, &project.id, deadline).await {
         Ok(x) => x,
         Err(why) => {
             out.outcome = ImportOutcome::Pending;
@@ -319,6 +320,11 @@ async fn project(
         }
         _ => ImportOutcome::NotImported,
     };
+    if let Err(why) = beads_ready(state, &project.id, deadline).await {
+        out.outcome = ImportOutcome::Pending;
+        out.detail = Some(format!("{why}; import again once Beads is set up"));
+        return out;
+    }
     let count = |r: crate::beads::firstmate::Imported| ImportCount {
         imported: r.created,
         present: r.present,
@@ -376,36 +382,46 @@ async fn count_present(
     (n(work), n(holds))
 }
 
-/// Waits for the Project to be provisioned and its Beads database to be set
-/// up.
-async fn ready(state: &AppState, id: &str, wait: Duration) -> Result<Project, String> {
-    let deadline = Instant::now() + wait;
+/// Waits for the Project to be provisioned.
+async fn ready(state: &AppState, id: &str, deadline: Instant) -> Result<Project, String> {
     loop {
         let sid = id.to_string();
         let p = db(state, move |s| s.get_project(&sid))
             .await
             .map_err(|e| e.message().to_string())?;
-        if p.status == ProjectStatus::Failed {
-            return Err(format!(
-                "provisioning failed: {}",
-                p.status_detail.unwrap_or_default()
-            ));
-        }
-        if p.status == ProjectStatus::Ready {
-            let b = state.beads.status(&state.layout.home, id).await;
-            match b.state {
-                BeadsState::Ready => return Ok(p),
-                BeadsState::Unavailable | BeadsState::Failed => {
-                    return Err(format!(
-                        "Beads is not available: {}",
-                        b.detail.unwrap_or_default()
-                    ))
-                }
-                _ => {}
+        match p.status {
+            ProjectStatus::Failed => {
+                return Err(format!(
+                    "provisioning failed: {}",
+                    p.status_detail.unwrap_or_default()
+                ))
             }
+            ProjectStatus::Ready => return Ok(p),
+            _ => {}
         }
         if Instant::now() >= deadline {
             return Err("the Project was not ready in time".into());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Waits for the Project's Beads database to be set up.
+async fn beads_ready(state: &AppState, id: &str, deadline: Instant) -> Result<(), String> {
+    loop {
+        let b = state.beads.status(&state.layout.home, id).await;
+        match b.state {
+            BeadsState::Ready => return Ok(()),
+            BeadsState::Unavailable | BeadsState::Failed => {
+                return Err(format!(
+                    "Beads is not available: {}",
+                    b.detail.unwrap_or_default()
+                ))
+            }
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            return Err("its Beads database was not set up in time".into());
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }

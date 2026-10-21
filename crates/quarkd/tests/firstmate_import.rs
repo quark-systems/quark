@@ -321,7 +321,12 @@ async fn imports_then_a_second_import_adds_nothing_and_firstmate_is_untouched() 
     assert_eq!(status, StatusCode::OK, "{r}");
     let widgets = project(&r, "widgets");
     assert_eq!(widgets["project"], "created", "{r}");
+    // Dispatch lands whether or not Beads can run here.
     assert_eq!(widgets["dispatch"], "imported", "{r}");
+    if !installed() {
+        assert_eq!(widgets["outcome"], "pending", "{r}");
+        assert!(widgets["detail"].as_str().unwrap().contains("Beads"), "{r}");
+    }
     let id = widgets["project_id"].as_str().unwrap();
 
     // The project took its repo and delivery posture from firstmate.
