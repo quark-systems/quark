@@ -96,6 +96,18 @@ pub async fn create_project(
     State(state): State<AppState>,
     Json(input): Json<CreateProject>,
 ) -> Result<(StatusCode, Json<Project>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(create_and_provision(&state, input).await?),
+    ))
+}
+
+/// Records the Project, starts provisioning it and sets up its Beads
+/// database; what `POST /v1/projects` does.
+pub(super) async fn create_and_provision(
+    state: &AppState,
+    input: CreateProject,
+) -> Result<Project, ApiError> {
     let input = provision::normalize(input).map_err(ApiError::invalid)?;
     if let Some(agent) = &input.agent_config {
         let check = state.harnesses.validate(agent, AgentRole::Coordinator);
@@ -119,9 +131,9 @@ pub async fn create_project(
             }
         }
     }
-    let project = db(&state, move |s| s.create_project(input)).await?;
+    let project = db(state, move |s| s.create_project(input)).await?;
     if project.status == ProjectStatus::Provisioning {
-        start_provisioning(&state, &project.id);
+        start_provisioning(state, &project.id);
     }
     // Every Project has its Beads database from the start.
     if state.beads.auto_setup() {
@@ -134,7 +146,7 @@ pub async fn create_project(
             )
             .await;
     }
-    Ok((StatusCode::CREATED, Json(project)))
+    Ok(project)
 }
 
 fn start_provisioning(state: &AppState, project_id: &str) {

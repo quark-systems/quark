@@ -42,6 +42,7 @@ use tokio::task::JoinHandle;
 use crate::store::Store;
 
 mod decisions;
+pub mod firstmate;
 pub use decisions::{answer_note, rule_memory, DecisionBead};
 
 /// Quark's notes about a database, next to its `.beads`.

@@ -9,6 +9,7 @@ mod decisions;
 mod dispatch;
 mod error;
 mod events;
+mod firstmate_import;
 mod harnesses;
 mod hosts;
 mod lifecycle;
@@ -88,6 +89,10 @@ const MODULES: &[Module] = &[
     Module {
         router: memory::router,
         openapi: <memory::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: firstmate_import::router,
+        openapi: <firstmate_import::Api as OpenApi>::openapi,
     },
     Module {
         router: pull_requests::router,
