@@ -59,6 +59,7 @@ fn harness() -> Harness {
         claude: vec![dir.path().join("claude")],
         codex: vec![dir.path().join("codex")],
         pi: vec![dir.path().join("pi")],
+        kiro: vec![dir.path().join("kiro")],
     };
     Harness {
         app,

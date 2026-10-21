@@ -146,6 +146,7 @@ fn locates_each_harness_log_by_working_directory() {
         claude: vec![home.path().join(".claude")],
         codex: vec![home.path().join(".codex")],
         pi: vec![home.path().join(".pi/agent")],
+        kiro: vec![home.path().join(".kiro")],
     };
     for f in SessionFormat::ALL {
         assert_eq!(locate(f, cwd, &roots), None);
@@ -181,4 +182,24 @@ fn locates_each_harness_log_by_working_directory() {
     )
     .unwrap();
     assert_eq!(locate(SessionFormat::Codex, cwd, &roots), Some(mine));
+
+    // Kiro keys sessions by a workspace hash: session.json names the directory.
+    let kiro = |hash: &str, sess: &str, workspace: &str| {
+        let dir = home.path().join(".kiro/sessions").join(hash).join(sess);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("session.json"),
+            format!(r#"{{"id":"{sess}","modelId":"auto","workspacePaths":["{workspace}"]}}"#),
+        )
+        .unwrap();
+        let log = dir.join("messages.jsonl");
+        std::fs::write(&log, "").unwrap();
+        log
+    };
+    kiro("aa", "sess_old", "/work/fix-42");
+    kiro("bb", "sess_other", "/elsewhere");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let newest = kiro("aa", "sess_new", "/work/fix-42");
+    kiro("cli", "sess_legacy", "/work/fix-42");
+    assert_eq!(locate(SessionFormat::Kiro, cwd, &roots), Some(newest));
 }

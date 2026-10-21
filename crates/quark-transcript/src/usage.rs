@@ -11,6 +11,9 @@
 //!   latest `turn_context`'s. Codex can repeat a `token_count`, so one whose
 //!   running total did not move is skipped.
 //! - Pi: each assistant message's `usage`, including Pi's own cost.
+//! - Kiro: no token counts; each turn's `usage_summary` carries the
+//!   credits it was billed (`promptTurnSummaries[].usage`, unit `credit`).
+//!   The model is the session's, from the `session.json` beside the log.
 //!
 //! [`read_turns`] reads completed turns from a byte offset and returns where
 //! to resume: the start of the turn still open at the end, read again once
@@ -46,6 +49,13 @@ pub struct ModelUsage {
     /// records cost (Pi does).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// What the harness billed in its own unit, for harnesses that bill in
+    /// credits rather than tokens (Kiro credits, IBM Bobcoins).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<f64>,
+    /// The unit of `credits`: `kiro-credit` or `bobcoin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit_unit: Option<String>,
 }
 
 impl ModelUsage {
@@ -59,6 +69,13 @@ impl ModelUsage {
             (None, None) => None,
             (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
         };
+        self.credits = match (self.credits, o.credits) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+        };
+        if self.credit_unit.is_none() {
+            self.credit_unit = o.credit_unit.clone();
+        }
     }
 }
 
@@ -75,6 +92,12 @@ pub struct TurnUsage {
     pub continued: bool,
     pub models: Vec<ModelUsage>,
 }
+
+/// The unit of Kiro's billing.
+pub const KIRO_CREDIT: &str = "kiro-credit";
+
+/// The unit of IBM Bob's billing.
+pub const BOBCOIN: &str = "bobcoin";
 
 /// Where to resume reading a log.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +130,9 @@ pub fn read_turns(
     f.seek(SeekFrom::Start(cursor.offset))?;
     let mut reader = BufReader::new(f.take(len - cursor.offset));
     let mut model = cursor.model.clone();
+    if format == SessionFormat::Kiro {
+        model = crate::kiro::session_model(path).or(model);
+    }
     let mut turns = Vec::new();
     // The open turn, the offset it started at, and the model then.
     let mut open = cursor
@@ -192,6 +218,7 @@ fn prompt(format: SessionFormat, v: &Value) -> Option<(Option<String>, Option<St
             str_at(v, "type") == Some("message")
                 && v.pointer("/message/role").and_then(Value::as_str) == Some("user")
         }
+        SessionFormat::Kiro => v.pointer("/payload/type").and_then(Value::as_str) == Some("user"),
     };
     let id = str_at(v, "uuid").or_else(|| str_at(v, "id"));
     starts.then(|| (id.map(str::to_string), ts))
@@ -265,6 +292,7 @@ impl Builder {
                         cache_write: write,
                         calls: 1,
                         cost_usd: None,
+                        ..Default::default()
                     },
                 );
             }
@@ -298,6 +326,7 @@ impl Builder {
                         cache_write: 0,
                         calls: 1,
                         cost_usd: None,
+                        ..Default::default()
                     },
                 );
             }
@@ -322,6 +351,31 @@ impl Builder {
                         cache_write: write,
                         calls: 1,
                         cost_usd: u.pointer("/cost/total").and_then(Value::as_f64),
+                        ..Default::default()
+                    },
+                );
+            }
+            SessionFormat::Kiro => {
+                let Some(p) = v.get("payload") else { return };
+                if str_at(p, "type") != Some("usage_summary") {
+                    return;
+                }
+                let credits: f64 = p
+                    .get("promptTurnSummaries")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|s| str_at(s, "unit").is_none_or(|u| u == "credit"))
+                    .filter_map(|s| s.get("usage").and_then(Value::as_f64))
+                    .sum();
+                self.call(
+                    str_at(p, "executionId").or_else(|| str_at(v, "id")),
+                    ModelUsage {
+                        model: model.unwrap_or_default().to_string(),
+                        calls: 1,
+                        credits: Some(credits),
+                        credit_unit: Some(KIRO_CREDIT.to_string()),
+                        ..Default::default()
                     },
                 );
             }
@@ -494,5 +548,48 @@ mod tests {
             (16, 7, 10, 1)
         );
         assert_eq!(m.cost_usd, Some(0.25));
+    }
+
+    #[test]
+    fn kiro_counts_each_turns_credits_under_the_sessions_model() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("session.json"),
+            r#"{"id":"sess_1","modelId":"claude-sonnet-5-5","workspacePaths":["/w"]}"#,
+        )
+        .unwrap();
+        let path = dir.path().join("messages.jsonl");
+        let summary = |exec: &str, credits: f64| {
+            json!({"id": format!("{exec}-us"), "payload": {"type": "usage_summary", "executionId": exec,
+                "promptTurnSummaries": [{"unit": "credit", "usage": credits, "usedTools": ["shell"]}]}})
+        };
+        write(
+            &path,
+            &[
+                json!({"id": "u1", "timestamp": "2026-10-21T10:00:00Z", "payload": {"type": "user", "content": "go"}}),
+                json!({"id": "s1", "payload": {"type": "turn_start", "executionId": "e1"}}),
+                json!({"id": "a1", "payload": {"type": "assistant", "content": "done"}}),
+                summary("e1", 1.5),
+                // Written again for the same execution: counted once.
+                summary("e1", 1.5),
+                json!({"id": "x1", "payload": {"type": "turn_end", "executionId": "e1"}}),
+                json!({"id": "u2", "payload": {"type": "user", "content": "more"}}),
+                json!({"id": "s2", "payload": {"type": "turn_start", "executionId": "e2"}}),
+                summary("e2", 0.25),
+            ],
+        );
+        let (turns, cur) =
+            read_turns(&path, &UsageCursor::default(), SessionFormat::Kiro, false).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].id, "u1");
+        assert_eq!(turns[0].at.as_deref(), Some("2026-10-21T10:00:00Z"));
+        let m = &turns[0].models[0];
+        assert_eq!(m.model, "claude-sonnet-5-5");
+        assert_eq!((m.input, m.output, m.calls), (0, 0, 1));
+        assert_eq!(m.credits, Some(1.5));
+        assert_eq!(m.credit_unit.as_deref(), Some(KIRO_CREDIT));
+        let (rest, _) = read_turns(&path, &cur, SessionFormat::Kiro, true).unwrap();
+        assert_eq!(rest[0].id, "u2");
+        assert_eq!(rest[0].models[0].credits, Some(0.25));
     }
 }

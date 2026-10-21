@@ -19,6 +19,8 @@ list = ["kiro-cli", "chat", "--list-models", "--format", "json"]
 argv = ["kiro-cli", "chat", "--v3", "--trust-all-tools"]
 optional = [["--model", "{model}"], ["--effort", "{effort}"]]
 prompt_via = "paste"
+# The newest local session started in the worktree (`~/.kiro/sessions`).
+resume = ["--resume"]
 
 # --trust-all-tools asks on every launch, with the selector on "No, exit".
 # Only the session-scoped answer is picked; "don't ask again" would change

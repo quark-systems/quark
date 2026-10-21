@@ -702,6 +702,114 @@ pub fn has_task(db: &Path, dir: &Path) -> bool {
     read_only(db, query).unwrap_or(false)
 }
 
+/// One Bob task's spend so far, from its `costs`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskCost {
+    pub id: String,
+    /// When the task started, epoch milliseconds.
+    pub created_ms: Option<f64>,
+    /// Bobcoins.
+    pub coins: f64,
+    /// The model, when `costs` names one.
+    pub model: Option<String>,
+    /// Token counts, when `costs` records them.
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+/// The spend of every task Bob ran in `dir` (subtasks too; subagent rows are
+/// already counted in their parent), oldest first. Read from Bob's database
+/// at `db`. An absent database, or one without `costs`, reads as no tasks.
+pub fn task_costs(db: &Path, dir: &Path) -> Result<Vec<TaskCost>, String> {
+    if db.as_os_str().is_empty() || !db.is_file() {
+        return Ok(Vec::new());
+    }
+    let mut dirs = vec![dir.to_string_lossy().into_owned()];
+    if let Ok(real) = std::fs::canonicalize(dir) {
+        let real = real.to_string_lossy().into_owned();
+        if real != dirs[0] {
+            dirs.push(real);
+        }
+    }
+    type Row = (String, Option<f64>, Option<String>);
+    let query = |con: &rusqlite::Connection| -> Result<Vec<Row>, rusqlite::Error> {
+        let cols = columns(con)?;
+        let has = |c: &str| cols.iter().any(|x| x == c);
+        if !has("costs") || !has("directory") || !has("id") {
+            return Ok(Vec::new());
+        }
+        let created = if has("created_at") {
+            "created_at"
+        } else {
+            "NULL"
+        };
+        let mut sql =
+            format!("SELECT CAST(id AS TEXT), {created}, costs FROM tasks WHERE directory = ?1");
+        if has("task_type") {
+            sql.push_str(" AND (task_type IS NULL OR task_type <> 'subagent')");
+        }
+        sql.push_str(&format!(" ORDER BY {created}, rowid"));
+        let mut stmt = con.prepare(&sql)?;
+        let mut rows = Vec::new();
+        for d in &dirs {
+            let found = stmt.query_map([d], |r| {
+                let created = match r.get_ref(1)? {
+                    rusqlite::types::ValueRef::Integer(i) => Some(i as f64),
+                    rusqlite::types::ValueRef::Real(f) => Some(f),
+                    _ => None,
+                };
+                let costs = match r.get_ref(2)? {
+                    rusqlite::types::ValueRef::Text(t) => {
+                        Some(String::from_utf8_lossy(t).into_owned())
+                    }
+                    _ => None,
+                };
+                Ok((r.get::<_, String>(0)?, created, costs))
+            })?;
+            for row in found {
+                rows.push(row?);
+            }
+        }
+        Ok(rows)
+    };
+    let rows = read_only(db, query).map_err(|e| match e {
+        Ok(e) => format!("bob database not readable read-only: {e}"),
+        Err(e) => e,
+    })?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, created_ms, costs)| {
+            let v = serde_json::from_str::<Value>(&costs?).ok()?;
+            let coins = v
+                .get("cost")
+                .and_then(Value::as_f64)
+                .filter(|c| *c >= 0.0)?;
+            let n = |keys: &[&str]| {
+                keys.iter()
+                    .find_map(|k| v.get(*k).and_then(Value::as_u64))
+                    .unwrap_or(0)
+            };
+            let model = ["model", "modelId", "model_id"]
+                .iter()
+                .find_map(|k| v.get(*k).and_then(Value::as_str))
+                .filter(|m| !m.is_empty())
+                .map(str::to_string);
+            Some(TaskCost {
+                id,
+                created_ms,
+                coins,
+                model,
+                input: n(&["tokensIn", "inputTokens", "input_tokens"]),
+                output: n(&["tokensOut", "outputTokens", "output_tokens"]),
+                cache_read: n(&["cacheReads", "cacheReadTokens", "cache_read_tokens"]),
+                cache_write: n(&["cacheWrites", "cacheWriteTokens", "cache_write_tokens"]),
+            })
+        })
+        .collect())
+}
+
 /// The `tasks` table's columns.
 fn columns(con: &rusqlite::Connection) -> Result<Vec<String>, rusqlite::Error> {
     con.prepare("PRAGMA table_info(tasks)")?
@@ -1074,5 +1182,38 @@ esac
                 limit: None
             })
         );
+    }
+
+    #[test]
+    fn reads_each_tasks_spend_in_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("bob.db");
+        let wt = dir.path().join("wt");
+        assert_eq!(task_costs(&db, &wt).unwrap(), Vec::new());
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+                task_type TEXT, created_at INTEGER, costs TEXT);",
+        )
+        .unwrap();
+        let wt_s = wt.to_string_lossy().into_owned();
+        con.execute(
+            "INSERT INTO tasks VALUES
+                ('b', NULL, ?1, 'normal', 2000, '{\"cost\": 1.5, \"tokensIn\": 10, \"tokensOut\": 4}'),
+                ('a', NULL, ?1, 'normal', 1000, '{\"cost\": 0.25, \"model\": \"granite\"}'),
+                ('s', 'b', ?1, 'subagent', 3000, '{\"cost\": 9}'),
+                ('o', NULL, '/elsewhere', 'normal', 1000, '{\"cost\": 9}'),
+                ('n', NULL, ?1, 'normal', 4000, NULL)",
+            [&wt_s],
+        )
+        .unwrap();
+        drop(con);
+        let costs = task_costs(&db, &wt).unwrap();
+        let ids: Vec<_> = costs.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(costs[0].coins, 0.25);
+        assert_eq!(costs[0].model.as_deref(), Some("granite"));
+        assert_eq!(costs[0].created_ms, Some(1000.0));
+        assert_eq!((costs[1].input, costs[1].output), (10, 4));
     }
 }

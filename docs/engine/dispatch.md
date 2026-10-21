@@ -104,5 +104,3 @@ With `--engine native`, quarkd registers this host and records a telemetry sampl
 - Spawners for SSH and hosted runtimes (slice 7).
 - Recording the task as `Queued` in the ledger while it waits in dispatch needs a small `quark-core` amendment so the supervisor accepts a queued task.
 - Anchoring Bob from a throwaway `/status` session, as firstmate's `fm-bob-quota.sh anchor --from-status` did; type the figure in with `--anchor` for now.
-- Bob and Kiro usage and spend: the usage ingest reads JSONL session logs, and Bob's are in its database (`tasks.costs`), Kiro's not located yet.
-- Kiro conversation resume: its session store is not located yet, so a lost Kiro worker starts fresh with its brief.

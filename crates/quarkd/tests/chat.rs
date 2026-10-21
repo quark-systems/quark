@@ -51,6 +51,7 @@ async fn messages_are_pasted_submitted_and_confirmed_from_the_log() {
         claude: vec![dir.path().join("claude")],
         codex: vec![],
         pi: vec![],
+        kiro: vec![],
     };
     let log_dir = dir
         .path()
