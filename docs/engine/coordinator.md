@@ -92,7 +92,7 @@ Two worker harnesses bill in their own credits rather than tokens, so their turn
 - **Kiro CLI** (V3 engine) logs each session in `~/.kiro/sessions/<workspace hash>/sess_<id>/messages.jsonl` (or under `$KIRO_HOME`), found by the working directory its `session.json` lists. A turn runs from one `user` event to the next; its `usage_summary` gives the credits billed. Kiro records no token counts, and the model is the session's `modelId` (`kiro-auto` for Kiro's automatic choice).
 - **IBM Bob** keeps no session log. Its database (`~/.bob/db/bob.db`, opened read-only) holds each task's running spend in Bobcoins (`tasks.costs`). Each Bob task in a worker's working copy counts as one turn, its id the Bob task's id, and whenever its spend grows the growth is added as a continuation of that turn. Subagent rows are left out (their spend is already in the parent). Token counts and the model are read from `costs` when it records them; otherwise the model reads `bob`.
 
-The Metrics tab prices turns at read time (`quarkd::spend`), so a price fix applies to past turns: a harness's own cost (Pi) first, then credits at their price (Kiro $0.04 a credit, its published overage price; Bob $0.40 a Bobcoin, the Pro plan's 50 for $20), then API list prices.
+The Metrics tab prices turns at read time (`quarkd::spend`), so a price fix applies to past turns: a harness's own cost (Pi) first, then credits at their price (Kiro $0.04 a credit, its published overage price; Bob $0.50 a Bobcoin, its list price), then API list prices.
 
 ## In quarkd
 

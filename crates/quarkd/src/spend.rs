@@ -80,11 +80,11 @@ pub fn price(model: &str) -> Option<Price> {
 }
 
 /// US dollars per credit of a harness that bills in credits: Kiro's
-/// published overage price, and IBM Bob's Pro plan (50 Bobcoins for $20).
+/// published overage price, and IBM Bob's list price per Bobcoin.
 pub fn credit_price(unit: &str) -> Option<f64> {
     match unit {
         quark_transcript::KIRO_CREDIT => Some(0.04),
-        quark_transcript::BOBCOIN => Some(0.40),
+        quark_transcript::BOBCOIN => Some(0.50),
         _ => None,
     }
 }
@@ -167,7 +167,7 @@ mod tests {
             credit_unit: Some(quark_transcript::BOBCOIN.into()),
             ..Default::default()
         };
-        assert!((cost(&bob).unwrap() - 1.2).abs() < 1e-9);
+        assert!((cost(&bob).unwrap() - 1.5).abs() < 1e-9);
         let odd = ModelUsage {
             credit_unit: Some("doubloon".into()),
             ..bob
