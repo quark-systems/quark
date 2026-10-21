@@ -125,6 +125,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
       <div className="header">
         <h1>New project</h1>
         <span className="spacer" />
+        <ButtonLink href={href({ name: "import" })}>Import instead</ButtonLink>
         <ButtonLink href={href({ name: "projects" })}>Cancel</ButtonLink>
       </div>
       <div className="screen scroll">

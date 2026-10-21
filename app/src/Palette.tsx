@@ -35,6 +35,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
             <Command.Group heading="Go to">
               <Command.Item value="all projects" onSelect={() => pick(() => go({ name: "projects" }))}>All projects</Command.Item>
               <Command.Item value="new project create" onSelect={() => pick(() => go({ name: "new" }))}>New project</Command.Item>
+              <Command.Item value="import projects firstmate" onSelect={() => pick(() => go({ name: "import" }))}>Import projects</Command.Item>
               <Command.Item value="decisions inbox answer" onSelect={() => pick(() => go({ name: "inbox" }))}>
                 Decisions inbox<span className="sub">{open.length} open</span>
               </Command.Item>
