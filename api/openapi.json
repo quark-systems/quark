@@ -820,6 +820,47 @@
         }
       }
     },
+    "/v1/imports/firstmate": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Import a firstmate home into Quark.",
+        "description": "Reads the firstmate home at `home` (only reads it: no script of it runs and\nnothing in it changes) and seeds Quark: one Project per firstmate project,\nwith its repo and delivery posture; the home's `config/crew-dispatch.json`\nas each Project's `dispatch.yaml`; the backlog as Beads, with held items\nas `decision` beads and each item's status log, report and brief as\ncomments; Kiro's overage setting and Bob's allowance under `quota/`; and\n`captain.md` and `learnings.md` as user-level memory.\nThe response lists every category firstmate stores and what became of\nit. Importing again leaves what an earlier import made alone, and creates\nwhat it missed. A Project still provisioning after `wait_secs` is\nreported `pending`; import again once it is ready. With `dry_run`\nnothing is written.",
+        "operationId": "import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportFirstmate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirstmateImportReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a firstmate home, or a name that is not one of its projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/issue-drafts/{id}": {
       "put": {
         "tags": [
@@ -7479,6 +7520,53 @@
           "untracked"
         ]
       },
+      "FirstmateImportReport": {
+        "type": "object",
+        "description": "What an import did, or with `dry_run` would do.",
+        "required": [
+          "home",
+          "dry_run",
+          "inventory",
+          "projects",
+          "unrouted",
+          "notes"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "home": {
+            "type": "string"
+          },
+          "inventory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportInventoryItem"
+            },
+            "description": "Every category firstmate stores locally and where it went."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Things to know or do next, such as a stale Bob anchor."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportedProject"
+            }
+          },
+          "unrouted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Backlog items no Project could be chosen for. They are not imported."
+          }
+        }
+      },
       "ForgeRepository": {
         "type": "object",
         "description": "A repository the forge account can reach, offered when adding\nrepositories to a Project.",
@@ -8239,6 +8327,172 @@
             "format": "int32",
             "description": "Hours of history in each `series`, ending now.",
             "minimum": 0
+          }
+        }
+      },
+      "ImportCount": {
+        "type": "object",
+        "required": [
+          "imported",
+          "present"
+        ],
+        "properties": {
+          "imported": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "present": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportFirstmate": {
+        "type": "object",
+        "description": "Seed Quark from a firstmate home. The home is only read.",
+        "required": [
+          "home"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Report what would be imported and change nothing."
+          },
+          "home": {
+            "type": "string",
+            "description": "The firstmate home: the directory holding its `data/`, `state/`,\n`config/` and `projects/`."
+          },
+          "include_archive": {
+            "type": "boolean",
+            "description": "Also import the Done entries of `data/done-archive.md`, which is\noften thousands of lines; only the Done section of the backlog is\nimported by default."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only these firstmate projects, by name; all of them when empty."
+          },
+          "routes": {
+            "type": "object",
+            "description": "Which project a backlog item belongs to when nothing in it says: an\nid prefix and the firstmate project it routes to, such as\n`\"magenta-\": \"magenta-mono\"`. The longest matching prefix wins.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "wait_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds to wait for each Project to be provisioned and its Beads\ndatabase to be set up before its tasks are imported; default 120.\nA Project not ready by then is reported as pending, and importing\nagain finishes it.",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportInventoryItem": {
+        "type": "object",
+        "description": "One category of firstmate data and its Quark equivalent.",
+        "required": [
+          "category",
+          "source",
+          "target",
+          "outcome",
+          "count",
+          "detail"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "`projects`, `dispatch`, `quota`, `tasks`, `holds`, `status`,\n`memory`, `reports`, `runtime`, `secrets`..."
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many records the category holds.",
+            "minimum": 0
+          },
+          "detail": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ImportOutcome"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where it is in the firstmate home."
+          },
+          "target": {
+            "type": "string",
+            "description": "What Quark keeps it as; empty when not imported."
+          }
+        }
+      },
+      "ImportOutcome": {
+        "type": "string",
+        "enum": [
+          "imported",
+          "present",
+          "pending",
+          "not_imported"
+        ]
+      },
+      "ImportedProject": {
+        "type": "object",
+        "description": "One firstmate project and what became of it in Quark.",
+        "required": [
+          "name",
+          "project",
+          "outcome",
+          "dispatch",
+          "tasks",
+          "holds"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, when `pending` or `not_imported`."
+          },
+          "dispatch": {
+            "$ref": "#/components/schemas/ImportOutcome",
+            "description": "Whether `dispatch.yaml` was written."
+          },
+          "holds": {
+            "$ref": "#/components/schemas/ImportCount"
+          },
+          "name": {
+            "type": "string",
+            "description": "The firstmate project's name."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ImportOutcome"
+          },
+          "project": {
+            "type": "string",
+            "description": "`created` or `existing`."
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Quark Project; absent on a dry run for a Project not yet created."
+          },
+          "repo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "$ref": "#/components/schemas/ImportCount",
+            "description": "Beads created, by what they came from."
           }
         }
       },

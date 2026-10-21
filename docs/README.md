@@ -23,12 +23,14 @@ The daemon's `/v1` HTTP API and event stream. The [OpenAPI document](../api/open
 - [Terminals](api/terminals.md): coordinator and worker terminals.
 - [Memory](api/memory.md): proposals, Project memory and user-level memory.
 - [Dispatch](api/dispatch.md): reading, saving and testing dispatch rules.
+- [Imports](api/imports.md): seeding Quark from a firstmate home.
 - [Desktop app contract](../app/CONTRACT.md): every endpoint the app calls and the shape it expects.
 
 ## Configuration
 
 - [Verification gates](configuration/verification-gates.md): checks, journeys and holdout tests in `project.yaml`.
 - [Dispatch rules](configuration/dispatch-rules.md): `dispatch.yaml`, the classifier and `~/.quark/config.yaml`.
+- [Importing from firstmate](configuration/firstmate-import.md): what an existing firstmate home becomes in Quark.
 
 ## Engine internals
 

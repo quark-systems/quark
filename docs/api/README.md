@@ -35,5 +35,6 @@ Each API page lists the events its resources emit.
 - [Terminals](terminals.md)
 - [Memory](memory.md)
 - [Dispatch](dispatch.md)
+- [Imports](imports.md)
 
 [`app/CONTRACT.md`](../../app/CONTRACT.md) lists every endpoint the desktop app calls and the shape it expects.
