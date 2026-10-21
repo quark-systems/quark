@@ -7,6 +7,8 @@ curl -s localhost:7380/v1/imports/firstmate -H 'content-type: application/json' 
   -d '{"home": "/Users/you/firstmate", "dry_run": true}' | jq
 ```
 
+In the app, **Import** on All projects (or *Import projects* in the command palette) does the same: choose the folder, preview, assign work that has no project, then import. A project still being set up shows *Waiting*, and *Check again* finishes it.
+
 Run it with `dry_run` first: the report says what will land where and lists the backlog items it could not route.
 
 ## Read only

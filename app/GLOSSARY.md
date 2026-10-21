@@ -33,6 +33,8 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
 
 - **Project**: a goal with its repositories, coordinator, workers and settings.
   _Avoid_: workspace, channel, repo.
+- **Import**: bringing projects, their work and memory over from another tool (firstmate first). Always previewed before anything is written; the other tool's folder is only read.
+  _Avoid_: migrate, convert, sync.
 - **Archived project**: a project whose coordinator and workers are stopped and which is hidden from the left list and All projects, with everything kept. Unarchive brings it back. Deleting a project removes it from Quark for good; its repositories are never touched.
   _Avoid_: closed, hidden, paused (for projects).
 - **Issue**: a piece of work not yet started, tracked in Beads.

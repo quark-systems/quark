@@ -1337,6 +1337,48 @@ function provision(proj) {
   }, QUIET ? 200 : 1500);
 }
 
+// POST /v1/imports/firstmate: the mock reads no folder. It stands in for a firstmate home with two
+// projects and some work that fits neither until a route is given; `/empty` is not a home.
+const FIRSTMATE_PROJECTS = [
+  { name: "widgets", repo: "https://example.test/acme/widgets.git", tasks: 3, holds: 1, delivery: "direct" },
+  { name: "gadgets", repo: "https://example.test/acme/gadgets.git", tasks: 2, holds: 2, delivery: "gated" },
+];
+function importFirstmate(b) {
+  if (typeof b.home !== "string" || !b.home.startsWith("/")) return { error: "home must be an absolute path" };
+  if (b.home.endsWith("/empty")) return { error: `${b.home} is not a firstmate home: it has no data/, config/ or state/` };
+  const routed = !!b.routes?.["stray-"];
+  const rows = FIRSTMATE_PROJECTS.map((fp) => {
+    const have = [...projects.values()].find((x) => x.name === fp.name);
+    const extra = routed && fp.name === b.routes["stray-"] ? 2 : 0;
+    const tasks = fp.tasks + extra + (b.include_archive ? 40 : 0);
+    const done = !b.dry_run;
+    let proj = have;
+    if (done && !have) {
+      proj = addProject({ name: fp.name, repos: [{ url: fp.repo }], agent_config: { harness: "claude-code", effort: "high" }, delivery: fp.delivery });
+      provision(proj);
+      setupBeads(proj);
+    }
+    const here = !!have;
+    return {
+      name: fp.name, project_id: proj?.id ?? null, project: here ? "existing" : "created", repo_url: fp.repo,
+      outcome: "imported", detail: null, dispatch: here ? "present" : "imported",
+      tasks: { imported: here && done ? 0 : tasks, present: here && done ? tasks : 0 },
+      holds: { imported: here && done ? 0 : fp.holds, present: here && done ? fp.holds : 0 },
+    };
+  });
+  const left = (source, detail, count = 1) => ({ category: "runtime", source, target: "", outcome: "not_imported", count, detail });
+  return {
+    home: b.home, dry_run: !!b.dry_run, projects: rows,
+    unrouted: routed ? [] : ["stray-idea: no project name matches its id", "stray-fix: no project name matches its id"],
+    notes: ["Bob's usage anchor was not imported: it goes stale within a day, so Bob reads as partial until you anchor it again."],
+    inventory: [
+      left("config/backend", "firstmate's terminal backend; Quark runs workers in its own terminals"),
+      left("state/*.check.sh", "scripts firstmate's watcher runs; never executed", 2),
+      left(".env", "never read. Store a classifier key in the keychain instead"),
+    ],
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return send(res, 204);
   const url = new URL(req.url, "http://x");
@@ -1348,6 +1390,11 @@ const server = http.createServer(async (req, res) => {
   if (p === "/v1/projects" && req.method === "GET") {
     const all = url.searchParams.get("include_archived") === "true";
     return send(res, 200, [...projects.values()].filter((x) => all || !x.archived_at));
+  }
+  if (p === "/v1/imports/firstmate" && req.method === "POST") {
+    const b = await readJson(req);
+    const out = b ? importFirstmate(b) : { error: "body must be JSON" };
+    return out.error ? invalid(res, out.error) : send(res, 200, out);
   }
   if (p === "/v1/projects" && req.method === "POST") {
     const b = await readJson(req);

@@ -5,6 +5,7 @@ import React from "react";
 import { go, useRoute, type Route } from "./nav";
 import { Projects } from "./screens/Projects";
 import { NewProject } from "./screens/NewProject";
+import { ImportProjects } from "./screens/ImportProjects";
 import { Conversation, ProjectBoard } from "./screens/ProjectBoard";
 import { Memory } from "./screens/Memory";
 import { Issues } from "./screens/Issues";
@@ -30,6 +31,7 @@ const framed = (r: Route, project: string, node: React.ReactNode) => <ProjectFra
 export const SCREENS: Screens = {
   projects: () => <Projects />,
   new: () => <NewProject onCreated={(id) => go({ name: "project", id })} />,
+  import: (r) => <ImportProjects key={r.source ?? ""} source={r.source} />,
   project: (r) => framed(r, r.id, <Conversation key={r.id} id={r.id} />),
   work: (r) => framed(r, r.project, <ProjectBoard key={r.project} id={r.project} />),
   issues: (r) => framed(r, r.project, <Issues key={r.project} project={r.project} id={r.id} />),

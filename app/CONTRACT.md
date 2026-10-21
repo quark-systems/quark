@@ -16,6 +16,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Changes and diff | `GET /v1/tasks/{id}/changes`, `GET /v1/tasks/{id}/diff[?path=]`, `task.event` events | quark#8 |
 | Terminals | `GET /v1/terminals/{id}`, `POST /v1/terminals/{id}/snapshot`, `/input`, `/resize` | quark#9 |
 | Answering decisions | `POST /v1/decisions/{id}:answer` with `answer` and optional `answered_by`; `Decision.answered_by`, `answered_at` | Phase 2 workstream 1 (decisions answer path) |
+| Import projects from firstmate | `POST /v1/imports/firstmate` with `home`, `dry_run`, `routes`, `include_archive`; the report's `projects`, `unrouted`, `notes` and `inventory` | quark#154 |
 | Project creation | `POST /v1/projects` with `repos`, `agent_config`, `dispatch_preset`, `delivery`; `Project.status`; `POST /v1/projects/{id}:provision` | quark#10 |
 | Archive and delete | `GET /v1/projects?include_archived=true`, `Project.archived_at`, `POST /v1/projects/{id}:archive`, `:unarchive`, `DELETE /v1/projects/{id}` with `confirm_name` (409 `unlanded_work` keeps it, archived); `project.deleted` events | project lifecycle |
 | Project memory | `GET /v1/projects/{id}/memory/proposals[?state=]`, `POST .../memory/proposals/{proposal_id}:accept` with optional `text` and `decided_by`, `:reject` with optional `decided_by`, `GET /v1/projects/{id}/memory`; `memory.proposed`, `memory.accepted`, `memory.rejected` events | quark#29 |

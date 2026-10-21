@@ -48,13 +48,14 @@ export function Projects() {
       <div className="header">
         <h1>All projects</h1>
         <span className="spacer" />
+        <a className="btn" href={href({ name: "import" })} data-testid="import-projects-link">Import</a>
         <a className="btn" href={href({ name: "new" })}>New project</a>
       </div>
       <div className="screen scroll">
         <div className="home">
           {rows.length === 0 && !archived.size ? (
             <div className="empty">
-              {connected ? <>No projects yet. <a href={href({ name: "new" })}>Create one</a> to get started.</> : "Waiting for the daemon…"}
+              {connected ? <>No projects yet. <a href={href({ name: "new" })}>Create one</a> or <a href={href({ name: "import" })}>import them</a> to get started.</> : "Waiting for the daemon…"}
             </div>
           ) : (
             <>
