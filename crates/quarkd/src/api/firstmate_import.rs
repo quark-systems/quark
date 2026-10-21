@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 use axum::extract::State;
 use axum::Json;
 use quark_systems::{
-    AgentConfig, BeadsState, CreateProject, ErrorBody, FirstmateImportReport, ImportCount,
-    ImportFirstmate, ImportInventoryItem, ImportOutcome, ImportedProject, Project, ProjectStatus,
-    RepoSource,
+    AgentConfig, AgentRole, BeadsState, CreateProject, ErrorBody, FirstmateImportReport,
+    ImportCount, ImportFirstmate, ImportInventoryItem, ImportOutcome, ImportedProject, Project,
+    ProjectStatus, RepoSource,
 };
 
 use super::{db, ApiError, AppState};
@@ -23,6 +23,9 @@ use crate::firstmate::{self, Plan, Task};
 use crate::project_repo::{self, RepoError};
 
 const DEFAULT_WAIT: u64 = 120;
+/// The coordinator's harness when firstmate's crew harness can't coordinate:
+/// the one the native engine starts coordinators on.
+const FALLBACK_HARNESS: &str = crate::engine::native_project::COORDINATOR_HARNESS;
 const DISPATCH_COMMIT: &str = "Import dispatch rules from firstmate";
 
 /// Import a firstmate home into Quark.
@@ -86,10 +89,11 @@ async fn run(
         }
     }
     let wait = Duration::from_secs(req.wait_secs.unwrap_or(DEFAULT_WAIT));
+    let agent = coordinator(state, &plan, &mut notes);
     let mut projects = Vec::new();
     for p in &plan.projects {
         let tasks = by_project.remove(p.name.as_str()).unwrap_or_default();
-        projects.push(project(state, req, &plan, p, &tasks, wait).await);
+        projects.push(project(state, req, &plan, p, &tasks, &agent, wait).await);
     }
     if let Some(e) = &plan.dispatch_error {
         notes.push(format!("config/crew-dispatch.json was not imported: {e}"));
@@ -107,11 +111,48 @@ async fn run(
     Ok(FirstmateImportReport {
         home: req.home.clone(),
         dry_run: req.dry_run,
-        inventory: inventory(&plan, &projects, &written, req),
+        inventory: inventory(&plan, &projects, &written, req, &agent),
         projects,
         unrouted,
         notes,
     })
+}
+
+/// The coordinator for each new Project: firstmate's crew harness
+/// (`config/crew-harness`) when Quark can run a coordinator on it, otherwise
+/// claude-code with a note saying why, at high effort.
+fn coordinator(state: &AppState, plan: &Plan, notes: &mut Vec<String>) -> AgentConfig {
+    let agent = |harness: &str| AgentConfig {
+        harness: harness.into(),
+        model: None,
+        effort: Some("high".into()),
+        pool: None,
+    };
+    let Some(name) = plan.crew_harness.as_deref() else {
+        return agent(FALLBACK_HARNESS);
+    };
+    let Some(id) = firstmate::dispatch::quark_harness(name) else {
+        notes.push(format!(
+            "config/crew-harness names `{name}`, which is not a Quark harness, so coordinators run on {FALLBACK_HARNESS}"
+        ));
+        return agent(FALLBACK_HARNESS);
+    };
+    let config = agent(&id);
+    let check = state.harnesses.validate(&config, AgentRole::Coordinator);
+    let why: Vec<_> = if !check.valid {
+        check.errors.into_iter().map(|e| e.message).collect()
+    } else if id != FALLBACK_HARNESS {
+        vec![format!(
+            "the native engine starts coordinators on {FALLBACK_HARNESS} only so far"
+        )]
+    } else {
+        return config;
+    };
+    notes.push(format!(
+        "{id} (config/crew-harness) cannot run a coordinator ({}), so coordinators run on {FALLBACK_HARNESS}; dispatch rules still send workers to it",
+        why.join("; ")
+    ));
+    agent(FALLBACK_HARNESS)
 }
 
 /// Quark-home files that need no Project: quota settings and user memory.
@@ -215,6 +256,7 @@ async fn project(
     plan: &Plan,
     p: &firstmate::Project,
     tasks: &[&Task],
+    agent: &AgentConfig,
     wait: Duration,
 ) -> ImportedProject {
     let mut out = ImportedProject {
@@ -265,12 +307,7 @@ async fn project(
                         name: None,
                     })
                     .collect(),
-                agent_config: Some(AgentConfig {
-                    harness: "claude-code".into(),
-                    model: None,
-                    effort: Some("high".into()),
-                    pool: None,
-                }),
+                agent_config: Some(agent.clone()),
                 delivery: Some(p.delivery),
                 ..Default::default()
             };
@@ -512,6 +549,7 @@ fn inventory(
     projects: &[ImportedProject],
     w: &Written,
     req: &ImportFirstmate,
+    agent: &AgentConfig,
 ) -> Vec<ImportInventoryItem> {
     use ImportOutcome::*;
     let sum = |f: fn(&ImportedProject) -> &ImportCount| -> (usize, usize) {
@@ -561,7 +599,19 @@ fn inventory(
                 Imported
             },
             plan.projects.len(),
-            "Quark's per-Project state (dispatch, Beads, workspace) needs a Project per firstmate project; coordinators use claude-code at high effort, change it in Settings",
+            "Quark's per-Project state (dispatch, Beads, workspace) needs a Project per firstmate project; change a coordinator in Settings",
+        ),
+        item(
+            "coordinator",
+            "config/crew-harness",
+            &format!("each new Project's coordinator: {} at high effort", agent.harness),
+            match &plan.crew_harness {
+                Some(_) if projects.iter().all(|p| p.outcome == NotImported) && !projects.is_empty() => NotImported,
+                Some(h) if firstmate::dispatch::quark_harness(h).as_deref() == Some(agent.harness.as_str()) => Imported,
+                _ => NotImported,
+            },
+            usize::from(plan.crew_harness.is_some()),
+            "firstmate's crew harness runs the coordinator when it can coordinate; otherwise claude-code does, and the notes say why. Existing Projects keep theirs",
         ),
         item(
             "dispatch",

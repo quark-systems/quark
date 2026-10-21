@@ -85,6 +85,9 @@ pub struct Plan {
     /// The dispatch rules as `dispatch.yaml`, with its notes.
     pub dispatch: Option<dispatch::Converted>,
     pub dispatch_error: Option<String>,
+    /// `config/crew-harness`'s first line, unless it is `default`: the
+    /// harness firstmate ran its crew on.
+    pub crew_harness: Option<String>,
     pub quota: Quota,
     pub tasks: Vec<Task>,
     pub captain: Vec<knowledge::Entry>,
@@ -141,6 +144,9 @@ pub fn read(req: &ImportFirstmate) -> Result<Plan, String> {
             Err(e) => plan.dispatch_error = Some(e),
         }
     }
+    plan.crew_harness = read_text(&home.join("config/crew-harness"))?
+        .and_then(|t| t.lines().next().map(|l| l.trim().to_string()))
+        .filter(|h| !h.is_empty() && h != "default");
     plan.skipped.variant_dispatch = count_dir(&home.join("config"), |n| {
         (n.starts_with("crew-dispatch-") && n.ends_with(".json")) || n.contains(".bak-")
     });
