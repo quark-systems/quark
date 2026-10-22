@@ -493,6 +493,51 @@ impl Store {
         })
     }
 
+    /// Takes a finished task off the board, keeping its row, activity log
+    /// and events, and emits `task.state_changed` carrying `cleared_at`.
+    /// Clearing a cleared task again is a no-op that still returns it.
+    pub fn clear_task(&self, id: &str) -> Result<Task> {
+        self.write(|tx, events| {
+            let mut task = tx
+                .query_row(&format!("{TASK_SELECT} WHERE id = ?1"), [id], task_from_row)
+                .optional()?
+                .ok_or(StoreError::NotFound)?;
+            if task.cleared_at.is_some() {
+                return Ok(task);
+            }
+            if !matches!(task.state, TaskState::Done | TaskState::Failed) {
+                return Err(StoreError::Conflict(format!(
+                    "the worker is {}; cancel it or let it finish first",
+                    task.state.as_str()
+                )));
+            }
+            task.cleared_at = Some(now_rfc3339());
+            tx.execute(
+                "UPDATE tasks SET cleared_at = ?2 WHERE id = ?1",
+                params![task.id, task.cleared_at],
+            )?;
+            append_event(
+                tx,
+                events,
+                Some(&task.project_id),
+                EventType::TaskStateChanged,
+                serde_json::json!({ "task": task, "previous_state": task.state }),
+            )?;
+            Ok(task)
+        })
+    }
+
+    /// Engine ids of the Project's cleared tasks.
+    pub fn cleared_engine_ids(&self, project_id: &str) -> Result<HashSet<String>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT engine_id FROM tasks WHERE project_id = ?1 AND cleared_at IS NOT NULL",
+            )?;
+            let rows = stmt.query_map([project_id], |r| r.get(0))?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
     /// Where to reach a task in its engine: the owning Project, the engine's
     /// own task id and the Project's workspace, if one is attached.
     pub fn task_target(&self, id: &str) -> Result<TaskTarget> {
@@ -564,6 +609,7 @@ impl Store {
                             failovers: Vec::new(),
                             model: None,
                             branch: None,
+                            cleared_at: None,
                             created_at: now.clone(),
                             updated_at: now,
                         };
@@ -606,12 +652,19 @@ impl Store {
                         } else {
                             (et.state, et.state_note.clone())
                         };
+                        // A cleared task the engine picked up again is
+                        // shown again.
+                        let cleared_at = old
+                            .cleared_at
+                            .clone()
+                            .filter(|_| matches!(state, TaskState::Done | TaskState::Failed));
                         let changed = old.title != et.title
                             || old.kind != et.kind
                             || old.state != state
                             || old.state_note != state_note
                             || old.harness != et.harness
-                            || old.pull_request_url != et.pull_request_url;
+                            || old.pull_request_url != et.pull_request_url
+                            || old.cleared_at != cleared_at;
                         // The worktree is not part of the API's task, so a
                         // move alone updates the row without an event.
                         tx.execute(
@@ -630,12 +683,14 @@ impl Store {
                             state_note,
                             harness: et.harness.clone(),
                             pull_request_url: et.pull_request_url.clone(),
+                            cleared_at,
                             updated_at: now,
                             ..old.clone()
                         };
                         tx.execute(
                             "UPDATE tasks SET title = ?2, kind = ?3, state = ?4, state_note = ?5,
-                                 harness = ?6, pull_request_url = ?7, updated_at = ?8
+                                 harness = ?6, pull_request_url = ?7, updated_at = ?8,
+                                 cleared_at = ?9
                              WHERE id = ?1",
                             params![
                                 task.id,
@@ -645,7 +700,8 @@ impl Store {
                                 task.state_note,
                                 task.harness,
                                 task.pull_request_url,
-                                task.updated_at
+                                task.updated_at,
+                                task.cleared_at
                             ],
                         )?;
                         append_event(
@@ -1621,10 +1677,10 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
 
 const TASK_COLUMNS: &str = "id, project_id, title, kind, state, state_note, harness, \
                             pull_request_url, created_at, updated_at, account_id, failovers, \
-                            COALESCE(model_seen, model), branch";
+                            COALESCE(model_seen, model), branch, cleared_at";
 const TASK_SELECT: &str = "SELECT id, project_id, title, kind, state, state_note, harness, \
                            pull_request_url, created_at, updated_at, account_id, failovers, \
-                           COALESCE(model_seen, model), branch FROM tasks";
+                           COALESCE(model_seen, model), branch, cleared_at FROM tasks";
 
 fn task_from_row(r: &Row) -> rusqlite::Result<Task> {
     task_from_row_at(r, 0)
@@ -1650,6 +1706,7 @@ fn task_from_row_at(r: &Row, i: usize) -> rusqlite::Result<Task> {
         failovers: serde_json::from_str(&r.get::<_, String>(i + 11)?).unwrap_or_default(),
         model: r.get(i + 12)?,
         branch: r.get(i + 13)?,
+        cleared_at: r.get(i + 14)?,
     })
 }
 

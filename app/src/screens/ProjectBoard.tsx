@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, CoordinatorCommand, Project, Task, TranscriptItem } from "../api";
 import { SinceYouLooked } from "../shell/SinceYouLooked";
-import { loadChat, useStore } from "../store";
+import { clearWorkers, loadChat, useStore } from "../store";
 import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
@@ -21,6 +21,7 @@ export function ProjectBoard({ id }: { id: string }) {
   const connected = useStore((s) => s.connected);
   const tasks = useStore((s) => s.tasks);
   const l = useLabels(id);
+  const [notes, setNotes] = useState<Record<string, string | null>>({});
 
   const mine = useMemo(() => Object.values(tasks).filter((t) => t.project_id === id), [tasks, id]);
   const columns = useMemo(() => {
@@ -45,8 +46,13 @@ export function ProjectBoard({ id }: { id: string }) {
         <div className="board" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(180px, 1fr))` }}>
           {columns.map((c) => (
             <div className="col" key={c.id} data-testid={`col-${c.id}`}>
-              <div className="col-head"><span className="swatch" style={{ background: c.color }} />{c.id === "needs_decision" ? `Needs ${l.role("decision")}` : c.label}<span className="n">{c.tasks.length}</span></div>
+              <div className="col-head"><span className="swatch" style={{ background: c.color }} />{c.id === "needs_decision" ? `Needs ${l.role("decision")}` : c.label}<span className="n">{c.tasks.length}</span>
+                {(c.id === "failed" || c.id === "done") && c.tasks.length > 0 && (
+                  <ClearColumn pid={id} state={c.id} onNote={(n) => setNotes((m) => ({ ...m, [c.id]: n }))} />
+                )}
+              </div>
               <div className="col-body">
+                {notes[c.id] && <div className="col-note faint" role="status" data-testid={`clear-${c.id}-note`}>{notes[c.id]}</div>}
                 {c.tasks.map((t) => (
                   <WorkerCard key={t.id + (changed.has(t.id) ? ":" + t.state : "")} task={t} flash={changed.has(t.id)} />
                 ))}
@@ -73,6 +79,28 @@ export function Conversation({ id }: { id: string }) {
         <SinceYouLooked project={id} />
       </div>
     </>
+  );
+}
+
+/** Clears every worker in the done or failed column; ones whose working copy holds work stay, and the column says why. */
+function ClearColumn({ pid, state, onNote }: { pid: string; state: "done" | "failed"; onNote: (note: string | null) => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+  const run = async () => {
+    setBusy(true); setConfirming(false); onNote(null);
+    try { onNote(await clearWorkers(pid, state)); } catch (e) { onNote(errText(e)); } finally { setBusy(false); }
+  };
+  return (
+    <button className={"btn small" + (confirming ? " danger" : "")} disabled={busy} data-testid={`clear-${state}`}
+      title={`Close the terminals of every ${state} worker, give their working copies back and take them off the board. Their history is kept.`}
+      onClick={() => (confirming ? void run() : setConfirming(true))}>
+      {busy ? "Clearing…" : confirming ? "Confirm clear" : "Clear all"}
+    </button>
   );
 }
 

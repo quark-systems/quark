@@ -571,6 +571,14 @@ function testDispatch(proj, description, draft = null) {
 }
 
 let taskEventId = 0;
+/** Clears a finished task, or says what its worktree still holds. */
+function clearTask(task) {
+  if (/unpushed/i.test(task.title)) return "2 unpushed commits";
+  task.cleared_at = now();
+  emit("task.state_changed", { task: { ...task }, previous_state: task.state }, task.project_id);
+  return null;
+}
+
 function setState(task, state, note = null) {
   const previous = task.state;
   task.state = state;
@@ -1565,7 +1573,24 @@ const server = http.createServer(async (req, res) => {
   if ((r = m(/^\/v1\/projects\/([^/]+)\/tasks$/)) && req.method === "GET") {
     const id = decodeURIComponent(r[1]);
     if (!projects.has(id)) return notFound(res);
-    return send(res, 200, [...tasks.values()].filter((t) => t.project_id === id));
+    const all = url.searchParams.get("include_cleared") === "true";
+    return send(res, 200, [...tasks.values()].filter((t) => t.project_id === id && (all || !t.cleared_at)));
+  }
+  // Like quarkd: clear each finished worker; one whose title mentions "unpushed" keeps its worktree.
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/tasks:clear$/)) && req.method === "POST") {
+    const id = decodeURIComponent(r[1]);
+    if (!projects.has(id)) return notFound(res);
+    const b = await readJson(req).catch(() => null);
+    const states = b?.states ?? ["done", "failed"];
+    if (states.some((s) => s !== "done" && s !== "failed")) return invalid(res, "only done and failed workers can be cleared");
+    const out = { cleared: [], kept: [] };
+    for (const t of tasks.values()) {
+      if (t.project_id !== id || t.cleared_at || !states.includes(t.state)) continue;
+      const why = clearTask(t);
+      if (why) out.kept.push({ task_id: t.id, title: t.title, code: "unlanded_work", reason: `its worktree has ${why}` });
+      else out.cleared.push(t.id);
+    }
+    return send(res, 200, out);
   }
   if (p === "/v1/decisions" && req.method === "GET") {
     const st = url.searchParams.get("state");
@@ -2016,6 +2041,13 @@ const server = http.createServer(async (req, res) => {
       if (task.state === "done" || task.state === "failed") return send(res, 409, { error: { code: "conflict", message: "task already finished" } });
       setState(task, "failed", "Cancelled from the app");
       output(task, "\r\n\x1b[31m[worker exited: cancelled]\x1b[0m\r\n");
+      return send(res, 204);
+    }
+    if (rest === ":clear" && req.method === "POST") {
+      if (task.cleared_at) return send(res, 204);
+      if (task.state !== "done" && task.state !== "failed") return send(res, 409, { error: { code: "conflict", message: `the worker is ${task.state}; cancel it or let it finish first` } });
+      const kept = clearTask(task);
+      if (kept) return send(res, 409, { error: { code: "unlanded_work", message: `Not cleared: the worker's worktree has ${kept}. Push or discard that work, then clear it again.` } });
       return send(res, 204);
     }
     if (rest === ":relaunch" && req.method === "POST") {

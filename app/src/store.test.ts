@@ -35,6 +35,15 @@ describe("applyEvent", () => {
     expect(Object.keys(s.tasks)).toEqual(["t1"]);
   });
 
+  it("drops a worker once it is cleared", () => {
+    let s = applyEvent(initialState, ev(1, "task.created", task({ state: "failed" })));
+    s = applyEvent(s, ev(2, "task.state_changed", {
+      task: task({ state: "failed", cleared_at: "2026-10-22T20:00:00Z" }), previous_state: "failed",
+    }));
+    expect(s.tasks).toEqual({});
+    expect(applyEvent(s, ev(3, "task.state_changed", { task: task({ cleared_at: "x" }), previous_state: "failed" }))).toBe(s);
+  });
+
   it("is idempotent when an event is replayed", () => {
     const e = ev(1, "task.created", task());
     const once = applyEvent(initialState, e);

@@ -11,6 +11,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | --- | --- | --- |
 | Projects, board, decisions, events | `GET /v1/health`, `GET/POST /v1/projects`, `GET /v1/projects/{id}`, `GET /v1/projects/{id}/tasks`, `GET /v1/tasks/{id}`, `GET /v1/decisions`, `GET /v1/events?cursor=` | main |
 | Steering and control | `POST /v1/tasks/{id}/messages`, `:cancel`, `:relaunch` | quark#5 |
+| Clearing finished workers | `POST /v1/tasks/{id}:clear` (409 `conflict` while working, 409 `unlanded_work` keeps it), `POST /v1/projects/{id}/tasks:clear` with `states` (`ClearedTasks`), `Task.cleared_at`, `GET /v1/projects/{id}/tasks?include_cleared=true`; a `task.state_changed` carrying `cleared_at` takes the worker out of every list | clear workers |
 | Harnesses | `GET /v1/harnesses`, `POST /v1/harnesses:validate` | quark#6 |
 | Transcripts and coordinator chat | `GET /v1/tasks/{id}/transcript`, `GET/POST /v1/coordinators/{id}/messages` | quark#7 |
 | Catch up, Status report, Wrap up | `POST /v1/coordinators/{id}:run` with `{"command": "catch_up" \| "status_report" \| "wrap_up"}`; `MessageAccepted.command` | quark#158 |

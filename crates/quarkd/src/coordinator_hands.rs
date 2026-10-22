@@ -4,7 +4,8 @@
 //!   coordinator's session, the way the coordinator chat does.
 //! - [`EngineHands`] carries out the coordinator's tool calls through the
 //!   engine adapter and the store: steering, answering, relaunching and
-//!   cancelling go to the engine; `ask_user`, `tell_user` and `remember`
+//!   cancelling go to the engine; clearing a finished task goes through
+//!   [`crate::clear`]; `ask_user`, `tell_user` and `remember`
 //!   become a decision, a coordinator chat message and a memory proposal in
 //!   the store. Starting a task and choosing its profile go to the engine's
 //!   dispatch ([`EngineAdapter::start_task`], served by the native engine);
@@ -20,11 +21,12 @@ use quark_core::{CoreError, ProjectId, Result};
 use quark_systems::{AgentConfig, MemoryEvidence, MemorySource};
 
 use crate::chat::{ChatError, CoordinatorInput, Delivery};
+use crate::clear::{ClearError, Cleared};
 use crate::engine::{
     EngineAdapter, EngineError, EngineTask, NewTask, StartOutcome, TaskControl, TaskStart,
     WorkspaceRef,
 };
-use crate::store::{NewProposal, Store};
+use crate::store::{NewProposal, Store, StoreError};
 
 /// Who the engine records as answering a worker for the coordinator.
 pub const ANSWERED_BY: &str = "coordinator";
@@ -121,8 +123,13 @@ impl EngineHands {
         self
     }
 
+    /// The engine's tasks, without the ones cleared off the board.
     async fn tasks(&self, ws: &WorkspaceRef) -> Result<Vec<EngineTask>> {
-        Ok(self.engine.snapshot(ws).await.map_err(core)?.tasks)
+        let mut tasks = self.engine.snapshot(ws).await.map_err(core)?.tasks;
+        let (store, pid) = (self.store.clone(), ws.project_id.clone());
+        let cleared = blocking(move || store.cleared_engine_ids(&pid)).await?;
+        tasks.retain(|t| !cleared.contains(&t.id));
+        Ok(tasks)
     }
 }
 
@@ -253,6 +260,32 @@ impl Hands for EngineHands {
                     .await
                     .map_err(core)?;
                 Ok(format!("Cancelled {task}; its worktree is kept."))
+            }
+            ToolCall::Clear { task, .. } => {
+                let (store, pid) = (self.store.clone(), ws.project_id.clone());
+                let id = blocking(move || store.task_ids_by_engine(&pid))
+                    .await?
+                    .remove(task.as_str())
+                    .ok_or_else(|| CoreError::NotFound(format!("no task {task}")))?;
+                match crate::clear::clear(&self.store, &self.engine, &id).await {
+                    Ok(Cleared::Cleared(_)) => Ok(format!(
+                        "Cleared {task}: its session is stopped, its worktree given back and it is off the board."
+                    )),
+                    Ok(Cleared::Kept {
+                        uncommitted,
+                        unpushed_commits,
+                        ..
+                    }) => Err(CoreError::Refused(format!(
+                        "Not cleared: {task}'s worktree has {}. Land that work or relaunch {task} to finish it.",
+                        crate::clear::unlanded(uncommitted, unpushed_commits)
+                    ))),
+                    Err(ClearError::Store(StoreError::Conflict(m))) => Err(CoreError::Refused(m)),
+                    Err(ClearError::Store(StoreError::NotFound)) => {
+                        Err(CoreError::NotFound(format!("no task {task}")))
+                    }
+                    Err(ClearError::Engine(e)) => Err(core(e)),
+                    Err(e) => Err(CoreError::Backend(e.to_string())),
+                }
             }
             ToolCall::AskUser { key, question, .. } => {
                 let brief = call.brief().unwrap_or_default();
@@ -487,6 +520,40 @@ mod tests {
                 action: TaskControl::Cancel
             }
         );
+    }
+
+    #[tokio::test]
+    async fn clear_tidies_a_finished_task_and_takes_it_out_of_the_fleet() {
+        let (store, engine, p) = setup();
+        let snapshot = FleetSnapshot {
+            tasks: vec![
+                task("t1", TaskState::Failed),
+                task("t2", TaskState::Running),
+            ],
+        };
+        store.apply_snapshot(p.as_str(), &snapshot).unwrap();
+        engine.set_snapshot(snapshot);
+        let hands = EngineHands::new(store.clone(), engine.clone());
+        let clear = |t: &str| ToolCall::Clear {
+            task: TaskId::from(t),
+            reason: "done with it".into(),
+        };
+
+        let refused = hands.run(&p, &clear("t2")).await.unwrap_err();
+        assert!(matches!(refused, CoreError::Refused(_)), "{refused:?}");
+        engine.set_unlanded("t1", true);
+        let kept = hands.run(&p, &clear("t1")).await.unwrap_err();
+        assert!(kept.to_string().contains("uncommitted changes"), "{kept}");
+        engine.set_unlanded("t1", false);
+        let out = hands.run(&p, &clear("t1")).await.unwrap();
+        assert!(out.starts_with("Cleared t1"), "{out}");
+        assert!(matches!(
+            hands.run(&p, &clear("nope")).await,
+            Err(CoreError::NotFound(_))
+        ));
+
+        let fleet = hands.run(&p, &ToolCall::Fleet {}).await.unwrap();
+        assert_eq!(fleet, "t2 [running] t2 title: note");
     }
 
     #[tokio::test]

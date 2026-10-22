@@ -284,12 +284,21 @@ pub(super) async fn set_standing_approval(
     Ok(())
 }
 
-/// The task board for one Project.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TaskListQuery {
+    /// Also list cleared tasks (those with `cleared_at`).
+    #[serde(default)]
+    pub include_cleared: bool,
+}
+
+/// The task board for one Project. Cleared tasks are left out unless
+/// `include_cleared`.
 #[utoipa::path(
     get,
     path = "/v1/projects/{id}/tasks",
     tag = "tasks",
-    params(("id" = String, Path, description = "Project id")),
+    params(("id" = String, Path, description = "Project id"), TaskListQuery),
     responses(
         (status = 200, body = Vec<Task>),
         (status = 404, body = ErrorBody)
@@ -298,8 +307,13 @@ pub(super) async fn set_standing_approval(
 pub async fn list_tasks(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<TaskListQuery>,
 ) -> Result<Json<Vec<Task>>, ApiError> {
-    Ok(Json(db(&state, move |s| s.list_tasks(&id)).await?))
+    let mut tasks = db(&state, move |s| s.list_tasks(&id)).await?;
+    if !q.include_cleared {
+        tasks.retain(|t| t.cleared_at.is_none());
+    }
+    Ok(Json(tasks))
 }
 
 /// Task detail.
@@ -380,12 +394,13 @@ pub async fn task_action(
         return Err(ApiError::new(
             StatusCode::METHOD_NOT_ALLOWED,
             "method_not_allowed",
-            "use POST /v1/tasks/{id}:cancel or :relaunch",
+            "use POST /v1/tasks/{id}:cancel, :relaunch or :clear",
         ));
     };
     let id = Path(id.to_string());
     match action {
         "cancel" => cancel_task(state, id).await,
+        "clear" => super::clear::clear_task(state, id).await,
         "relaunch" => {
             // The body is optional, so an empty one is accepted whatever its
             // content type says.
@@ -1261,8 +1276,9 @@ pub(super) fn router() -> axum::Router<AppState> {
                 .delete(super::lifecycle::delete_project),
         )
         .route("/v1/projects/{id}/tasks", get(list_tasks))
-        // POST serves the custom methods `/v1/tasks/{id}:cancel` and
-        // `:relaunch`; the router allows one parameter per segment.
+        // POST serves the custom methods `/v1/tasks/{id}:cancel`,
+        // `:relaunch` and `:clear`; the router allows one parameter per
+        // segment.
         .route("/v1/tasks/{id}", get(get_task).post(task_action))
         .route("/v1/tasks/{id}/messages", post(send_task_message))
         .route("/v1/tasks/{id}/transcript", get(task_transcript))

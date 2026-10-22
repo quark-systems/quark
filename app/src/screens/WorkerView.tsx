@@ -1,6 +1,6 @@
 // J4: one worker in one view. Its live terminal and a box to message it in the middle; the work
 // pane on the right with its transcript, changed files with their diff, its PR, the brief it
-// was dispatched with and why this agent; cancel and relaunch in the header, and the coordinator dock under the terminal.
+// was dispatched with and why this agent; cancel, relaunch and clear in the header, and the coordinator dock under the terminal.
 import { KeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
@@ -27,15 +27,17 @@ export function WorkerView({ id }: { id: string }) {
   const activity = useStore((s) => s.taskActivity[id] ?? 0);
   const [tab, setTab] = useState<"transcript" | "changes" | "pr" | "brief" | "why">("transcript");
   const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
-  const [missing, setMissing] = useState(false);
+  const [gone, setGone] = useState<null | "missing" | "cleared">(null);
   const [paneWidth, setPaneWidth] = useWorkPaneWidth();
 
   useEffect(() => {
-    if (!task) refreshTask(id).catch(() => setMissing(true));
+    if (!task) refreshTask(id).then((t) => t.cleared_at && setGone("cleared")).catch(() => setGone("missing"));
   }, [id, task]);
 
   if (!task) {
-    return <div className="empty">{missing ? "This task does not exist on the daemon." : connected ? "Loading…" : "Waiting for the daemon…"}</div>;
+    const why = gone === "cleared" ? "This worker was cleared. Its terminal was closed and its working copy given back."
+      : gone === "missing" ? "This task does not exist on the daemon." : connected ? "Loading…" : "Waiting for the daemon…";
+    return <div className="empty" data-testid={gone === "cleared" ? "worker-cleared" : undefined}>{why}</div>;
   }
   const st = stateMeta(task.state);
 
@@ -158,36 +160,47 @@ function PrPanel({ prId, url }: { prId: string | null; url: string | null }) {
   );
 }
 
-// ---- cancel / relaunch ----
+// ---- cancel / relaunch / clear ----
+
+type Control = "cancel" | "relaunch" | "clear";
+const CONTROL_LABEL: Record<Control, string> = { cancel: "Cancel", relaunch: "Relaunch", clear: "Clear" };
 
 function Controls({ taskId, active }: { taskId: string; active: boolean }) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState<null | "cancel" | "relaunch">(null);
+  const [confirming, setConfirming] = useState<null | "cancel" | "clear">(null);
+  const [busy, setBusy] = useState<null | Control>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!confirming) return;
-    const t = setTimeout(() => setConfirming(false), 4000);
+    const t = setTimeout(() => setConfirming(null), 4000);
     return () => clearTimeout(t);
   }, [confirming]);
 
-  const run = async (what: "cancel" | "relaunch") => {
-    setBusy(what); setErr(null); setConfirming(false);
+  const run = async (what: Control) => {
+    setBusy(what); setErr(null); setConfirming(null);
     try {
-      await (what === "cancel" ? api.cancel(taskId) : api.relaunch(taskId));
+      await (what === "cancel" ? api.cancel(taskId) : what === "clear" ? api.clearTask(taskId) : api.relaunch(taskId));
     } catch (e) {
-      setErr(e instanceof NotAvailable ? `${what === "cancel" ? "Cancel" : "Relaunch"} is not available from this daemon yet` : errText(e));
+      setErr(e instanceof NotAvailable ? `${CONTROL_LABEL[what]} is not available from this daemon yet` : errText(e));
     } finally { setBusy(null); }
   };
 
   return (
     <div className="controls">
       {err && <span className="bad small-text" role="alert">{err}</span>}
-      {confirming ? (
+      {active ? confirming === "cancel" ? (
         <button className="btn danger" onClick={() => run("cancel")} data-testid="confirm-cancel">Confirm cancel</button>
       ) : (
-        <button className="btn" disabled={!active || busy !== null} onClick={() => setConfirming(true)} data-testid="cancel">
+        <button className="btn" disabled={busy !== null} onClick={() => setConfirming("cancel")} data-testid="cancel">
           {busy === "cancel" ? "Cancelling…" : "Cancel"}
+        </button>
+      ) : confirming === "clear" ? (
+        <button className="btn danger" onClick={() => run("clear")} data-testid="confirm-clear"
+          title="Closes its terminal, gives its working copy back and takes it off the board">Confirm clear</button>
+      ) : (
+        <button className="btn" disabled={busy !== null} onClick={() => setConfirming("clear")} data-testid="clear"
+          title="Close its terminal, give its working copy back and take it off the board. Its history is kept.">
+          {busy === "clear" ? "Clearing…" : "Clear"}
         </button>
       )}
       <button className="btn" disabled={busy !== null} onClick={() => run("relaunch")} data-testid="relaunch">
