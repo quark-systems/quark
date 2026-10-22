@@ -177,7 +177,12 @@ pub struct Account {
     /// Credential files relative to the config directory.
     #[serde(default)]
     pub auth_files: Vec<String>,
-    /// `auth_env` and `auth_files` are the only credential sources.
+    /// Login Keychain services (generic passwords) that hold the default
+    /// account's login on macOS.
+    #[serde(default)]
+    pub auth_keychain: Vec<String>,
+    /// `auth_env`, `auth_files` and `auth_keychain` are the only credential
+    /// sources.
     #[serde(default)]
     pub auth_exhaustive: bool,
     /// Variable that signs the harness in with an API key, for a harness

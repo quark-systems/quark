@@ -86,6 +86,7 @@ async fn ask_the_user_and_wake_on_the_answer() {
             path: None,
             home: None,
             vars: HashMap::new(),
+            ..Default::default()
         },
     ));
     let accounts = Arc::new(Accounts::new(

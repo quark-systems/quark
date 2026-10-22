@@ -23,6 +23,8 @@ GEMINI_CLI_TRUST_WORKSPACE = "true"
 [account]
 config_dir = ".gemini"
 auth_env = ["GEMINI_API_KEY"]
+# Written by "Sign in with Google".
+auth_files = ["oauth_creds.json"]
 
 [hooks]
 install = "gemini-settings"

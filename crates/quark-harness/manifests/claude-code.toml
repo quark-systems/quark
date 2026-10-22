@@ -27,6 +27,8 @@ env = "CLAUDE_CONFIG_DIR"
 config_dir = ".claude"
 auth_env = ["ANTHROPIC_API_KEY"]
 auth_files = [".credentials.json"]
+# On macOS the login lives in the Keychain, not in .credentials.json.
+auth_keychain = ["Claude Code-credentials"]
 
 [hooks]
 install = "claude-settings"

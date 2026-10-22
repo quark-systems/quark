@@ -18,6 +18,12 @@ argv = ["cursor-agent", "--trust", "--yolo", "--workspace", "{cwd}", "{prompt}"]
 optional = [["--model", "{model}"]]
 prompt_via = "argv"
 
+[account]
+config_dir = ".cursor"
+auth_env = ["CURSOR_API_KEY"]
+# `cursor-agent login` keeps its token in the Keychain on macOS.
+auth_keychain = ["cursor-access-token"]
+
 [turn_signals]
 busy = "transcript"
 turn_end = "transcript"

@@ -189,6 +189,7 @@ fn served(dir: &Path) -> Served {
             path: Some(bin.into_os_string()),
             home: Some(home),
             vars: Default::default(),
+            ..Default::default()
         },
     ));
 

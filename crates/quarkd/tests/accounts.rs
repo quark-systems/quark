@@ -66,6 +66,7 @@ fn setup_with(forwarded: &'static [&'static str]) -> Setup {
         path: Some(bin.into_os_string()),
         home: Some(home.clone()),
         vars: HashMap::new(),
+        ..Default::default()
     };
     let store = Arc::new(Store::open_in_memory().unwrap());
     let engine = Arc::new(StubEngine::new());

@@ -17,6 +17,11 @@ argv = ["opencode", "--prompt", "{prompt}"]
 optional = [["--model", "{model}"]]
 prompt_via = "argv"
 
+[account]
+config_dir = ".local/share/opencode"
+# `opencode auth login` writes every provider's login here.
+auth_files = ["auth.json"]
+
 [turn_signals]
 busy = "extension"
 turn_end = "extension"
