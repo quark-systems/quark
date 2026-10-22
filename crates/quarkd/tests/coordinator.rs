@@ -185,14 +185,15 @@ async fn ask_the_user_and_wake_on_the_answer() {
     let decision = open[0].clone();
     assert_eq!(decision.brief.asked_by.as_deref(), Some("coordinator"));
 
-    // Its turn-end hook closes the turn.
+    // Its turn-end hook closes the turn. Claude Code's `Stop` gets an empty
+    // decision, which lets the session stop.
     let (s, b) = send(
         &app,
         post(&hook_path, json!({"usage": {"input": 900, "output": 80}})),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert!(b["turn"].is_string(), "{b}");
+    assert_eq!(b, json!({}));
     assert!(coordinator.coordinator().open_turn(&pid).await.is_none());
 
     // The user answers in the app; the answer wakes the coordinator.
