@@ -5,9 +5,9 @@
 // commands get readable titles too, and the ones that only wait for events
 // mark the agent as listening rather than working.
 import type { Step } from "./turns";
-import { commandNoteTitle } from "../../commands";
+import { CommandNote, commandNoteTitle, parseCommandNote } from "../../commands";
 
-export type EventKind = "wake" | "background" | "engine" | "warning";
+export type EventKind = "wake" | "background" | "engine" | "warning" | "command";
 
 /** One thing a wake asks the coordinator to judge. */
 export interface WakeItem {
@@ -29,6 +29,8 @@ export interface EngineEvent {
   raw: string;
   /** What a native wake lists, one row each. */
   items?: WakeItem[];
+  /** A catch up, status report or wrap up you asked for (or the engine did). */
+  command?: CommandNote;
 }
 
 /** firstmate's operational-input prefix: U+2063 then `FIRSTMATE_OP: ` (bin/fm-operational-input.sh). */
@@ -55,7 +57,9 @@ export function engineEvent(text: string): EngineEvent | null {
   // `ENGINE_NOTE` in quarkd's chat.rs: the engine telling the coordinator something outside a wake.
   if (t.startsWith("Engine note: ")) {
     const what = t.slice("Engine note: ".length);
-    const title = commandNoteTitle(what) ?? (/^Project memory:/.test(what) ? "Project memory updated"
+    const command = parseCommandNote(what);
+    if (command) return { kind: "command", title: commandNoteTitle(what) ?? "Command", raw, command };
+    const title = (/^Project memory:/.test(what) ? "Project memory updated"
       : /^Memory shared by every Project:/.test(what) ? "Shared memory updated"
       : /^the user set this Project's persona to /.test(what) ? "Persona changed" : "Engine note");
     return { kind: "engine", title, raw };

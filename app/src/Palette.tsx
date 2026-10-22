@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { Command } from "cmdk";
 import { go, useRoute } from "./nav";
-import { api } from "./api";
+import { runCommand } from "./components/CoordinatorCommand";
 import { COMMANDS, commandLabel, HINTS } from "./commands";
 import { useLabels } from "./persona";
 import { useStore } from "./store";
@@ -55,7 +55,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
               <Command.Group heading={`Ask the ${l.role("coordinator")}`}>
                 {COMMANDS.map((c) => (
                   <Command.Item key={c} value={`${commandLabel(l, c)} ${c.replace("_", " ")} ${HINTS[c]}`}
-                    onSelect={() => pick(() => { go({ name: "project", id: here }); void api.runCommand(here, c).catch((e) => console.warn("command", e)); })}>
+                    onSelect={() => pick(() => { go({ name: "project", id: here }); void runCommand(here, c).catch((e) => console.warn("command", e)); })}>
                     {commandLabel(l, c)}<span className="sub">{HINTS[c]}</span>
                   </Command.Item>
                 ))}

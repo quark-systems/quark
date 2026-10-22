@@ -17,6 +17,9 @@ const PATHS: Record<string, string> = {
   cross: "M4.5 4.5l7 7M11.5 4.5l-7 7",
   copy: "M5.5 5.5h7v8h-7zM3.5 10.5v-8h7",
   "arrow-down": "M8 3v10M4 9l4 4 4-4",
+  "catch-up": "M3 8a5 5 0 1 0 1.5-3.5M3 2.5V5h2.5M8 5.5V8l2 1.5",
+  status: "M3 3h10v10H3zM5.5 6h5M5.5 8.5h5M5.5 11h3",
+  "wrap-up": "M2.5 4.5h11V7h-11zM3.5 7v6.5h9V7M6.5 9.5h3",
   "chevron-right": "M6 4l4 4-4 4",
   "chevron-down": "M4 6l4 4 4-4",
 };

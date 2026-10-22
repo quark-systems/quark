@@ -3,8 +3,8 @@
 // answer. Layout and interaction follow MonoCode's agent transcript
 // (https://github.com/hardbeat920/monocode, MIT); the code is Quark's own.
 import React, { useMemo, useRef, useState } from "react";
-import type { TranscriptItem } from "../../api";
-import { TranscriptContext, TranscriptSettings } from "./context";
+import type { CoordinatorCommand, TranscriptItem } from "../../api";
+import { neutralCommandLabel, TranscriptContext, TranscriptSettings } from "./context";
 import { useScrollAnchor } from "./hooks";
 import { Icon } from "./Icon";
 import { TurnView } from "./Turn";
@@ -25,13 +25,15 @@ export interface TranscriptProps {
   empty?: React.ReactNode;
   testId?: string;
   className?: string;
+  /** A command's name in the Project's persona, for command cards. */
+  commandLabel?: (c: CoordinatorCommand) => string;
 }
 
 /**
  * Give it a `key` per source (task or coordinator), so paging and the entries that
  * count as new start over when the source changes.
  */
-export function Transcript({ items, agent, actions = false, children, empty, testId, className }: TranscriptProps) {
+export function Transcript({ items, agent, actions = false, children, empty, testId, className, commandLabel = neutralCommandLabel }: TranscriptProps) {
   const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id)), [items]);
   const { ref, onScroll, unseen, jump, holdPosition } = useScrollAnchor<HTMLDivElement>(items.length);
 
@@ -46,7 +48,7 @@ export function Transcript({ items, agent, actions = false, children, empty, tes
   const shown = turns.slice(start);
 
   const freshAfter = firstLoad.current?.maxId ?? Infinity;
-  const settings = useMemo<TranscriptSettings>(() => ({ agent, actions, freshAfter }), [agent, actions, freshAfter]);
+  const settings = useMemo<TranscriptSettings>(() => ({ agent, actions, freshAfter, commandLabel }), [agent, actions, freshAfter, commandLabel]);
 
   const showEarlier = () => {
     holdPosition();

@@ -28,6 +28,9 @@ pub struct TranscriptTap {
     store: Arc<Store>,
     roots: SessionRoots,
     located: Mutex<HashMap<TranscriptSource, (Instant, Located)>>,
+    /// Held while a log is read and its entries appended, so two polls of
+    /// the same source never append the same lines twice.
+    polling: Mutex<()>,
 }
 
 impl TranscriptTap {
@@ -36,6 +39,7 @@ impl TranscriptTap {
             store,
             roots,
             located: Mutex::new(HashMap::new()),
+            polling: Mutex::new(()),
         }
     }
 
@@ -54,6 +58,7 @@ impl TranscriptTap {
             return Ok(None);
         };
         let path_str = path.to_string_lossy().into_owned();
+        let _polling = self.polling.lock().unwrap_or_else(|e| e.into_inner());
         let cursor = self.store.transcript_cursor(&source)?;
         let offset = match &cursor {
             Some((p, offset)) if *p == path_str => *offset,

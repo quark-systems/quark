@@ -34,6 +34,9 @@ use crate::transcripts::TranscriptTap;
 /// How long to wait after a file change for the rest of a burst (an atomic
 /// rename, several status lines) before refreshing.
 const DEBOUNCE: Duration = Duration::from_millis(250);
+/// How often coordinator conversations are read between full refreshes, so
+/// what the user sends and the coordinator answers shows up promptly.
+const COORDINATOR_TAP: Duration = Duration::from_millis(750);
 
 pub struct Projector {
     store: Arc<Store>,
@@ -408,6 +411,34 @@ impl Projector {
         log_apply(ws, "task_agents", res);
     }
 
+    /// Projects new coordinator session-log entries only: cheap enough to run
+    /// between full refreshes.
+    async fn tap_coordinators(&self, workspaces: Vec<WorkspaceRef>) {
+        if workspaces.is_empty() {
+            return;
+        }
+        let tap = self.transcripts.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            for ws in workspaces {
+                let source = TranscriptSource::Coordinator {
+                    project_id: ws.project_id.clone(),
+                };
+                if let Err(e) = tap.poll(
+                    &ws.project_id,
+                    source,
+                    &ws.root,
+                    &SessionFormat::COORDINATOR,
+                ) {
+                    tracing::debug!(project = %ws.project_id, error = %e, "coordinator transcript");
+                }
+            }
+        })
+        .await;
+        if let Err(e) = res {
+            tracing::error!(error = %e, "coordinator transcript task panicked");
+        }
+    }
+
     /// Projects new coordinator and worker session-log entries. A log that
     /// cannot be read is logged and retried next tick. A worker whose log
     /// now ends at a rate limit is failed over.
@@ -687,8 +718,11 @@ impl Projector {
         let mut workspaces: HashMap<String, WorkspaceRef> = HashMap::new();
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut chat = tokio::time::interval(COORDINATOR_TAP);
+        chat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                _ = chat.tick() => self.tap_coordinators(workspaces.values().cloned().collect()).await,
                 _ = ticker.tick() => match self.refresh_all().await {
                     Ok(list) => {
                         watches.sync(&list);
