@@ -37,6 +37,7 @@ fn fake_host(root: &Path) -> HostEnv {
         path: Some(bin.into_os_string()),
         home: Some(home),
         vars: HashMap::new(),
+        ..Default::default()
     }
 }
 

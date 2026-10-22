@@ -17,6 +17,37 @@ pub struct HostEnv {
     pub path: Option<OsString>,
     pub home: Option<PathBuf>,
     pub vars: HashMap<String, String>,
+    pub keychain: Keychain,
+}
+
+/// Where credential checks look for Keychain items.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Keychain {
+    /// Nowhere: off macOS, and in tests that build a [`HostEnv`] by hand.
+    #[default]
+    Off,
+    /// The user's login Keychain, through `security`.
+    System,
+    /// Exactly these generic-password services.
+    Items(Vec<String>),
+}
+
+impl Keychain {
+    /// Whether a generic password for `service` exists. Only the item's
+    /// attributes are read, never its secret, so the Keychain never asks.
+    pub fn has(&self, service: &str) -> bool {
+        match self {
+            Keychain::Off => false,
+            Keychain::Items(items) => items.iter().any(|s| s == service),
+            Keychain::System => std::process::Command::new("/usr/bin/security")
+                .args(["find-generic-password", "-s", service])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success()),
+        }
+    }
 }
 
 impl HostEnv {
@@ -26,6 +57,11 @@ impl HostEnv {
             path: std::env::var_os("PATH"),
             home: std::env::var_os("HOME").map(PathBuf::from),
             vars: std::env::vars().collect(),
+            keychain: if cfg!(target_os = "macos") {
+                Keychain::System
+            } else {
+                Keychain::Off
+            },
         }
     }
 
@@ -132,6 +168,7 @@ mod tests {
             path: Some(bin.clone().into_os_string()),
             home: Some(home.clone()),
             vars: HashMap::new(),
+            ..HostEnv::default()
         };
         let reg = crate::ManifestRegistry::builtin();
 
