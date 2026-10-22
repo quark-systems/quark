@@ -31,6 +31,15 @@ options = ["No, exit", "Yes, I accept", "Yes, and don't ask again"]
 choose = "Yes, I accept"
 cursor = "❯"
 
+# Kiro 2.33 asks once per folder whether to trust it, then remembers the
+# answer in ~/.kiro/workspace-roots/<hash>/permissions.yaml. A worktree
+# Quark made for the task is trusted; --trust-all-tools already grants more.
+[[launch.dialogs]]
+detect = ["Only trust folders you know", "Trust, continue", "Don't trust, exit"]
+options = ["Trust, continue", "Don't trust, exit"]
+choose = "Trust, continue"
+cursor = "❯"
+
 [hooks]
 install = "kiro-hooks"
 events = { UserPromptSubmit = "busy", Stop = "turn_end" }

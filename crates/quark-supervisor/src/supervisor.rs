@@ -551,6 +551,10 @@ impl Supervisor {
             self.sessions
                 .input(&info.id, &launch::paste(&plan.brief))
                 .await?;
+            if let Some(ms) = manifest.launch.enter_again_ms {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                self.sessions.input(&info.id, b"\r").await?;
+            }
         }
         // Missed steering went into the brief, so it has been delivered.
         for s in steers {
