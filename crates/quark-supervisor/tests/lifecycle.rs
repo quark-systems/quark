@@ -512,3 +512,58 @@ async fn a_model_the_catalog_does_not_list_is_refused() {
     req.assignment.model = Some("auto".into());
     sup.spawn(req).await.unwrap();
 }
+
+/// An agent that draws its idle prompt a moment before it takes input and
+/// throws away what was typed before then, as Kiro does when it switches
+/// its terminal into raw mode.
+const LATE_READER_AGENT: &str = r#"#!/bin/sh
+dir=$(dirname "$QUARK_STATUS_FILE")
+echo "ready for work"
+sleep 1
+python3 -c 'import termios; termios.tcflush(0, termios.TCIFLUSH)'
+while IFS= read -r line; do
+  printf '%s\n' "$line" | tr -d '\033\r' | sed 's/\[20[01]~//g' >> "$dir/received"
+done
+"#;
+
+#[tokio::test]
+async fn the_brief_waits_until_the_idle_prompt_has_settled() {
+    let mut env = Env::new();
+    let agent = env.dir.path().join("late.sh");
+    std::fs::write(&agent, LATE_READER_AGENT).unwrap();
+    let manifest = quark_harness::parse(&format!(
+        r#"
+schema = 1
+id = "fake"
+name = "Fake agent"
+efforts = ["low", "high"]
+[detect]
+bins = ["sh"]
+[launch]
+argv = ["sh", "{agent}"]
+prompt_via = "paste"
+[turn_signals]
+busy = "none"
+turn_end = "none"
+idle_patterns = ["ready for work"]
+[keys]
+interrupt = ["C-c"]
+exit = "/exit"
+"#,
+        agent = agent.display()
+    ))
+    .unwrap();
+    env.manifests = Arc::new(quark_harness::ManifestRegistry::with([manifest]));
+    let mut config = env.config();
+    config.ready_settle = std::time::Duration::from_millis(1500);
+    let pty = Arc::new(PtySupervisor::new());
+    let sup = env.supervisor_with(pty.clone(), config).await;
+    let w = sup.spawn(env.request("t1")).await.unwrap();
+    let g = w.current.unwrap();
+    eventually("the brief", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Fix the parser.")
+    })
+    .await;
+}

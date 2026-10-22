@@ -177,6 +177,7 @@ exit = "/exit"
         let mut c = Config::new(HostId::from("parent"));
         c.ready_timeout = Duration::from_secs(5);
         c.ready_quiet = Duration::from_millis(300);
+        c.ready_settle = Duration::from_millis(100);
         c
     }
 
