@@ -47,13 +47,23 @@ pub(crate) fn viewport(snap: &Snapshot) -> String {
 /// idle patterns may also match.
 pub(crate) fn judge(m: &HarnessManifest, snap: &Snapshot, raw: &str) -> Screen {
     let screen = viewport(snap);
-    for d in &m.launch.dialogs {
-        if d.detect.iter().all(|t| screen.contains(t.as_str())) {
-            return answer(d, &screen).map_or(Screen::Busy, Screen::Answer);
-        }
-        if d.detect.iter().any(|t| screen.contains(t.as_str())) {
-            return Screen::Busy;
-        }
+    // A whole dialog first: one dialog's text can share words with
+    // another's ("to navigate"), so a partial match of an earlier entry
+    // must not hide a later dialog that is fully drawn.
+    if let Some(d) = m
+        .launch
+        .dialogs
+        .iter()
+        .find(|d| d.detect.iter().all(|t| screen.contains(t.as_str())))
+    {
+        return answer(d, &screen).map_or(Screen::Busy, Screen::Answer);
+    }
+    if m.launch
+        .dialogs
+        .iter()
+        .any(|d| d.detect.iter().any(|t| screen.contains(t.as_str())))
+    {
+        return Screen::Busy;
     }
     let idle = &m.turn_signals.idle_patterns;
     if idle
@@ -137,6 +147,40 @@ mod tests {
         let ready = "Trust All Tools active, confirmations are off\n\n›  ask a question or describe a task ↵\n";
         assert_eq!(j(ready), Screen::Idle);
         assert_eq!(j("loading…"), Screen::Unknown);
+    }
+
+    /// Kiro 2.33's workspace-trust question, as drawn on a fresh worktree.
+    fn kiro_folder_trust(selected: &str) -> String {
+        let opt = |o: &str| {
+            if o == selected {
+                format!(" ❯ {o}\n")
+            } else {
+                format!("   {o}\n")
+            }
+        };
+        format!(
+            " /tmp/wt\n\n This folder can contain hooks, agents, MCP servers and workflows that run commands on your machine. Only trust folders you know.\n\n Trusting lets Kiro use this workspace's configuration.\n\n{}{} esc to exit · ↑↓ to navigate · ↵ to select\n",
+            opt("Trust, continue"),
+            opt("Don't trust, exit")
+        )
+    }
+
+    #[test]
+    fn answers_kiros_folder_trust_question() {
+        let reg = ManifestRegistry::builtin();
+        let kiro = reg.get("kiro").unwrap();
+        let j = |s: &str| judge(kiro, &snap(s), s);
+        // It shares "to navigate" with the trust-all-tools dialog, which
+        // must not hold it as half drawn.
+        assert_eq!(
+            j(&kiro_folder_trust("Trust, continue")),
+            Screen::Answer(b"\r")
+        );
+        assert_eq!(
+            j(&kiro_folder_trust("Don't trust, exit")),
+            Screen::Answer(UP)
+        );
+        assert_eq!(j(&kiro_dialog("No, exit")), Screen::Answer(DOWN));
     }
 
     #[test]
