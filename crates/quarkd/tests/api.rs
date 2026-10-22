@@ -1482,3 +1482,134 @@ async fn deleting_an_attached_project_leaves_its_workspace() {
         "mine"
     );
 }
+
+#[tokio::test]
+async fn clearing_finished_workers_hides_them_and_keeps_unlanded_work() {
+    let h = harness().await;
+    let (_, p) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Quark", "workspace_path": "/tmp/quark-ws"})),
+    )
+    .await;
+    let pid = p["id"].as_str().unwrap().to_string();
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![
+            worker("a", TaskState::Running),
+            worker("b", TaskState::Failed),
+            worker("c", TaskState::Failed),
+            worker("d", TaskState::Done),
+        ],
+    });
+    h.projector.refresh_all().await.unwrap();
+    let list = format!("/v1/projects/{pid}/tasks");
+    let (_, tasks) = call(&h.app, "GET", &list, None).await;
+    let id = |title: &str| {
+        tasks
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["title"] == title)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (a, b, d) = (id("Task a"), id("Task b"), id("Task d"));
+
+    // A working worker is refused, and nothing reaches the engine.
+    let (status, body) = call(&h.app, "POST", &format!("/v1/tasks/{a}:clear"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(h.engine.writes().is_empty());
+
+    // One finished worker: its session is stopped and its worktree given back.
+    let mut ws = connect(h.addr, "").await;
+    let (status, body) = call(&h.app, "POST", &format!("/v1/tasks/{d}:clear"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        h.engine.writes(),
+        [
+            StubWrite::Control {
+                task_id: "d".into(),
+                action: TaskControl::Cancel
+            },
+            StubWrite::ReleaseWorktree {
+                task_id: "d".into()
+            },
+        ]
+    );
+    let e = next_event(&mut ws).await;
+    assert_eq!(e.event_type, EventType::TaskStateChanged);
+    assert!(
+        e.payload["task"]["cleared_at"].is_string(),
+        "{:?}",
+        e.payload
+    );
+    // Clearing again changes nothing.
+    let (status, _) = call(&h.app, "POST", &format!("/v1/tasks/{d}:clear"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(h.engine.writes().len(), 2);
+
+    // Bulk: failed only; one worktree holds unlanded work and stays.
+    h.engine.set_unlanded("c", true);
+    let (status, out) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/projects/{pid}/tasks:clear"),
+        Some(json!({"states": ["failed"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["cleared"], json!([b]));
+    assert_eq!(out["kept"][0]["title"], "Task c");
+    assert_eq!(out["kept"][0]["code"], "unlanded_work");
+    assert_eq!(
+        out["kept"][0]["reason"],
+        "its worktree has uncommitted changes"
+    );
+
+    let (_, shown) = call(&h.app, "GET", &list, None).await;
+    let titles: Vec<&str> = shown
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Task a", "Task c"]);
+    let (_, all) = call(&h.app, "GET", &format!("{list}?include_cleared=true"), None).await;
+    assert_eq!(all.as_array().unwrap().len(), 4);
+    // The record and its history stay readable.
+    let (status, t) = call(&h.app, "GET", &format!("/v1/tasks/{b}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(t["cleared_at"].is_string());
+
+    // A single clear of the kept one says why.
+    let c = id("Task c");
+    let (status, body) = call(&h.app, "POST", &format!("/v1/tasks/{c}:clear"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "unlanded_work");
+
+    // Only finished states can be asked for.
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/projects/{pid}/tasks:clear"),
+        Some(json!({"states": ["running"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A cleared task the engine picks up again is shown again.
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![
+            worker("a", TaskState::Running),
+            worker("b", TaskState::Running),
+            worker("c", TaskState::Failed),
+            worker("d", TaskState::Done),
+        ],
+    });
+    h.projector.refresh_all().await.unwrap();
+    let (_, shown) = call(&h.app, "GET", &list, None).await;
+    assert_eq!(shown.as_array().unwrap().len(), 3);
+}

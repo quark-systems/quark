@@ -93,6 +93,12 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
       // quarkd sends `{ task, previous_state }`.
       const t = p?.task as Task | undefined;
       if (typeof t?.id !== "string") return s;
+      // A cleared worker leaves every list; the daemon keeps its history.
+      if (t.cleared_at) {
+        if (!(t.id in s.tasks)) return s;
+        const { [t.id]: _gone, ...tasks } = s.tasks;
+        return { ...s, tasks };
+      }
       return { ...s, tasks: { ...s.tasks, [t.id]: { ...s.tasks[t.id], ...t } } };
     }
     case "decision.opened":
@@ -272,9 +278,20 @@ export async function refreshSnapshots() {
   await loadPullRequests().catch(() => undefined);
 }
 
-export async function refreshTask(id: string) {
+/** Loads one task. A cleared one is not added to the lists; its `cleared_at` is returned. */
+export async function refreshTask(id: string): Promise<{ cleared_at?: string | null }> {
   const t = await api.task(id);
-  set({ tasks: { ...state.tasks, [t.id]: t } });
+  if (!t.cleared_at) set({ tasks: { ...state.tasks, [t.id]: t } });
+  return { cleared_at: t.cleared_at };
+}
+
+/** Clears a project's done or failed workers and says what happened, in a line. */
+export async function clearWorkers(pid: string, state: "done" | "failed"): Promise<string> {
+  const r = await api.clearTasks(pid, [state]);
+  const n = r.cleared.length;
+  const cleared = n === 0 ? "Nothing cleared." : `Cleared ${n} ${state} ${n === 1 ? "worker" : "workers"}.`;
+  if (!r.kept.length) return cleared;
+  return `${cleared} Kept ${r.kept.map((k) => `${k.title}: ${k.reason}`).join("; ")}.`;
 }
 
 /** Loads a coordinator's chat; later `coordinator.message` events append to it. */

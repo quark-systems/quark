@@ -105,6 +105,11 @@ pub struct Task {
     /// exists.
     #[serde(default)]
     pub branch: Option<String>,
+    /// When the finished task was cleared: its terminal closed, its
+    /// worktree given back and its card taken off the board. Its history is
+    /// kept. Absent while the task is shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -131,6 +136,36 @@ pub struct RelaunchTask {
     /// Where things stand, for the new worker, which keeps the worktree but
     /// none of the conversation. A default note is used when absent.
     pub note: Option<String>,
+}
+
+/// Clear a Project's finished workers at once. Only done and failed tasks
+/// are ever cleared.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ClearTasks {
+    /// Which finished states to clear; absent clears done and failed tasks.
+    #[serde(default)]
+    pub states: Option<Vec<TaskState>>,
+}
+
+/// What clearing a Project's finished workers did.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ClearedTasks {
+    /// Task ids taken off the board, their sessions stopped and worktrees
+    /// given back.
+    pub cleared: Vec<String>,
+    /// Tasks left on the board because their worktree holds work that has
+    /// not landed, or because the engine could not clean them up.
+    pub kept: Vec<KeptTask>,
+}
+
+/// A task clearing left on the board, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct KeptTask {
+    pub task_id: String,
+    pub title: String,
+    /// `unlanded_work` or `engine_failed`.
+    pub code: String,
+    pub reason: String,
 }
 
 /// One entry of a task's activity log: something the worker or the engine

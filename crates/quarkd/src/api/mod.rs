@@ -3,6 +3,7 @@
 mod accounts;
 pub(crate) mod automation;
 mod beads;
+mod clear;
 mod dashboard;
 mod decision_beads;
 mod decisions;
@@ -149,6 +150,10 @@ const MODULES: &[Module] = &[
     Module {
         router: lifecycle::router,
         openapi: <lifecycle::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: clear::router,
+        openapi: <clear::Api as OpenApi>::openapi,
     },
 ];
 

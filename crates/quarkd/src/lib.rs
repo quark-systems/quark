@@ -9,6 +9,7 @@ pub mod api;
 pub mod beads;
 pub mod chat;
 pub mod classifier;
+pub mod clear;
 pub mod config;
 pub mod coordinator_commands;
 pub mod coordinator_hands;

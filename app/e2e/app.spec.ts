@@ -1364,3 +1364,51 @@ test("project lifecycle: archive hides a project, Archived brings it back, delet
   const all = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects?include_archived=true")).json());
   expect(all.map((p: any) => p.id)).not.toContain(proj.id);
 });
+
+test("finished workers can be cleared one at a time or a column at once", async ({ page }) => {
+  await open(page, "#/p/quark/work");
+  // Two failed workers, one with work that has not landed.
+  const ids = await page.evaluate(async () => {
+    const d = "http://127.0.0.1:7392";
+    const post = (p: string, body?: unknown) => fetch(d + p, { method: "POST", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    const titles = ["Retry the flaky login test", "Fix the unpushed release branch"];
+    for (const text of titles) await post("/v1/coordinators/quark/messages", { text });
+    let found: any[] = [];
+    for (let i = 0; i < 50 && found.length < 2; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      found = (await (await fetch(d + "/v1/projects/quark/tasks")).json()).filter((t: any) => titles.includes(t.title));
+    }
+    for (const t of found) await post(`/v1/tasks/${t.id}:cancel`);
+    return Object.fromEntries(found.map((t: any) => [t.title, t.id]));
+  });
+  const failed = page.getByTestId("col-failed");
+  await expect(failed.getByTestId("task-card")).toHaveCount(2);
+
+  // A column at once: the one holding unpushed work stays and says why.
+  await failed.getByTestId("clear-failed").click();
+  await failed.getByTestId("clear-failed").click();
+  await expect(failed.getByTestId("clear-failed-note")).toHaveText(
+    "Cleared 1 failed worker. Kept Fix the unpushed release branch: its worktree has 2 unpushed commits.");
+  await expect(failed.getByTestId("task-card")).toHaveText([/Fix the unpushed release branch/]);
+
+  // One at a time, from the worker: it refuses while work has not landed.
+  await failed.getByTestId("task-card").click();
+  await page.getByTestId("clear").click();
+  await page.getByTestId("confirm-clear").click();
+  await expect(page.getByRole("alert")).toContainText("2 unpushed commits");
+  // Relaunched, it is working again and cannot be cleared.
+  await page.getByTestId("relaunch").click();
+  await expect(page.getByTestId("task-state")).toHaveText("Running");
+  await expect(page.getByTestId("clear")).toHaveCount(0);
+
+  // A done worker clears from its view; its page then says so.
+  await open(page, `#/t/${ids["Retry the flaky login test"]}`);
+  await expect(page.getByTestId("worker-cleared")).toContainText("This worker was cleared");
+  await open(page, "#/p/quark/work");
+  await page.getByTestId("task-card").filter({ hasText: "Daemon skeleton" }).click();
+  await page.getByTestId("clear").click();
+  await page.getByTestId("confirm-clear").click();
+  await expect(page.getByTestId("worker-cleared")).toBeVisible();
+  await open(page, "#/p/quark/work");
+  await expect(page.getByTestId("col-done")).not.toContainText("Daemon skeleton");
+});

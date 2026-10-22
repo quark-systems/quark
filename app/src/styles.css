@@ -247,6 +247,8 @@ html.is-mac .drag-strip { display: block; flex: none; height: 28px; }
 .col-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); }
 .col-head .swatch { width: 8px; height: 8px; border-radius: 2px; }
 .col-head .n { margin-left: auto; color: var(--fg-faint); }
+.col-head .btn { text-transform: none; letter-spacing: normal; font-family: inherit; }
+.col-note { font-size: 12px; padding: 2px 2px 4px; }
 .col-body { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .card { display: block; color: inherit; text-decoration: none; background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px; cursor: pointer; transition: border-color var(--motion-feedback-duration) var(--motion-ease-out), background-color var(--motion-feedback-duration) var(--motion-ease-out); }
 .card:hover { border-color: var(--line-2); }

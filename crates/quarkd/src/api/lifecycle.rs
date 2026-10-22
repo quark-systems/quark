@@ -255,7 +255,7 @@ async fn release_worktrees(
             }) => kept.push(format!(
                 "{} ({})",
                 task.title,
-                unlanded(uncommitted, unpushed_commits)
+                crate::clear::unlanded(uncommitted, unpushed_commits)
             )),
             Err(e) => failed.push(format!("{}: {e}", task.title)),
         }
@@ -283,20 +283,6 @@ async fn release_worktrees(
         ));
     }
     Ok(())
-}
-
-fn unlanded(uncommitted: bool, unpushed: u32) -> String {
-    let commits = match unpushed {
-        0 => None,
-        1 => Some("1 unpushed commit".to_string()),
-        n => Some(format!("{n} unpushed commits")),
-    };
-    match (uncommitted, commits) {
-        (true, Some(c)) => format!("uncommitted changes and {c}"),
-        (true, None) => "uncommitted changes".into(),
-        (false, Some(c)) => c,
-        (false, None) => "work not landed".into(),
-    }
 }
 
 /// Removes what Quark made for the Project under its home. Never a path
@@ -380,15 +366,5 @@ mod tests {
         for bad in ["", "command", "..", "a/b", "prj 1", "../x"] {
             assert!(!safe_id(bad), "{bad}");
         }
-    }
-
-    #[test]
-    fn says_what_has_not_landed() {
-        assert_eq!(unlanded(true, 0), "uncommitted changes");
-        assert_eq!(unlanded(false, 1), "1 unpushed commit");
-        assert_eq!(
-            unlanded(true, 3),
-            "uncommitted changes and 3 unpushed commits"
-        );
     }
 }

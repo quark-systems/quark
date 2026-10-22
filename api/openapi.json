@@ -3277,7 +3277,7 @@
         "tags": [
           "tasks"
         ],
-        "summary": "The task board for one Project.",
+        "summary": "The task board for one Project. Cleared tasks are left out unless\n`include_cleared`.",
         "operationId": "list_tasks",
         "parameters": [
           {
@@ -3287,6 +3287,15 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "include_cleared",
+            "in": "query",
+            "description": "Also list cleared tasks (those with `cleared_at`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -3299,6 +3308,66 @@
                   "items": {
                     "$ref": "#/components/schemas/Task"
                   }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/tasks:clear": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Clear a Project's finished workers, as `POST /v1/tasks/{id}:clear` does\nfor each one in `states` (done and failed by default). Tasks it cannot\nclear are listed under `kept` with why; the rest are still cleared.",
+        "operationId": "clear_project_tasks",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearTasks"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearedTasks"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`states` names a state that is not finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -4860,6 +4929,61 @@
         }
       }
     },
+    "/v1/tasks/{id}:clear": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Clear a finished task's worker.",
+        "description": "Stops its session if its agent never exited, gives its worktree back and\ntakes it off the board: `GET /v1/projects/{id}/tasks` leaves it out\nunless `include_cleared`. Its activity log and events are kept. Clearing\na cleared task again does nothing.",
+        "operationId": "clear_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The task is cleared"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The task is still working (`conflict`), or its worktree holds work that has not landed (`unlanded_work`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine could not stop its agent or give its worktree back",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}:relaunch": {
       "post": {
         "tags": [
@@ -5961,6 +6085,46 @@
           "pending",
           "none"
         ]
+      },
+      "ClearTasks": {
+        "type": "object",
+        "description": "Clear a Project's finished workers at once. Only done and failed tasks\nare ever cleared.",
+        "properties": {
+          "states": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TaskState"
+            },
+            "description": "Which finished states to clear; absent clears done and failed tasks."
+          }
+        }
+      },
+      "ClearedTasks": {
+        "type": "object",
+        "description": "What clearing a Project's finished workers did.",
+        "required": [
+          "cleared",
+          "kept"
+        ],
+        "properties": {
+          "cleared": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Task ids taken off the board, their sessions stopped and worktrees\ngiven back."
+          },
+          "kept": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeptTask"
+            },
+            "description": "Tasks left on the board because their worktree holds work that has\nnot landed, or because the engine could not clean them up."
+          }
+        }
       },
       "CommentUpdated": {
         "type": "object",
@@ -8957,6 +9121,31 @@
           }
         }
       },
+      "KeptTask": {
+        "type": "object",
+        "description": "A task clearing left on the board, and why.",
+        "required": [
+          "task_id",
+          "title",
+          "code",
+          "reason"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`unlanded_work` or `engine_failed`."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "LeadTime": {
         "type": "object",
         "description": "From a task's first spawn to its `done`, over tasks done in the window.",
@@ -11325,6 +11514,13 @@
               "null"
             ],
             "description": "The git branch checked out in the task's working copy, while it\nexists."
+          },
+          "cleared_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the finished task was cleared: its terminal closed, its\nworktree given back and its card taken off the board. Its history is\nkept. Absent while the task is shown."
           },
           "created_at": {
             "type": "string"

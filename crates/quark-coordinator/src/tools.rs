@@ -3,8 +3,8 @@
 //! The coordinator acts only through these. They cover judgment: starting
 //! work and writing its instructions, steering and answering workers,
 //! choosing an agent when dispatch asks, and deciding what reaches the user.
-//! Lifecycle steps the engine owns (gates, rebase, merge, teardown,
-//! recovery) are deliberately absent.
+//! Lifecycle steps the engine owns (gates, rebase, merge, recovery) are
+//! deliberately absent; `clear` only tidies up after a task has finished.
 //!
 //! [`Hands`] carries a call out; quarkd implements it over the dispatcher,
 //! the supervisor, the channels and Project memory. `load_skill` is answered
@@ -78,6 +78,10 @@ pub enum ToolCall {
     },
     /// Stop a task. Its worktree and any unlanded work are kept.
     Cancel { task: TaskId, reason: String },
+    /// Clean up a done or failed task: stop its session, give its worktree
+    /// back and take it off the board, keeping its history. A worktree with
+    /// unlanded work is kept and the task stays.
+    Clear { task: TaskId, reason: String },
     /// Raise a decision only the user can make. Everything but `key` and
     /// `question` is the decision's brief ([`ToolCall::brief`]), the same
     /// record firstmate's coordinator attaches to a captain hold.
@@ -118,6 +122,7 @@ impl ToolCall {
             ToolCall::ChooseProfile { .. } => "choose_profile",
             ToolCall::Relaunch { .. } => "relaunch",
             ToolCall::Cancel { .. } => "cancel",
+            ToolCall::Clear { .. } => "clear",
             ToolCall::AskUser { .. } => "ask_user",
             ToolCall::TellUser { .. } => "tell_user",
             ToolCall::Remember { .. } => "remember",
@@ -228,7 +233,7 @@ impl ToolCall {
                 blank("task", task.as_str())?;
                 blank("note", note)
             }
-            ToolCall::Cancel { task, reason } => {
+            ToolCall::Cancel { task, reason } | ToolCall::Clear { task, reason } => {
                 blank("task", task.as_str())?;
                 blank("reason", reason)
             }
@@ -349,6 +354,14 @@ pub fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "clear",
+            description: "Clean up a done or failed task once nobody needs it: stops its session, gives its worktree back and takes it off the board, keeping its history. Refused while the task is working, and when its worktree holds work that has not landed.",
+            input_schema: object(
+                json!({"task": text("Task id."), "reason": text("Why.")}),
+                &["task", "reason"],
+            ),
+        },
+        ToolSpec {
             name: "ask_user",
             description: "Raise a decision only the user can make: a design choice, anything destructive, irreversible or security-sensitive, a credential. Ask once with context, options (each with its consequence), your recommendation and why, and what the answer unblocks.",
             input_schema: object(
@@ -448,7 +461,7 @@ mod tests {
             "answer" => json!({"task": "t1", "key": "k", "answer": "a"}),
             "choose_profile" => json!({"task": "t1", "rule": "rule_2"}),
             "relaunch" => json!({"task": "t1", "note": "n"}),
-            "cancel" => json!({"task": "t1", "reason": "r"}),
+            "cancel" | "clear" => json!({"task": "t1", "reason": "r"}),
             "ask_user" => {
                 json!({"key": "k", "question": "q", "options": ["a", {"label": "b", "consequence": "c"}]})
             }

@@ -19,6 +19,15 @@ export interface Task {
   model?: string | null;
   /** The git branch checked out in the task's working copy, while it exists. */
   branch?: string | null;
+  /** When the finished worker was cleared off the board; its history is kept. */
+  cleared_at?: string | null;
+}
+
+/** What clearing a project's finished workers did (`POST /v1/projects/{id}/tasks:clear`). */
+export interface ClearedTasks {
+  cleared: string[];
+  /** Workers left on the board: `unlanded_work` (their worktree holds work) or `engine_failed`. */
+  kept: { task_id: string; title: string; code: string; reason: string }[];
 }
 
 export type FailoverOutcome = "relaunched" | "no_healthy_account" | "relaunch_failed";
@@ -65,6 +74,9 @@ export const tasksApi = {
   steer: (id: string, text: string) => req<void>("POST", `/v1/tasks/${enc(id)}/messages`, { text }),
   cancel: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:cancel`),
   relaunch: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:relaunch`),
+  clearTask: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:clear`),
+  clearTasks: (pid: string, states: TaskState[] = ["done", "failed"]) =>
+    req<ClearedTasks>("POST", `/v1/projects/${enc(pid)}/tasks:clear`, { states }),
   brief: (id: string) => req<TaskBrief>("GET", `/v1/tasks/${enc(id)}/brief`),
   changes: (id: string) => req<TaskChanges>("GET", `/v1/tasks/${enc(id)}/changes`),
   diff: (id: string, path?: string) =>
