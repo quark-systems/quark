@@ -444,11 +444,26 @@ fn claim(root: &Path, project_id: &str) -> Result<(), EngineError> {
             root.display()
         )));
     }
+    write_claim(&file, project_id)
+}
+
+/// Claim `root`, a workspace firstmate made and [`crate::firstmate::workspace`]
+/// emptied of firstmate, for `project_id`. A claim already there is kept.
+pub(crate) fn adopt(root: &Path, project_id: &str) -> Result<(), EngineError> {
+    check_id(project_id)?;
+    let file = root.join(STATE_DIR).join(WORKSPACE_FILE);
+    if file.exists() {
+        return Ok(());
+    }
+    write_claim(&file, project_id)
+}
+
+fn write_claim(file: &Path, project_id: &str) -> Result<(), EngineError> {
     let claim = Claim {
         project_id: project_id.to_string(),
     };
     let bytes = serde_json::to_vec_pretty(&claim).map_err(|e| EngineError::Parse(e.to_string()))?;
-    write_atomic(&file, &bytes)
+    write_atomic(file, &bytes)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), EngineError> {

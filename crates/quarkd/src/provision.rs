@@ -64,7 +64,8 @@ impl Layout {
         self.home.join(crate::classifier::USER_FILE)
     }
 
-    /// The command-center workspace (a firstmate primary).
+    /// The command-center workspace: the clones every Project seeds from and
+    /// the coordinator records.
     pub fn command_workspace(&self) -> PathBuf {
         self.home.join("workspaces/command")
     }

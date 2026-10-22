@@ -15,6 +15,7 @@ use quark_systems::{DeliveryPolicy, ImportFirstmate};
 pub mod backlog;
 pub mod dispatch;
 pub mod knowledge;
+pub mod workspace;
 
 use backlog::{Item, Section};
 
