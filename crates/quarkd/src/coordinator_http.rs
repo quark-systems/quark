@@ -7,7 +7,10 @@
 //!   (`turn_end`, or Claude Code's `Stop`). It closes the open turn with the
 //!   turn's token use: the body's `usage` when the hook sends one, else read
 //!   from the coordinator's own session log. An `Idempotency-Key` header
-//!   makes a retried hook count once.
+//!   makes a retried hook count once. On Claude Code's `Stop`, a reply that
+//!   asks the user something with no `ask_user` call that turn is sent back
+//!   once (`{"decision": "block"}`, [`questions::NUDGE`]) so the coordinator
+//!   files the questions as decisions; the turn closes when it stops again.
 //!
 //! The token is minted once per Project and kept in `<home>/coordinators/`
 //! (mode `0600`), so only the coordinator quarkd configured can reach its
@@ -28,6 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use quark_coordinator::mcp::CoordinatorMcp;
+use quark_coordinator::questions;
 use quark_coordinator::{Coordinator, Usage};
 use quark_core::ProjectId;
 use quark_transcript::{locate, read_turns, SessionFormat, SessionRoots, UsageCursor};
@@ -257,6 +261,14 @@ async fn hook(
             _ => return bad("Idempotency-Key must be text".into()),
         },
     };
+    // Claude Code's `Stop`: a reply that asks the user something without
+    // `ask_user` is sent back once, so the coordinator files the questions
+    // as decisions. The turn stays open until it stops again.
+    let claude_stop = event == "Stop";
+    if claude_stop && r.unfiled_questions(&project, &body).await {
+        tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
+        return Json(json!({ "decision": "block", "reason": questions::NUDGE })).into_response();
+    }
     let (usage, context) = match body.get("usage") {
         Some(u) => match serde_json::from_value::<Usage>(u.clone()) {
             Ok(u) => (u, None),
@@ -274,6 +286,11 @@ async fn hook(
             if let Some(tokens) = context {
                 r.clone().wrap_up_if_full(project, tokens);
             }
+            // Claude Code reads a `Stop` hook's output as its decision; an
+            // empty object lets the session stop.
+            if claude_stop {
+                return Json(json!({})).into_response();
+            }
             Json(json!({ "turn": turn })).into_response()
         }
         Err(e) => (
@@ -285,6 +302,36 @@ async fn hook(
 }
 
 impl Routes {
+    /// Whether the turn a Claude Code `Stop` hook ends asked the user
+    /// something in text with no `ask_user` call since the last turn end.
+    /// Never on a stop that a nudge already caused (`stop_hook_active`).
+    async fn unfiled_questions(&self, project: &str, body: &Value) -> bool {
+        if body.get("stop_hook_active").and_then(Value::as_bool) == Some(true) {
+            return false;
+        }
+        let text = match body.get("last_assistant_message").and_then(Value::as_str) {
+            Some(t) => t.to_string(),
+            None => match body.get("transcript_path").and_then(Value::as_str) {
+                Some(path) => {
+                    let path = PathBuf::from(path);
+                    tokio::task::spawn_blocking(move || last_reply(&path))
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
+                }
+                None => return false,
+            },
+        };
+        if questions::questions(&text).is_empty() {
+            return false;
+        }
+        !self
+            .coordinator
+            .asked_this_turn(&ProjectId::new(project.to_string()))
+            .await
+    }
+
     /// After a turn that ended with `tokens` in context, ask for a wrap up
     /// in the background when the context crossed the threshold.
     fn wrap_up_if_full(self: Arc<Self>, project: String, tokens: u64) {
@@ -360,6 +407,40 @@ impl Routes {
     }
 }
 
+/// The text of the last assistant message in a Claude Code session log,
+/// read from its tail. `None` when the file is not a readable `.jsonl`.
+fn last_reply(path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 256 * 1024;
+    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    text.lines().rev().find_map(|line| {
+        let v: Value = serde_json::from_str(line).ok()?;
+        if v.get("type").and_then(Value::as_str) != Some("assistant") {
+            return None;
+        }
+        let content = v.get("message")?.get("content")?;
+        let said = match content {
+            Value::String(s) => s.clone(),
+            Value::Array(blocks) => blocks
+                .iter()
+                .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        (!said.trim().is_empty()).then_some(said)
+    })
+}
+
 fn newest_log(roots: &SessionRoots, cwd: &Path) -> Option<(PathBuf, SessionFormat)> {
     SessionFormat::COORDINATOR
         .iter()
@@ -391,7 +472,7 @@ pub fn install_claude(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bo
         v["mcpServers"][SERVER_NAME] = json!({ "type": "http", "url": urls.mcp });
     })?;
     let command = format!(
-        "curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary @- '{}/turn_end' >/dev/null 2>&1 || true",
+        "curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary @- '{}/Stop' 2>/dev/null || true",
         urls.hooks
     );
     changed |= edit_json(&root.join(".claude/settings.local.json"), |v| {
@@ -591,6 +672,102 @@ mod tests {
         assert_eq!(ended[0]["usage"]["input"], 100);
     }
 
+    /// Hands that carry out every call.
+    struct YesHands;
+
+    #[async_trait::async_trait]
+    impl quark_coordinator::Hands for YesHands {
+        async fn run(
+            &self,
+            _: &ProjectId,
+            _: &quark_coordinator::ToolCall,
+        ) -> quark_core::Result<String> {
+            Ok("done".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_asks_in_text_is_sent_back_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let coordinator = Arc::new(
+            Coordinator::open(
+                Arc::new(log.clone()),
+                quark_core::HostId::from("h"),
+                Config::default(),
+                Arc::new(NoBrain),
+                Arc::new(YesHands),
+            )
+            .await
+            .unwrap(),
+        );
+        let tokens = Tokens::new(dir.path());
+        let token = tokens.get_or_create("p1").unwrap();
+        let app = router(coordinator.clone(), tokens, store, SessionRoots::default());
+        let stop = |body: Value| post(&format!("/p1/{token}/hooks/Stop"), &body.to_string());
+        let ended = || async {
+            log.read(Seq::ZERO, 100)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind.as_str() == "coordinator.turn_ended")
+                .count()
+        };
+        let asking = "Plan is ready. Should I use Redis or keep it in memory?";
+
+        let (s, b) = send(&app, stop(json!({"last_assistant_message": asking}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(b["decision"], "block");
+        assert_eq!(b["reason"], questions::NUDGE);
+        assert_eq!(ended().await, 0, "the turn stays open");
+
+        // The stop the nudge caused ends the turn, whatever it said.
+        let (_, b) = send(
+            &app,
+            stop(json!({"last_assistant_message": asking, "stop_hook_active": true})),
+        )
+        .await;
+        assert_eq!(b, json!({}));
+        assert_eq!(ended().await, 1);
+
+        // Read from the session log when the hook does not carry the reply.
+        let path = dir.path().join("session.jsonl");
+        let line = |kind: &str, text: &str| {
+            json!({"type": kind, "message": {"content": [{"type": "text", "text": text}]}})
+                .to_string()
+        };
+        std::fs::write(
+            &path,
+            [
+                line("user", "Go?"),
+                line("assistant", asking),
+                "{\"type\":\"system\"}".into(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let (_, b) = send(&app, stop(json!({"transcript_path": path}))).await;
+        assert_eq!(b["decision"], "block");
+
+        // A question filed with ask_user this turn needs no nudge.
+        let ask = quark_coordinator::ToolCall::parse(
+            "ask_user",
+            &json!({"key": "cache", "question": "Redis or memory?"}),
+        )
+        .unwrap();
+        coordinator.call(&ProjectId::new("p1"), ask).await.unwrap();
+        let (_, b) = send(&app, stop(json!({"last_assistant_message": asking}))).await;
+        assert_eq!(b, json!({}));
+        assert_eq!(ended().await, 2);
+
+        // Nor does a reply without a question, and the next turn starts clean.
+        let (_, b) = send(&app, stop(json!({"last_assistant_message": "Started t1."}))).await;
+        assert_eq!(b, json!({}));
+        let (_, b) = send(&app, stop(json!({"last_assistant_message": asking}))).await;
+        assert_eq!(b["decision"], "block");
+    }
+
     #[test]
     fn installs_into_a_claude_workspace_and_keeps_the_rest() {
         let dir = tempfile::tempdir().unwrap();
@@ -625,7 +802,7 @@ mod tests {
         assert_eq!(stop[0]["hooks"][0]["command"], "mine");
         assert!(stop[1]
             .to_string()
-            .contains("/v1/coordinator/p1/tok/hooks/turn_end"));
+            .contains("/v1/coordinator/p1/tok/hooks/Stop"));
 
         // A new token replaces the old hook rather than adding another.
         let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok2");

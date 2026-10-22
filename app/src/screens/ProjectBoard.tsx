@@ -193,7 +193,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
-          <Transcript key={cid} items={items} agent="coordinator" actions className="chat-log" commandLabel={label}
+          <Transcript key={cid} items={items} agent="coordinator" actions project={cid} className="chat-log" commandLabel={label}
             empty={status === "ok" ? <div className="empty">Ask the {coordinator} to plan or delegate work.</div>
               : status === "loading" ? <div className="empty">Loading…</div> : null}>
             {pending.map((p) => (

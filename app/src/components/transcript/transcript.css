@@ -47,6 +47,13 @@
 .tx-action-reason { font-size: 12px; color: var(--fg-dim); line-height: 1.45; overflow-wrap: anywhere; }
 .tx-action-link { align-self: flex-start; margin-top: 2px; font-size: 12px; color: var(--accent); text-decoration: none; }
 .tx-action-link:hover { text-decoration: underline; }
+/* A question the native coordinator asked with ask_user: the decision card itself. */
+.tx-ask { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 6px; }
+.tx-ask-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-dim); }
+.tx-ask-head .tx-icon { color: var(--violet); }
+.tx-ask .dc-inline { border-color: color-mix(in srgb, var(--violet) 40%, var(--line-2)); }
+.tx-ask-options { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.tx-ask-options li { padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 999px; color: var(--fg); }
 
 /* engine events: a watcher wake or background notice, one quiet line instead of a bubble */
 .tx-event { display: flex; flex-direction: column; }

@@ -3,8 +3,11 @@
 // latest step stays visible with a running state. Layout follows MonoCode's
 // WorkFoldLine and ActivityToolRow (https://github.com/hardbeat920/monocode, MIT).
 import { useState } from "react";
+import type { Decision } from "../../api";
 import { href } from "../../nav";
-import { actionTitle, coordinatorAction, CoordinatorAction } from "./actions";
+import { useStore } from "../../store";
+import { DecisionCard } from "../../ui";
+import { actionTitle, AskAction, coordinatorAction, CoordinatorAction } from "./actions";
 import { rise, useTranscript } from "./context";
 import { DiffCard } from "./DiffCard";
 import { Icon } from "./Icon";
@@ -89,6 +92,7 @@ function StepRow({ step, live }: { step: Step; live?: Activity }) {
 /** A worker the coordinator started, or a question it put to the person, linking to where it is answered. */
 function ActionCard({ id, action }: { id: number; action: CoordinatorAction }) {
   const { freshAfter } = useTranscript();
+  if (action.kind === "ask") return <AskCard id={id} action={action} />;
   const decision = action.kind === "decision";
   return (
     <div className={"tx-action tx-action-" + action.kind + rise(id, freshAfter)} data-testid="coordinator-action">
@@ -101,6 +105,48 @@ function ActionCard({ id, action }: { id: number; action: CoordinatorAction }) {
         {decision && action.reason && <div className="tx-action-reason">{action.reason}</div>}
         {decision && <a className="tx-action-link" href={href({ name: "inbox" })}>Open inbox</a>}
       </div>
+    </div>
+  );
+}
+
+/** The decision an `ask_user` call filed: by its number, else the newest with the same question. */
+export function findAsked(decisions: Record<string, Decision>, project: string | undefined, a: AskAction): Decision | null {
+  if (!project) return null;
+  const mine = Object.values(decisions).filter((d) => d.project_id === project);
+  if (a.number !== undefined) {
+    const d = mine.find((d) => d.number === a.number);
+    if (d) return d;
+  }
+  return mine.filter((d) => d.question.trim() === a.question).sort((x, y) => y.opened_at.localeCompare(x.opened_at))[0] ?? null;
+}
+
+/**
+ * A question the coordinator asked with `ask_user`: the decision itself, answered in
+ * place with one tap, or as the coordinator asked it while the decision is on its way.
+ */
+function AskCard({ id, action }: { id: number; action: AskAction }) {
+  const { freshAfter, project } = useTranscript();
+  const decision = useStore((s) => findAsked(s.decisions, project, action));
+  return (
+    <div className={"tx-ask" + rise(id, freshAfter)} data-testid="coordinator-ask">
+      <div className="tx-ask-head"><Icon kind="decision" /><span>{actionTitle(action)}</span></div>
+      {decision ? <DecisionCard d={decision} size="inline" /> : (
+        <article className="dc dc-inline" data-testid="decision-card">
+          <span className="dc-meta">{action.number ? `D-${action.number}` : "Decision"} · asked by the coordinator</span>
+          <div className="dc-q">{action.question}</div>
+          {action.context && <p className="dc-context clamp">{action.context}</p>}
+          {action.options.length > 0 && (
+            <ul className="tx-ask-options">
+              {action.options.map((o) => (
+                <li key={o.label} title={o.consequence ?? undefined}>
+                  {o.label}{o.label === action.recommended && <span className="faint"> · recommended</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {project && <a className="tx-action-link" href={href({ name: "decisions", project })}>Open decisions</a>}
+        </article>
+      )}
     </div>
   );
 }

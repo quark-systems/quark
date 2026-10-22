@@ -56,7 +56,7 @@ Each call is recorded as `coordinator.tool` before it runs and `coordinator.tool
 | `steer`, `answer` | message a worker; answer its question by key |
 | `choose_profile` | pick the agent when dispatch escalated |
 | `relaunch`, `cancel` | replace a worker in the same worktree; stop a task (its worktree and unlanded work are kept) |
-| `ask_user`, `tell_user` | raise a decision only the user can make; report an outcome |
+| `ask_user`, `tell_user` | ask the user anything that needs their answer, as a decision (one call per question); report an outcome, which carries no questions |
 | `remember`, `ack_message` | propose a memory entry; mark an inbound message handled |
 | `fleet`, `task`, `load_skill` | read the work in progress; load a skill |
 
@@ -119,8 +119,8 @@ With `--engine native`, quarkd runs the coordinator for every Project on a timer
 |---|---|---|
 | `InputBrain` | `coordinator_hands.rs` | Types each turn's briefing into the coordinator's session, the way the coordinator chat does. A typed but unconfirmed wake is not typed again; the turn timeout redelivers it. |
 | `EngineHands` | `coordinator_hands.rs` | `fleet`, `task`, `steer`, `answer`, `relaunch` and `cancel` go to the engine adapter. `ask_user` opens a decision in the store, `tell_user` puts a message in the coordinator chat (`coordinator.message`) and `remember` proposes a memory entry. `start_task` and `choose_profile` go to the engine's dispatch, and `ack_message` to the triggers engine's channels (`with_channels`); without them it is refused. |
-| Routes | `coordinator_http.rs` | `POST /v1/coordinator/{project}/{token}/mcp` serves the tools over MCP; `POST /v1/coordinator/{project}/{token}/hooks/turn_end` (or `Stop`) closes the turn. |
-| Hook install | `coordinator_http::install_claude` | Native only: writes the MCP server into the workspace's `.mcp.json` (approved in `.claude/settings.local.json`) a `Stop` hook that POSTs the turn end, and a `SessionStart` hook that runs `bd prime --memories-only` so the Project's Beads memories (standing rules among them) are injected when the session starts, resumes or is compacted. Everything else in both files is kept. How a coordinator uses Beads (issues, the decision log, memory) is in the built-in prompt's Beads section; it reads through the `bd` CLI and `BEADS_DIR`. |
+| Routes | `coordinator_http.rs` | `POST /v1/coordinator/{project}/{token}/mcp` serves the tools over MCP; `POST /v1/coordinator/{project}/{token}/hooks/turn_end` (or `Stop`) closes the turn. On `Stop`, a reply that asks the user something (`questions::questions`) with no successful `ask_user` since the last turn end is sent back once with `{"decision": "block", "reason": questions::NUDGE}`, so the coordinator files each question as a decision; the stop that follows (`stop_hook_active`) closes the turn. `tell_user` refuses text with a question for the same reason. |
+| Hook install | `coordinator_http::install_claude` | Native only: writes the MCP server into the workspace's `.mcp.json` (approved in `.claude/settings.local.json`) a `Stop` hook that POSTs the turn end and prints the answer as the hook's decision, and a `SessionStart` hook that runs `bd prime --memories-only` so the Project's Beads memories (standing rules among them) are injected when the session starts, resumes or is compacted. Everything else in both files is kept. How a coordinator uses Beads (issues, the decision log, memory) is in the built-in prompt's Beads section; it reads through the `bd` CLI and `BEADS_DIR`. |
 
 Each Project's token is minted once into `<home>/coordinators/<project>.token` (mode 0600); a wrong token is `404`.
 The turn-end hook takes the turn's `usage` from its body when it sends one, else reads it from the coordinator's newest session log; an `Idempotency-Key` header makes a retried hook count once.

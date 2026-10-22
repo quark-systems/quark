@@ -926,6 +926,7 @@ function seed() {
       evidence: [{ label: "Page checks, 14 of 14 green", url: "https://github.com/acme/site/actions" }],
     },
   });
+  const d2 = decisions.get("d-2");
   D("d-3", quark, "Use SQLite WAL mode for the projection store?", {
     opened_at: minutesAgo(200), state: "acted", answer: "Yes, WAL with a busy timeout.", answered_by: "matt", answered_at: minutesAgo(180),
     answered_via: "app", answer_why: "Readers must never block the event writer.", outcome: "Every store opens in WAL mode with a 5s busy timeout.",
@@ -1123,6 +1124,18 @@ function seed() {
   chat(quark.id, "assistant", "Both workers are on track; nothing needs you.", { ts: minutesAgo(33) });
   chat(quark.id, "user", wake("stale: quark:terminals"), { ts: minutesAgo(32) });
   fm("k6", `${H}/fm-wake-drain.sh`, 32);
+
+  // The website's coordinator is native: its question is an ask_user call, shown as the
+  // decision itself (d-2) and answered in place.
+  chat(site.id, "user", "Ship the new design when the page checks pass.", { ts: minutesAgo(8) });
+  const ask = {
+    key: "launch-design", question: d2.question, context: d2.brief.context,
+    options: d2.brief.options, recommended: d2.brief.recommended, recommended_why: d2.brief.recommended_why,
+  };
+  chat(site.id, "tool_call", JSON.stringify(ask), { ts: minutesAgo(6), tool_name: "mcp__quark-coordinator__ask_user", tool_call_id: "s1",
+    tool: { kind: "other", title: "quark-coordinator: ask_user" } });
+  chat(site.id, "tool_result", `Asked the user (decision ${d2.number}). Their answer wakes you; keep the rest of the work moving.`, { ts: minutesAgo(6), tool_call_id: "s1" });
+  chat(site.id, "assistant", "All 14 page checks pass. I asked you how to launch it.", { ts: minutesAgo(6) });
 
   // The website has no Beads database yet, so its memory is files under memory/ in its repo.
   MP("mp-3", site, null, "The marketing site's images go through the CDN's resize endpoint; never commit originals over 500 KB.", {

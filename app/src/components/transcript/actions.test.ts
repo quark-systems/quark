@@ -41,4 +41,21 @@ describe("coordinatorAction", () => {
     expect(coordinatorAction(shell("bin/fm-captain-hold.sh release x"))).toBeNull();
     expect(coordinatorAction(shell("bin/fm-spawn.sh a", "ok", { kind: "read" }))).toBeNull();
   });
+
+  it("reads the native coordinator's ask_user calls as decisions, with the number it was filed under", () => {
+    const ask = (input: unknown, result?: string, status: StepStatus = "ok"): Step => ({
+      key: 2, status,
+      call: { id: 2, role: "tool_call", text: JSON.stringify(input), tool_name: "mcp__quark-coordinator__ask_user", is_error: false, truncated: false, tool: { kind: "other", title: "quark-coordinator: ask_user" } },
+      result: result === undefined ? undefined : { id: 3, role: "tool_result", text: result, is_error: false, truncated: false },
+    });
+    const input = { key: "cache", question: "Redis or memory?", context: "Sessions need a store.", options: ["Redis", { label: "Memory", consequence: "Lost on restart" }], recommended: "Redis" };
+    expect(coordinatorAction(ask(input, "Asked the user (decision 12). Their answer wakes you; keep the rest of the work moving."))).toEqual({
+      kind: "ask", key: "cache", question: "Redis or memory?", context: "Sessions need a store.",
+      options: [{ label: "Redis" }, { label: "Memory", consequence: "Lost on restart" }], recommended: "Redis", number: 12,
+    });
+    expect(coordinatorAction(ask(input))).toMatchObject({ kind: "ask", number: undefined });
+    expect(actionTitle(coordinatorAction(ask(input))!)).toBe("Asked you to decide");
+    expect(coordinatorAction(ask(input, "refused", "error"))).toBeNull();
+    expect(coordinatorAction(ask({ key: "k" }))).toBeNull();
+  });
 });

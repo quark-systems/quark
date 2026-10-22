@@ -6,6 +6,8 @@ export interface TranscriptSettings {
   agent: string;
   /** Show coordinator actions (workers started, questions asked) as cards. */
   actions: boolean;
+  /** The Project whose coordinator this is, to find the decisions it asked. */
+  project?: string;
   /** Entries with a larger id arrived after the first load, so they animate in. */
   freshAfter: number;
   /** A command's name in the Project's persona. */
