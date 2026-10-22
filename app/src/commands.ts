@@ -50,9 +50,49 @@ export function slashMatches(text: string): { command: CoordinatorCommand; alias
 
 /** How the engine's note for a command reads in the conversation, or null when the text is not one. */
 export function commandNoteTitle(note: string): string | null {
-  if (note.startsWith("The user asked to catch up")) return "You asked to catch up";
-  if (note.startsWith("The user asked for a status report")) return "You asked for a status report";
-  if (note.startsWith("The user asked you to wrap up")) return "You asked to wrap up";
-  if (/^Your context holds about \d+k tokens/.test(note)) return "Wrap up before the conversation is compacted";
+  const n = parseCommandNote(note);
+  if (!n) return null;
+  if (n.asked === "engine") return "Wrap up before the conversation is compacted";
+  return { catch_up: "You asked to catch up", status_report: "You asked for a status report", wrap_up: "You asked to wrap up" }[n.command];
+}
+
+/** What the engine's note for a command says, read back for the conversation's command card. */
+export interface CommandNote {
+  command: CoordinatorCommand;
+  /** You pressed or typed it, or the engine asked because the context filled. */
+  asked: "you" | "engine";
+  /** Catch up: when you last wrote to the coordinator. */
+  since?: string;
+  /** Catch up: notable events since then. */
+  events?: number;
+  /** Status report: tasks in the snapshot. */
+  tasks?: number;
+  /** Catch up and status report: open decisions. */
+  decisions?: number;
+  /** An automatic wrap up: the context size, in thousands of tokens. */
+  contextK?: number;
+}
+
+/** The command an engine note (text after `Engine note: `) asks for, with the facts it carried; null when it is not one. */
+export function parseCommandNote(note: string): CommandNote | null {
+  const lines = note.split("\n");
+  const head = lines[0];
+  const quoted = lines.slice(1).map((l) => l.replace(/^ {2}/, ""));
+  const decisions = quoted.some((l) => l === "No decisions are open.") ? 0
+    : quoted.some((l) => l.startsWith("Open decisions")) ? quoted.filter((l) => /^- D-\d+ /.test(l)).length : undefined;
+  if (head.startsWith("The user asked to catch up")) {
+    const since = /Their last message to you was at (\S+?)\.? /.exec(head)?.[1];
+    const n = quoted.map((l) => /^Since then, newest first \((\d+) events?\)/.exec(l)).find(Boolean);
+    const events = n ? Number(n[1]) : quoted.includes("Nothing notable was logged since then.") ? 0 : undefined;
+    return { command: "catch_up", asked: "you", since: since && since !== "unknown" ? since : undefined, events, decisions };
+  }
+  if (head.startsWith("The user asked for a status report")) {
+    const tasks = quoted.includes("No tasks ran in the last day.") ? 0
+      : quoted.some((l) => l.startsWith("Tasks,")) ? quoted.filter((l) => l.startsWith("- ") && !/^- D-\d+ /.test(l)).length : undefined;
+    return { command: "status_report", asked: "you", tasks, decisions };
+  }
+  if (head.startsWith("The user asked you to wrap up")) return { command: "wrap_up", asked: "you" };
+  const full = /^Your context holds about (\d+)k tokens/.exec(head);
+  if (full) return { command: "wrap_up", asked: "engine", contextK: Number(full[1]) };
   return null;
 }

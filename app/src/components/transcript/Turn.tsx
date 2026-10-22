@@ -12,6 +12,7 @@ import { rise, useTranscript } from "./context";
 import type { EngineEvent } from "./events";
 import { useCopy, useElapsed, useNow } from "./hooks";
 import { Icon } from "./Icon";
+import { CommandCard } from "./CommandCard";
 import { activity, Activity, duration, Turn, turnMarkdown } from "./turns";
 import { Work } from "./Work";
 
@@ -33,13 +34,14 @@ export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
   );
 });
 
-const EVENT_ICON: Record<EngineEvent["kind"], string> = { wake: "event", background: "event", engine: "event", warning: "warning" };
+const EVENT_ICON: Record<EngineEvent["kind"], string> = { wake: "event", background: "event", engine: "event", warning: "warning", command: "event" };
 
 /** A message from the engine, not a person: one quiet line, with what the session recorded behind it. */
 function EventRow({ event, id }: { event: EngineEvent; id: number }) {
   const { freshAfter } = useTranscript();
   const [open, setOpen] = useState(false);
   if (event.items) return <WakeCard event={event} id={id} />;
+  if (event.command) return <CommandCard note={event.command} id={id} raw={event.raw} />;
   return (
     <div className={"tx-event tx-event-" + event.kind + rise(id, freshAfter)} data-testid="engine-event">
       <button className="tx-event-row" aria-expanded={open} onClick={() => setOpen(!open)} title="What the engine sent">

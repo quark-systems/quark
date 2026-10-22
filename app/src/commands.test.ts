@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandLabel, commandNoteTitle, fromSlash, slashMatches } from "./commands";
+import { commandLabel, commandNoteTitle, fromSlash, parseCommandNote, slashMatches } from "./commands";
 import { labels } from "./persona";
 
 describe("coordinator commands", () => {
@@ -40,5 +40,29 @@ describe("coordinator commands", () => {
     expect(commandNoteTitle("The user asked to catch up (with a button…)")).toBe("You asked to catch up");
     expect(commandNoteTitle("Your context holds about 151k tokens and will be compacted")).toMatch(/^Wrap up/);
     expect(commandNoteTitle("Project memory: x")).toBeNull();
+  });
+});
+
+describe("command notes", () => {
+  it("reads back what a catch up passed on", () => {
+    const note = [
+      "The user asked to catch up (with a button or a slash command in the app). Their last message to you was at 2026-10-21T10:00:00Z. In a few lines…",
+      "",
+      "  Since then, newest first (7 events):",
+      "  - 2026-10-21T11:00:00Z finished: Login fix: Merged",
+      "  ",
+      "  Open decisions, oldest first:",
+      "  - D-3 (dec_3): Which database?",
+      "  - D-4 (dec_4): Ship it?",
+    ].join("\n");
+    expect(parseCommandNote(note)).toEqual({ command: "catch_up", asked: "you", since: "2026-10-21T10:00:00Z", events: 7, decisions: 2 });
+  });
+
+  it("reads a status report, a wrap up and an automatic one", () => {
+    const status = "The user asked for a status report (…).\n\n  Tasks, open first, then newest first:\n  - Login: working since x\n  - Docs: done since y\n  \n  No decisions are open.";
+    expect(parseCommandNote(status)).toEqual({ command: "status_report", asked: "you", tasks: 2, decisions: 0 });
+    expect(parseCommandNote("The user asked you to wrap up (…). Make sure…")).toEqual({ command: "wrap_up", asked: "you" });
+    expect(parseCommandNote("Your context holds about 151k tokens and will be compacted, so wrap up now.")).toEqual({ command: "wrap_up", asked: "engine", contextK: 151 });
+    expect(parseCommandNote("Project memory: x")).toBeNull();
   });
 });

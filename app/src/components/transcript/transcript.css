@@ -101,3 +101,19 @@ a.tx-wake-worker:hover { text-decoration: underline; }
   .shimmer, .spinner, .tx-rise, .tx-jump, .tx-listen { animation: none; }
   .shimmer { color: var(--fg-dim); background: none; }
 }
+
+/* A catch up, status report or wrap up: your request as a card on your side of the conversation. */
+.tx-command { align-self: flex-end; max-width: 88%; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.tx-command.by-engine { align-self: flex-start; }
+.tx-command.pending .tx-command-head { border-style: dashed; }
+.tx-command-head { display: flex; align-items: center; gap: 10px; min-width: 260px; padding: 8px 12px 8px 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line-2)); border-radius: 12px 12px 4px 12px; background: color-mix(in srgb, var(--accent) 8%, var(--bg-2)); color: var(--fg); font: 13px var(--sans); text-align: left; cursor: pointer; }
+.tx-command.by-engine .tx-command-head { border-radius: 12px 12px 12px 4px; border-color: var(--line-2); background: var(--bg-2); }
+.tx-command-head:disabled { cursor: default; }
+.tx-command-head:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 13%, var(--bg-2)); }
+.tx-command-mark { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+.tx-command.by-engine .tx-command-mark { background: var(--bg-3); color: var(--fg-dim); }
+.tx-command-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tx-command-title { display: flex; align-items: baseline; gap: 8px; }
+.tx-command-slash, .tx-command-by { font-size: 11px; color: var(--fg-faint); }
+.tx-command-detail { font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-command-status { flex: none; font-size: 11px; color: var(--fg-faint); }

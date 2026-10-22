@@ -1,17 +1,17 @@
 // J3: the project's Conversation tab (its coordinator) and Work tab (its board, live from the event stream).
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, Project, Task, TranscriptItem } from "../api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, CoordinatorCommand, Project, Task, TranscriptItem } from "../api";
 import { SinceYouLooked } from "../shell/SinceYouLooked";
 import { loadChat, useStore } from "../store";
 import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
-import { lastId, PendingMessage, stillPending, Transcript, UserMessage } from "../components/transcript";
+import { CommandCard, lastId, PendingMessage, stillPending, stillPendingCommands, Transcript, UserMessage } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
 import { useLabels } from "../persona";
 import { useDraft } from "../drafts";
-import { CommandButton, useRunCommand } from "../components/CoordinatorCommand";
+import { CommandButton, usePendingCommands, useRunCommand } from "../components/CoordinatorCommand";
 import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
@@ -105,42 +105,57 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
   const [text, setText] = useDraft(`coordinator:${cid}`);
-  const [sending, setSending] = useState(false);
-  // Sent messages are not echoed: they appear once the coordinator's session records them.
+  const typed = useRef(text);
+  typed.current = text;
+  // What you sent shows at once, then stays until the coordinator's session records it.
   const [pending, setPending] = useState<PendingMessage[]>([]);
+  const [commandsPending, setCommandsPending] = usePendingCommands(cid);
   const l = useLabels(cid);
   const coordinator = l.role("coordinator");
   const commands = useRunCommand(cid);
   const matches = slashMatches(text);
+  const label = useCallback((c: CoordinatorCommand) => commandLabel(l, c), [l]);
 
   useEffect(() => {
     loadChat(cid).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
   }, [cid]);
 
-  // Drop a pending message once the log records it.
+  // Drop a pending message or command once the log records it.
   useEffect(() => {
     const left = stillPending(pending, items);
     if (left !== pending) setPending(left);
   }, [items, pending]);
+  useEffect(() => {
+    const left = stillPendingCommands(commandsPending, items);
+    if (left !== commandsPending) setCommandsPending(left);
+  }, [items, commandsPending, setCommandsPending]);
+
+  const ask = async (command: CoordinatorCommand) => {
+    const draft = text;
+    setText("");
+    if (!(await commands.run(command)) && !typed.current.trim()) setText(draft);
+  };
 
   const send = async () => {
     const t = text.trim();
-    if (!t || sending) return;
-    // A slash command is a request, not a message: its note shows up in the conversation instead.
+    if (!t) return;
+    // A slash command is a request, not a message: it shows as its command card.
     const command = fromSlash(t);
-    if (command) {
-      if (await commands.run(command)) setText("");
-      return;
-    }
-    setSending(true); setErr(null);
+    if (command) return ask(command);
+    setErr(null);
     // Only entries recorded after this point can be this message.
-    const after = lastId(items);
+    const key = Date.now() + Math.random();
+    setPending((p) => [...p, { key, text: t, sending: true, confirmed: false, after: lastId(items) }]);
+    setText("");
     try {
       const r = await api.sendChat(cid, t);
-      setText("");
-      setPending((p) => [...p, { key: Date.now(), text: t, confirmed: r?.confirmed ?? true, after }]);
-    } catch (e) { setErr(errText(e)); }
-    finally { setSending(false); }
+      setPending((p) => p.map((x) => x.key === key ? { ...x, sending: false, confirmed: r?.confirmed ?? true } : x));
+    } catch (e) {
+      setErr(errText(e));
+      setPending((p) => p.filter((x) => x.key !== key));
+      // Give the text back unless something new was typed meanwhile.
+      if (!typed.current.trim()) setText(t);
+    }
   };
 
   return (
@@ -150,12 +165,16 @@ export function CoordinatorChat({ cid }: { cid: string }) {
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
-          <Transcript key={cid} items={items} agent="coordinator" actions className="chat-log"
+          <Transcript key={cid} items={items} agent="coordinator" actions className="chat-log" commandLabel={label}
             empty={status === "ok" ? <div className="empty">Ask the {coordinator} to plan or delegate work.</div>
               : status === "loading" ? <div className="empty">Loading…</div> : null}>
-            {pending.length > 0 && pending.map((p) => (
+            {pending.map((p) => (
               <UserMessage key={p.key} pending item={{ text: p.text, ts: null, truncated: false }}
-                note={p.confirmed ? "sent" : "typed, not confirmed; check before sending again"} />
+                note={p.sending ? "sending…" : p.confirmed ? "sent" : "typed, not confirmed; check before sending again"} />
+            ))}
+            {commandsPending.map((p) => (
+              <CommandCard key={p.key} note={{ command: p.command, asked: "you" }}
+                state={p.sending ? "sending" : p.confirmed ? "sent" : "unconfirmed"} />
             ))}
           </Transcript>
           {(err ?? commands.err) && <div className="form-error">{err ?? commands.err}</div>}
@@ -163,13 +182,13 @@ export function CoordinatorChat({ cid }: { cid: string }) {
             <div className="slash-menu" role="listbox" aria-label="Slash commands" data-testid="slash-menu">
               {matches.map((m) => (
                 <button key={m.command} role="option" aria-selected={false} className="slash-item" disabled={commands.busy !== null}
-                  onClick={async () => { if (await commands.run(m.command)) setText(""); }}>
-                  <span className="mono">/{m.alias}</span><b>{commandLabel(l, m.command)}</b><span className="faint">{HINTS[m.command]}</span>
+                  onClick={() => void ask(m.command)}>
+                  <span className="mono">/{m.alias}</span><b>{label(m.command)}</b><span className="faint">{HINTS[m.command]}</span>
                 </button>
               ))}
             </div>
           )}
-          <Composer value={text} onChange={setText} onSend={() => void send()} sending={sending || commands.busy !== null}
+          <Composer value={text} onChange={setText} onSend={() => void send()} sending={false}
             label={`Message the ${coordinator}`} placeholder={`Message the ${coordinator} (Enter to send, Shift+Enter for a newline)`} />
         </>
       )}

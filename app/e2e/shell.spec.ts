@@ -204,21 +204,30 @@ test("updates: each says what happened, which worker, and the detail in plain wo
   await expect(items.nth(1).getByRole("img", { name: "Finished" })).toBeVisible();
 });
 
-test("coordinator commands: Catch up from the Since-you-looked column, slash commands in the message box", async ({ page }) => {
+test("coordinator commands: shown as a card the moment you ask, from a button or a slash command", async ({ page }) => {
   await open(page, "#/p/quark");
   const chat = page.getByTestId("coordinator-chat");
+  const cards = chat.getByTestId("command-card");
   await page.getByTestId("since-you-looked").getByTestId("command-catch_up").click();
-  await expect(chat.getByTestId("engine-event").filter({ hasText: "You asked to catch up" })).toBeVisible();
+  // The card shows at once, then stays as the recorded request with the coordinator's answer under it.
+  await expect(cards.filter({ hasText: "Catch up" }).first()).toBeVisible();
   await expect(chat).toContainText("Since your last message");
+  await expect(cards.filter({ hasText: "Catch up" })).toHaveCount(1);
 
   // A half-typed slash command offers what it can become; Enter on a whole one runs it.
   const box = chat.getByRole("textbox");
   await box.fill("/st");
-  const menu = chat.getByTestId("slash-menu");
-  await expect(menu.getByRole("option")).toHaveCount(2);
+  await expect(chat.getByTestId("slash-menu").getByRole("option")).toHaveCount(2);
   await box.fill("/bearings");
   await box.press("Enter");
   await expect(box).toHaveValue("");
-  await expect(chat.getByTestId("engine-event").filter({ hasText: "You asked for a status report" })).toBeVisible();
-  await expect(chat.getByTestId("command-wrap_up")).toBeVisible();
+  await expect(cards.filter({ hasText: "Status report" }).first()).toBeVisible();
+  await expect(chat).toContainText("Recently landed");
+  await expect(cards.filter({ hasText: "Status report" })).toHaveCount(1);
+
+  // A message shows the moment it is sent.
+  await box.fill("plan the release");
+  await box.press("Enter");
+  await expect(box).toHaveValue("");
+  await expect(chat.locator(".tx-user").filter({ hasText: "plan the release" }).first()).toBeVisible({ timeout: 300 });
 });
