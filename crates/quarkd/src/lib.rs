@@ -117,6 +117,8 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         None => sessions,
     };
     let layout = provision::Layout::new(&config.home).with_user_memory(config.user_memory.clone());
+    // Before anything starts in a workspace firstmate made.
+    firstmate::workspace::retire(&layout);
     // Native dispatch (slice 5) starts the native engine's tasks.
     let dispatch = match &native {
         Some(n) => {

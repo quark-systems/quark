@@ -59,6 +59,7 @@ Both are additive trait methods whose default refuses, so the stub engine refuse
 1. Makes the task id from the title (lowercase letters, digits and dashes, at most 40 characters, `-2`, `-3` and so on when taken), so it passes `quarkd::engine::valid_task_id`.
 2. Finds the repo in the Project workspace: `<root>/repos/<name>` is each source repo's primary checkout.
    `<root>/projects/<name>`, firstmate's layout, is read too, so a workspace firstmate seeded runs natively.
+   When quarkd starts, it moves firstmate's own files (its engine clone, `data/`, `state/`, `.claude` hooks and skills) out of such a workspace into `~/.quark/backups/firstmate/`, keeping the clones, `project/`, `.quark/`, `config/`, `verify/` and the coordinator's settings (`firstmate/workspace.rs`).
    With no repo named, the workspace's only repo is used; with several, the call names them and refuses.
 3. Records a `dispatch.requested` event and resolves the agent from the Project's rules (classifier, quota, selection), unless the caller named one.
    A clear resolution, or a named agent, chooses an account from the profile's pool (`dispatch.chosen`).
