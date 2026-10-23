@@ -206,7 +206,7 @@ async fn hands_out_an_isolated_worktree_and_takes_it_back() {
     assert_eq!(status.slots[0].holder, Some(wt.holder.clone()));
 
     assert_eq!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Returned
     );
     assert_eq!(p.status().await.unwrap().slots[0].state, SlotState::Idle);
@@ -237,7 +237,7 @@ async fn keeps_uncommitted_work() {
     let wt = p.get(&fx.request("feat")).await.unwrap();
     std::fs::write(wt.path.join("new.txt"), "x").unwrap();
 
-    let out = p.return_worktree(&wt.id).await.unwrap();
+    let out = p.return_worktree(&wt).await.unwrap();
     assert_eq!(
         out,
         ReturnOutcome::Kept {
@@ -259,7 +259,7 @@ async fn keeps_uncommitted_work() {
 
     std::fs::remove_file(wt.path.join("new.txt")).unwrap();
     assert_eq!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Returned
     );
 }
@@ -274,7 +274,7 @@ async fn keeps_unpushed_commits_until_they_land() {
     git(&wt.path, &["commit", "-q", "-m", "a"]);
 
     assert_eq!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Kept {
             work: LandedWork {
                 uncommitted: false,
@@ -285,7 +285,7 @@ async fn keeps_unpushed_commits_until_they_land() {
 
     git(&wt.path, &["push", "-q", "origin", "feat"]);
     assert_eq!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Returned
     );
 }
@@ -312,7 +312,7 @@ async fn squash_merged_work_counts_as_landed() {
     let work = checks::landed_work(&wt.path).await.unwrap();
     assert!(work.is_landed(), "{work:?}");
     assert_eq!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Returned
     );
 }
@@ -416,19 +416,20 @@ async fn leases_survive_as_leased_slots() {
     assert!(matches!(changes(&log)[0], WorktreeEvent::Leased { .. }));
     assert_eq!(log.events()[0].task, None);
 
-    // A restarted provider finds the lease through the pool alone.
+    // A restarted provider finds the lease through the pool alone, from
+    // the worktree's own repo: nothing has told it about the repo yet.
     let again = TreehouseProvider::new(GitPool {
         root: p.pool().root.clone(),
         entries: Mutex::new(p.pool().entries.lock().unwrap().clone()),
         fault: Mutex::new(Fault::None),
         released: Mutex::default(),
     });
-    again.add_repo(&fx.repo);
-    let slots = again.status().await.unwrap().slots;
+    assert!(again.repos().is_empty());
+    let slots = p.status().await.unwrap().slots;
     assert_eq!(slots[0].state, SlotState::Leased);
     assert_eq!(slots[0].holder, Some(wt.holder.clone()));
     assert_eq!(
-        again.return_worktree(&wt.id).await.unwrap(),
+        again.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Returned
     );
 
@@ -442,11 +443,47 @@ async fn leases_survive_as_leased_slots() {
 async fn unknown_ids_are_not_found() {
     let fx = Fixture::new();
     let (p, _) = provider(&fx);
-    p.add_repo(&fx.repo);
+    let mut wt = p.get(&fx.request("feat")).await.unwrap();
+    wt.id = "nope".into();
     assert!(matches!(
-        p.return_worktree("nope").await,
+        p.return_worktree(&wt).await,
         Err(CoreError::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn a_merged_task_returns_over_its_pre_squash_commits() {
+    let fx = Fixture::new();
+    let (p, _) = provider(&fx);
+    let wt = p.get(&fx.request("feat")).await.unwrap();
+    std::fs::write(wt.path.join("a.txt"), "a").unwrap();
+    git(&wt.path, &["add", "."]);
+    git(&wt.path, &["commit", "-q", "-m", "a"]);
+    // Main moves on past the squash, so the branch's commit never matches.
+    std::fs::write(fx.repo.join("a.txt"), "a, then more").unwrap();
+    git(&fx.repo, &["add", "."]);
+    git(&fx.repo, &["commit", "-q", "-m", "squash, then more"]);
+    git(&fx.repo, &["push", "-q", "origin", "HEAD:main"]);
+    std::fs::write(wt.path.join("scratch.txt"), "x").unwrap();
+
+    // Uncommitted changes still keep it.
+    assert_eq!(
+        p.return_merged(&wt).await.unwrap(),
+        ReturnOutcome::Kept {
+            work: LandedWork {
+                uncommitted: true,
+                unpushed_commits: 1
+            }
+        }
+    );
+    std::fs::remove_file(wt.path.join("scratch.txt")).unwrap();
+    assert!(matches!(
+        p.return_worktree(&wt).await.unwrap(),
+        ReturnOutcome::Kept { .. }
+    ));
+    assert_eq!(p.return_merged(&wt).await.unwrap(), ReturnOutcome::Returned);
+    // Its commit stays on its branch.
+    assert_eq!(git(&fx.repo, &["log", "-1", "--format=%s", "feat"]), "a");
 }
 
 /// The same lifecycle against a real treehouse. Opt-in: set
@@ -475,13 +512,13 @@ async fn real_treehouse_lifecycle() {
 
     std::fs::write(wt.path.join("x"), "x").unwrap();
     assert!(matches!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Kept { .. }
     ));
     assert!(wt.path.join("x").exists());
     std::fs::remove_file(wt.path.join("x")).unwrap();
     assert_eq!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Returned
     );
     assert_eq!(p.status().await.unwrap().slots[0].state, SlotState::Idle);
@@ -498,7 +535,7 @@ async fn real_treehouse_lifecycle() {
         1
     );
     assert_eq!(
-        p.return_worktree(&home.id).await.unwrap(),
+        p.return_worktree(&home).await.unwrap(),
         ReturnOutcome::Returned
     );
     // Handed out, kept, returned, leased, returned.

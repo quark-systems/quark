@@ -56,6 +56,25 @@ impl FakeWorktrees {
         self.held.lock().unwrap().insert(id, wt.clone());
         Ok(wt)
     }
+
+    /// Kept while it has unlanded work; with `merged`, unpushed commits
+    /// alone do not keep it.
+    fn give_back(&self, id: &str, merged: bool) -> Result<ReturnOutcome> {
+        if !self.held.lock().unwrap().contains_key(id) {
+            return Err(CoreError::NotFound(format!("worktree {id}")));
+        }
+        if let Some(work) = self
+            .work
+            .lock()
+            .unwrap()
+            .get(id)
+            .filter(|w| w.uncommitted || (!merged && !w.is_landed()))
+        {
+            return Ok(ReturnOutcome::Kept { work: work.clone() });
+        }
+        self.held.lock().unwrap().remove(id);
+        Ok(ReturnOutcome::Returned)
+    }
 }
 
 #[async_trait]
@@ -69,18 +88,16 @@ impl WorktreeProvider for FakeWorktrees {
         )
     }
 
-    async fn return_worktree(&self, id: &str) -> Result<ReturnOutcome> {
-        if !self.held.lock().unwrap().contains_key(id) {
-            return Err(CoreError::NotFound(format!("worktree {id}")));
-        }
-        if let Some(work) = self.work.lock().unwrap().get(id).filter(|w| !w.is_landed()) {
-            return Ok(ReturnOutcome::Kept { work: work.clone() });
-        }
-        self.held.lock().unwrap().remove(id);
-        Ok(ReturnOutcome::Returned)
+    async fn return_worktree(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
+        self.give_back(&worktree.id, false)
     }
 
-    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
+    async fn return_merged(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
+        self.give_back(&worktree.id, true)
+    }
+
+    async fn discard_worktree(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
+        let id = worktree.id.as_str();
         if self.held.lock().unwrap().remove(id).is_none() {
             return Err(CoreError::NotFound(format!("worktree {id}")));
         }
@@ -143,7 +160,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            wt.return_worktree(&w.id).await.unwrap(),
+            wt.return_worktree(&w).await.unwrap(),
             ReturnOutcome::Kept { .. }
         ));
         assert_eq!(wt.status().await.unwrap().slots.len(), 1);
@@ -155,9 +172,38 @@ mod tests {
             },
         );
         assert_eq!(
-            wt.return_worktree(&w.id).await.unwrap(),
+            wt.return_worktree(&w).await.unwrap(),
             ReturnOutcome::Returned
         );
+    }
+
+    #[tokio::test]
+    async fn merged_returns_over_unpushed_commits_only() {
+        let wt = FakeWorktrees::new("/pool");
+        let w = wt.get(&req()).await.unwrap();
+        wt.set_work(
+            &w.id,
+            LandedWork {
+                uncommitted: true,
+                unpushed_commits: 2,
+            },
+        );
+        assert!(matches!(
+            wt.return_merged(&w).await.unwrap(),
+            ReturnOutcome::Kept { .. }
+        ));
+        wt.set_work(
+            &w.id,
+            LandedWork {
+                uncommitted: false,
+                unpushed_commits: 2,
+            },
+        );
+        assert!(matches!(
+            wt.return_worktree(&w).await.unwrap(),
+            ReturnOutcome::Kept { .. }
+        ));
+        assert_eq!(wt.return_merged(&w).await.unwrap(), ReturnOutcome::Returned);
     }
 
     #[tokio::test]

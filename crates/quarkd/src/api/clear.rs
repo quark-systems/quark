@@ -34,9 +34,10 @@ fn kept_error(uncommitted: bool, unpushed_commits: u32) -> ApiError {
 /// Stops its session if its agent never exited, gives its worktree back and
 /// takes it off the board: `GET /v1/projects/{id}/tasks` leaves it out
 /// unless `include_cleared`. Its activity log and events are kept. Clearing
-/// a cleared task again does nothing. With `discard`, work that has not
-/// landed is thrown away instead of keeping the worker; commits stay on its
-/// branch.
+/// a cleared task again asks for its worktree back again, which frees one an
+/// earlier clear could not. With `discard`, work that has not landed is
+/// thrown away instead of keeping the worker; commits stay on its branch. A
+/// merged task's pre-squash commits do not keep its worktree.
 #[utoipa::path(
     post,
     path = "/v1/tasks/{id}:clear",

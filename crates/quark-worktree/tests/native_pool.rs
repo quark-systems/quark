@@ -97,7 +97,7 @@ async fn lifecycle() {
     // Unlanded work is kept; landed work is returned and the slot reused.
     std::fs::write(one.path.join("a"), "a\n").unwrap();
     assert!(matches!(
-        p.return_worktree(&one.id).await.unwrap(),
+        p.return_worktree(&one).await.unwrap(),
         ReturnOutcome::Kept { .. }
     ));
     git(&one.path, &["add", "a"]);
@@ -106,7 +106,7 @@ async fn lifecycle() {
     git(&one.path, &["push", "-q", "origin", "HEAD:feat-1"]);
     git(&fx.repo, &["fetch", "-q", "origin"]);
     assert_eq!(
-        p.return_worktree(&one.id).await.unwrap(),
+        p.return_worktree(&one).await.unwrap(),
         ReturnOutcome::Returned
     );
     let status = p.status().await.unwrap();
@@ -189,12 +189,12 @@ async fn discarding_drops_uncommitted_work_and_keeps_commits_on_the_branch() {
     std::fs::write(wt.path.join("scratch"), "untracked\n").unwrap();
     std::fs::write(wt.path.join("kept"), "edited\n").unwrap();
     assert!(matches!(
-        p.return_worktree(&wt.id).await.unwrap(),
+        p.return_worktree(&wt).await.unwrap(),
         ReturnOutcome::Kept { .. }
     ));
 
     assert_eq!(
-        p.discard_worktree(&wt.id).await.unwrap(),
+        p.discard_worktree(&wt).await.unwrap(),
         ReturnOutcome::Returned
     );
     let status = p.status().await.unwrap();

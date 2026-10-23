@@ -374,7 +374,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "clear",
-            description: "Clean up a done or failed task once nobody needs it: stops its session, gives its worktree back and takes it off the board, keeping its history. Refused while the task is working, and when its worktree holds work that has not landed unless `discard` is set. Set `discard` only when the user said to throw that work away.",
+            description: "Clean up a done or failed task once nobody needs it: stops its session, gives its worktree back and takes it off the board, keeping its history. Refused while the task is working, and when its worktree holds work that has not landed unless `discard` is set (a merged task's pre-squash commits do not count). Clearing a cleared task again frees a worktree an earlier clear left leased. Set `discard` only when the user said to throw that work away.",
             input_schema: object(
                 json!({
                     "task": text("Task id."),

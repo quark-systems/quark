@@ -189,6 +189,36 @@ impl GitWorktrees {
     pub fn held(&self) -> usize {
         self.held.lock().unwrap().len()
     }
+
+    /// Kept while it has unlanded work; with `merged`, unpushed commits
+    /// alone do not keep it.
+    fn give_back(&self, id: &str, merged: bool) -> Result<ReturnOutcome> {
+        let wt = self
+            .held
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| CoreError::NotFound(id.into()))?;
+        let dirty = !git(&wt.path, &["status", "--porcelain"]).trim().is_empty();
+        let ahead: u32 = git(&wt.path, &["rev-list", "--count", "main..HEAD"])
+            .trim()
+            .parse()
+            .unwrap();
+        let work = LandedWork {
+            uncommitted: dirty,
+            unpushed_commits: ahead,
+        };
+        if dirty || (!merged && !work.is_landed()) {
+            return Ok(ReturnOutcome::Kept { work });
+        }
+        git(
+            &wt.repo,
+            &["worktree", "remove", "--force", wt.path.to_str().unwrap()],
+        );
+        self.held.lock().unwrap().remove(id);
+        Ok(ReturnOutcome::Returned)
+    }
 }
 
 #[async_trait]
@@ -220,32 +250,16 @@ impl WorktreeProvider for GitWorktrees {
         Ok(wt)
     }
 
-    async fn return_worktree(&self, id: &str) -> Result<ReturnOutcome> {
-        let wt = self
-            .held
-            .lock()
-            .unwrap()
-            .get(id)
-            .cloned()
-            .ok_or_else(|| CoreError::NotFound(id.into()))?;
-        let dirty = !git(&wt.path, &["status", "--porcelain"]).trim().is_empty();
-        let ahead: u32 = git(&wt.path, &["rev-list", "--count", "main..HEAD"])
-            .trim()
-            .parse()
-            .unwrap();
-        let work = LandedWork {
-            uncommitted: dirty,
-            unpushed_commits: ahead,
-        };
-        if !work.is_landed() {
-            return Ok(ReturnOutcome::Kept { work });
-        }
-        git(&wt.repo, &["worktree", "remove", wt.path.to_str().unwrap()]);
-        self.held.lock().unwrap().remove(id);
-        Ok(ReturnOutcome::Returned)
+    async fn return_worktree(&self, wt: &Worktree) -> Result<ReturnOutcome> {
+        self.give_back(&wt.id, false)
     }
 
-    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
+    async fn return_merged(&self, wt: &Worktree) -> Result<ReturnOutcome> {
+        self.give_back(&wt.id, true)
+    }
+
+    async fn discard_worktree(&self, wt: &Worktree) -> Result<ReturnOutcome> {
+        let id = wt.id.as_str();
         let wt = self
             .held
             .lock()

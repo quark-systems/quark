@@ -118,21 +118,34 @@ pub enum WorktreeEvent {
 ///   worktree whose git dir points at another worktree).
 /// - `return_worktree` runs the landed-work check first and never discards
 ///   uncommitted or unpushed work; it reports [`ReturnOutcome::Kept`].
+/// - Returns find the worktree from the [`Worktree`] they are given, not
+///   from state the provider built up since it started, so a restarted
+///   daemon gives back what an earlier one handed out.
 #[async_trait]
 pub trait WorktreeProvider: Send + Sync {
     /// A fresh worktree for a task, on a new branch.
     async fn get(&self, request: &WorktreeRequest) -> Result<Worktree>;
 
     /// Give a worktree back.
-    async fn return_worktree(&self, id: &str) -> Result<ReturnOutcome>;
+    async fn return_worktree(&self, worktree: &Worktree) -> Result<ReturnOutcome>;
+
+    /// Give back the worktree of a task whose pull request merged. Its
+    /// unpushed commits are that pull request's pre-squash copies (a squash
+    /// or rebase merge lands new commits, so the branch's own never reach
+    /// the default branch), and do not keep it; uncommitted changes still
+    /// do. Providers that cannot tell fall back to [`Self::return_worktree`].
+    async fn return_merged(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
+        self.return_worktree(worktree).await
+    }
 
     /// Throw away the worktree's uncommitted changes and untracked files,
     /// then give it back. Commits stay on the task's branch, so they can
     /// still be recovered; only what was never committed is lost. Only for
     /// an explicit request to discard; providers that cannot refuse.
-    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
+    async fn discard_worktree(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
         Err(crate::CoreError::Unsupported(format!(
-            "this worktree provider cannot discard worktree {id}"
+            "this worktree provider cannot discard worktree {}",
+            worktree.id
         )))
     }
 

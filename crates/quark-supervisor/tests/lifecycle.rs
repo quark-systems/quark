@@ -310,6 +310,33 @@ async fn landed_task_gives_its_worktree_back() {
 }
 
 #[tokio::test]
+async fn a_merged_task_gives_back_its_pre_squash_worktree_by_itself() {
+    let env = Env::new();
+    let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+    let (p, t) = ids("t1");
+    let w = sup.spawn(env.request("t1")).await.unwrap();
+    let path = w.worktree.unwrap().path;
+    sup.steer(&p, &t, "commit").await.unwrap();
+    eventually("a commit", async || {
+        git(&path, &["rev-list", "--count", "main..HEAD"]).trim() == "1"
+    })
+    .await;
+    sup.steer(&p, &t, "ship").await.unwrap();
+    eventually("review", async || {
+        sup.tick().await.unwrap();
+        sup.task(&p, &t).unwrap().0.state == TaskState::InReview
+    })
+    .await;
+
+    // Squash-merged: the branch's own commit never reaches main.
+    sup.complete(&p, &t).await.unwrap();
+    assert_eq!(sup.tick().await.unwrap().released, 1);
+    assert!(!path.exists());
+    assert!(sup.task(&p, &t).unwrap().1.is_released());
+    assert_eq!(sup.tick().await.unwrap(), Default::default());
+}
+
+#[tokio::test]
 async fn relaunch_switches_effort_and_tells_the_new_worker() {
     let env = Env::new();
     let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;

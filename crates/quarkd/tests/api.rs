@@ -1546,10 +1546,24 @@ async fn clearing_finished_workers_hides_them_and_keeps_unlanded_work() {
         "{:?}",
         e.payload
     );
-    // Clearing again changes nothing.
+    // Clearing again asks for its worktree again, freeing one an earlier
+    // clear could not, and the task stays cleared.
     let (status, _) = call(&h.app, "POST", &format!("/v1/tasks/{d}:clear"), None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert_eq!(h.engine.writes().len(), 2);
+    assert_eq!(
+        h.engine.writes()[2..],
+        [
+            StubWrite::Control {
+                task_id: "d".into(),
+                action: TaskControl::Cancel
+            },
+            StubWrite::ReleaseWorktree {
+                task_id: "d".into()
+            },
+        ]
+    );
+    let (_, t) = call(&h.app, "GET", &format!("/v1/tasks/{d}"), None).await;
+    assert!(t["cleared_at"].is_string());
 
     // Bulk: failed only; one worktree holds unlanded work and stays.
     h.engine.set_unlanded("c", true);
