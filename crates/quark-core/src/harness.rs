@@ -140,8 +140,8 @@ pub struct Launch {
     #[serde(default)]
     pub dialogs: Vec<Dialog>,
     /// Press Enter once more this many milliseconds after typing the
-    /// brief, for a harness that can drop the first Enter just after it
-    /// starts. Enter on an empty composer does nothing.
+    /// brief or a steering message, for a harness that can leave a pasted
+    /// message unsent. Enter on an empty composer does nothing.
     #[serde(default)]
     pub enter_again_ms: Option<u64>,
 }

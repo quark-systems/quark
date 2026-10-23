@@ -723,6 +723,24 @@ impl Supervisor {
             .await?;
             n += 1;
         }
+        // The same second Enter a brief gets at launch, for a harness that
+        // can leave a pasted message unsent. It is sent after the lock is
+        // released, so steering does not wait for it.
+        if n > 0 {
+            let again = self
+                .manifests
+                .resolve(&g.harness)
+                .and_then(|m| m.launch.enter_again_ms);
+            if let Some(ms) = again {
+                let sessions = self.sessions.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                    if let Err(e) = sessions.input(&g.session, b"\r").await {
+                        tracing::info!(error = %e, "second Enter after steering not sent");
+                    }
+                });
+            }
+        }
         Ok(n)
     }
 
