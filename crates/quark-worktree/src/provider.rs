@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use quark_core::event::kinds;
 use quark_core::worktree::{
-    Holder, ProviderStatus, ReturnOutcome, Slot, SlotState, Worktree, WorktreeEvent,
+    Holder, LandedWork, ProviderStatus, ReturnOutcome, Slot, SlotState, Worktree, WorktreeEvent,
     WorktreeProvider, WorktreeRequest,
 };
 use quark_core::{CoreError, EventLog, HostId, NewEvent, ProjectId, Result, TaskId};
@@ -176,22 +176,20 @@ impl<P: Pool> TreehouseProvider<P> {
         }
         Err(CoreError::NotFound(format!("worktree {id}")))
     }
-}
 
-#[async_trait]
-impl<P: Pool> WorktreeProvider for TreehouseProvider<P> {
-    async fn get(&self, request: &WorktreeRequest) -> Result<Worktree> {
-        self.hand_out(
-            request,
-            Holder::Task {
-                task: request.task.clone(),
-            },
-        )
-        .await
+    /// Find `worktree`'s lease in its own repo's pool, which a restarted
+    /// daemon has not seen handed out yet.
+    async fn locate(&self, worktree: &Worktree) -> Result<(PathBuf, PoolEntry)> {
+        self.add_repo(&worktree.repo);
+        self.find(&worktree.id).await
     }
 
-    async fn return_worktree(&self, id: &str) -> Result<ReturnOutcome> {
-        let (repo, entry) = self.find(id).await?;
+    /// Run the landed-work check, then give the worktree back unless work
+    /// would be lost. With `merged`, unpushed commits are a merged pull
+    /// request's pre-squash copies and only uncommitted changes keep it.
+    async fn give_back_checked(&self, worktree: &Worktree, merged: bool) -> Result<ReturnOutcome> {
+        let id = worktree.id.as_str();
+        let (repo, entry) = self.locate(worktree).await?;
         let (project, holder) = parse_holder(&entry.lease_holder).unwrap_or_else(|| {
             (
                 ProjectId::engine(),
@@ -202,8 +200,15 @@ impl<P: Pool> WorktreeProvider for TreehouseProvider<P> {
         });
         let task = task_of(&holder);
 
+        let keeps = |work: &LandedWork| {
+            if merged {
+                work.uncommitted
+            } else {
+                !work.is_landed()
+            }
+        };
         let work = checks::landed_work(&entry.path).await?;
-        let outcome = if !work.is_landed() {
+        let outcome = if keeps(&work) {
             ReturnOutcome::Kept { work }
         } else {
             match self.pool.release(&repo, &entry.path, id).await? {
@@ -211,7 +216,7 @@ impl<P: Pool> WorktreeProvider for TreehouseProvider<P> {
                 Release::NotReturned(why) => {
                     // Work appeared between our check and the pool's.
                     let work = checks::landed_work(&entry.path).await?;
-                    if work.is_landed() {
+                    if !keeps(&work) {
                         return Err(CoreError::Backend(format!(
                             "pool kept worktree {id}: {why}"
                         )));
@@ -231,9 +236,31 @@ impl<P: Pool> WorktreeProvider for TreehouseProvider<P> {
         .await?;
         Ok(outcome)
     }
+}
 
-    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
-        let (repo, entry) = self.find(id).await?;
+#[async_trait]
+impl<P: Pool> WorktreeProvider for TreehouseProvider<P> {
+    async fn get(&self, request: &WorktreeRequest) -> Result<Worktree> {
+        self.hand_out(
+            request,
+            Holder::Task {
+                task: request.task.clone(),
+            },
+        )
+        .await
+    }
+
+    async fn return_worktree(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
+        self.give_back_checked(worktree, false).await
+    }
+
+    async fn return_merged(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
+        self.give_back_checked(worktree, true).await
+    }
+
+    async fn discard_worktree(&self, worktree: &Worktree) -> Result<ReturnOutcome> {
+        let id = worktree.id.as_str();
+        let (repo, entry) = self.locate(worktree).await?;
         let (project, holder) = parse_holder(&entry.lease_holder).unwrap_or_else(|| {
             (
                 ProjectId::engine(),

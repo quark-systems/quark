@@ -4935,7 +4935,7 @@
           "tasks"
         ],
         "summary": "Clear a finished task's worker.",
-        "description": "Stops its session if its agent never exited, gives its worktree back and\ntakes it off the board: `GET /v1/projects/{id}/tasks` leaves it out\nunless `include_cleared`. Its activity log and events are kept. Clearing\na cleared task again does nothing. With `discard`, work that has not\nlanded is thrown away instead of keeping the worker; commits stay on its\nbranch.",
+        "description": "Stops its session if its agent never exited, gives its worktree back and\ntakes it off the board: `GET /v1/projects/{id}/tasks` leaves it out\nunless `include_cleared`. Its activity log and events are kept. Clearing\na cleared task again asks for its worktree back again, which frees one an\nearlier clear could not. With `discard`, work that has not landed is\nthrown away instead of keeping the worker; commits stay on its branch. A\nmerged task's pre-squash commits do not keep its worktree.",
         "operationId": "clear_task",
         "parameters": [
           {

@@ -411,12 +411,12 @@ async fn shadow_lifecycle_has_no_divergence() {
     git(&one.path, &["push", "-q", "origin", "HEAD:feat-1"]);
     git(&fx.repo, &["fetch", "-q", "origin"]);
     assert_eq!(
-        provider.return_worktree(&one.id).await.unwrap(),
+        provider.return_worktree(&one).await.unwrap(),
         ReturnOutcome::Returned
     );
     std::fs::write(two.path.join("wip"), "x\n").unwrap();
     assert!(matches!(
-        provider.return_worktree(&two.id).await.unwrap(),
+        provider.return_worktree(&two).await.unwrap(),
         ReturnOutcome::Kept { .. }
     ));
 

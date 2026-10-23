@@ -130,6 +130,8 @@ pub struct Tick {
     pub recovered: usize,
     pub stale: usize,
     pub resumed_spawns: usize,
+    /// Done tasks' worktrees given back to the pool.
+    pub released: usize,
 }
 
 /// What the supervisor watches about one generation in memory. Lost on a
@@ -877,7 +879,9 @@ impl Supervisor {
 
     /// Give a finished task's worktree back. Refused while the task is
     /// still open; a worktree with uncommitted or unpushed work is kept and
-    /// reported, never discarded.
+    /// reported, never discarded. A done task with a pull request landed
+    /// it, so its unpushed commits (copies of a squashed pull request) do
+    /// not keep its worktree; uncommitted changes still do.
     pub async fn teardown(&self, project: &ProjectId, task: &TaskId) -> Result<ReturnOutcome> {
         self.give_back(project, task, false).await
     }
@@ -902,6 +906,17 @@ impl Supervisor {
     ) -> Result<ReturnOutcome> {
         let key = (project.clone(), task.clone());
         let _guard = self.lock(&key).await;
+        self.give_back_locked(project, task, discard).await
+    }
+
+    /// [`Self::give_back`] with the task's lock already held.
+    async fn give_back_locked(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+        discard: bool,
+    ) -> Result<ReturnOutcome> {
+        let key = (project.clone(), task.clone());
         self.refresh().await?;
         let w = self.worker(project, task)?;
         let state = self.state(project, task);
@@ -920,10 +935,24 @@ impl Supervisor {
         let Some(wt) = w.worktree else {
             return Ok(ReturnOutcome::Returned);
         };
+        let merged = state == TaskState::Done
+            && self
+                .ledger
+                .states()
+                .get(project, task)
+                .is_some_and(|r| r.pull_request.is_some());
         let outcome = if discard {
-            self.worktrees.discard_worktree(&wt.id).await?
+            self.worktrees.discard_worktree(&wt).await
+        } else if merged {
+            self.worktrees.return_merged(&wt).await
         } else {
-            self.worktrees.return_worktree(&wt.id).await?
+            self.worktrees.return_worktree(&wt).await
+        };
+        let outcome = match outcome {
+            // Its lease is in no pool any more (someone returned it by
+            // hand): there is nothing left to give back.
+            Err(CoreError::NotFound(_)) => ReturnOutcome::Returned,
+            other => other?,
         };
         self.record(
             project,
@@ -1137,6 +1166,16 @@ impl Supervisor {
             state,
             TaskState::Running | TaskState::NeedsDecision | TaskState::Blocked | TaskState::Paused
         );
+
+        if state == TaskState::Done && w.worktree.is_some() && w.released.is_none() {
+            // Done tasks are never relaunched, so their worktree goes back
+            // to the pool. One with work that has not landed is kept, and
+            // not tried again; clearing the task asks again.
+            if let ReturnOutcome::Returned = self.give_back_locked(project, task, false).await? {
+                t.released += 1;
+            }
+            return Ok(());
+        }
 
         let Some(g) = w.current.clone() else {
             // Assigned but never launched: a crash interrupted the spawn.

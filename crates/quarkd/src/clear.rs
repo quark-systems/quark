@@ -6,7 +6,9 @@
 //! and takes the task off the board. The task's row, activity log and events
 //! are kept, so its history still reads. A worktree holding work that has
 //! not landed is kept: the task stays on the board and the caller is told
-//! why, unless the caller asked to discard it. Discarding throws away
+//! why, unless the caller asked to discard it. A merged task's pre-squash
+//! commits are not work that has not landed (see
+//! `Supervisor::teardown`). Discarding throws away
 //! uncommitted changes and untracked files; commits stay on the task's
 //! branch.
 //!
@@ -60,8 +62,9 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// Clear the task with API id `id`, discarding unlanded work in its
-/// worktree when `discard`. Clearing a cleared task again is a no-op; a
-/// task that is still working is refused as a conflict.
+/// worktree when `discard`. Clearing a cleared task again asks the engine
+/// for its worktree again, which frees a lease an earlier clear left
+/// behind; a task that is still working is refused as a conflict.
 pub async fn clear(
     store: &Arc<Store>,
     engine: &Arc<dyn EngineAdapter>,
@@ -73,7 +76,8 @@ pub async fn clear(
         Ok((s.get_task(&tid)?, s.task_target(&tid)?))
     })
     .await?;
-    if task.cleared_at.is_some() {
+    let cleared = task.cleared_at.is_some();
+    if cleared && !clearable(task.state) {
         return Ok(Cleared::Cleared(task));
     }
     if !clearable(task.state) {
@@ -122,6 +126,9 @@ pub async fn clear(
             }
             Err(e) => return Err(e.into()),
         }
+    }
+    if cleared {
+        return Ok(Cleared::Cleared(task));
     }
     let tid = id.to_string();
     Ok(Cleared::Cleared(
