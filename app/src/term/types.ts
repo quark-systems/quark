@@ -9,8 +9,8 @@ export interface TermAdapter {
   readonly kind: string;
   open(host: HTMLElement): Promise<void>;
   write(bytes: Uint8Array): void;
-  /** Clears the screen and scrollback, optionally resizing, before a snapshot redraw. */
-  reset(cols?: number, rows?: number): void;
+  /** Resizes the emulator, keeping its scrollback, before a snapshot redraw. */
+  resize(cols: number, rows: number): void;
   fit(): void;
   focus(): void;
   /** The buffer's text, scrollback included, one line per row, whatever the renderer. */

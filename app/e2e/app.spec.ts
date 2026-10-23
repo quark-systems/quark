@@ -166,6 +166,11 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await page.keyboard.type("ls -la");
   await page.keyboard.press("Enter");
   await expect.poll(termText).toContain("you typed: ls -la");
+  // A repaint after a screenful of output (quarkd pruning old output) keeps the scrollback.
+  await page.keyboard.type("flood");
+  await page.keyboard.press("Enter");
+  await expect.poll(termText).toContain("resynced");
+  expect(await termText()).toContain("flood line 0");
 
   // Transcript shows history; steering lands in it.
   const transcript = page.getByTestId("transcript");

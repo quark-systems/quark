@@ -1273,6 +1273,15 @@ function terminalInput(task, data) {
       const cmd = term.line.trim();
       term.line = "";
       out += "\r\n";
+      if (cmd === "flood") {
+        // More output than a screen, then the repaint quarkd sends after pruning old output.
+        for (let i = 0; i < 200; i++) out += `flood line ${i}\r\n`;
+        output(task, out);
+        out = "";
+        term.screen = "resynced\r\n$ ";
+        outputEvent(task, "snapshot", "\x1bc\x1b[H" + term.screen);
+        continue;
+      }
       if (cmd) out += `you typed: ${cmd}\r\n`;
       out += "$ ";
     } else if (ch === "\x7f") {
@@ -2022,7 +2031,7 @@ const server = http.createServer(async (req, res) => {
     const term = terms.get(task.id);
     const info = () => ({ id: task.id, project_id: task.project_id, role: "worker", task_id: task.id, title: task.title, cols: term.cols, rows: term.rows });
     if (rest === "" && req.method === "GET") return send(res, 200, info());
-    if (rest === "/snapshot" && req.method === "POST") return send(res, 200, outputEvent(task, "snapshot", "\x1b[2J\x1b[H" + term.screen));
+    if (rest === "/snapshot" && req.method === "POST") return send(res, 200, outputEvent(task, "snapshot", "\x1bc\x1b[H" + term.screen));
     if (rest === "/input" && req.method === "POST") {
       const b = await readJson(req);
       if (typeof b?.data_b64 !== "string") return invalid(res, "data_b64 is required");
@@ -2067,7 +2076,7 @@ const server = http.createServer(async (req, res) => {
       setState(task, "running", "Relaunched from the app");
       recordDispatch(task, dispatches.has(task.id) ? "relaunch" : "coordinator");
       terms.get(task.id).screen = "";
-      outputEvent(task, "snapshot", "\x1b[2J\x1b[H");
+      outputEvent(task, "snapshot", "\x1bc\x1b[H");
       output(task, `\x1b[1;35m${task.harness}\x1b[0m relaunched on \x1b[1m${task.title}\x1b[0m\r\n$ `);
       return send(res, 204);
     }
