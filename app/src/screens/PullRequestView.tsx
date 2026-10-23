@@ -5,7 +5,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, ApiError, Evidence, NotAvailable, PullRequest } from "../api";
 import { href } from "../nav";
 import { externalLink } from "../links";
-import { refreshPullRequest, setPullRequest, useStore } from "../store";
+import { mergePullRequest, refreshPullRequest, useStore } from "../store";
 import { ago, errText } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
 import { DiffFocus, DiffView, LineComment, OnComment } from "../components/diff/DiffView";
@@ -27,7 +27,7 @@ export function PullRequestView({ id }: { id: string }) {
   const [comments, setComments] = useState<LineComment[]>([]);
   const [tab, setTab] = useState<"overview" | "diff" | "evidence">("overview");
   const [focus, setFocus] = useState<DiffFocus | null>(null);
-  const [mergeNote, setMergeNote] = useState<MergeNote | null>(null);
+  const mergeNote = useStore((s) => s.merges[id]?.note ?? null);
   const openLine = (t: DiffTarget) => {
     setFocus((f) => ({ ...t, n: (f?.n ?? 0) + 1 }));
     setTab("diff");
@@ -70,7 +70,7 @@ export function PullRequestView({ id }: { id: string }) {
         <span className={"pill " + st.cls} data-testid="pr-state">{st.label}</span>
         <a className="pill mono" {...externalLink(pr.url)} data-testid="pr-forge-link">{pr.repo}#{pr.number}</a>
         <span className="spacer" />
-        <PrActions pr={pr} onNote={setMergeNote} />
+        <PrActions pr={pr} />
       </div>
       <div className="state-note">
         <span className="mono">{pr.head_ref ?? "?"} → {pr.base_ref ?? "?"}</span>
@@ -130,11 +130,9 @@ function EvidenceBadge({ ev }: { ev: Evidence }) {
 
 // ---- merge ----
 
-type MergeNote = { ok: boolean; text: string };
-
 /** The merge button. Its result shows under the header, where a long refusal has room. */
-function PrActions({ pr, onNote }: { pr: PullRequest; onNote: (n: MergeNote | null) => void }) {
-  const [busy, setBusy] = useState(false);
+function PrActions({ pr }: { pr: PullRequest }) {
+  const busy = useStore((s) => s.merges[pr.id]?.busy ?? false);
   const [confirming, setConfirming] = useState(false);
   const blocker = mergeBlocker(pr);
 
@@ -144,28 +142,18 @@ function PrActions({ pr, onNote }: { pr: PullRequest; onNote: (n: MergeNote | nu
     return () => clearTimeout(t);
   }, [confirming]);
 
-  const merge = async () => {
-    setBusy(true); onNote(null); setConfirming(false);
-    try {
-      const merged = await api.mergePullRequest(pr.id);
-      if (merged && typeof merged === "object") setPullRequest(merged);
-      else await refreshPullRequest(pr.id).catch(() => undefined);
-      onNote({ ok: true, text: "Merged" });
-    } catch (e) {
-      onNote({ ok: false, text: e instanceof NotAvailable ? "Merging is not available from this daemon yet" : `Not merged: ${errText(e).replace(/^merge refused: /, "")}` });
-    } finally { setBusy(false); }
-  };
+  const merge = () => { setConfirming(false); void mergePullRequest(pr.id); };
 
   if (pr.state === "merged") return <div className="controls"><span className="pill accent">merged {ago(pr.merged_at)}</span></div>;
   return (
     <div className="controls">
       {blocker && <span className="faint small-text ellipsis" data-testid="merge-blocker" title={blocker.reason}>{blocker.reason}</span>}
       {confirming ? (
-        <button className="btn danger" onClick={() => void merge()} data-testid="confirm-merge">Merge anyway</button>
+        <button className="btn danger" onClick={merge} data-testid="confirm-merge">Merge anyway</button>
       ) : (
         <button className={"btn" + (blocker ? "" : " on")} disabled={busy || !!blocker?.hard} data-testid="merge"
           title="Approve and merge through the engine's guarded merge"
-          onClick={() => (blocker ? setConfirming(true) : void merge())}>
+          onClick={() => (blocker ? setConfirming(true) : merge())}>
           {busy ? "Merging…" : "Approve and merge"}
         </button>
       )}

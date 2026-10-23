@@ -286,14 +286,21 @@ pub async fn merge(
             ),
         ));
     }
-    let merged = pr_center::merge(
-        &state.store,
-        state.engine.as_ref(),
-        state.forge.as_ref(),
-        &owner,
-        method,
-    )
+    // Its own task: an app that leaves or disconnects mid-merge must not
+    // cancel it between the rebase push and the merge.
+    let merged = tokio::spawn(async move {
+        pr_center::merge(
+            &state.store,
+            state.engine.as_ref(),
+            state.forge.as_ref(),
+            &owner,
+            method,
+        )
+        .await
+    })
     .await
+    .map_err(|e| PrError::Store(crate::store::StoreError::Invalid(e.to_string())))
+    .and_then(|r| r)
     .map_err(|e| match e {
         // The engine's guarded merge refuses with its reasons on stderr.
         PrError::Engine(crate::engine::EngineError::Command(m)) => {

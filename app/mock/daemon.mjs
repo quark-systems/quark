@@ -2147,6 +2147,7 @@ const server = http.createServer(async (req, res) => {
       if (why) return send(res, 409, { error: { code: "merge_refused", message: why } });
       if (pr.behind) {
         // A head behind its base: rebased, pushed, and refused until its checks run on the new head.
+        await new Promise((r) => setTimeout(r, 500)); // the rebase takes a moment
         const old = pr.head_sha;
         Object.assign(pr, { behind: false, head_sha: "4c3b2a1f9e", updated_at: now() });
         emit("pr.updated", { ...pr }, pr.project_id);
