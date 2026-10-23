@@ -124,3 +124,5 @@ a.tx-wake-worker:hover { text-decoration: underline; }
 .tx-command-slash, .tx-command-by { font-size: 11px; color: var(--fg-faint); }
 .tx-command-detail { font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tx-command-status { flex: none; font-size: 11px; color: var(--fg-faint); }
+.tx-compaction { color: var(--fg-dim); margin: 6px 0; }
+.tx-compaction::before, .tx-compaction::after { border-top-style: dashed; }

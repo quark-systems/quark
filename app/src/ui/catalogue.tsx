@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, UsageMeter, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -75,6 +75,12 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "Show how many things wait somewhere: decisions on a project, proposals to review.",
     contract: "n (renders nothing at 0); tone needs-you for things waiting on you, accent for news, neutral otherwise.",
     example: () => <div className="cat-inline"><CountBadge n={3} tone="needs-you" /><CountBadge n={2} tone="accent" /><CountBadge n={12} /></div>,
+  },
+  {
+    name: "UsageMeter",
+    when: "Show how much of a limit is used: the coordinator's context against its window.",
+    contract: "used and max in one unit; mark adds a tick (markLabel on hover) and turns the bar yellow once used reaches it; label names what is measured. Put the numbers in words beside it.",
+    example: () => <div style={{ width: 240 }}><UsageMeter used={96_000} max={200_000} mark={140_000} markLabel="Compacts at 140k" label="Context" /></div>,
   },
   {
     name: "SectionLabel",

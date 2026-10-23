@@ -106,6 +106,7 @@ async fn ask_the_user_and_wake_on_the_answer() {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: log.clone(),
         triggers: None,
+        compaction: Default::default(),
         beads: Default::default(),
     })
     .nest(

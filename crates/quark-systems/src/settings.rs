@@ -22,6 +22,8 @@ pub struct ProjectSettings {
     /// Harness, model, effort and account pool the coordinator and, by
     /// default, workers use.
     pub agent_config: Option<AgentConfig>,
+    /// When the coordinator's conversation is compacted.
+    pub compaction: CompactionSettings,
     pub verification: VerificationSettings,
     pub dispatch: DispatchSummary,
     pub memory: MemorySummary,
@@ -117,6 +119,66 @@ pub struct UpdateProjectSettings {
     /// `verification.revision` the change was made against; a holdout change
     /// is refused when `main` has another.
     pub revision: Option<String>,
+    /// Change when the coordinator's conversation is compacted.
+    #[serde(default)]
+    pub compaction: Option<CompactionSettings>,
+}
+
+/// When Quark compacts a Project coordinator's conversation. With `auto`
+/// on, a turn that ends with the context at `at_tokens` or more is followed
+/// by a wrap up, then the harness's `/compact`. With it off, Quark leaves
+/// compaction to the harness, which compacts on its own only when the
+/// context window is nearly full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CompactionSettings {
+    pub auto: bool,
+    /// The context size, in tokens, that sets off a compaction.
+    pub at_tokens: u64,
+}
+
+/// A Project coordinator's agent and how full its context is, for the
+/// coordinator's header.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CoordinatorContext {
+    pub coordinator_id: String,
+    /// The harness, model, effort and pool it was started with.
+    pub agent_config: Option<AgentConfig>,
+    /// The model its session log last named, when it differs from or fills
+    /// in the configured one.
+    pub model_seen: Option<String>,
+    /// Tokens in context when its last turn ended. Absent before its first
+    /// turn, and after a compaction until the next turn ends.
+    pub context_tokens: Option<u64>,
+    /// The model's context window, when Quark knows it.
+    pub window_tokens: Option<u64>,
+    /// When the turn that `context_tokens` was read from ended.
+    pub measured_at: Option<String>,
+    pub compaction: CompactionSettings,
+    /// What Quark is doing about compaction right now.
+    pub compacting: CompactionPhase,
+    /// The last time the conversation was compacted, by anyone.
+    pub last_compaction: Option<CompactionRecord>,
+}
+
+/// Where a Quark-run compaction is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionPhase {
+    /// Nothing under way.
+    Idle,
+    /// The coordinator was asked to wrap up; `/compact` follows its turn.
+    WrappingUp,
+    /// `/compact` was sent and has not been seen to finish.
+    Compacting,
+}
+
+/// A compaction the coordinator's session log recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CompactionRecord {
+    /// RFC 3339, as the harness recorded it.
+    pub at: Option<String>,
+    /// Who compacted it and at what size, as the conversation shows it.
+    pub text: String,
 }
 
 /// Turn one source's holdout tests on or off.

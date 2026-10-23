@@ -62,6 +62,8 @@ pub struct AppState {
     /// Inbox, trigger rules and away policy (slice 7); `None` when that
     /// engine is off.
     pub triggers: Option<Arc<quark_triggers::Engine>>,
+    /// When each coordinator is compacted, and how full its context is.
+    pub compaction: Arc<crate::compaction::Compactor>,
     /// Each Project's Beads database: issues, decision beads and memories.
     pub beads: Arc<crate::beads::Beads>,
 }

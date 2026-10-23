@@ -5,7 +5,9 @@
 //! `response_item` messages also carry injected context (environment,
 //! AGENTS.md). Assistant text comes from `response_item` messages, since the
 //! matching `agent_message` event is a duplicate. Rollouts written before the
-//! envelope existed are not supported.
+//! envelope existed are not supported. A `compacted` line, where Codex
+//! replaced the conversation with a summary, is one
+//! [`TranscriptRole::Compaction`] entry.
 
 use serde_json::Value;
 
@@ -23,6 +25,13 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
                 .collect()
         }
         (Some("response_item"), Some(item)) => response_item(item, p, ts),
+        (Some("compacted"), _) => entry(
+            TranscriptRole::Compaction,
+            "Codex compacted the conversation",
+            ts,
+        )
+        .into_iter()
+        .collect(),
         _ => Vec::new(),
     }
 }

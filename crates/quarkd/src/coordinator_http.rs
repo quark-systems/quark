@@ -38,7 +38,7 @@ use quark_transcript::{locate, read_turns, SessionFormat, SessionRoots, UsageCur
 use serde_json::{json, Value};
 
 use crate::chat::CoordinatorInput;
-use crate::coordinator_commands::{self, Asked, ContextWatch};
+use crate::compaction::{self, Compactor};
 use crate::store::Store;
 
 /// Where the routes are nested.
@@ -151,11 +151,11 @@ struct Routes {
     wrap_up: Option<WrapUp>,
 }
 
-/// What asking a coordinator to wrap up takes.
+/// What compacting a coordinator takes: a wrap up, then `/compact`.
 pub struct WrapUp {
     pub chat: Arc<dyn CoordinatorInput>,
     pub events: quark_eventlog::SqliteEventLog,
-    pub watch: ContextWatch,
+    pub compactor: Arc<Compactor>,
 }
 
 /// The routes, to nest under [`PREFIX`].
@@ -168,7 +168,7 @@ pub fn router(
     routes(coordinator, tokens, store, roots, None)
 }
 
-/// The routes, asking a coordinator to wrap up when its context fills.
+/// The routes, compacting a coordinator when its context fills.
 pub fn router_wrapping_up(
     coordinator: Arc<Coordinator>,
     tokens: Tokens,
@@ -283,8 +283,15 @@ async fn hook(
         .await
     {
         Ok(turn) => {
-            if let Some(tokens) = context {
-                r.clone().wrap_up_if_full(project, tokens);
+            if let Some(w) = &r.wrap_up {
+                compaction::after_turn(
+                    w.compactor.clone(),
+                    r.store.clone(),
+                    w.events.clone(),
+                    w.chat.clone(),
+                    project,
+                    context,
+                );
             }
             // Claude Code reads a `Stop` hook's output as its decision; an
             // empty object lets the session stop.
@@ -330,33 +337,6 @@ impl Routes {
             .coordinator
             .asked_this_turn(&ProjectId::new(project.to_string()))
             .await
-    }
-
-    /// After a turn that ended with `tokens` in context, ask for a wrap up
-    /// in the background when the context crossed the threshold.
-    fn wrap_up_if_full(self: Arc<Self>, project: String, tokens: u64) {
-        let Some(w) = &self.wrap_up else { return };
-        if !w.watch.crossed(&project, tokens) {
-            return;
-        }
-        tokio::spawn(async move {
-            let Some(w) = &self.wrap_up else { return };
-            let ran = coordinator_commands::run(
-                &self.store,
-                &w.events,
-                w.chat.as_ref(),
-                &project,
-                quark_systems::CoordinatorCommand::WrapUp,
-                Asked::ContextFull { tokens },
-            )
-            .await;
-            match ran {
-                Ok(_) => tracing::info!(%project, tokens, "asked the coordinator to wrap up"),
-                Err(e) => {
-                    tracing::warn!(%project, error = %e, "could not ask the coordinator to wrap up")
-                }
-            }
-        });
     }
 
     /// The token use logged by the coordinator since its last turn end,

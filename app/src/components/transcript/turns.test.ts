@@ -8,6 +8,20 @@ const item = (role: TranscriptRole, extra: Partial<TranscriptItem> = {}): Transc
 const tool = (kind: ToolInfo["kind"], title: string): ToolInfo => ({ kind, title });
 
 describe("groupTurns", () => {
+  it("makes a compaction its own marker and starts over after it", () => {
+    const g = groupTurns([
+      item("user"),
+      item("assistant"),
+      item("compaction", { text: "The conversation was compacted at 152k tokens" }),
+      item("assistant"),
+    ]);
+    expect(g).toHaveLength(3);
+    expect(g[1].compaction?.text).toMatch(/compacted/);
+    expect(g[1].live).toBe(false);
+    expect(g[2].prompt).toBeUndefined();
+    expect(g[2].parts.map((p) => p.kind)).toEqual(["text"]);
+  });
+
   it("splits on prompts and pairs results with calls by id", () => {
     const g = groupTurns([
       item("user", { ts: "2026-10-07T10:00:00Z" }),

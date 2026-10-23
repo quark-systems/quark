@@ -61,6 +61,7 @@ async fn harness() -> Harness {
         forge: forge.clone(),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         triggers: None,
+        compaction: Default::default(),
         beads: Default::default(),
     });
     let project = store

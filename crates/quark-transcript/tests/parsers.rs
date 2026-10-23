@@ -203,3 +203,29 @@ fn locates_each_harness_log_by_working_directory() {
     kiro("cli", "sess_legacy", "/work/fix-42");
     assert_eq!(locate(SessionFormat::Kiro, cwd, &roots), Some(newest));
 }
+
+#[test]
+fn each_harness_compaction_is_one_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            SessionFormat::Codex,
+            r#"{"timestamp":"2026-10-23T10:00:00Z","type":"compacted","payload":{"message":"summary"}}"#,
+            "Codex compacted the conversation",
+        ),
+        (
+            SessionFormat::Pi,
+            r#"{"type":"compaction","id":"c1","timestamp":"2026-10-23T10:00:00Z","summary":"s","tokensBefore":98700}"#,
+            "Pi compacted the conversation at 99k tokens",
+        ),
+    ];
+    for (i, (format, line, text)) in cases.into_iter().enumerate() {
+        let path = dir.path().join(format!("{i}.jsonl"));
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let batch = read_from(&path, 0, format).unwrap();
+        let entries: Vec<_> = batch.entries.into_iter().map(|(_, e)| e).collect();
+        assert_eq!(entries.len(), 1, "{format:?}");
+        assert_eq!(entries[0].role, TranscriptRole::Compaction);
+        assert_eq!(entries[0].text, text);
+    }
+}

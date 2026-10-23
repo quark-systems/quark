@@ -607,3 +607,9 @@ details.why-record > summary.why-head { cursor: pointer; }
 .dx-result { max-width: 900px; }
 .dx-checks { flex-basis: 100%; list-style: none; margin: 2px 0 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 1px; font-size: 12px; overflow-wrap: anywhere; }
 .dx-row .meta > span { white-space: nowrap; }
+
+/* The coordinator header's agent and context meter (components/CoordinatorContext.tsx). */
+.coord-context { display: inline-flex; align-items: center; gap: 6px; min-width: 0; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.coord-agent { color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.coord-meter { height: 24px; padding: 0 8px; gap: 6px; }
+.coord-meter-bar { display: inline-flex; width: 44px; }

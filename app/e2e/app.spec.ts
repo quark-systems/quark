@@ -138,6 +138,39 @@ test("coordinator chat: engine events show as one plain line, not raw XML", asyn
   await expect(stale).toContainText("Stop hook blocking error");
 });
 
+test("coordinator header: its agent, a context meter, compaction settings and Compact now", async ({ page }) => {
+  await open(page, "#/p/website");
+  const chat = page.getByTestId("coordinator-chat");
+  await expect(chat.getByTestId("coordinator-agent")).toContainText("Codex · gpt-5-codex · default effort");
+  const meter = chat.getByTestId("context-meter");
+  await expect(meter).toContainText(/\d+%/);
+  await meter.click();
+  const pop = page.getByTestId("context-popover");
+  await expect(pop.getByTestId("context-line")).toContainText(/\d+k of 272k tokens/);
+  await expect(pop.getByTestId("compaction-line")).toHaveText("Compacts at 140k tokens, after a wrap up.");
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/01-context-popover.png` });
+  await pop.getByTestId("compact-now").click();
+  await expect(chat.getByTestId("transcript-compaction")).toContainText("The conversation was compacted at");
+  await expect(pop.getByTestId("last-compaction")).toContainText("Last compacted");
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/02-compacted.png` });
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("nav-settings").click();
+  const section = page.getByTestId("settings-compaction");
+  await expect(section).toContainText("Compact automatically");
+  await section.getByTestId("settings-compaction-at").fill("300");
+  await section.getByTestId("settings-compaction-save").click();
+  await expect(section.getByTestId("settings-compaction-save")).toHaveCount(0);
+  await section.getByTestId("settings-compaction-auto").click();
+  await expect(section).toContainText("Off: the harness compacts on its own");
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/03-settings.png` });
+  await page.getByTestId("nav-conversation").click();
+  await chat.getByTestId("context-meter").click();
+  await expect(page.getByTestId("compaction-line")).toContainText("Automatic compaction is off.");
+  const s = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/website/settings")).json());
+  expect(s.compaction).toEqual({ auto: false, at_tokens: 300_000 });
+});
+
 test("worker cards show the harness, its mark and how much the worker changed", async ({ page }) => {
   await open(page, "#/p/quark/work");
   const card = page.getByTestId("task-card").filter({ hasText: "Event stream" });

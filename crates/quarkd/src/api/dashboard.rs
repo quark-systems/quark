@@ -45,8 +45,9 @@ pub async fn get(
 /// one commit on the Project repo's `main` (comments in the file are not
 /// kept); the engine takes the new gates on the daemon's next refresh.
 /// `standing_approval` is applied to the engine as `PATCH /v1/projects/{id}`
-/// applies it. Holdout changes are made first, so a refused one changes
-/// nothing. Answers the settings as they are now.
+/// applies it. `compaction` takes effect when the coordinator's next turn
+/// ends. Holdout changes are made first, so a refused one changes nothing.
+/// Answers the settings as they are now.
 #[utoipa::path(
     patch,
     path = "/v1/projects/{id}/settings",
@@ -55,7 +56,7 @@ pub async fn get(
     request_body = UpdateProjectSettings,
     responses(
         (status = 200, body = ProjectSettings),
-        (status = 400, description = "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`)", body = ErrorBody),
+        (status = 400, description = "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`), or the compaction threshold is under 10,000 tokens", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`main` has another `project.yaml` revision (`settings_changed`), the checkout has an uncommitted edit of it (`uncommitted_changes`), the Project has no Project repo or `project.yaml` (`no_project_repo`), or standing approval needs the workspace (`workspace_missing`)", body = ErrorBody),
         (status = 502, description = "The engine refused or failed the call", body = ErrorBody)
@@ -68,8 +69,19 @@ pub async fn patch(
 ) -> Result<Json<ProjectSettings>, ApiError> {
     let pid = id.clone();
     let project = db(&state, move |s| s.get_project(&pid)).await?;
+    if let Some(c) = input.compaction {
+        if c.at_tokens < MIN_COMPACT_AT_TOKENS {
+            return Err(ApiError::invalid(format!(
+                "compaction.at_tokens must be at least {MIN_COMPACT_AT_TOKENS}"
+            )));
+        }
+    }
     if !input.holdout.is_empty() {
         set_holdout(&project, &input).await?;
+    }
+    if let Some(c) = input.compaction {
+        let pid = project.id.clone();
+        db(&state, move |s| s.set_compaction_settings(&pid, c)).await?;
     }
     let project = match input.standing_approval {
         Some(on) => {
@@ -84,6 +96,10 @@ pub async fn patch(
     };
     Ok(Json(read(&state, project).await?))
 }
+
+/// The smallest compaction threshold: below it a coordinator would compact
+/// right after its prompt and memories load.
+const MIN_COMPACT_AT_TOKENS: u64 = 10_000;
 
 fn no_project_repo() -> ApiError {
     ApiError::new(
@@ -134,6 +150,9 @@ async fn set_holdout(project: &Project, input: &UpdateProjectSettings) -> Result
 /// The settings of `project`, reading its Project repo off the async runtime.
 async fn read(state: &AppState, project: Project) -> Result<ProjectSettings, ApiError> {
     let pid = project.id.clone();
+    let default = state.compaction.defaults();
+    let compaction = db(state, move |s| s.compaction_settings(&pid, default)).await?;
+    let pid = project.id.clone();
     let to_review = db(state, move |s| {
         s.list_memory_proposals(&pid, Some(MemoryProposalState::Proposed))
     })
@@ -177,6 +196,7 @@ async fn read(state: &AppState, project: Project) -> Result<ProjectSettings, Api
         standing_approval: project.standing_approval,
         delivery: project.delivery.unwrap_or(DeliveryPolicy::Gated),
         agent_config: project.agent_config,
+        compaction,
         verification,
         dispatch,
         memory: MemorySummary {

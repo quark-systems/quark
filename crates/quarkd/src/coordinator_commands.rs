@@ -15,12 +15,12 @@
 //!   decisions, for a four-section report.
 //! - **Wrap up**: no facts; the coordinator saves what only its
 //!   conversation holds as memory proposals and Beads issues. The engine
-//!   also asks for one when the coordinator's context fills
-//!   ([`ContextWatch`]), before the harness compacts it.
+//!   also asks for one when the coordinator's context fills, before it
+//!   compacts it ([`crate::compaction`]).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use quark_systems::{
     CoordinatorCommand, Decision, DecisionState, DigestItem, DigestKind, OverviewDigest,
@@ -32,10 +32,6 @@ use time::OffsetDateTime;
 use crate::chat::{engine_note, ChatError, CoordinatorInput, Delivery, ENGINE_NOTE};
 use crate::engine::WorkspaceRef;
 use crate::store::Store;
-
-/// The context size, in tokens, at which the engine asks a coordinator to
-/// wrap up, and again at each multiple of it.
-pub const WRAP_UP_TOKENS: u64 = 150_000;
 
 /// Who asked for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,55 +316,6 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Asks a coordinator to wrap up when its context crosses a multiple of
-/// the threshold, once per multiple. A smaller context than at the last
-/// ask means the harness compacted it, so the count starts again.
-#[derive(Debug)]
-pub struct ContextWatch {
-    every: u64,
-    asked: Mutex<HashMap<String, u64>>,
-}
-
-impl ContextWatch {
-    /// `every` of 0 never asks.
-    pub fn new(every: u64) -> Self {
-        Self {
-            every,
-            asked: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// The threshold from `QUARK_COORDINATOR_WRAP_UP_TOKENS`, else
-    /// [`WRAP_UP_TOKENS`].
-    pub fn from_env() -> Self {
-        let every = std::env::var("QUARK_COORDINATOR_WRAP_UP_TOKENS")
-            .ok()
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(WRAP_UP_TOKENS);
-        Self::new(every)
-    }
-
-    /// Whether a turn that ended with `context` tokens should be followed
-    /// by a wrap up.
-    pub fn crossed(&self, project: &str, context: u64) -> bool {
-        if self.every == 0 {
-            return false;
-        }
-        let level = context / self.every;
-        let mut asked = self.asked.lock().unwrap();
-        let last = asked.entry(project.to_string()).or_insert(0);
-        if level < *last {
-            *last = level;
-            return false;
-        }
-        if level > *last {
-            *last = level;
-            return true;
-        }
-        false
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use quark_systems::{DecisionBrief, TranscriptRole};
@@ -498,19 +445,5 @@ mod tests {
         );
         assert!(full.starts_with("Engine note: Your context holds about 151k tokens"));
         assert!(full.contains("`remember`") && full.contains("bd create"));
-    }
-
-    #[test]
-    fn the_context_watch_asks_once_per_threshold_and_again_after_compaction() {
-        let w = ContextWatch::new(100);
-        assert!(!w.crossed("p", 50));
-        assert!(w.crossed("p", 120));
-        assert!(!w.crossed("p", 180));
-        assert!(w.crossed("p", 210));
-        assert!(!w.crossed("q", 90));
-        // Compacted: smaller, then full again.
-        assert!(!w.crossed("p", 30));
-        assert!(w.crossed("p", 130));
-        assert!(!ContextWatch::new(0).crossed("p", 1_000_000));
     }
 }

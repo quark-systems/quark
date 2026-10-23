@@ -62,6 +62,10 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: bearings, brief, standup.
 - **Wrap up**: ask the coordinator to save what its conversation learned to memory and file unfinished work as issues. The coordinator's header, `/wrapup`, and on its own before its conversation is compacted.
   _Avoid_: stow, save, checkpoint.
+- **Context**: what the coordinator's conversation holds right now, in tokens, against its model's window. The meter in the coordinator's header.
+  _Avoid_: memory (that is the project's), tokens used (that is spend), session.
+- **Compact**: replace the coordinator's conversation with a summary, so each turn reads less. Quark compacts when the context reaches the project's threshold, after a wrap up; Compact now in the context popover skips the wrap up. Set in Settings › Compaction.
+  _Avoid_: clear, reset, summarize (as the action), truncate.
 
 ## State words
 

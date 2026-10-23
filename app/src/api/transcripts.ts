@@ -1,8 +1,11 @@
 // Coordinator chat and worker transcripts.
 
 import { enc, req } from "./client";
+import type { AgentConfig } from "./projects";
+import type { CompactionSettings } from "./settings";
 
-export type TranscriptRole = "user" | "assistant" | "thinking" | "tool_call" | "tool_result";
+/** `compaction`: the harness compacted the conversation here; `text` says who and at what size. */
+export type TranscriptRole = "user" | "assistant" | "thinking" | "tool_call" | "tool_result" | "compaction";
 export type ToolKind = "read" | "edit" | "write" | "shell" | "search" | "web" | "agent" | "plan" | "other";
 export interface ToolDiffLine { kind: "add" | "del" | "context"; text: string }
 /** A readable summary of a tool call, from the daemon. */
@@ -26,9 +29,29 @@ export interface MessageAccepted {
   command?: CoordinatorCommand;
 }
 
+/** Where a compaction Quark started is: a wrap up first, then the harness's `/compact`. */
+export type CompactionPhase = "idle" | "wrapping_up" | "compacting";
+/** A coordinator's agent and how full its context is (`GET /v1/coordinators/{id}/context`). */
+export interface CoordinatorContext {
+  coordinator_id: string;
+  agent_config?: AgentConfig | null;
+  /** The model its session log names, when it differs from or fills in the configured one. */
+  model_seen?: string | null;
+  /** Tokens in context when its last turn ended; absent before the first turn and right after a compaction. */
+  context_tokens?: number | null;
+  /** The model's context window, when the daemon knows it. */
+  window_tokens?: number | null;
+  measured_at?: string | null;
+  compaction: CompactionSettings;
+  compacting: CompactionPhase;
+  last_compaction?: { at?: string | null; text: string } | null;
+}
+
 export const transcriptsApi = {
   chat: (cid: string) => req<TranscriptItem[]>("GET", `/v1/coordinators/${enc(cid)}/messages?limit=1000`),
   sendChat: (cid: string, text: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}/messages`, { text }),
   runCommand: (cid: string, command: CoordinatorCommand) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:run`, { command }),
+  coordinatorContext: (cid: string) => req<CoordinatorContext>("GET", `/v1/coordinators/${enc(cid)}/context`),
+  compactCoordinator: (cid: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:compact`),
   transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
 };

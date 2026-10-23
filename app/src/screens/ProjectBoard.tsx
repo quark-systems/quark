@@ -9,6 +9,7 @@ import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
 import { CommandCard, lastId, PendingMessage, stillPending, stillPendingCommands, Transcript, UserMessage } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
+import { CoordinatorContext } from "../components/CoordinatorContext";
 import { useLabels } from "../persona";
 import { useDraft } from "../drafts";
 import { CommandButton, usePendingCommands, useRunCommand } from "../components/CoordinatorCommand";
@@ -221,7 +222,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
 
   return (
     <aside className="side-chat" data-testid="coordinator-chat">
-      <div className="panel-head">{l.Role("coordinator")}<span className="spacer" /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} /></div>
+      <div className="panel-head">{l.Role("coordinator")}<CoordinatorContext cid={cid} changed={items.length} /><span className="spacer" /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} /></div>
       {status === "unavailable" ? (
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (

@@ -1158,16 +1158,106 @@ pub async fn run_coordinator_command(
     Path(target): Path<String>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
-    let Some((id, "run")) = target.rsplit_once(':') else {
-        return Err(ApiError::new(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "method_not_allowed",
-            "use POST /v1/coordinators/{id}:run",
-        ));
+    let id = match target.rsplit_once(':') {
+        Some((id, "run")) => id,
+        Some((id, "compact")) => {
+            return compact_coordinator(State(state), Path(id.to_string())).await
+        }
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method_not_allowed",
+                "use POST /v1/coordinators/{id}:run or :compact",
+            ))
+        }
     };
     let input: CoordinatorCommandRequest = serde_json::from_slice(&body)
         .map_err(|e| ApiError::invalid(format!("invalid command: {e}")))?;
     run_command(&state, id, input.command).await
+}
+
+/// A Project coordinator's harness, model and effort, how full its context
+/// is, and when its conversation is compacted.
+///
+/// The context is the input of its last turn's last model call, read from
+/// its session log; it is unknown before the first turn and after a
+/// compaction until the next turn ends. `window_tokens` is absent when
+/// Quark does not know the model's window.
+#[utoipa::path(
+    get,
+    path = "/v1/coordinators/{id}/context",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    responses(
+        (status = 200, body = quark_systems::CoordinatorContext),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn coordinator_context(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<quark_systems::CoordinatorContext>, ApiError> {
+    let compactor = state.compaction.clone();
+    Ok(Json(
+        db(&state, move |s| {
+            let project = s.get_project(&id)?;
+            compactor.context(s, &project)
+        })
+        .await?,
+    ))
+}
+
+/// Compact a Project coordinator's conversation now.
+///
+/// Served as `POST /v1/coordinators/{id}:compact`, with no body. Types the
+/// harness's `/compact` into the coordinator's session, with what the
+/// summary must keep, and answers at once: the compaction shows in the
+/// conversation when the session log records it. No wrap up comes first;
+/// ask for one before when the conversation holds something unsaved.
+#[utoipa::path(
+    post,
+    path = "/v1/coordinators/{id}:compact",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    responses(
+        (status = 202, body = CoordinatorMessageAccepted),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The Project has no workspace yet", body = ErrorBody)
+    )
+)]
+pub async fn compact_coordinator(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
+    use crate::coordinator_commands::CommandError;
+    match crate::compaction::compact_now(
+        state.compaction.clone(),
+        state.store.clone(),
+        state.chat.clone(),
+        id.clone(),
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(CommandError::Store(e)) => return Err(e.into()),
+        Err(CommandError::NoWorkspace) => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "no_workspace",
+                CommandError::NoWorkspace.to_string(),
+            ))
+        }
+        Err(CommandError::Chat(e)) => return Err(ApiError::internal(e.to_string())),
+    }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CoordinatorMessageAccepted {
+            coordinator_id: id,
+            confirmed: false,
+            accepted_at: crate::now_rfc3339(),
+            command: None,
+        }),
+    ))
 }
 
 async fn run_command(
@@ -1246,7 +1336,9 @@ async fn run_command(
         task_transcript,
         coordinator_messages,
         send_coordinator_message,
-        run_coordinator_command
+        run_coordinator_command,
+        coordinator_context,
+        compact_coordinator
     ),
     components(schemas(
         quark_systems::TaskState,
@@ -1306,6 +1398,8 @@ pub(super) fn router() -> axum::Router<AppState> {
             "/v1/coordinators/{id}/messages",
             get(coordinator_messages).post(send_coordinator_message),
         )
-        // POST serves the custom method `/v1/coordinators/{id}:run`.
+        .route("/v1/coordinators/{id}/context", get(coordinator_context))
+        // POST serves the custom methods `/v1/coordinators/{id}:run` and
+        // `:compact`.
         .route("/v1/coordinators/{id}", post(run_coordinator_command))
 }

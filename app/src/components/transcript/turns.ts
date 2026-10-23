@@ -34,6 +34,8 @@ export interface Turn {
   endedAt?: number;
   /** The agent is still working: the last turn, and it hasn't written its answer yet. */
   live: boolean;
+  /** Not a turn but the point where the harness compacted the conversation. */
+  compaction?: TranscriptItem;
 }
 
 const ms = (ts?: string | null) => {
@@ -51,6 +53,12 @@ export function groupTurns(items: TranscriptItem[]): Turn[] {
   };
 
   for (const item of items) {
+    if (item.role === "compaction") {
+      // What follows starts a turn of its own.
+      turns.push({ key: item.id, compaction: item, parts: [], live: false, startedAt: ms(item.ts), endedAt: ms(item.ts) });
+      cur = undefined;
+      continue;
+    }
     if (item.role === "user") {
       const t = open(item);
       const event = engineEvent(item.text);
@@ -69,7 +77,7 @@ export function groupTurns(items: TranscriptItem[]): Turn[] {
     }
   }
   const last = turns[turns.length - 1];
-  if (last) {
+  if (last && !last.compaction) {
     const end = last.parts[last.parts.length - 1];
     last.live = end?.kind === "work" || (end === undefined && !!last.prompt);
   }
