@@ -1590,6 +1590,21 @@ async fn clearing_finished_workers_hides_them_and_keeps_unlanded_work() {
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"]["code"], "unlanded_work");
 
+    // Asked to, it discards that work and clears it.
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/tasks/{c}:clear"),
+        Some(json!({"discard": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert!(h.engine.writes().contains(&StubWrite::DiscardWorktree {
+        task_id: "c".into()
+    }));
+    let (_, shown) = call(&h.app, "GET", &list, None).await;
+    assert_eq!(shown.as_array().unwrap().len(), 1);
+
     // Only finished states can be asked for.
     let (status, _) = call(
         &h.app,
@@ -1611,5 +1626,5 @@ async fn clearing_finished_workers_hides_them_and_keeps_unlanded_work() {
     });
     h.projector.refresh_all().await.unwrap();
     let (_, shown) = call(&h.app, "GET", &list, None).await;
-    assert_eq!(shown.as_array().unwrap().len(), 3);
+    assert_eq!(shown.as_array().unwrap().len(), 2);
 }

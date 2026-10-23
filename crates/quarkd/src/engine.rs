@@ -549,6 +549,19 @@ pub trait EngineAdapter: Send + Sync {
         ))
     }
 
+    /// Throw away a stopped task's uncommitted changes, then give its
+    /// worktree back for good. Its commits stay on the task's branch. Only
+    /// for an explicit request to discard; an engine that cannot refuses.
+    async fn discard_worktree(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+    ) -> Result<(), EngineError> {
+        Err(EngineError::Invalid(
+            "this engine cannot discard a worker's worktree".into(),
+        ))
+    }
+
     /// Drop the engine's record of a deleted Project's coordinator, so
     /// nothing starts it again. Engines without records have nothing to do.
     async fn forget_coordinator(
@@ -694,6 +707,9 @@ pub enum StubWrite {
         rule: String,
     },
     ReleaseWorktree {
+        task_id: String,
+    },
+    DiscardWorktree {
         task_id: String,
     },
     ForgetCoordinator {
@@ -933,6 +949,14 @@ impl EngineAdapter for StubEngine {
         } else {
             WorktreeRelease::Returned
         })
+    }
+
+    async fn discard_worktree(&self, _ws: &WorkspaceRef, task_id: &str) -> Result<(), EngineError> {
+        self.accept(StubWrite::DiscardWorktree {
+            task_id: task_id.into(),
+        })?;
+        self.unlanded.lock().unwrap().remove(task_id);
+        Ok(())
     }
 
     async fn forget_coordinator(

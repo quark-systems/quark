@@ -145,6 +145,19 @@ pub struct ClearTasks {
     /// Which finished states to clear; absent clears done and failed tasks.
     #[serde(default)]
     pub states: Option<Vec<TaskState>>,
+    /// Throw away work that has not landed instead of keeping those
+    /// workers, as [`ClearTask::discard`] does.
+    #[serde(default)]
+    pub discard: bool,
+}
+
+/// How to clear one finished worker.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ClearTask {
+    /// Throw away the worktree's uncommitted changes and untracked files
+    /// instead of keeping the worker. Its commits stay on its branch.
+    #[serde(default)]
+    pub discard: bool,
 }
 
 /// What clearing a Project's finished workers did.

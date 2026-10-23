@@ -571,9 +571,9 @@ function testDispatch(proj, description, draft = null) {
 }
 
 let taskEventId = 0;
-/** Clears a finished task, or says what its worktree still holds. */
-function clearTask(task) {
-  if (/unpushed/i.test(task.title)) return "2 unpushed commits";
+/** Clears a finished task, or says what its worktree still holds unless asked to discard it. */
+function clearTask(task, discard = false) {
+  if (!discard && /unpushed/i.test(task.title)) return "2 unpushed commits";
   task.cleared_at = now();
   emit("task.state_changed", { task: { ...task }, previous_state: task.state }, task.project_id);
   return null;
@@ -1599,7 +1599,7 @@ const server = http.createServer(async (req, res) => {
     const out = { cleared: [], kept: [] };
     for (const t of tasks.values()) {
       if (t.project_id !== id || t.cleared_at || !states.includes(t.state)) continue;
-      const why = clearTask(t);
+      const why = clearTask(t, b?.discard === true);
       if (why) out.kept.push({ task_id: t.id, title: t.title, code: "unlanded_work", reason: `its worktree has ${why}` });
       else out.cleared.push(t.id);
     }
@@ -2059,7 +2059,8 @@ const server = http.createServer(async (req, res) => {
     if (rest === ":clear" && req.method === "POST") {
       if (task.cleared_at) return send(res, 204);
       if (task.state !== "done" && task.state !== "failed") return send(res, 409, { error: { code: "conflict", message: `the worker is ${task.state}; cancel it or let it finish first` } });
-      const kept = clearTask(task);
+      const b = await readJson(req);
+      const kept = clearTask(task, b?.discard === true);
       if (kept) return send(res, 409, { error: { code: "unlanded_work", message: `Not cleared: the worker's worktree has ${kept}. Push or discard that work, then clear it again.` } });
       return send(res, 204);
     }

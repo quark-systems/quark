@@ -80,6 +80,14 @@ impl WorktreeProvider for FakeWorktrees {
         Ok(ReturnOutcome::Returned)
     }
 
+    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
+        if self.held.lock().unwrap().remove(id).is_none() {
+            return Err(CoreError::NotFound(format!("worktree {id}")));
+        }
+        self.work.lock().unwrap().remove(id);
+        Ok(ReturnOutcome::Returned)
+    }
+
     async fn lease(&self, request: &WorktreeRequest, owner: &str) -> Result<Worktree> {
         self.hand_out(
             request,

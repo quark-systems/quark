@@ -244,6 +244,20 @@ impl WorktreeProvider for GitWorktrees {
         Ok(ReturnOutcome::Returned)
     }
 
+    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
+        let wt = self
+            .held
+            .lock()
+            .unwrap()
+            .remove(id)
+            .ok_or_else(|| CoreError::NotFound(id.into()))?;
+        git(
+            &wt.repo,
+            &["worktree", "remove", "--force", wt.path.to_str().unwrap()],
+        );
+        Ok(ReturnOutcome::Returned)
+    }
+
     async fn lease(&self, _r: &WorktreeRequest, _owner: &str) -> Result<Worktree> {
         Err(CoreError::Unsupported("lease".into()))
     }

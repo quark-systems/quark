@@ -162,13 +162,16 @@ function PrPanel({ prId, url }: { prId: string | null; url: string | null }) {
 
 // ---- cancel / relaunch / clear ----
 
-type Control = "cancel" | "relaunch" | "clear";
-const CONTROL_LABEL: Record<Control, string> = { cancel: "Cancel", relaunch: "Relaunch", clear: "Clear" };
+type Control = "cancel" | "relaunch" | "clear" | "discard";
+const CONTROL_LABEL: Record<Control, string> = { cancel: "Cancel", relaunch: "Relaunch", clear: "Clear", discard: "Discard work and clear" };
 
 function Controls({ taskId, active }: { taskId: string; active: boolean }) {
-  const [confirming, setConfirming] = useState<null | "cancel" | "clear">(null);
+  const [confirming, setConfirming] = useState<null | "cancel" | "clear" | "discard">(null);
   const [busy, setBusy] = useState<null | Control>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Clear refused because the working copy holds work that has not landed.
+  const [unlanded, setUnlanded] = useState(false);
+  useEffect(() => { if (active) setUnlanded(false); }, [active]);
 
   useEffect(() => {
     if (!confirming) return;
@@ -179,8 +182,9 @@ function Controls({ taskId, active }: { taskId: string; active: boolean }) {
   const run = async (what: Control) => {
     setBusy(what); setErr(null); setConfirming(null);
     try {
-      await (what === "cancel" ? api.cancel(taskId) : what === "clear" ? api.clearTask(taskId) : api.relaunch(taskId));
+      await (what === "cancel" ? api.cancel(taskId) : what === "clear" || what === "discard" ? api.clearTask(taskId, what === "discard") : api.relaunch(taskId));
     } catch (e) {
+      if (what === "clear" && e instanceof ApiError && e.code === "unlanded_work") setUnlanded(true);
       setErr(e instanceof NotAvailable ? `${CONTROL_LABEL[what]} is not available from this daemon yet` : errText(e));
     } finally { setBusy(null); }
   };
@@ -203,6 +207,14 @@ function Controls({ taskId, active }: { taskId: string; active: boolean }) {
           {busy === "clear" ? "Clearing…" : "Clear"}
         </button>
       )}
+      {!active && unlanded && (confirming === "discard" ? (
+        <button className="btn danger" onClick={() => run("discard")} data-testid="confirm-discard">Confirm discard</button>
+      ) : (
+        <button className="btn danger" disabled={busy !== null} onClick={() => setConfirming("discard")} data-testid="discard"
+          title="Throw away its uncommitted changes, then clear it. Its commits stay on its branch.">
+          {busy === "discard" ? "Discarding…" : "Discard work and clear"}
+        </button>
+      ))}
       <button className="btn" disabled={busy !== null} onClick={() => run("relaunch")} data-testid="relaunch">
         {busy === "relaunch" ? "Relaunching…" : "Relaunch"}
       </button>

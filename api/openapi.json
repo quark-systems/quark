@@ -4935,7 +4935,7 @@
           "tasks"
         ],
         "summary": "Clear a finished task's worker.",
-        "description": "Stops its session if its agent never exited, gives its worktree back and\ntakes it off the board: `GET /v1/projects/{id}/tasks` leaves it out\nunless `include_cleared`. Its activity log and events are kept. Clearing\na cleared task again does nothing.",
+        "description": "Stops its session if its agent never exited, gives its worktree back and\ntakes it off the board: `GET /v1/projects/{id}/tasks` leaves it out\nunless `include_cleared`. Its activity log and events are kept. Clearing\na cleared task again does nothing. With `discard`, work that has not\nlanded is thrown away instead of keeping the worker; commits stay on its\nbranch.",
         "operationId": "clear_task",
         "parameters": [
           {
@@ -4948,6 +4948,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearTask"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "204": {
             "description": "The task is cleared"
@@ -4962,7 +4972,7 @@
             }
           },
           "409": {
-            "description": "The task is still working (`conflict`), or its worktree holds work that has not landed (`unlanded_work`)",
+            "description": "The task is still working (`conflict`), or its worktree holds work that has not landed and `discard` is not set (`unlanded_work`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6086,10 +6096,24 @@
           "none"
         ]
       },
+      "ClearTask": {
+        "type": "object",
+        "description": "How to clear one finished worker.",
+        "properties": {
+          "discard": {
+            "type": "boolean",
+            "description": "Throw away the worktree's uncommitted changes and untracked files\ninstead of keeping the worker. Its commits stay on its branch."
+          }
+        }
+      },
       "ClearTasks": {
         "type": "object",
         "description": "Clear a Project's finished workers at once. Only done and failed tasks\nare ever cleared.",
         "properties": {
+          "discard": {
+            "type": "boolean",
+            "description": "Throw away work that has not landed instead of keeping those\nworkers, as [`ClearTask::discard`] does."
+          },
           "states": {
             "type": [
               "array",

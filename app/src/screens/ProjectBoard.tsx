@@ -21,7 +21,7 @@ export function ProjectBoard({ id }: { id: string }) {
   const connected = useStore((s) => s.connected);
   const tasks = useStore((s) => s.tasks);
   const l = useLabels(id);
-  const [notes, setNotes] = useState<Record<string, string | null>>({});
+  const [notes, setNotes] = useState<Record<string, ClearResult | null>>({});
 
   const mine = useMemo(() => Object.values(tasks).filter((t) => t.project_id === id), [tasks, id]);
   const columns = useMemo(() => {
@@ -52,7 +52,9 @@ export function ProjectBoard({ id }: { id: string }) {
                 )}
               </div>
               <div className="col-body">
-                {notes[c.id] && <div className="col-note faint" role="status" data-testid={`clear-${c.id}-note`}>{notes[c.id]}</div>}
+                {notes[c.id] && (c.id === "failed" || c.id === "done") && (
+                  <ClearNote pid={id} state={c.id} note={notes[c.id]!} onNote={(n) => setNotes((m) => ({ ...m, [c.id]: n }))} />
+                )}
                 {c.tasks.map((t) => (
                   <WorkerCard key={t.id + (changed.has(t.id) ? ":" + t.state : "")} task={t} flash={changed.has(t.id)} />
                 ))}
@@ -83,7 +85,38 @@ export function Conversation({ id }: { id: string }) {
 }
 
 /** Clears every worker in the done or failed column; ones whose working copy holds work stay, and the column says why. */
-function ClearColumn({ pid, state, onNote }: { pid: string; state: "done" | "failed"; onNote: (note: string | null) => void }) {
+type ClearResult = { note: string; unlanded: number };
+
+/** What Clear all did; when it kept workers for work that has not landed, a second, confirmed step discards that work. */
+function ClearNote({ pid, state, note, onNote }: { pid: string; state: "done" | "failed"; note: ClearResult; onNote: (note: ClearResult | null) => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+  const discard = async () => {
+    setBusy(true); setConfirming(false);
+    try { onNote(await clearWorkers(pid, state, true)); } catch (e) { onNote({ note: errText(e), unlanded: 0 }); } finally { setBusy(false); }
+  };
+  return (
+    <div className="col-note faint" role="status" data-testid={`clear-${state}-note`}>
+      {note.note}
+      {note.unlanded > 0 && (
+        <div>
+          <button className="btn small danger" disabled={busy} data-testid={`discard-${state}`}
+            title="Throw away their uncommitted changes, then clear them. Their commits stay on their branches."
+            onClick={() => (confirming ? void discard() : setConfirming(true))}>
+            {busy ? "Discarding…" : confirming ? "Confirm discard" : "Discard their work and clear"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClearColumn({ pid, state, onNote }: { pid: string; state: "done" | "failed"; onNote: (note: ClearResult | null) => void }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -93,7 +126,7 @@ function ClearColumn({ pid, state, onNote }: { pid: string; state: "done" | "fai
   }, [confirming]);
   const run = async () => {
     setBusy(true); setConfirming(false); onNote(null);
-    try { onNote(await clearWorkers(pid, state)); } catch (e) { onNote(errText(e)); } finally { setBusy(false); }
+    try { onNote(await clearWorkers(pid, state)); } catch (e) { onNote({ note: errText(e), unlanded: 0 }); } finally { setBusy(false); }
   };
   return (
     <button className={"btn small" + (confirming ? " danger" : "")} disabled={busy} data-testid={`clear-${state}`}

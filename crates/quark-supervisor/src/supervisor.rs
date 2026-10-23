@@ -863,6 +863,27 @@ impl Supervisor {
     /// still open; a worktree with uncommitted or unpushed work is kept and
     /// reported, never discarded.
     pub async fn teardown(&self, project: &ProjectId, task: &TaskId) -> Result<ReturnOutcome> {
+        self.give_back(project, task, false).await
+    }
+
+    /// As [`Supervisor::teardown`], but throws away the worktree's
+    /// uncommitted changes first (see
+    /// [`WorktreeProvider::discard_worktree`]); its commits stay on the
+    /// task's branch. Only for an explicit request to discard.
+    pub async fn discard_teardown(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+    ) -> Result<ReturnOutcome> {
+        self.give_back(project, task, true).await
+    }
+
+    async fn give_back(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+        discard: bool,
+    ) -> Result<ReturnOutcome> {
         let key = (project.clone(), task.clone());
         let _guard = self.lock(&key).await;
         self.refresh().await?;
@@ -883,7 +904,11 @@ impl Supervisor {
         let Some(wt) = w.worktree else {
             return Ok(ReturnOutcome::Returned);
         };
-        let outcome = self.worktrees.return_worktree(&wt.id).await?;
+        let outcome = if discard {
+            self.worktrees.discard_worktree(&wt.id).await?
+        } else {
+            self.worktrees.return_worktree(&wt.id).await?
+        };
         self.record(
             project,
             task,

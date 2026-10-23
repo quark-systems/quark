@@ -80,8 +80,14 @@ pub enum ToolCall {
     Cancel { task: TaskId, reason: String },
     /// Clean up a done or failed task: stop its session, give its worktree
     /// back and take it off the board, keeping its history. A worktree with
-    /// unlanded work is kept and the task stays.
-    Clear { task: TaskId, reason: String },
+    /// unlanded work is kept and the task stays, unless `discard`, which
+    /// throws away uncommitted changes (commits stay on the branch).
+    Clear {
+        task: TaskId,
+        reason: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        discard: bool,
+    },
     /// Raise a decision only the user can make. Everything but `key` and
     /// `question` is the decision's brief ([`ToolCall::brief`]), the same
     /// record firstmate's coordinator attaches to a captain hold.
@@ -233,7 +239,7 @@ impl ToolCall {
                 blank("task", task.as_str())?;
                 blank("note", note)
             }
-            ToolCall::Cancel { task, reason } | ToolCall::Clear { task, reason } => {
+            ToolCall::Cancel { task, reason } | ToolCall::Clear { task, reason, .. } => {
                 blank("task", task.as_str())?;
                 blank("reason", reason)
             }
@@ -368,9 +374,13 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "clear",
-            description: "Clean up a done or failed task once nobody needs it: stops its session, gives its worktree back and takes it off the board, keeping its history. Refused while the task is working, and when its worktree holds work that has not landed.",
+            description: "Clean up a done or failed task once nobody needs it: stops its session, gives its worktree back and takes it off the board, keeping its history. Refused while the task is working, and when its worktree holds work that has not landed unless `discard` is set. Set `discard` only when the user said to throw that work away.",
             input_schema: object(
-                json!({"task": text("Task id."), "reason": text("Why.")}),
+                json!({
+                    "task": text("Task id."),
+                    "reason": text("Why."),
+                    "discard": {"type": "boolean", "description": "Throw away uncommitted changes and untracked files in its worktree; its commits stay on its branch. Only when the user said so."}
+                }),
                 &["task", "reason"],
             ),
         },
@@ -474,7 +484,8 @@ mod tests {
             "answer" => json!({"task": "t1", "key": "k", "answer": "a"}),
             "choose_profile" => json!({"task": "t1", "rule": "rule_2"}),
             "relaunch" => json!({"task": "t1", "note": "n"}),
-            "cancel" | "clear" => json!({"task": "t1", "reason": "r"}),
+            "cancel" => json!({"task": "t1", "reason": "r"}),
+            "clear" => json!({"task": "t1", "reason": "r", "discard": true}),
             "ask_user" => {
                 json!({"key": "k", "question": "q", "options": ["a", {"label": "b", "consequence": "c"}]})
             }

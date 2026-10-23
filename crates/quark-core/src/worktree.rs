@@ -126,6 +126,16 @@ pub trait WorktreeProvider: Send + Sync {
     /// Give a worktree back.
     async fn return_worktree(&self, id: &str) -> Result<ReturnOutcome>;
 
+    /// Throw away the worktree's uncommitted changes and untracked files,
+    /// then give it back. Commits stay on the task's branch, so they can
+    /// still be recovered; only what was never committed is lost. Only for
+    /// an explicit request to discard; providers that cannot refuse.
+    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
+        Err(crate::CoreError::Unsupported(format!(
+            "this worktree provider cannot discard worktree {id}"
+        )))
+    }
+
     /// A durable worktree for `owner` that survives restarts until returned.
     async fn lease(&self, request: &WorktreeRequest, owner: &str) -> Result<Worktree>;
 

@@ -261,22 +261,23 @@ impl Hands for EngineHands {
                     .map_err(core)?;
                 Ok(format!("Cancelled {task}; its worktree is kept."))
             }
-            ToolCall::Clear { task, .. } => {
+            ToolCall::Clear { task, discard, .. } => {
                 let (store, pid) = (self.store.clone(), ws.project_id.clone());
                 let id = blocking(move || store.task_ids_by_engine(&pid))
                     .await?
                     .remove(task.as_str())
                     .ok_or_else(|| CoreError::NotFound(format!("no task {task}")))?;
-                match crate::clear::clear(&self.store, &self.engine, &id).await {
+                match crate::clear::clear(&self.store, &self.engine, &id, *discard).await {
                     Ok(Cleared::Cleared(_)) => Ok(format!(
-                        "Cleared {task}: its session is stopped, its worktree given back and it is off the board."
+                        "Cleared {task}: its session is stopped, its worktree given back{} and it is off the board.",
+                        if *discard { " with its uncommitted changes discarded" } else { "" }
                     )),
                     Ok(Cleared::Kept {
                         uncommitted,
                         unpushed_commits,
                         ..
                     }) => Err(CoreError::Refused(format!(
-                        "Not cleared: {task}'s worktree has {}. Land that work or relaunch {task} to finish it.",
+                        "Not cleared: {task}'s worktree has {}. Land that work or relaunch {task} to finish it; clear with `discard` only if the user said to throw it away.",
                         crate::clear::unlanded(uncommitted, unpushed_commits)
                     ))),
                     Err(ClearError::Store(StoreError::Conflict(m))) => Err(CoreError::Refused(m)),
@@ -534,21 +535,25 @@ mod tests {
         store.apply_snapshot(p.as_str(), &snapshot).unwrap();
         engine.set_snapshot(snapshot);
         let hands = EngineHands::new(store.clone(), engine.clone());
-        let clear = |t: &str| ToolCall::Clear {
+        let clear = |t: &str, discard: bool| ToolCall::Clear {
             task: TaskId::from(t),
             reason: "done with it".into(),
+            discard,
         };
 
-        let refused = hands.run(&p, &clear("t2")).await.unwrap_err();
+        let refused = hands.run(&p, &clear("t2", false)).await.unwrap_err();
         assert!(matches!(refused, CoreError::Refused(_)), "{refused:?}");
         engine.set_unlanded("t1", true);
-        let kept = hands.run(&p, &clear("t1")).await.unwrap_err();
+        let kept = hands.run(&p, &clear("t1", false)).await.unwrap_err();
         assert!(kept.to_string().contains("uncommitted changes"), "{kept}");
-        engine.set_unlanded("t1", false);
-        let out = hands.run(&p, &clear("t1")).await.unwrap();
+        let out = hands.run(&p, &clear("t1", true)).await.unwrap();
         assert!(out.starts_with("Cleared t1"), "{out}");
+        assert!(out.contains("discarded"), "{out}");
+        assert!(engine.writes().contains(&StubWrite::DiscardWorktree {
+            task_id: "t1".into()
+        }));
         assert!(matches!(
-            hands.run(&p, &clear("nope")).await,
+            hands.run(&p, &clear("nope", false)).await,
             Err(CoreError::NotFound(_))
         ));
 

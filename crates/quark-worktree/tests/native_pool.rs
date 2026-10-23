@@ -176,3 +176,30 @@ async fn unsupported_settings_are_refused_not_ignored() {
         .unwrap_err();
     assert!(err.to_string().contains(".worktreeinclude"), "{err}");
 }
+
+#[tokio::test]
+async fn discarding_drops_uncommitted_work_and_keeps_commits_on_the_branch() {
+    let fx = Fixture::new();
+    let p = TreehouseProvider::new(fx.pool());
+    let wt = p.get(&fx.request("t1", "feat-1")).await.unwrap();
+    std::fs::write(wt.path.join("kept"), "kept\n").unwrap();
+    git(&wt.path, &["add", "kept"]);
+    git(&wt.path, &["commit", "-q", "-m", "kept"]);
+    let commit = git(&wt.path, &["rev-parse", "HEAD"]);
+    std::fs::write(wt.path.join("scratch"), "untracked\n").unwrap();
+    std::fs::write(wt.path.join("kept"), "edited\n").unwrap();
+    assert!(matches!(
+        p.return_worktree(&wt.id).await.unwrap(),
+        ReturnOutcome::Kept { .. }
+    ));
+
+    assert_eq!(
+        p.discard_worktree(&wt.id).await.unwrap(),
+        ReturnOutcome::Returned
+    );
+    let status = p.status().await.unwrap();
+    let freed = status.slots.iter().find(|s| s.path == wt.path).unwrap();
+    assert_eq!(freed.state, SlotState::Idle);
+    assert!(!wt.path.join("scratch").exists());
+    assert_eq!(git(&fx.repo, &["rev-parse", "feat-1"]), commit);
+}

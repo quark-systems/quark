@@ -74,9 +74,11 @@ export const tasksApi = {
   steer: (id: string, text: string) => req<void>("POST", `/v1/tasks/${enc(id)}/messages`, { text }),
   cancel: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:cancel`),
   relaunch: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:relaunch`),
-  clearTask: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:clear`),
-  clearTasks: (pid: string, states: TaskState[] = ["done", "failed"]) =>
-    req<ClearedTasks>("POST", `/v1/projects/${enc(pid)}/tasks:clear`, { states }),
+  /** With `discard`, work that has not landed is thrown away; commits stay on the worker's branch. */
+  clearTask: (id: string, discard = false) =>
+    req<void>("POST", `/v1/tasks/${enc(id)}:clear`, discard ? { discard } : undefined),
+  clearTasks: (pid: string, states: TaskState[] = ["done", "failed"], discard = false) =>
+    req<ClearedTasks>("POST", `/v1/projects/${enc(pid)}/tasks:clear`, { states, discard }),
   brief: (id: string) => req<TaskBrief>("GET", `/v1/tasks/${enc(id)}/brief`),
   changes: (id: string) => req<TaskChanges>("GET", `/v1/tasks/${enc(id)}/changes`),
   diff: (id: string, path?: string) =>

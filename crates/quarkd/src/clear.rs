@@ -5,8 +5,10 @@
 //! session, gives the worktree back through the engine's worktree provider
 //! and takes the task off the board. The task's row, activity log and events
 //! are kept, so its history still reads. A worktree holding work that has
-//! not landed is never discarded: the task stays on the board and the
-//! caller is told why.
+//! not landed is kept: the task stays on the board and the caller is told
+//! why, unless the caller asked to discard it. Discarding throws away
+//! uncommitted changes and untracked files; commits stay on the task's
+//! branch.
 //!
 //! The API (`POST /v1/tasks/{id}:clear`, `POST /v1/projects/{id}/tasks:clear`)
 //! and the coordinator's `clear` tool both come here.
@@ -57,12 +59,14 @@ async fn blocking<T: Send + 'static>(
         .map_err(ClearError::from)
 }
 
-/// Clear the task with API id `id`. Clearing a cleared task again is a
-/// no-op; a task that is still working is refused as a conflict.
+/// Clear the task with API id `id`, discarding unlanded work in its
+/// worktree when `discard`. Clearing a cleared task again is a no-op; a
+/// task that is still working is refused as a conflict.
 pub async fn clear(
     store: &Arc<Store>,
     engine: &Arc<dyn EngineAdapter>,
     id: &str,
+    discard: bool,
 ) -> Result<Cleared, ClearError> {
     let tid = id.to_string();
     let (task, target) = blocking(store, move |s| {
@@ -96,7 +100,15 @@ pub async fn clear(
             Ok(()) | Err(EngineError::TaskNotFound(_)) => {}
             Err(e) => return Err(e.into()),
         }
-        match engine.release_worktree(&ws, &target.engine_id).await {
+        let release = if discard {
+            engine
+                .discard_worktree(&ws, &target.engine_id)
+                .await
+                .map(|()| WorktreeRelease::Returned)
+        } else {
+            engine.release_worktree(&ws, &target.engine_id).await
+        };
+        match release {
             Ok(WorktreeRelease::Returned) | Err(EngineError::TaskNotFound(_)) => {}
             Ok(WorktreeRelease::Kept {
                 uncommitted,
