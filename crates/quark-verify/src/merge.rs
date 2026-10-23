@@ -6,6 +6,8 @@
 //!    the gates run on the rebased head ([`NativePipeline`]). A head that
 //!    did not contain the tip is pushed rebased and the merge is refused
 //!    until the forge's checks have run on it: a stale head never merges.
+//!    A pull request with no checks at all (a repo without CI) has none to
+//!    wait for, so once the forge reports the rebased head it merges that.
 //! 2. The gates must pass on exactly the head that merges.
 //! 3. The pull request's own checks must be green (or absent).
 //! 4. The [`NativeGuard`] re-reads main and decides: fresh head, and while
@@ -20,6 +22,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use quark_core::verify::{Change, MergeGuard, Permit, Verdict, VerifyPipeline};
 use quark_core::{EventLog, HostId, NewEvent, ProjectId, Result, Seq, TaskId};
@@ -113,7 +116,12 @@ pub struct GuardedMerge {
     /// The guard's target is per Project, so one Project's merges take
     /// turns from setting it to merging. The gates run outside the turn.
     turns: Mutex<HashMap<ProjectId, Arc<tokio::sync::Mutex<()>>>>,
+    /// How long a pushed rebase may take to show as the pull request's head.
+    settle: Duration,
 }
+
+/// GitHub shows a force-pushed head within a few seconds.
+const SETTLE: Duration = Duration::from_secs(15);
 
 impl GuardedMerge {
     pub fn new(forge: Arc<dyn Forge>, log: Arc<dyn EventLog>, host: HostId) -> Self {
@@ -124,6 +132,28 @@ impl GuardedMerge {
             host,
             restored: tokio::sync::OnceCell::new(),
             turns: Mutex::default(),
+            settle: SETTLE,
+        }
+    }
+
+    /// Wait at most `settle` for a pushed rebase to reach the forge.
+    pub fn settle_within(mut self, settle: Duration) -> Self {
+        self.settle = settle;
+        self
+    }
+
+    /// Whether the forge reports `head` as pull request `number`'s head
+    /// within [`Self::settle`].
+    async fn settled(&self, repo: &str, number: u64, head: &str) -> Result<bool> {
+        let deadline = tokio::time::Instant::now() + self.settle;
+        loop {
+            if self.forge.pull_request(repo, number).await?.sha == head {
+                return Ok(true);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }
 
@@ -166,7 +196,7 @@ impl GuardedMerge {
                 return Ok(Landing::refused(None, "it was closed without merging"))
             }
         }
-        let change = Change {
+        let mut change = Change {
             project: req.project.clone(),
             task: req.task.clone(),
             pull_request: Some(req.pull_request.clone()),
@@ -190,6 +220,17 @@ impl GuardedMerge {
         if let Some(c) = &verdict.conflict {
             let reason = format!("it does not rebase cleanly onto {}: {c}", pull.base);
             return Ok(Landing::refused(Some(verdict), reason));
+        }
+        if verdict.head != change.head {
+            // With no checks on the old head there are none to wait for on
+            // the rebased one: merge it once the forge shows it.
+            let unchecked = verdict.passed() && {
+                let (runs, statuses) = self.forge.checks(&repo, &change.head).await?;
+                classify(&change.head, &runs, &statuses).state == HealthState::None
+            };
+            if unchecked && self.settled(&repo, number, &verdict.head).await? {
+                change.head = verdict.head.clone();
+            }
         }
         if verdict.head != change.head {
             let reason = format!(
@@ -581,6 +622,64 @@ mod tests {
         r.sync();
         let l = r.land("test -f feature && test -f other").await;
         assert_eq!(l.outcome, Outcome::Merged { head: rebased });
+    }
+
+    /// Main moves on past `b`, whose head has no checks: a repo without CI.
+    fn main_moves_on_without_ci(r: &Repo) -> (String, String) {
+        let old = r.origin_sha("b");
+        r.forge.set_checks(&old, vec![], vec![]);
+        commit(&r.checkout, "other");
+        git(&r.checkout, &["push", "-q", "origin", "main"]);
+        let main = r.origin_sha("main");
+        r.forge.set_tip("acme/app", "main", &main);
+        r.forge.set_checks(&main, vec![], vec![]);
+        r.forge.set_behind(&main, &old, 1);
+        (old, main)
+    }
+
+    #[tokio::test]
+    async fn a_stale_head_without_checks_merges_once_the_forge_shows_its_rebase() {
+        let r = Repo::new();
+        let (old, main) = main_moves_on_without_ci(&r);
+        // The forge shows the pushed rebase a moment later, still unchecked.
+        let (forge, origin) = (r.forge.clone(), r.origin.clone());
+        tokio::spawn(async move {
+            loop {
+                let head = git(&origin, &["rev-parse", "b"]);
+                if head != old {
+                    forge.set_checks(&head, vec![], vec![]);
+                    forge.set_behind(&main, &head, 0);
+                    let mut pull = forge.pull_request("acme/app", 1).await.unwrap();
+                    pull.sha = head;
+                    forge.set_pull("acme/app", 1, pull);
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let l = r.land("test -f feature && test -f other").await;
+        let rebased = r.origin_sha("b");
+        assert_eq!(
+            l.outcome,
+            Outcome::Merged {
+                head: rebased.clone()
+            }
+        );
+        assert_eq!(
+            r.forge.merges(),
+            vec![("acme/app".into(), 1, rebased, MergeMethod::Squash)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rebase_the_forge_never_shows_is_refused() {
+        let mut r = Repo::new();
+        r.merge = GuardedMerge::new(r.forge.clone(), r.log.clone(), "h".into())
+            .settle_within(Duration::from_millis(100));
+        main_moves_on_without_ci(&r);
+        let l = r.land("true").await;
+        assert!(refusal(&l).contains("rebased and pushed"), "{l:?}");
+        assert!(r.forge.merges().is_empty());
     }
 
     #[tokio::test]

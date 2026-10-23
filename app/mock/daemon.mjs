@@ -2145,6 +2145,13 @@ const server = http.createServer(async (req, res) => {
       const why = pr.state !== "open" ? `pull request is ${pr.state}` : pr.mergeable === "conflicting" ? "pull request has conflicts"
         : pr.checks_state !== "passing" && pr.checks_state !== "none" ? "checks are not green" : null;
       if (why) return send(res, 409, { error: { code: "merge_refused", message: why } });
+      if (pr.behind) {
+        // A head behind its base: rebased, pushed, and refused until its checks run on the new head.
+        const old = pr.head_sha;
+        Object.assign(pr, { behind: false, head_sha: "4c3b2a1f9e", updated_at: now() });
+        emit("pr.updated", { ...pr }, pr.project_id);
+        return send(res, 409, { error: { code: "merge_refused", message: `merge refused: ${old} did not contain ${pr.base_ref}'s tip, so it was rebased and pushed as ${pr.head_sha}; the gates passed on it, so merge again once its checks pass` } });
+      }
       pr.state = "merged"; pr.merged_at = pr.closed_at = pr.updated_at = now();
       emit("pr.updated", { ...pr }, pr.project_id);
       const task = pr.task_id && tasks.get(pr.task_id);
@@ -2153,6 +2160,13 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (p === "/mock/pr-comments" && req.method === "GET") return send(res, 200, prComments);
+  // Its base moves on: the next merge rebases it first, as the native engine's guarded merge does.
+  if ((r = m(/^\/mock\/pull-requests\/([^/]+)\/behind$/)) && req.method === "POST") {
+    const pr = pulls.get(decodeURIComponent(r[1]));
+    if (!pr) return notFound(res);
+    pr.behind = true;
+    return send(res, 204);
+  }
   // Someone comments on the forge (quark-ual): the next sync records it and emits `comment.updated`.
   if ((r = m(/^\/mock\/pull-requests\/([^/]+)\/forge-comments$/)) && req.method === "POST") {
     const pr = pulls.get(decodeURIComponent(r[1]));
