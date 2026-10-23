@@ -112,6 +112,19 @@ test("coordinator chat: workers started and questions asked show as cards", asyn
   await expect(page).toHaveURL(/#\/inbox/);
 });
 
+test("coordinator chat: a question asked with ask_user shows as the decision, answerable in place", async ({ page }) => {
+  await open(page, "#/p/website");
+  const chat = page.getByTestId("coordinator-chat");
+  const ask = chat.getByTestId("coordinator-ask");
+  await expect(ask).toContainText("Asked you to decide");
+  const card = ask.getByTestId("decision-card");
+  await expect(card).toContainText("Launch the new design behind a flag, or replace the old site directly?");
+  await expect(card.getByTestId("decision-meta")).toContainText("D-1 · asked by the coordinator");
+  // One tap answers it; the inbox journey answers this one, so here it is only offered.
+  await expect(card.getByRole("button", { name: "Behind a flag" })).toBeEnabled();
+  await expect(card.getByRole("button", { name: "Replace directly" })).toBeEnabled();
+});
+
 test("coordinator chat: engine events show as one plain line, not raw XML", async ({ page }) => {
   await open(page, "#/p/quark");
   const chat = page.getByTestId("coordinator-chat");

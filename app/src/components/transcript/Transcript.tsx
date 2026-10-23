@@ -20,6 +20,8 @@ export interface TranscriptProps {
   agent: string;
   /** Show the workers the agent started and the questions it asked as cards (the coordinator chat). */
   actions?: boolean;
+  /** The Project whose coordinator this is: its questions show as decision cards answered in place. */
+  project?: string;
   /** Shown after the turns, such as messages sent but not yet in the log. */
   children?: React.ReactNode;
   empty?: React.ReactNode;
@@ -33,7 +35,7 @@ export interface TranscriptProps {
  * Give it a `key` per source (task or coordinator), so paging and the entries that
  * count as new start over when the source changes.
  */
-export function Transcript({ items, agent, actions = false, children, empty, testId, className, commandLabel = neutralCommandLabel }: TranscriptProps) {
+export function Transcript({ items, agent, actions = false, project, children, empty, testId, className, commandLabel = neutralCommandLabel }: TranscriptProps) {
   const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id)), [items]);
   const { ref, onScroll, unseen, jump, holdPosition } = useScrollAnchor<HTMLDivElement>(items.length);
 
@@ -48,7 +50,7 @@ export function Transcript({ items, agent, actions = false, children, empty, tes
   const shown = turns.slice(start);
 
   const freshAfter = firstLoad.current?.maxId ?? Infinity;
-  const settings = useMemo<TranscriptSettings>(() => ({ agent, actions, freshAfter, commandLabel }), [agent, actions, freshAfter, commandLabel]);
+  const settings = useMemo<TranscriptSettings>(() => ({ agent, actions, project, freshAfter, commandLabel }), [agent, actions, project, freshAfter, commandLabel]);
 
   const showEarlier = () => {
     holdPosition();

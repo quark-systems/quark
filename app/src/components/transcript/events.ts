@@ -52,6 +52,10 @@ export function engineEvent(text: string): EngineEvent | null {
   // A task's instructions are meant to be read, so they stay a message.
   if (op && op[1] !== "launch-brief") return { kind: "engine", title: OP_TITLES[op[1]] ?? "Engine message", raw };
 
+  // `questions::NUDGE` in quark-coordinator, sent back by quarkd's Stop hook when a
+  // reply asked something without filing it as a decision.
+  if (/(^|\n|: )Quark decision check: /.test(t)) return { kind: "engine", title: "Reminded to ask with decisions", raw };
+
   const native = nativeWake(t);
   if (native) return { ...native, raw };
   // `ENGINE_NOTE` in quarkd's chat.rs: the engine telling the coordinator something outside a wake.

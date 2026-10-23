@@ -12,6 +12,8 @@
 //!   turns, records every turn and tool call, and recovers from a crash by
 //!   replay.
 //! - [`tools`] and [`mcp`]: the coordinator's tool set, served over MCP.
+//! - [`questions`]: questions left in a reply that should have been
+//!   `ask_user` decisions.
 //! - [`efficiency`]: turns and tokens per task, and the share of turns spent
 //!   acknowledging status.
 //!
@@ -22,6 +24,7 @@ pub mod efficiency;
 pub mod events;
 pub mod mcp;
 pub mod prompt;
+pub mod questions;
 pub mod tools;
 pub mod wake;
 

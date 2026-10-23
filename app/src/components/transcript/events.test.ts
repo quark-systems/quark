@@ -31,6 +31,12 @@ describe("engineEvent", () => {
     expect(wakeTitle("check: pr-merged quark#12")).toBe("Check: pr-merged quark#12");
   });
 
+  it("reads quarkd's reminder to file questions as decisions as an engine row", () => {
+    const raw = `<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command "Stop": Quark decision check: your reply asks the user something, but you did not call ask_user this turn.\n</system-reminder>`;
+    expect(engineEvent(raw)).toMatchObject({ kind: "engine", title: "Reminded to ask with decisions" });
+    expect(engineEvent("What is the Quark decision check: for?")).toBeNull();
+  });
+
   it("flags a monitoring failure", () => {
     const e = engineEvent("<system-reminder>Stop hook blocking error: firstmate watcher auto-arm FAILED twice</system-reminder>");
     expect(e?.kind).toBe("warning");

@@ -241,7 +241,14 @@ impl ToolCall {
                 blank("key", key)?;
                 blank("question", question)
             }
-            ToolCall::TellUser { text } => blank("text", text),
+            ToolCall::TellUser { text } => {
+                blank("text", text)?;
+                if crate::questions::questions(text).is_empty() {
+                    Ok(())
+                } else {
+                    Err(TELL_USER_QUESTION.into())
+                }
+            }
             ToolCall::Remember { fact } => blank("fact", fact),
             ToolCall::AckMessage { channel, id } => {
                 blank("channel", channel)?;
@@ -257,6 +264,12 @@ pub const START_TASK_AGENT: &str =
      Project's dispatch rules. Give the rule the task fits as `rule`, or leave it out and dispatch \
      asks you when it needs a pick. Name an agent only when the user asked for one: start the task \
      without it, then give it to choose_profile when dispatch asks, or relaunch the task on it.";
+
+/// Why `tell_user` refuses a question, and what to do instead.
+pub const TELL_USER_QUESTION: &str =
+    "tell_user is for outcomes and does not carry questions: nothing waits on \
+     a question there and its answer never wakes you. Ask each question with ask_user (one call per \
+     question), then tell_user anything else without the questions.";
 
 /// A tool as listed to the coordinator.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -363,7 +376,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "ask_user",
-            description: "Raise a decision only the user can make: a design choice, anything destructive, irreversible or security-sensitive, a credential. Ask once with context, options (each with its consequence), your recommendation and why, and what the answer unblocks.",
+            description: "Ask the user something. Every question for the user goes through this tool, one call per question: a design choice, a clarification, a go-ahead, anything destructive, irreversible or security-sensitive, a credential. It files a decision the user answers in the app, and their answer wakes you. Never ask in your reply text or in tell_user instead. Ask once with context, options (each with its consequence), your recommendation and why, and what the answer unblocks.",
             input_schema: object(
                 json!({
                     "key": text("Stable key; asking again with it updates the same decision."),
@@ -397,7 +410,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "tell_user",
-            description: "Tell the user an outcome they need: finished work with its link, findings, a real blocker. Lead with the outcome.",
+            description: "Tell the user an outcome they need: finished work with its link, findings, a real blocker. Lead with the outcome. It carries no questions: ask those with ask_user.",
             input_schema: object(json!({"text": text("The message.")}), &["text"]),
         },
         ToolSpec {
@@ -506,5 +519,18 @@ mod tests {
         let logged = json!({"tool": "start_task", "title": "t", "brief": "b", "agent": {"harness": "claude"}});
         assert!(serde_json::from_value::<ToolCall>(logged).is_ok());
         assert!(ToolCall::parse("fleet", &Value::Null).is_ok());
+        // A question goes through ask_user, where its answer wakes the coordinator.
+        assert_eq!(
+            ToolCall::parse(
+                "tell_user",
+                &json!({"text": "PR is up. Want me to merge it?"})
+            ),
+            Err(TELL_USER_QUESTION.to_string())
+        );
+        assert!(ToolCall::parse(
+            "tell_user",
+            &json!({"text": "Merged https://x.test/pr/1?tab=files."})
+        )
+        .is_ok());
     }
 }

@@ -131,6 +131,8 @@ struct ProjectState {
     open: Option<OpenTurn>,
     turns: u64,
     prompt_digest: Option<String>,
+    /// An `ask_user` call succeeded since the last turn ended.
+    asked: bool,
 }
 
 #[derive(Default)]
@@ -144,6 +146,8 @@ struct State {
     covered: BTreeSet<(ProjectId, Seq)>,
     /// Tool calls recorded without an outcome.
     tools_open: BTreeMap<String, ProjectId>,
+    /// The `ask_user` calls among them.
+    asks_open: BTreeSet<String>,
 }
 
 impl State {
@@ -186,6 +190,7 @@ impl State {
                 });
             }
             CoordinatorEvent::TurnEnded { turn, end, .. } => {
+                p.asked = false;
                 if let (Some(open), Some(turn)) = (&p.open, turn) {
                     if open.id == turn {
                         let open = p.open.take().unwrap();
@@ -198,10 +203,16 @@ impl State {
                     }
                 }
             }
-            CoordinatorEvent::Tool { id, .. } => {
+            CoordinatorEvent::Tool { id, call, .. } => {
+                if matches!(call, ToolCall::AskUser { .. }) {
+                    self.asks_open.insert(id.clone());
+                }
                 self.tools_open.insert(id, e.project.clone());
             }
-            CoordinatorEvent::ToolDone { id, .. } => {
+            CoordinatorEvent::ToolDone { id, ok, .. } => {
+                if self.asks_open.remove(&id) && ok {
+                    p.asked = true;
+                }
                 self.tools_open.remove(&id);
             }
             CoordinatorEvent::Cursor { through } => {
@@ -567,6 +578,16 @@ impl Coordinator {
             items: o.items.clone(),
             attempt: o.attempt,
         })
+    }
+
+    /// Whether `project`'s coordinator asked the user something with
+    /// `ask_user` since its last turn ended.
+    pub async fn asked_this_turn(&self, project: &ProjectId) -> bool {
+        let mut st = self.state.lock().await;
+        if let Err(e) = self.refresh_locked(&mut st).await {
+            tracing::warn!(%project, error = %e, "could not read the log");
+        }
+        st.projects.get(project).is_some_and(|p| p.asked)
     }
 
     /// Items waiting for a turn.
