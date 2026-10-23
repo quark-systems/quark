@@ -3,7 +3,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use quark_systems::{ClearTasks, ClearedTasks, ErrorBody, KeptTask, TaskState};
+use quark_systems::{ClearTask, ClearTasks, ClearedTasks, ErrorBody, KeptTask, TaskState};
 
 use super::{db, ApiError, AppState};
 use crate::clear::{self, ClearError, Cleared};
@@ -23,7 +23,7 @@ fn kept_error(uncommitted: bool, unpushed_commits: u32) -> ApiError {
         StatusCode::CONFLICT,
         "unlanded_work",
         format!(
-            "Not cleared: the worker's worktree has {}. Push or discard that work, then clear it again.",
+            "Not cleared: the worker's worktree has {}. Push that work, or clear it with discard.",
             clear::unlanded(uncommitted, unpushed_commits)
         ),
     )
@@ -34,24 +34,29 @@ fn kept_error(uncommitted: bool, unpushed_commits: u32) -> ApiError {
 /// Stops its session if its agent never exited, gives its worktree back and
 /// takes it off the board: `GET /v1/projects/{id}/tasks` leaves it out
 /// unless `include_cleared`. Its activity log and events are kept. Clearing
-/// a cleared task again does nothing.
+/// a cleared task again does nothing. With `discard`, work that has not
+/// landed is thrown away instead of keeping the worker; commits stay on its
+/// branch.
 #[utoipa::path(
     post,
     path = "/v1/tasks/{id}:clear",
     tag = "tasks",
     params(("id" = String, Path, description = "Task id")),
+    request_body = ClearTask,
     responses(
         (status = 204, description = "The task is cleared"),
         (status = 404, body = ErrorBody),
-        (status = 409, body = ErrorBody, description = "The task is still working (`conflict`), or its worktree holds work that has not landed (`unlanded_work`)"),
+        (status = 409, body = ErrorBody, description = "The task is still working (`conflict`), or its worktree holds work that has not landed and `discard` is not set (`unlanded_work`)"),
         (status = 502, body = ErrorBody, description = "The engine could not stop its agent or give its worktree back")
     )
 )]
 pub async fn clear_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    input: Option<Json<ClearTask>>,
 ) -> Result<StatusCode, ApiError> {
-    match clear::clear(&state.store, &state.engine, &id).await? {
+    let discard = input.is_some_and(|Json(i)| i.discard);
+    match clear::clear(&state.store, &state.engine, &id, discard).await? {
         Cleared::Cleared(_) => Ok(StatusCode::NO_CONTENT),
         Cleared::Kept {
             uncommitted,
@@ -81,8 +86,10 @@ pub async fn clear_project_tasks(
     Path(id): Path<String>,
     input: Option<Json<ClearTasks>>,
 ) -> Result<Json<ClearedTasks>, ApiError> {
+    let input = input.map(|Json(i)| i).unwrap_or_default();
+    let discard = input.discard;
     let states = input
-        .and_then(|Json(i)| i.states)
+        .states
         .unwrap_or_else(|| vec![TaskState::Done, TaskState::Failed]);
     if let Some(s) = states.iter().find(|s| !clear::clearable(**s)) {
         return Err(ApiError::invalid(format!(
@@ -102,7 +109,7 @@ pub async fn clear_project_tasks(
             code: code.into(),
             reason,
         };
-        match clear::clear(&state.store, &state.engine, &t.id).await {
+        match clear::clear(&state.store, &state.engine, &t.id, discard).await {
             Ok(Cleared::Cleared(_)) => out.cleared.push(t.id.clone()),
             Ok(Cleared::Kept {
                 uncommitted,
@@ -127,7 +134,7 @@ pub async fn clear_project_tasks(
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(clear_task, clear_project_tasks),
-    components(schemas(ClearTasks, ClearedTasks, KeptTask))
+    components(schemas(ClearTask, ClearTasks, ClearedTasks, KeptTask))
 )]
 pub(super) struct Api;
 

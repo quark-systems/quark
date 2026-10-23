@@ -519,6 +519,20 @@ impl EngineAdapter for NativeEngine {
         }
     }
 
+    async fn discard_worktree(&self, ws: &WorkspaceRef, task: &str) -> Result<(), EngineError> {
+        match self
+            .supervisor
+            .discard_teardown(&project(ws), &task_id(task)?)
+            .await
+        {
+            Ok(ReturnOutcome::Returned) | Err(CoreError::NotFound(_)) => Ok(()),
+            Ok(ReturnOutcome::Kept { .. }) => Err(EngineError::Command(
+                "the worktree was kept after discarding its changes".into(),
+            )),
+            Err(e) => Err(engine_error(e)),
+        }
+    }
+
     async fn forget_coordinator(
         &self,
         command: &Path,

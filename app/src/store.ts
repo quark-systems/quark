@@ -285,13 +285,17 @@ export async function refreshTask(id: string): Promise<{ cleared_at?: string | n
   return { cleared_at: t.cleared_at };
 }
 
-/** Clears a project's done or failed workers and says what happened, in a line. */
-export async function clearWorkers(pid: string, state: "done" | "failed"): Promise<string> {
-  const r = await api.clearTasks(pid, [state]);
+/**
+ * Clears a project's done or failed workers and says what happened, in a line, with how many
+ * were kept for work that has not landed. `discard` throws that work away instead.
+ */
+export async function clearWorkers(pid: string, state: "done" | "failed", discard = false): Promise<{ note: string; unlanded: number }> {
+  const r = await api.clearTasks(pid, [state], discard);
   const n = r.cleared.length;
-  const cleared = n === 0 ? "Nothing cleared." : `Cleared ${n} ${state} ${n === 1 ? "worker" : "workers"}.`;
-  if (!r.kept.length) return cleared;
-  return `${cleared} Kept ${r.kept.map((k) => `${k.title}: ${k.reason}`).join("; ")}.`;
+  const cleared = n === 0 ? "Nothing cleared." : `Cleared ${n} ${state} ${n === 1 ? "worker" : "workers"}${discard ? ", discarding their work" : ""}.`;
+  const unlanded = r.kept.filter((k) => k.code === "unlanded_work").length;
+  if (!r.kept.length) return { note: cleared, unlanded };
+  return { note: `${cleared} Kept ${r.kept.map((k) => `${k.title}: ${k.reason}`).join("; ")}.`, unlanded };
 }
 
 /** Loads a coordinator's chat; later `coordinator.message` events append to it. */

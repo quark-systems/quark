@@ -272,6 +272,15 @@ async fn cancel_keeps_work_and_teardown_never_discards_it() {
     }
     assert!(path.exists());
     assert_eq!(env.worktrees.held(), 1);
+
+    // Only an explicit discard gives it back.
+    assert_eq!(
+        sup.discard_teardown(&p, &t).await.unwrap(),
+        ReturnOutcome::Returned
+    );
+    assert!(!path.exists());
+    assert_eq!(env.worktrees.held(), 0);
+    assert!(sup.task(&p, &t).unwrap().1.is_released());
 }
 
 #[tokio::test]

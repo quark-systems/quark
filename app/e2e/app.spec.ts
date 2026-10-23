@@ -1400,8 +1400,9 @@ test("finished workers can be cleared one at a time or a column at once", async 
   // A column at once: the one holding unpushed work stays and says why.
   await failed.getByTestId("clear-failed").click();
   await failed.getByTestId("clear-failed").click();
-  await expect(failed.getByTestId("clear-failed-note")).toHaveText(
+  await expect(failed.getByTestId("clear-failed-note")).toContainText(
     "Cleared 1 failed worker. Kept Fix the unpushed release branch: its worktree has 2 unpushed commits.");
+  await expect(failed.getByTestId("discard-failed")).toBeVisible();
   await expect(failed.getByTestId("task-card")).toHaveText([/Fix the unpushed release branch/]);
 
   // One at a time, from the worker: it refuses while work has not landed.
@@ -1413,6 +1414,17 @@ test("finished workers can be cleared one at a time or a column at once", async 
   await page.getByTestId("relaunch").click();
   await expect(page.getByTestId("task-state")).toHaveText("Running");
   await expect(page.getByTestId("clear")).toHaveCount(0);
+  await expect(page.getByTestId("discard")).toHaveCount(0);
+
+  // Failed again, its work can be discarded on purpose, behind a confirmation.
+  await page.getByTestId("cancel").click();
+  await page.getByTestId("confirm-cancel").click();
+  await expect(page.getByTestId("task-state")).toHaveText("Failed");
+  await page.getByTestId("clear").click();
+  await page.getByTestId("confirm-clear").click();
+  await page.getByTestId("discard").click();
+  await page.getByTestId("confirm-discard").click();
+  await expect(page.getByTestId("worker-cleared")).toBeVisible();
 
   // A done worker clears from its view; its page then says so.
   await open(page, `#/t/${ids["Retry the flaky login test"]}`);

@@ -12,8 +12,8 @@ use quark_core::worktree::{
 };
 use quark_core::{CoreError, EventLog, HostId, NewEvent, ProjectId, Result, TaskId};
 
-use crate::checks;
 use crate::treehouse::{LeaseInfo, Pool, PoolEntry, Release, TreehouseCli};
+use crate::{checks, git};
 
 const TASK_PREFIX: &str = "quark:task:";
 const LEASE_PREFIX: &str = "quark:lease:";
@@ -218,6 +218,40 @@ impl<P: Pool> WorktreeProvider for TreehouseProvider<P> {
                     }
                     ReturnOutcome::Kept { work }
                 }
+            }
+        };
+        self.record(
+            &project,
+            task,
+            &WorktreeEvent::Returned {
+                id: id.to_string(),
+                outcome: outcome.clone(),
+            },
+        )
+        .await?;
+        Ok(outcome)
+    }
+
+    async fn discard_worktree(&self, id: &str) -> Result<ReturnOutcome> {
+        let (repo, entry) = self.find(id).await?;
+        let (project, holder) = parse_holder(&entry.lease_holder).unwrap_or_else(|| {
+            (
+                ProjectId::engine(),
+                Holder::Lease {
+                    owner: entry.lease_holder.clone(),
+                },
+            )
+        });
+        let task = task_of(&holder);
+        // Only what was never committed goes; commits stay on the branch.
+        git::read(&entry.path, ["reset", "--hard", "--quiet", "HEAD"]).await?;
+        git::read(&entry.path, ["clean", "-ffd", "--quiet"]).await?;
+        let outcome = match self.pool.release(&repo, &entry.path, id).await? {
+            Release::Returned => ReturnOutcome::Returned,
+            Release::NotReturned(why) => {
+                return Err(CoreError::Backend(format!(
+                    "pool kept worktree {id} after discarding its changes: {why}"
+                )))
             }
         };
         self.record(

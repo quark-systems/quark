@@ -400,7 +400,16 @@ pub async fn task_action(
     let id = Path(id.to_string());
     match action {
         "cancel" => cancel_task(state, id).await,
-        "clear" => super::clear::clear_task(state, id).await,
+        "clear" => {
+            let input = if body.iter().all(u8::is_ascii_whitespace) {
+                None
+            } else {
+                Some(Json(serde_json::from_slice(&body).map_err(|e| {
+                    ApiError::invalid(format!("invalid clear body: {e}"))
+                })?))
+            };
+            super::clear::clear_task(state, id, input).await
+        }
         "relaunch" => {
             // The body is optional, so an empty one is accepted whatever its
             // content type says.

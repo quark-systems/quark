@@ -43,7 +43,7 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: pull (alone), merge request, change request.
 - **Check**: one CI result on a PR. Checks are green, red or running.
   _Avoid_: build, job, pipeline (in copy).
-- **Clear**: take a done or failed worker off the board and the left list: its terminal is closed and its working copy given back, and its history is kept. A working copy holding work that has not landed is never thrown away; that worker stays and says why.
+- **Clear**: take a done or failed worker off the board and the left list: its terminal is closed and its working copy given back, and its history is kept. A working copy holding work that has not landed is kept; that worker stays and says why, and **Discard work and clear** throws away its uncommitted changes on purpose (its commits stay on its branch).
   _Avoid_: dismiss, delete, remove, archive (for workers).
 - **Changes**: what a worker changed in its working copy, file by file.
   _Avoid_: diff (as a tab name), patch.
