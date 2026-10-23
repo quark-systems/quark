@@ -17,6 +17,9 @@ pub enum TranscriptRole {
     ToolCall,
     /// What a tool returned; `text` holds its output.
     ToolResult,
+    /// The harness compacted the conversation here: what came before is now
+    /// a summary. `text` says who compacted it and at what size.
+    Compaction,
 }
 
 /// One entry of a coordinator or worker transcript, parsed from the harness's

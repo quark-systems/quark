@@ -78,6 +78,7 @@ async fn metrics_count_the_projects_own_events() {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: events.clone(),
         triggers: None,
+        compaction: Default::default(),
         beads: Default::default(),
     });
     let project = store

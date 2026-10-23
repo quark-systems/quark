@@ -76,8 +76,20 @@ Each is typed into the session as an engine note that begins `The user asked`, w
 The firstmate names are kept so the commands people already type keep working; the nautical persona pack also shows them on the buttons.
 A message that is a slash command plus more text (`/stow the logs`) is an ordinary message.
 
-The engine asks for `wrap_up` by itself before the harness compacts the coordinator's context: when a turn ends with the context (its last model call's input) past a multiple of `QUARK_COORDINATOR_WRAP_UP_TOKENS` (default 150,000; `0` turns it off), once per multiple, starting over when compaction shrinks it.
-Only harnesses with a turn-end hook (Claude Code) report the context.
+### Compaction
+
+A harness compacts its conversation on its own only when the context window is nearly full, which on a 1M model means every turn reads close to a million tokens. So the engine compacts the coordinator earlier (`crates/quarkd/src/compaction.rs`):
+
+1. A turn ends with the context (its last model call's input) at the Project's threshold or more: the engine asks for `wrap_up` (the note says the context will be compacted).
+2. The wrap up's turn ends: the engine types `/compact` with what the summary must keep (standing rules, open decisions, tasks under way with their ids, branches and pull requests, promises, next steps). Claude Code, Codex and Pi all have `/compact`.
+3. A later turn ending smaller, or the compaction entry in the session log, ends it. A compaction not seen in 15 minutes is given up on, and the next full turn starts again.
+
+Each Project sets it in Settings (`compaction` in `GET`/`PATCH /v1/projects/{id}/settings`): `auto` on or off and `at_tokens`, at least 10,000. A Project that never set it uses `QUARK_COORDINATOR_COMPACT_AT_TOKENS` (or the older `QUARK_COORDINATOR_WRAP_UP_TOKENS`), else 140,000; `0` turns it off by default. With it off, the harness's own compaction still applies.
+`POST /v1/coordinators/{id}:compact` compacts now, with no wrap up.
+Only harnesses with a turn-end hook (Claude Code) set the automatic steps off; the context itself is read from any coordinator's session log.
+
+Every compaction, whoever started it, is one `compaction` entry in the conversation (Claude Code's `compact_boundary` line, Codex's `compacted`, Pi's `compaction`), and the `/compact` command line is left out.
+`GET /v1/coordinators/{id}/context` returns the coordinator's agent config, the model its log names, the context its last turn ended on, the model's window when known (Claude 200k, or 1M for a `[1m]` model or one seen past 200k; Codex GPT-5 272k), the compaction settings, where a compaction is, and the last compaction. The coordinator's header shows it as a meter.
 
 ## Durability
 

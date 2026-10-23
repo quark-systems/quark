@@ -352,11 +352,26 @@ function metricsOf(proj, days) {
     unavailable: [],
   };
 }
+// The coordinator's compaction settings and context, per project (quarkd's compaction.rs).
+const compactionSettings = new Map();
+const compactionOf = (pid) => compactionSettings.get(pid) ?? { auto: true, at_tokens: 140_000 };
+const lastCompaction = new Map();
+function coordinatorContextOf(proj) {
+  const used = 40_000 + (chats.get(proj.id)?.length ?? 0) * 1_500;
+  const compacted = lastCompaction.get(proj.id);
+  const codex = proj.agent_config?.harness === "codex";
+  return {
+    coordinator_id: proj.id, agent_config: proj.agent_config,
+    model_seen: proj.agent_config?.model ? null : codex ? "gpt-5-codex" : "claude-opus-5-5",
+    context_tokens: compacted && Date.now() - Date.parse(compacted.at) < 30_000 ? null : used, window_tokens: codex ? 272_000 : 200_000,
+    measured_at: now(), compaction: compactionOf(proj.id), compacting: "idle", last_compaction: compacted ?? null,
+  };
+}
 function settingsOf(proj) {
   const rules = rulesOf(proj);
   return {
     project_id: proj.id, standing_approval: proj.standing_approval, delivery: proj.delivery ?? "gated",
-    agent_config: proj.agent_config, verification: verificationOf(proj),
+    agent_config: proj.agent_config, compaction: compactionOf(proj.id), verification: verificationOf(proj),
     dispatch: { rules: rules.rules.length, default_candidates: rules.default.length, classifier: "none", error: null },
     memory: {
       entries: (memoryEntries.get(proj.id) ?? []).length,
@@ -1560,6 +1575,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (changed) v.revision = hex40();
     }
+    if (b.compaction) {
+      if (typeof b.compaction.auto !== "boolean" || !(b.compaction.at_tokens >= 10_000)) return invalid(res, "compaction.at_tokens must be at least 10000");
+      compactionSettings.set(proj.id, { auto: b.compaction.auto, at_tokens: b.compaction.at_tokens });
+    }
     if (b.standing_approval !== undefined && b.standing_approval !== proj.standing_approval) {
       proj.standing_approval = b.standing_approval;
       proj.updated_at = now();
@@ -2000,6 +2019,23 @@ const server = http.createServer(async (req, res) => {
       chat(cid, "assistant", replies[b.command]);
     }, QUIET ? 50 : 500);
     return send(res, 202, { coordinator_id: cid, confirmed: true, accepted_at: now(), command: b.command });
+  }
+
+  if ((r = m(/^\/v1\/coordinators\/([^/]+)\/context$/)) && req.method === "GET") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    return send(res, 200, coordinatorContextOf(proj));
+  }
+  if ((r = m(/^\/v1\/coordinators\/([^/:]+):compact$/)) && req.method === "POST") {
+    const cid = decodeURIComponent(r[1]);
+    if (!chats.has(cid)) return notFound(res);
+    const tokens = coordinatorContextOf(projects.get(cid)).context_tokens ?? 0;
+    setTimeout(() => {
+      const text = `The conversation was compacted at ${Math.round(tokens / 1000)}k tokens`;
+      const c = chat(cid, "compaction", text);
+      lastCompaction.set(cid, { at: c?.ts ?? now(), text });
+    }, QUIET ? 50 : 800);
+    return send(res, 202, { coordinator_id: cid, confirmed: false, accepted_at: now() });
   }
 
   if ((r = m(/^\/v1\/coordinators\/([^/]+)\/messages$/))) {

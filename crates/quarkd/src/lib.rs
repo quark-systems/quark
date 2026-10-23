@@ -10,6 +10,7 @@ pub mod beads;
 pub mod chat;
 pub mod classifier;
 pub mod clear;
+pub mod compaction;
 pub mod config;
 pub mod coordinator_commands;
 pub mod coordinator_hands;
@@ -257,6 +258,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         sessions.clone(),
         quark_transcript::SessionRoots::from_env(),
     ));
+    let compactor = Arc::new(compaction::Compactor::from_env(
+        quark_transcript::SessionRoots::from_env(),
+    ));
     // The native engine's coordinator wakes and acts.
     let (coordinator_routes, coordinator_task) = if native_engine {
         let wiring = native_coordinator::Wiring {
@@ -289,7 +293,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                     coordinator_http::WrapUp {
                         chat: chat_input.clone(),
                         events: events.clone(),
-                        watch: coordinator_commands::ContextWatch::from_env(),
+                        compactor: compactor.clone(),
                     },
                 );
                 (
@@ -330,6 +334,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         forge,
         events,
         triggers,
+        compaction: compactor,
         beads,
     };
     let decision_beads_task = api::spawn_decision_beads(state.clone());

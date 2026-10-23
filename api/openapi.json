@@ -238,6 +238,47 @@
         }
       }
     },
+    "/v1/coordinators/{id}/context": {
+      "get": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "A Project coordinator's harness, model and effort, how full its context\nis, and when its conversation is compacted.",
+        "description": "The context is the input of its last turn's last model call, read from\nits session log; it is unknown before the first turn and after a\ncompaction until the next turn ends. `window_tokens` is absent when\nQuark does not know the model's window.",
+        "operationId": "coordinator_context",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorContext"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/coordinators/{id}/messages": {
       "get": {
         "tags": [
@@ -379,6 +420,57 @@
           },
           "503": {
             "description": "No live coordinator session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/coordinators/{id}:compact": {
+      "post": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Compact a Project coordinator's conversation now.",
+        "description": "Served as `POST /v1/coordinators/{id}:compact`, with no body. Types the\nharness's `/compact` into the coordinator's session, with what the\nsummary must keep, and answers at once: the compaction shows in the\nconversation when the session log records it. No wrap up comes first;\nask for one before when the conversation holds something unsaved.",
+        "operationId": "compact_coordinator",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorMessageAccepted"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Project has no workspace yet",
             "content": {
               "application/json": {
                 "schema": {
@@ -3197,7 +3289,7 @@
           "projects"
         ],
         "summary": "Change Project settings.",
-        "description": "`holdout` turns a source's holdout tests on or off in `project.yaml`, in\none commit on the Project repo's `main` (comments in the file are not\nkept); the engine takes the new gates on the daemon's next refresh.\n`standing_approval` is applied to the engine as `PATCH /v1/projects/{id}`\napplies it. Holdout changes are made first, so a refused one changes\nnothing. Answers the settings as they are now.",
+        "description": "`holdout` turns a source's holdout tests on or off in `project.yaml`, in\none commit on the Project repo's `main` (comments in the file are not\nkept); the engine takes the new gates on the daemon's next refresh.\n`standing_approval` is applied to the engine as `PATCH /v1/projects/{id}`\napplies it. `compaction` takes effect when the coordinator's next turn\nends. Holdout changes are made first, so a refused one changes nothing.\nAnswers the settings as they are now.",
         "operationId": "patch",
         "parameters": [
           {
@@ -3231,7 +3323,7 @@
             }
           },
           "400": {
-            "description": "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`)",
+            "description": "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`), or the compaction threshold is under 10,000 tokens",
             "content": {
               "application/json": {
                 "schema": {
@@ -6176,6 +6268,54 @@
           }
         }
       },
+      "CompactionPhase": {
+        "type": "string",
+        "description": "Where a Quark-run compaction is.",
+        "enum": [
+          "idle",
+          "wrapping_up",
+          "compacting"
+        ]
+      },
+      "CompactionRecord": {
+        "type": "object",
+        "description": "A compaction the coordinator's session log recorded.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339, as the harness recorded it."
+          },
+          "text": {
+            "type": "string",
+            "description": "Who compacted it and at what size, as the conversation shows it."
+          }
+        }
+      },
+      "CompactionSettings": {
+        "type": "object",
+        "description": "When Quark compacts a Project coordinator's conversation. With `auto`\non, a turn that ends with the context at `at_tokens` or more is followed\nby a wrap up, then the harness's `/compact`. With it off, Quark leaves\ncompaction to the harness, which compacts on its own only when the\ncontext window is nearly full.",
+        "required": [
+          "auto",
+          "at_tokens"
+        ],
+        "properties": {
+          "at_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The context size, in tokens, that sets off a compaction.",
+            "minimum": 0
+          },
+          "auto": {
+            "type": "boolean"
+          }
+        }
+      },
       "ConfigIssue": {
         "type": "object",
         "description": "One problem with an agent config.",
@@ -6216,6 +6356,81 @@
         "properties": {
           "command": {
             "$ref": "#/components/schemas/CoordinatorCommand"
+          }
+        }
+      },
+      "CoordinatorContext": {
+        "type": "object",
+        "description": "A Project coordinator's agent and how full its context is, for the\ncoordinator's header.",
+        "required": [
+          "coordinator_id",
+          "compaction",
+          "compacting"
+        ],
+        "properties": {
+          "agent_config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentConfig",
+                "description": "The harness, model, effort and pool it was started with."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "compacting": {
+            "$ref": "#/components/schemas/CompactionPhase",
+            "description": "What Quark is doing about compaction right now."
+          },
+          "compaction": {
+            "$ref": "#/components/schemas/CompactionSettings"
+          },
+          "context_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Tokens in context when its last turn ended. Absent before its first\nturn, and after a compaction until the next turn ends.",
+            "minimum": 0
+          },
+          "coordinator_id": {
+            "type": "string"
+          },
+          "last_compaction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CompactionRecord",
+                "description": "The last time the conversation was compacted, by anyone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "measured_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the turn that `context_tokens` was read from ended."
+          },
+          "model_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model its session log last named, when it differs from or fills\nin the configured one."
+          },
+          "window_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The model's context window, when Quark knows it.",
+            "minimum": 0
           }
         }
       },
@@ -10490,6 +10705,7 @@
           "project_id",
           "standing_approval",
           "delivery",
+          "compaction",
           "verification",
           "dispatch",
           "memory"
@@ -10505,6 +10721,10 @@
                 "type": "null"
               }
             ]
+          },
+          "compaction": {
+            "$ref": "#/components/schemas/CompactionSettings",
+            "description": "When the coordinator's conversation is compacted."
           },
           "delivery": {
             "$ref": "#/components/schemas/DeliveryPolicy",
@@ -12358,7 +12578,8 @@
           "assistant",
           "thinking",
           "tool_call",
-          "tool_result"
+          "tool_result",
+          "compaction"
         ]
       },
       "TriggerRule": {
@@ -12501,6 +12722,17 @@
         "type": "object",
         "description": "Change Project settings. Absent fields are left unchanged.",
         "properties": {
+          "compaction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CompactionSettings",
+                "description": "Change when the coordinator's conversation is compacted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "holdout": {
             "type": "array",
             "items": {

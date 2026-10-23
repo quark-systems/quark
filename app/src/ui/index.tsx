@@ -12,6 +12,7 @@ export { ControlRow, Disclosure, Field, FieldError, FieldHint, Form, FormActions
 export type { OptionCardChoice } from "./form";
 export { FolderPicker } from "./FolderPicker";
 export { ImagePreview } from "./ImagePreview";
+export { UsageMeter } from "./UsageMeter";
 export type { PreviewImage } from "./ImagePreview";
 export { Button, ButtonLink, buttonClass } from "./button";
 export { controlClass } from "./form";

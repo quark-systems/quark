@@ -1,14 +1,26 @@
 //! Pi coding agent session logs: a `session` header line, then entries with a
 //! top-level `type`. `message` entries carry a pi-ai message whose `role` is
 //! `user`, `assistant`, `toolResult`, or one of Pi's own roles; `bashExecution`
-//! is a command the user ran with `!`. Model, thinking-level, compaction,
-//! label and custom entries are bookkeeping.
+//! is a command the user ran with `!`. A `compaction` entry is one
+//! [`TranscriptRole::Compaction`] entry. Model, thinking-level, label and
+//! custom entries are bookkeeping.
 
 use serde_json::Value;
 
 use crate::{entry, str_at, text_of, tool_call, tool_entry, TranscriptEntry, TranscriptRole};
 
 pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
+    if str_at(v, "type") == Some("compaction") {
+        let size = v
+            .get("tokensBefore")
+            .and_then(Value::as_u64)
+            .map(|t| format!(" at {}k tokens", (t + 500) / 1000))
+            .unwrap_or_default();
+        let text = format!("Pi compacted the conversation{size}");
+        return entry(TranscriptRole::Compaction, &text, str_at(v, "timestamp"))
+            .into_iter()
+            .collect();
+    }
     if str_at(v, "type") != Some("message") {
         return Vec::new();
     }

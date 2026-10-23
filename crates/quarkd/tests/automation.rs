@@ -79,6 +79,7 @@ async fn rig(with_triggers: bool) -> Rig {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events,
         triggers: with_triggers.then(|| triggers.engine()),
+        compaction: Default::default(),
         beads: Default::default(),
     });
     let project = store

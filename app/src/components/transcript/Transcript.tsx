@@ -71,7 +71,12 @@ export function Transcript({ items, agent, actions = false, project, children, e
           return (
             <React.Fragment key={t.key}>
               {label && <div className="tx-break" role="separator"><span>{label}</span></div>}
-              <TurnView turn={t} />
+              {t.compaction
+                ? <div className="tx-break tx-compaction" role="separator" data-testid="transcript-compaction"
+                  title={t.compaction.ts ? new Date(t.compaction.ts).toLocaleString() : undefined}>
+                  <span>{t.compaction.text}. What came before is now a summary.</span>
+                </div>
+                : <TurnView turn={t} />}
             </React.Fragment>
           );
         })}

@@ -74,6 +74,7 @@ async fn settings_read_every_switch_and_change_holdout_and_standing_approval() {
         forge: Arc::new(quarkd::forge::StubForge::new()),
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         triggers: None,
+        compaction: Default::default(),
         beads: Default::default(),
     });
 
@@ -181,4 +182,105 @@ async fn settings_read_every_switch_and_change_holdout_and_standing_approval() {
 
     let (status, _) = call(&app, "GET", "/v1/projects/prj_missing/settings", None).await;
     assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn compaction_is_set_in_settings_and_shown_with_the_coordinator_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let harnesses = Arc::new(quarkd::harness::HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        quarkd::harness::HostEnv::default(),
+    ));
+    let chat = Arc::new(quarkd::chat::RecordingInput::new());
+    let app = quarkd::api::router(quarkd::api::AppState {
+        store: store.clone(),
+        engine: Arc::new(StubEngine::new()),
+        harnesses: harnesses.clone(),
+        accounts: Arc::new(quarkd::accounts::Accounts::new(
+            store.clone(),
+            harnesses,
+            Arc::new(quarkd::accounts::StubQuota::new()),
+            &["CLAUDE_CONFIG_DIR"],
+        )),
+        sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
+        layout: quarkd::provision::Layout::new(dir.path()),
+        chat: chat.clone(),
+        forge: Arc::new(quarkd::forge::StubForge::new()),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
+        triggers: None,
+        compaction: Default::default(),
+        beads: Default::default(),
+    });
+    let project = store
+        .create_project(CreateProject {
+            name: "Quark".into(),
+            workspace_path: Some(dir.path().to_string_lossy().into_owned()),
+            agent_config: Some(AgentConfig {
+                harness: "claude-code".into(),
+                model: Some("opus[1m]".into()),
+                effort: Some("high".into()),
+                pool: None,
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let context = format!("/v1/coordinators/{}/context", project.id);
+    let (status, c) = call(&app, "GET", &context, None).await;
+    assert_eq!(status, 200, "{c}");
+    assert_eq!(c["agent_config"]["model"], "opus[1m]");
+    assert_eq!(c["agent_config"]["effort"], "high");
+    assert_eq!(c["window_tokens"], 1_000_000);
+    assert_eq!(c["context_tokens"], Value::Null);
+    assert_eq!(c["compaction"], json!({"auto": true, "at_tokens": 140_000}));
+    assert_eq!(c["compacting"], "idle");
+
+    let settings = format!("/v1/projects/{}/settings", project.id);
+    let (status, e) = call(
+        &app,
+        "PATCH",
+        &settings,
+        Some(json!({"compaction": {"auto": true, "at_tokens": 500}})),
+    )
+    .await;
+    assert_eq!(status, 400, "{e}");
+    let (status, s) = call(
+        &app,
+        "PATCH",
+        &settings,
+        Some(json!({"compaction": {"auto": false, "at_tokens": 300_000}})),
+    )
+    .await;
+    assert_eq!(status, 200, "{s}");
+    assert_eq!(
+        s["compaction"],
+        json!({"auto": false, "at_tokens": 300_000})
+    );
+    let (_, c) = call(&app, "GET", &context, None).await;
+    assert_eq!(
+        c["compaction"],
+        json!({"auto": false, "at_tokens": 300_000})
+    );
+
+    // Compact now types the harness's /compact, with what to keep.
+    let (status, a) = call(
+        &app,
+        "POST",
+        &format!("/v1/coordinators/{}:compact", project.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, 202, "{a}");
+    let (_, c) = call(&app, "GET", &context, None).await;
+    assert_eq!(c["compacting"], "compacting");
+    for _ in 0..50 {
+        if !chat.sent().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let sent = chat.sent();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].1.starts_with("/compact Keep"), "{}", sent[0].1);
 }

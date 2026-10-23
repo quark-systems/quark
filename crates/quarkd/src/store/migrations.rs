@@ -46,6 +46,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     migration!("0019_project_archive"),
     migration!("0020_account_keys"),
     migration!("0021_task_cleared"),
+    migration!("0022_coordinator_compaction"),
 ];
 
 /// The schema version a fully migrated database has.
