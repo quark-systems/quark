@@ -48,6 +48,10 @@ pub struct Config {
     pub ready_timeout: Duration,
     /// How long the screen must stay still to count as ready.
     pub ready_quiet: Duration,
+    /// How long an idle pattern must stay on screen before the brief is
+    /// typed. Kiro draws its composer a moment before it reads input, and
+    /// a paste in that moment is dropped.
+    pub ready_settle: Duration,
     /// No screen change or worker message for this long is reported stale.
     pub stale_after: Duration,
     /// Times in a row the supervisor relaunches a worker whose session
@@ -70,6 +74,7 @@ impl Config {
             size: TermSize::default(),
             ready_timeout: Duration::from_secs(30),
             ready_quiet: Duration::from_millis(1500),
+            ready_settle: Duration::from_millis(1000),
             stale_after: Duration::from_secs(15 * 60),
             max_recoveries: 2,
             exit_grace: Duration::from_secs(3),
@@ -578,21 +583,32 @@ impl Supervisor {
             .ok_or_else(|| CoreError::Backend("launched generation not recorded".into()))
     }
 
-    /// Wait until the agent looks ready for input: an idle pattern is on
-    /// screen, or the screen has something on it and has stopped changing.
+    /// Wait until the agent looks ready for input: an idle pattern has
+    /// stayed on screen for `ready_settle`, or the screen has something on
+    /// it and has stopped changing.
     /// Start-up questions the manifest lists (`launch.dialogs`) are answered
     /// first, and the screen never counts as ready while one shows.
     async fn wait_ready(&self, session: &SessionId, manifest: &HarnessManifest) {
         let deadline = Instant::now() + self.config.ready_timeout;
         let mut last: Option<(u64, Instant)> = None;
+        let mut idle_since: Option<Instant> = None;
         let mut keys = 0;
         while Instant::now() < deadline {
             let Ok(snap) = self.sessions.snapshot(session).await else {
                 return;
             };
             let text = String::from_utf8_lossy(&snap.bytes);
-            match ready::judge(manifest, &snap, &text) {
-                ready::Screen::Idle => return,
+            let screen = ready::judge(manifest, &snap, &text);
+            if screen != ready::Screen::Idle {
+                idle_since = None;
+            }
+            match screen {
+                ready::Screen::Idle => {
+                    let since = *idle_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= self.config.ready_settle {
+                        return;
+                    }
+                }
                 ready::Screen::Answer(key) if keys < MAX_DIALOG_KEYS => {
                     keys += 1;
                     if let Err(e) = self.sessions.input(session, key).await {

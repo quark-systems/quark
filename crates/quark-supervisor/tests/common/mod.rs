@@ -109,6 +109,7 @@ exit = "/exit"
         c.agent_home = Some(self.dir.path().join("agent-home"));
         c.ready_timeout = Duration::from_secs(5);
         c.ready_quiet = Duration::from_millis(200);
+        c.ready_settle = Duration::from_millis(100);
         c.exit_grace = Duration::from_millis(500);
         c
     }

@@ -48,6 +48,10 @@ pub struct Config {
     pub ready_timeout: Duration,
     /// How long the screen must stay still to count as ready.
     pub ready_quiet: Duration,
+    /// How long an idle pattern must stay on screen before the brief is
+    /// typed. Kiro draws its composer a moment before it reads input, and
+    /// a paste in that moment is dropped.
+    pub ready_settle: Duration,
     /// Most bytes of a parent channel read per pass.
     pub channel_chunk: u64,
     pub size: TermSize,
@@ -60,6 +64,7 @@ impl Config {
             max_recoveries: 3,
             ready_timeout: Duration::from_secs(30),
             ready_quiet: Duration::from_millis(1500),
+            ready_settle: Duration::from_millis(1000),
             channel_chunk: 64 * 1024,
             size: TermSize::default(),
         }
@@ -815,11 +820,13 @@ impl SubCoordinators {
         Ok(generation)
     }
 
-    /// Wait until the screen shows an idle pattern or settles.
+    /// Wait until the screen has shown an idle pattern for `ready_settle`,
+    /// or settles.
     async fn wait_ready(&self, sessions: &dyn SessionBackend, id: &SessionId, m: &HarnessManifest) {
         let start = Instant::now();
         let mut last = Vec::new();
         let mut still = Instant::now();
+        let mut idle_since: Option<Instant> = None;
         while start.elapsed() < self.config.ready_timeout {
             if let Ok(snap) = sessions.snapshot(id).await {
                 let screen = String::from_utf8_lossy(&snap.bytes);
@@ -828,7 +835,12 @@ impl SubCoordinators {
                     .iter()
                     .any(|p| screen.contains(p.as_str()))
                 {
-                    return;
+                    let since = *idle_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= self.config.ready_settle {
+                        return;
+                    }
+                } else {
+                    idle_since = None;
                 }
                 if snap.bytes != last {
                     last = snap.bytes;
