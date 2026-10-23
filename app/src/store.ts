@@ -32,6 +32,8 @@ export interface AppState {
   prsAvailable: boolean | null;
   /** Count of `pr.updated`, `check.updated`, `review.updated` and `comment.updated` events per PR, so views can refetch it. */
   prActivity: Record<string, number>;
+  /** Merges started from the app, by PR id: running, or how the last one ended. Outlives the PR view. */
+  merges: Record<string, MergeAttempt>;
   /** Accounts per harness by id, in the daemon's order (`order`). */
   accounts: Record<string, Account>;
   accountOrder: string[];
@@ -54,7 +56,7 @@ export const NOTICES_KEPT = 50;
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
   projects: {}, tasks: {}, decisions: {}, rules: {}, memoryProposals: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
-  pullRequests: {}, prsAvailable: null, prActivity: {},
+  pullRequests: {}, prsAvailable: null, prActivity: {}, merges: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
   beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null, notices: [],
 };
@@ -372,6 +374,25 @@ export async function refreshPullRequest(id: string) {
   const pr = await api.pullRequest(id);
   set({ pullRequests: { ...state.pullRequests, [pr.id]: pr } });
   return pr;
+}
+
+/** A merge from the app: running until `note` says how it ended. */
+export interface MergeAttempt { busy: boolean; note: { ok: boolean; text: string } | null }
+
+/** Merges `id` through the daemon and keeps the outcome in the store, so leaving the PR view loses neither. */
+export async function mergePullRequest(id: string) {
+  const mark = (m: MergeAttempt) => set({ merges: { ...state.merges, [id]: m } });
+  mark({ busy: true, note: null });
+  try {
+    const merged = await api.mergePullRequest(id);
+    if (merged && typeof merged === "object") setPullRequest(merged);
+    else await refreshPullRequest(id).catch(() => undefined);
+    mark({ busy: false, note: { ok: true, text: "Merged" } });
+  } catch (e) {
+    const text = e instanceof NotAvailable ? "Merging is not available from this daemon yet"
+      : `Not merged: ${(e instanceof Error ? e.message : String(e)).replace(/^merge refused: /, "")}`;
+    mark({ busy: false, note: { ok: false, text } });
+  }
 }
 
 export function setPullRequest(pr: PullRequest) {

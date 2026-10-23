@@ -368,8 +368,23 @@ test("PR center: list by state, checks, line comment, merge, standing approval",
   await prDiff.getByRole("button", { name: "Expand all files" }).click();
   await expect(prDiff.locator("table.diff").first()).toBeVisible();
 
+  // A refused merge says why in full, even in a narrow window; merging again goes through.
+  await page.evaluate(() => fetch("http://127.0.0.1:7392/mock/pull-requests/pr-1/behind", { method: "POST" }));
+  await page.setViewportSize({ width: 900, height: 900 });
+  // Leaving the PR while it merges loses neither the merge nor its result.
+  await page.getByTestId("merge").click();
+  await expect(page.getByTestId("merge")).toHaveText("Merging…");
+  await page.locator(".header a.crumb").click();
+  await expect(page).toHaveURL(/#\/prs$/);
+  await page.goBack();
+  const result = page.getByTestId("merge-result");
+  await expect(result).toHaveText("Not merged: 9f1e2d3c4b did not contain main's tip, so it was rebased and pushed as 4c3b2a1f9e; the gates passed on it, so merge again once its checks pass (409)");
+  await expect(result).toBeInViewport({ ratio: 1 });
+  expect(await result.evaluate((el) => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 1400, height: 900 });
   await page.getByTestId("merge").click();
   await expect(page.getByTestId("pr-state")).toHaveText("Merged");
+  await expect(result).toHaveCount(0);
 
   // A PR with failing checks cannot be merged; the reason is shown.
   await page.goto("/?daemon=http://127.0.0.1:7392#/pr/pr-2");
