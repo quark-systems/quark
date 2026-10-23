@@ -51,7 +51,7 @@ A `404` with an `ErrorBody` is a real "not found".
 - **Transcripts.** Entries are keyed by `id`, the `seq` of the event that carried them; live `worker.transcript` and `coordinator.message` events use the event's `seq`.
 - **Terminals.** The terminal id of a worker is its task id.
   To open one, the app, already subscribed to the event stream, calls `POST /v1/terminals/{id}/snapshot`, applies the returned event, then applies that terminal's `worker.output` events with a greater `seq`.
-  A `snapshot` chunk resets the emulator to its `cols` x `rows` and redraws.
+  A `snapshot` chunk resizes the emulator to its `cols` x `rows` and redraws the screen; the app swaps the snapshot's leading full reset for a soft one, so the view keeps its scrollback when quarkd repaints after pruning old output or for another view.
   Input is serialized per terminal, one request in flight, without the optional `seq`.
   A `503` with code `unavailable` means the daemon has no tmux, and the panel says so.
 - **Changes.** The file list refetches when the task changes state and on each `task.event` for it.

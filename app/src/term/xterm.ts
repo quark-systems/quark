@@ -41,10 +41,7 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
       }
     },
     write(bytes) { term.write(bytes); },
-    reset(cols, rows) {
-      term.reset();
-      if (cols && rows && (cols !== term.cols || rows !== term.rows)) term.resize(cols, rows);
-    },
+    resize(cols, rows) { if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows); },
     // A hidden terminal (another work-pane tab is showing) keeps its size until it is shown again.
     fit() { if (!el?.offsetWidth) return; try { fit.fit(); } catch { /* not laid out */ } },
     focus() { term.focus(); },

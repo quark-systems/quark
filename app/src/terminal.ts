@@ -4,10 +4,12 @@
 //
 // Opening follows quarkd's terminal contract: with the event stream already subscribed, ask
 // for a snapshot (an appended `worker.output` event of kind "snapshot"), apply it, then apply
-// only that terminal's events with a greater `seq`. A snapshot arriving later (a resync)
-// resets the emulator to its size and redraws.
+// only that terminal's events with a greater `seq`. A snapshot arriving later (a resync, or a
+// repaint after quarkd pruned old output) resizes the emulator and redraws the screen, keeping the
+// scrollback the view already has.
 import { api, ApiError, b64ToBytes, NotAvailable, Terminal, TerminalOutput } from "./api";
 import { onOutput } from "./store";
+import { keepScrollback } from "./term/repaint";
 import { AdapterOptions, TermAdapter, TERM_FONT } from "./term/types";
 import { cssVar } from "./theme";
 
@@ -52,10 +54,12 @@ function setStatus(h: TermHandle, status: TermStatus, error: string | null = nul
   h.onStatus.forEach((f) => f());
 }
 
-/** Writes one chunk; a snapshot first resets the emulator to the snapshot's size. */
+/** Writes one chunk; a snapshot first sizes the emulator to the snapshot and keeps its scrollback. */
 export function applyChunk(a: TermAdapter, c: TerminalOutput) {
-  if (c.kind === "snapshot") a.reset(c.cols ?? undefined, c.rows ?? undefined);
-  a.write(b64ToBytes(c.data_b64));
+  const bytes = b64ToBytes(c.data_b64);
+  if (c.kind !== "snapshot") return a.write(bytes);
+  if (c.cols && c.rows) a.resize(c.cols, c.rows);
+  a.write(keepScrollback(bytes));
 }
 
 async function open(h: TermHandle) {
