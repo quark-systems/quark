@@ -21,10 +21,12 @@ use quark_harness::ManifestRegistry;
 use quark_sessions::pty::PtySupervisor;
 use quark_systems::{
     AgentConfig, CreateProject, DeliveryPolicy, DispatchStatus, EventType, ProjectStatus,
-    TaskState, TerminalChunkKind, TerminalOutput,
+    SwitchKind, SwitchState, TaskState, TerminalChunkKind, TerminalOutput, TranscriptEntry,
+    TranscriptRole,
 };
 use quark_transcript::SessionRoots;
 use quarkd::accounts::{Accounts, StubQuota};
+use quarkd::chat::RecordingInput;
 use quarkd::engine::native::NativeEngine;
 use quarkd::engine::native_dispatch_engine::{DispatchParts, NativeDispatch};
 use quarkd::engine::native_project::{ProjectSetup, WINDOW_PREFIX};
@@ -37,7 +39,8 @@ use quarkd::projector::Projector;
 use quarkd::provision::Layout;
 use quarkd::recovery::CoordinatorRecovery;
 use quarkd::sessions::{pty, Sessions};
-use quarkd::store::Store;
+use quarkd::store::{Store, TranscriptSource};
+use quarkd::switch::Switches;
 
 fn ws(env: &Env) -> WorkspaceRef {
     WorkspaceRef {
@@ -856,6 +859,166 @@ async fn creates_a_project_and_recovers_its_coordinator_with_no_firstmate() {
     adopting.pass().await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(starts(dir, 3).await.len(), 3);
+
+    sessions.detach_all();
+    server.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn switches_a_coordinators_agent_resumed_and_by_handoff() {
+    if !tmux_installed() {
+        eprintln!("tmux is not installed; skipping");
+        return;
+    }
+    let env = Env::new();
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let dir = env.dir.path();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let sessions = Sessions::new("tmux", dir.join("run"), store.clone()).unwrap();
+    let server = sessions.server().unwrap().clone();
+    let layout = Layout::new(dir.join("home"));
+    let setup = ProjectSetup::new(sessions.clone(), layout.clone(), "http://127.0.0.1:1")
+        .with_agent_home(dir.join("agent-home"))
+        .with_manifests(fake_claude(dir))
+        .with_roots(SessionRoots {
+            claude: vec![dir.join("claude")],
+            ..Default::default()
+        });
+    let engine = Arc::new(NativeEngine::new(env.log(), sup).with_project_setup(Arc::new(setup)));
+    let agent = |model: &str| AgentConfig {
+        harness: "claude-code".into(),
+        model: Some(model.into()),
+        effort: None,
+        pool: None,
+    };
+    let project = store
+        .create_project(CreateProject {
+            name: "p".into(),
+            agent_config: Some(agent("sonnet")),
+            ..Default::default()
+        })
+        .unwrap();
+    let command = layout.command_workspace();
+    let root = layout.workspace(&project.id);
+    std::fs::create_dir_all(&root).unwrap();
+    let ws = WorkspaceRef {
+        project_id: project.id.clone(),
+        root: root.clone(),
+    };
+    engine
+        .start_coordinator(&command, &ws, &agent("sonnet"), &[], false)
+        .await
+        .unwrap();
+    assert_eq!(starts(dir, 1).await.len(), 1);
+    store
+        .set_project_status(
+            &project.id,
+            ProjectStatus::Ready,
+            None,
+            Some(&root.display().to_string()),
+            None,
+        )
+        .unwrap();
+    let chat = Arc::new(RecordingInput::new());
+    let switches = Switches::new(
+        store.clone(),
+        engine.clone(),
+        Arc::new(Accounts::new(
+            store.clone(),
+            Arc::new(HarnessRegistry::builtin()),
+            Arc::new(StubQuota::new()),
+            engine.account_envs(),
+        )),
+        sessions.clone(),
+        chat.clone(),
+        command.clone(),
+        layout.home.clone(),
+    )
+    .with_timeouts(Duration::from_secs(300), Duration::ZERO);
+
+    // Same harness: one pass closes the old window and starts the new
+    // model. It has no conversation to resume, so it starts fresh with a
+    // handoff file.
+    let s = store
+        .start_switch(&project.id, &agent("opus"), SwitchKind::Resume)
+        .unwrap();
+    switches.pass().await;
+    let all = starts(dir, 2).await;
+    assert!(all[1].contains("opus"), "{}", all[1]);
+    let done = store.latest_switch(&project.id).unwrap().unwrap();
+    assert_eq!(
+        (done.id.as_str(), done.state),
+        (s.id.as_str(), SwitchState::Done)
+    );
+    assert_eq!(
+        store.get_project(&project.id).unwrap().agent_config,
+        Some(agent("opus"))
+    );
+    let sent = chat.sent();
+    assert!(
+        sent.last().unwrap().1.contains("same conversation"),
+        "{sent:?}"
+    );
+    let handoff = root.join(".quark/handoff.md");
+    assert!(handoff.is_file());
+
+    // A handoff: the running coordinator is asked to wrap up first, and the
+    // switch waits for its turn to end.
+    let s = store
+        .start_switch(&project.id, &agent("haiku"), SwitchKind::Handoff)
+        .unwrap();
+    switches.pass().await;
+    assert_eq!(
+        store.latest_switch(&project.id).unwrap().unwrap().state,
+        SwitchState::WrappingUp
+    );
+    assert!(chat.sent().last().unwrap().1.contains("Handoff brief:"));
+    assert_eq!(
+        store.switching_projects().unwrap(),
+        vec![project.id.clone()]
+    );
+    switches.pass().await;
+    assert_eq!(starts(dir, 2).await.len(), 2);
+    let said = TranscriptEntry {
+        role: TranscriptRole::Assistant,
+        text: "Handoff brief: fixing the login bug for Matt.".into(),
+        tool_name: None,
+        tool_call_id: None,
+        is_error: false,
+        truncated: false,
+        ts: None,
+        tool: None,
+    };
+    store
+        .apply_transcript(
+            &project.id,
+            &TranscriptSource::Coordinator {
+                project_id: project.id.clone(),
+            },
+            "/log",
+            1,
+            &[said],
+        )
+        .unwrap();
+    store.switch_turn_ended(&project.id).unwrap();
+    switches.pass().await;
+    let all = starts(dir, 3).await;
+    assert!(all[2].contains("haiku"), "{}", all[2]);
+    let done = store.latest_switch(&project.id).unwrap().unwrap();
+    assert_eq!(
+        (done.id.as_str(), done.state),
+        (s.id.as_str(), SwitchState::Done)
+    );
+    assert_eq!(
+        done.brief.as_deref(),
+        Some("Handoff brief: fixing the login bug for Matt.")
+    );
+    let text = std::fs::read_to_string(&handoff).unwrap();
+    assert!(text.contains("fixing the login bug"), "{text}");
+    let prompt = std::fs::read_to_string(root.join(".quark/coordinator.md")).unwrap();
+    assert!(prompt.contains("fixing the login bug"));
+    assert!(chat.sent().last().unwrap().1.contains("Read the handoff"));
+    assert!(store.switching_projects().unwrap().is_empty());
 
     sessions.detach_all();
     server.kill().await;

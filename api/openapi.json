@@ -238,6 +238,77 @@
         }
       }
     },
+    "/v1/coordinators/{id}/agent": {
+      "put": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Change a Project coordinator's harness, model, effort or pool.",
+        "description": "Starts a switch and answers at once; `GET /v1/coordinators/{id}/context`\nshows how far it got under `switch`. On the same harness the coordinator\ncontinues its conversation with the new agent (`resume`). On another\nharness the old coordinator first writes a handoff brief, then the new\none starts fresh with it (`handoff`). A new agent that does not start\nputs the old one back. See `docs/engine/coordinator-switch.md`.",
+        "operationId": "switch_coordinator_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorSwitch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The agent cannot run a coordinator, or is the one it runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A switch is under way, or the Project has no running coordinator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/coordinators/{id}/context": {
       "get": {
         "tags": [
@@ -3323,7 +3394,7 @@
             }
           },
           "400": {
-            "description": "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`), or the compaction threshold is under 10,000 tokens",
+            "description": "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`), or the compaction threshold is outside 10% to 95%",
             "content": {
               "application/json": {
                 "schema": {
@@ -6299,16 +6370,16 @@
       },
       "CompactionSettings": {
         "type": "object",
-        "description": "When Quark compacts a Project coordinator's conversation. With `auto`\non, a turn that ends with the context at `at_tokens` or more is followed\nby a wrap up, then the harness's `/compact`. With it off, Quark leaves\ncompaction to the harness, which compacts on its own only when the\ncontext window is nearly full.",
+        "description": "When Quark compacts a Project coordinator's conversation. With `auto`\non, a turn that ends with the context at `at_percent` of the model's\nwindow or more (of 200k when the window is unknown) is followed\nby a wrap up, then the harness's `/compact`. With it off, Quark leaves\ncompaction to the harness, which compacts on its own only when the\ncontext window is nearly full.",
         "required": [
           "auto",
-          "at_tokens"
+          "at_percent"
         ],
         "properties": {
-          "at_tokens": {
+          "at_percent": {
             "type": "integer",
-            "format": "int64",
-            "description": "The context size, in tokens, that sets off a compaction.",
+            "format": "int32",
+            "description": "How full the context window is, in percent, when a compaction starts.",
             "minimum": 0
           },
           "auto": {
@@ -6379,6 +6450,15 @@
               }
             ]
           },
+          "compact_at_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The context size, in tokens, at which it compacts: `at_percent` of\nthe window. Absent when automatic compaction is off.",
+            "minimum": 0
+          },
           "compacting": {
             "$ref": "#/components/schemas/CompactionPhase",
             "description": "What Quark is doing about compaction right now."
@@ -6422,6 +6502,17 @@
               "null"
             ],
             "description": "The model its session log last named, when it differs from or fills\nin the configured one."
+          },
+          "switch": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CoordinatorSwitch",
+                "description": "The latest change of its agent, under way or finished."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "window_tokens": {
             "type": [
@@ -6495,6 +6586,66 @@
             "format": "int32",
             "description": "Tasks seen in the window, the divisor of the per-task figures.",
             "minimum": 0
+          }
+        }
+      },
+      "CoordinatorSwitch": {
+        "type": "object",
+        "description": "A change of a coordinator's harness, model, effort or pool, and how far\nit got. See `docs/engine/coordinator-switch.md`.",
+        "required": [
+          "id",
+          "project_id",
+          "to",
+          "kind",
+          "state",
+          "requested_at",
+          "updated_at"
+        ],
+        "properties": {
+          "brief": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the old coordinator wrote for the new one (handoff only)."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed."
+          },
+          "from": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SwitchKind"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_at": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SwitchState"
+          },
+          "to": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "updated_at": {
+            "type": "string"
           }
         }
       },
@@ -11671,6 +11822,27 @@
         "enum": [
           "high",
           "low"
+        ]
+      },
+      "SwitchKind": {
+        "type": "string",
+        "description": "How the conversation carries over.",
+        "enum": [
+          "resume",
+          "handoff"
+        ]
+      },
+      "SwitchState": {
+        "type": "string",
+        "description": "A switch's step. Each is recorded before its effect happens.",
+        "enum": [
+          "requested",
+          "wrapping_up",
+          "switching",
+          "starting",
+          "briefing",
+          "done",
+          "failed"
         ]
       },
       "SyncDirection": {

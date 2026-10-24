@@ -1,10 +1,11 @@
 // The coordinator header's agent and context meter: which harness, model and effort the
 // coordinator runs, and how full its context is, like the plan usage popover in Claude.
-// The popover says when it compacts, when it last did, and compacts on request.
+// The popover says when it compacts, when it last did, and compacts on request. It shows a
+// change of agent under way, and links to Settings › Agent to make one.
 import { useCallback, useEffect, useState } from "react";
 import { Popover } from "radix-ui";
 import { api, CoordinatorContext as Context, NotAvailable } from "../api";
-import { agentLine, compactionLine, contextLine, fullness, tokens } from "../coordinatorContext";
+import { agentLine, compactionLine, contextLine, fullness, switching, switchLine, tokens } from "../coordinatorContext";
 import { href } from "../nav";
 import { ago, errText } from "../util";
 import { Button, buttonClass, UsageMeter } from "../ui";
@@ -36,7 +37,7 @@ export function CoordinatorContext({ cid, changed }: { cid: string; changed?: un
   const agent = agentLine(ctx);
   const used = ctx.context_tokens ?? 0;
   const max = ctx.window_tokens ?? 0;
-  const mark = ctx.compaction.auto ? ctx.compaction.at_tokens : undefined;
+  const mark = ctx.compact_at_tokens ?? undefined;
   const compact = async () => {
     setBusy(true); setNote(null);
     try {
@@ -47,7 +48,7 @@ export function CoordinatorContext({ cid, changed }: { cid: string; changed?: un
   };
   return (
     <span className="coord-context">
-      <span className="coord-agent" data-testid="coordinator-agent" title="Harness, model and effort, chosen when the project was created">
+      <span className="coord-agent" data-testid="coordinator-agent" title="Harness, model and effort; change them in Settings › Agent">
         {agent.harness} · {agent.model} · {agent.effort}
       </span>
       <Popover.Root onOpenChange={(o) => { if (o) load(); else setNote(null); }}>
@@ -79,6 +80,9 @@ export function CoordinatorContext({ cid, changed }: { cid: string; changed?: un
             <div className="flex flex-col gap-0.5 border-t border-line pt-3">
               <span className="text-xs text-faint">Agent</span>
               <span>{agent.harness}, {agent.model}, {agent.effort}{ctx.agent_config?.pool ? `, pool ${ctx.agent_config.pool}` : ""}</span>
+              {ctx.switch && (switching(ctx.switch) || ctx.switch.state === "failed") &&
+                <span className="text-dim" data-testid="context-switch">{switchLine(ctx.switch)}</span>}
+              <a className="text-accent" href={href({ name: "settings", project: cid })}>Change agent</a>
             </div>
             <div className="flex items-center gap-2">
               <Button disabled={busy || ctx.compacting !== "idle"} onClick={() => void compact()} data-testid="compact-now"

@@ -354,7 +354,7 @@ function metricsOf(proj, days) {
 }
 // The coordinator's compaction settings and context, per project (quarkd's compaction.rs).
 const compactionSettings = new Map();
-const compactionOf = (pid) => compactionSettings.get(pid) ?? { auto: true, at_tokens: 140_000 };
+const compactionOf = (pid) => compactionSettings.get(pid) ?? { auto: true, at_percent: 70 };
 const lastCompaction = new Map();
 function coordinatorContextOf(proj) {
   const used = 40_000 + (chats.get(proj.id)?.length ?? 0) * 1_500;
@@ -364,8 +364,26 @@ function coordinatorContextOf(proj) {
     coordinator_id: proj.id, agent_config: proj.agent_config,
     model_seen: proj.agent_config?.model ? null : codex ? "gpt-5-codex" : "claude-opus-5-5",
     context_tokens: compacted && Date.now() - Date.parse(compacted.at) < 30_000 ? null : used, window_tokens: codex ? 272_000 : 200_000,
-    measured_at: now(), compaction: compactionOf(proj.id), compacting: "idle", last_compaction: compacted ?? null,
+    measured_at: now(), compaction: compactionOf(proj.id),
+    compact_at_tokens: compactionOf(proj.id).auto ? Math.round((codex ? 272_000 : 200_000) * compactionOf(proj.id).at_percent / 100) : null,
+    compacting: "idle", last_compaction: compacted ?? null, switch: switches.get(proj.id) ?? null,
   };
+}
+// Changes of a coordinator's agent (quarkd's switch.rs): each step a moment after the last.
+const switches = new Map();
+const sameAgent = (a, b) => ["harness", "model", "effort", "pool"].every((k) => (a?.[k] ?? null) === (b?.[k] ?? null));
+function startSwitch(proj, to) {
+  const kind = proj.agent_config?.harness === to.harness ? "resume" : "handoff";
+  const sw = { id: `sw_${Date.now()}`, project_id: proj.id, from: proj.agent_config ?? null, to, kind, state: "requested",
+    brief: null, error: null, requested_at: now(), updated_at: now() };
+  switches.set(proj.id, sw);
+  const steps = kind === "handoff" ? ["wrapping_up", "switching", "starting", "briefing", "done"] : ["switching", "starting", "briefing", "done"];
+  steps.forEach((state, i) => setTimeout(() => {
+    sw.state = state; sw.updated_at = now();
+    if (state === "switching") { proj.agent_config = to; emit("project.updated", { ...proj }, proj.id); }
+    if (state === "done") chat(proj.id, "assistant", kind === "resume" ? "Carrying on with the new model." : "I took over from the previous coordinator.");
+  }, (QUIET ? 40 : 600) * (i + 1)));
+  return sw;
 }
 function settingsOf(proj) {
   const rules = rulesOf(proj);
@@ -1576,8 +1594,9 @@ const server = http.createServer(async (req, res) => {
       if (changed) v.revision = hex40();
     }
     if (b.compaction) {
-      if (typeof b.compaction.auto !== "boolean" || !(b.compaction.at_tokens >= 10_000)) return invalid(res, "compaction.at_tokens must be at least 10000");
-      compactionSettings.set(proj.id, { auto: b.compaction.auto, at_tokens: b.compaction.at_tokens });
+      const pct = b.compaction.at_percent;
+      if (typeof b.compaction.auto !== "boolean" || !Number.isInteger(pct) || pct < 10 || pct > 95) return invalid(res, "compaction.at_percent must be from 10 to 95");
+      compactionSettings.set(proj.id, { auto: b.compaction.auto, at_percent: pct });
     }
     if (b.standing_approval !== undefined && b.standing_approval !== proj.standing_approval) {
       proj.standing_approval = b.standing_approval;
@@ -2025,6 +2044,22 @@ const server = http.createServer(async (req, res) => {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);
     return send(res, 200, coordinatorContextOf(proj));
+  }
+  if ((r = m(/^\/v1\/coordinators\/([^/]+)\/agent$/)) && req.method === "PUT") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const b = await readJson(req);
+    const blank = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+    const to = { harness: b?.harness === "claude" ? "claude-code" : b?.harness, model: blank(b?.model), effort: blank(b?.effort), pool: blank(b?.pool) };
+    if (to.harness !== "claude-code") {
+      return invalid(res, `the native coordinator runs on claude-code only so far (its tools and turn-end hook are wired for it alone), not ${to.harness}`);
+    }
+    const open = switches.get(proj.id);
+    if (open && open.state !== "done" && open.state !== "failed") {
+      return send(res, 409, { error: { code: "conflict", message: "the coordinator is already switching agents" } });
+    }
+    if (sameAgent(proj.agent_config, to)) return invalid(res, "the coordinator already runs this agent");
+    return send(res, 202, startSwitch(proj, to));
   }
   if ((r = m(/^\/v1\/coordinators\/([^/:]+):compact$/)) && req.method === "POST") {
     const cid = decodeURIComponent(r[1]);

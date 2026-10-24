@@ -125,10 +125,21 @@ impl CoordinatorRecovery {
                 return;
             }
         };
+        // A switch's driver owns its coordinator until the switch ends.
+        let store = self.store.clone();
+        let switching: HashSet<String> =
+            match tokio::task::spawn_blocking(move || store.switching_projects()).await {
+                Ok(Ok(p)) => p.into_iter().collect(),
+                res => {
+                    tracing::warn!(?res, "coordinator recovery could not read open switches");
+                    return;
+                }
+            };
         let ready: Vec<Project> = projects
             .into_iter()
             .filter(|p| {
-                p.status == ProjectStatus::Ready
+                !switching.contains(&p.id)
+                    && p.status == ProjectStatus::Ready
                     && p.workspace_path.is_some()
                     && p.agent_config.is_some()
             })

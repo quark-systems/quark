@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { CoordinatorContext } from "./api";
-import { agentLine, compactionLine, contextLine, fullness, tokens } from "./coordinatorContext";
+import type { CoordinatorContext, CoordinatorSwitch } from "./api";
+import { agentLine, compactionLine, contextLine, fullness, switching, switchLine, tokens } from "./coordinatorContext";
 
 const ctx = (c: Partial<CoordinatorContext> = {}): CoordinatorContext => ({
   coordinator_id: "p",
   agent_config: { harness: "claude-code", model: "opus", effort: "high", pool: null },
   context_tokens: 46_000, window_tokens: 200_000,
-  compaction: { auto: true, at_tokens: 140_000 }, compacting: "idle",
+  compaction: { auto: true, at_percent: 70 }, compact_at_tokens: 140_000, compacting: "idle",
   ...c,
 });
 
@@ -31,8 +31,19 @@ describe("coordinator context", () => {
     expect(contextLine(ctx({ context_tokens: null, last_compaction: { text: "x" } }))).toMatch(/since it was compacted/);
   });
   it("says what happens about compaction", () => {
-    expect(compactionLine(ctx())).toBe("Compacts at 140k tokens, after a wrap up.");
-    expect(compactionLine(ctx({ compaction: { auto: false, at_tokens: 140_000 } }))).toMatch(/^Automatic compaction is off\. Claude Code compacts/);
+    expect(compactionLine(ctx())).toBe("Compacts when the context is 70% full (140k tokens), after a wrap up.");
+    expect(compactionLine(ctx({ compaction: { auto: false, at_percent: 70 }, compact_at_tokens: null }))).toMatch(/^Automatic compaction is off\. Claude Code compacts/);
     expect(compactionLine(ctx({ compacting: "wrapping_up" }))).toBe("Wrapping up, then compacting.");
+  });
+  it("says how far a change of agent got", () => {
+    const sw = (c: Partial<CoordinatorSwitch>): CoordinatorSwitch => ({
+      id: "sw_1", project_id: "p", from: { harness: "claude-code", model: "sonnet" }, to: { harness: "claude-code", model: "opus", effort: "high" },
+      kind: "resume", state: "requested", requested_at: "t", updated_at: "t", ...c,
+    });
+    expect(switching(sw({}))).toBe(true);
+    expect(switching(sw({ state: "failed" }))).toBe(false);
+    expect(switchLine(sw({ state: "wrapping_up", kind: "handoff" }))).toBe("Changing to Claude Code, opus, high effort. The coordinator is saving its work and writing a handoff.");
+    expect(switchLine(sw({ state: "done" }))).toBe("Changed from Claude Code, sonnet, default effort to Claude Code, opus, high effort, in the same conversation.");
+    expect(switchLine(sw({ state: "failed", error: "no account" }))).toBe("Could not change to Claude Code, opus, high effort: no account. The coordinator kept Claude Code, sonnet, default effort.");
   });
 });

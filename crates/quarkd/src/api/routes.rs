@@ -110,26 +110,7 @@ pub(super) async fn create_and_provision(
 ) -> Result<Project, ApiError> {
     let input = provision::normalize(input).map_err(ApiError::invalid)?;
     if let Some(agent) = &input.agent_config {
-        let check = state.harnesses.validate(agent, AgentRole::Coordinator);
-        if !check.valid {
-            let msgs: Vec<_> = check.errors.into_iter().map(|e| e.message).collect();
-            return Err(ApiError::invalid(format!(
-                "agent_config: {}",
-                msgs.join("; ")
-            )));
-        }
-        if let Some(pool) = &agent.pool {
-            let accounts = state.accounts.list().await?;
-            if !accounts
-                .iter()
-                .any(|a| a.harness == agent.harness && a.pools.contains(pool))
-            {
-                return Err(ApiError::invalid(format!(
-                    "agent_config: pool `{pool}` has no {} accounts",
-                    agent.harness
-                )));
-            }
-        }
+        check_coordinator_agent(state, agent).await?;
     }
     let project = db(state, move |s| s.create_project(input)).await?;
     if project.status == ProjectStatus::Provisioning {
@@ -1207,6 +1188,104 @@ pub async fn coordinator_context(
     ))
 }
 
+/// Whether `agent` can run a coordinator, and its pool has accounts.
+async fn check_coordinator_agent(
+    state: &AppState,
+    agent: &quark_systems::AgentConfig,
+) -> Result<(), ApiError> {
+    let check = state.harnesses.validate(agent, AgentRole::Coordinator);
+    if !check.valid {
+        let msgs: Vec<_> = check.errors.into_iter().map(|e| e.message).collect();
+        return Err(ApiError::invalid(format!(
+            "agent_config: {}",
+            msgs.join("; ")
+        )));
+    }
+    if let Some(pool) = &agent.pool {
+        let accounts = state.accounts.list().await?;
+        if !accounts
+            .iter()
+            .any(|a| a.harness == agent.harness && a.pools.contains(pool))
+        {
+            return Err(ApiError::invalid(format!(
+                "agent_config: pool `{pool}` has no {} accounts",
+                agent.harness
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Change a Project coordinator's harness, model, effort or pool.
+///
+/// Starts a switch and answers at once; `GET /v1/coordinators/{id}/context`
+/// shows how far it got under `switch`. On the same harness the coordinator
+/// continues its conversation with the new agent (`resume`). On another
+/// harness the old coordinator first writes a handoff brief, then the new
+/// one starts fresh with it (`handoff`). A new agent that does not start
+/// puts the old one back. See `docs/engine/coordinator-switch.md`.
+#[utoipa::path(
+    put,
+    path = "/v1/coordinators/{id}/agent",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    request_body = quark_systems::AgentConfig,
+    responses(
+        (status = 202, body = quark_systems::CoordinatorSwitch),
+        (status = 400, description = "The agent cannot run a coordinator, or is the one it runs", body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "A switch is under way, or the Project has no running coordinator", body = ErrorBody)
+    )
+)]
+pub async fn switch_coordinator_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(mut to): Json<quark_systems::AgentConfig>,
+) -> Result<(StatusCode, Json<quark_systems::CoordinatorSwitch>), ApiError> {
+    use crate::engine::native_project::COORDINATOR_HARNESS;
+    if !state.engine.switches_coordinators() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unsupported",
+            "only the native engine can change a coordinator's agent",
+        ));
+    }
+    // Blank model or effort means the harness's default.
+    to.model = to.model.filter(|m| !m.trim().is_empty());
+    to.effort = to.effort.filter(|e| !e.trim().is_empty());
+    to.pool = to.pool.filter(|p| !p.trim().is_empty());
+    check_coordinator_agent(&state, &to).await?;
+    let harness = |name: &str| state.harnesses.resolve(name).map(|h| h.id().to_string());
+    let to_harness = harness(&to.harness);
+    if to_harness.as_deref() != Some(COORDINATOR_HARNESS) {
+        return Err(ApiError::invalid(format!(
+            "the native coordinator runs on {COORDINATOR_HARNESS} only so far \
+             (its tools and turn-end hook are wired for it alone), not {}",
+            to.harness
+        )));
+    }
+    let pid = id.clone();
+    let project = db(&state, move |s| s.get_project(&pid)).await?;
+    if project.status != ProjectStatus::Ready || project.workspace_path.is_none() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not_ready",
+            "the Project has no running coordinator to switch",
+        ));
+    }
+    let same = project
+        .agent_config
+        .as_ref()
+        .is_some_and(|a| harness(&a.harness) == to_harness);
+    let kind = if same {
+        quark_systems::SwitchKind::Resume
+    } else {
+        quark_systems::SwitchKind::Handoff
+    };
+    let switch = db(&state, move |s| s.start_switch(&id, &to, kind)).await?;
+    Ok((StatusCode::ACCEPTED, Json(switch)))
+}
+
 /// Compact a Project coordinator's conversation now.
 ///
 /// Served as `POST /v1/coordinators/{id}:compact`, with no body. Types the
@@ -1338,7 +1417,8 @@ async fn run_command(
         send_coordinator_message,
         run_coordinator_command,
         coordinator_context,
-        compact_coordinator
+        compact_coordinator,
+        switch_coordinator_agent
     ),
     components(schemas(
         quark_systems::TaskState,
@@ -1363,7 +1443,7 @@ pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.
 pub(super) fn router() -> axum::Router<AppState> {
-    use axum::routing::{get, post};
+    use axum::routing::{get, post, put};
     axum::Router::new()
         .route("/v1/health", get(health))
         .route("/v1/projects", get(list_projects).post(create_project))
@@ -1399,6 +1479,7 @@ pub(super) fn router() -> axum::Router<AppState> {
             get(coordinator_messages).post(send_coordinator_message),
         )
         .route("/v1/coordinators/{id}/context", get(coordinator_context))
+        .route("/v1/coordinators/{id}/agent", put(switch_coordinator_agent))
         // POST serves the custom methods `/v1/coordinators/{id}:run` and
         // `:compact`.
         .route("/v1/coordinators/{id}", post(run_coordinator_command))

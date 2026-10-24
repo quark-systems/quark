@@ -1,6 +1,6 @@
 // What the coordinator's header says about its agent and how full its context is
 // (`GET /v1/coordinators/{id}/context`), as words the header and its popover show.
-import type { CoordinatorContext } from "./api";
+import type { AgentConfig, CoordinatorContext, CoordinatorSwitch } from "./api";
 import { harnessMark } from "./components/WorkerCard/harnessMarks";
 
 /** "46k", "1.2M", "800". */
@@ -43,5 +43,34 @@ export function compactionLine(c: CoordinatorContext): string {
   if (!c.compaction.auto) {
     return `Automatic compaction is off. ${harness} compacts on its own when the context is nearly full.`;
   }
-  return `Compacts at ${tokens(c.compaction.at_tokens)} tokens, after a wrap up.`;
+  const at = c.compact_at_tokens ? ` (${tokens(c.compact_at_tokens)} tokens)` : "";
+  return `Compacts when the context is ${c.compaction.at_percent}% full${at}, after a wrap up.`;
+}
+
+/** An agent in words: "Claude Code, opus, high effort". */
+export function agentWords(a: AgentConfig | null | undefined): string {
+  if (!a) return "no agent";
+  return [harnessMark(a.harness).name, a.model ?? "default model", a.effort ? `${a.effort} effort` : "default effort",
+    ...(a.pool ? [`pool ${a.pool}`] : [])].join(", ");
+}
+
+/** Whether a change of agent still has steps left. */
+export function switching(s: CoordinatorSwitch | null | undefined): boolean {
+  return !!s && s.state !== "done" && s.state !== "failed";
+}
+
+/** How far a change of agent got, in a sentence. */
+export function switchLine(s: CoordinatorSwitch): string {
+  const to = agentWords(s.to);
+  switch (s.state) {
+    case "requested": return `Changing to ${to}.`;
+    case "wrapping_up": return `Changing to ${to}. The coordinator is saving its work and writing a handoff.`;
+    case "switching":
+    case "starting": return `Changing to ${to}. Starting the new coordinator.`;
+    case "briefing": return `Changing to ${to}. Telling the new coordinator what changed.`;
+    case "done": return s.kind === "resume"
+      ? `Changed from ${agentWords(s.from)} to ${to}, in the same conversation.`
+      : `Changed from ${agentWords(s.from)} to ${to}, with a handoff.`;
+    case "failed": return `Could not change to ${to}: ${s.error ?? "it did not start"}. The coordinator kept ${agentWords(s.from)}.`;
+  }
 }

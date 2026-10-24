@@ -23,7 +23,6 @@ use axum::Json;
 use quark_systems::{DeleteProject, ErrorBody, Project, ProjectStatus, TaskState};
 
 use super::{db, ApiError, AppState};
-use crate::engine::native_project::WINDOW_PREFIX;
 use crate::engine::{EngineError, EngineTask, TaskControl, WorkspaceRef, WorktreeRelease};
 
 /// Archive a Project: stop its coordinator and workers and hide it.
@@ -201,39 +200,16 @@ fn open(state: TaskState) -> bool {
     !matches!(state, TaskState::Done | TaskState::Failed)
 }
 
-/// Closes the coordinator's window: the one the engine recorded, and one
-/// named for the Project the native engine would adopt. Its conversation is
-/// kept, so it resumes when the Project is unarchived.
+/// Closes the coordinator's window. Its conversation is kept, so it
+/// resumes when the Project is unarchived.
 async fn stop_coordinator(state: &AppState, project_id: &str) -> Result<(), String> {
-    let Ok(server) = state.sessions.server() else {
-        return Ok(());
-    };
-    if !server.is_running().await {
-        return Ok(());
-    }
-    let recorded = state
-        .engine
-        .coordinator_terminals(&state.layout.command_workspace())
-        .await
-        .map_err(|e| e.to_string())?
-        .remove(project_id);
-    let window = format!("{WINDOW_PREFIX}{project_id}");
-    let panes = server.list_panes().await.map_err(|e| e.to_string())?;
-    let mut targets: Vec<String> = panes
-        .into_iter()
-        .map(|p| p.target)
-        .filter(|t| {
-            Some(t) == recorded.as_ref() || t.split_once(':').is_some_and(|(_, w)| w == window)
-        })
-        .collect();
-    targets.dedup();
-    for target in targets {
-        server
-            .run(&["kill-window", "-t", &target])
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    crate::switch::close_coordinator(
+        &state.sessions,
+        state.engine.as_ref(),
+        &state.layout.command_workspace(),
+        project_id,
+    )
+    .await
 }
 
 /// Gives back every worktree the Project's tasks hold. Any kept for work

@@ -56,7 +56,7 @@ pub async fn get(
     request_body = UpdateProjectSettings,
     responses(
         (status = 200, body = ProjectSettings),
-        (status = 400, description = "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`), or the compaction threshold is under 10,000 tokens", body = ErrorBody),
+        (status = 400, description = "A holdout change names no source of `project.yaml`, or leaves a file that does not compile (`settings_invalid`), or the compaction threshold is outside 10% to 95%", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`main` has another `project.yaml` revision (`settings_changed`), the checkout has an uncommitted edit of it (`uncommitted_changes`), the Project has no Project repo or `project.yaml` (`no_project_repo`), or standing approval needs the workspace (`workspace_missing`)", body = ErrorBody),
         (status = 502, description = "The engine refused or failed the call", body = ErrorBody)
@@ -70,9 +70,11 @@ pub async fn patch(
     let pid = id.clone();
     let project = db(&state, move |s| s.get_project(&pid)).await?;
     if let Some(c) = input.compaction {
-        if c.at_tokens < MIN_COMPACT_AT_TOKENS {
+        if !COMPACT_AT_PERCENT.contains(&c.at_percent) {
             return Err(ApiError::invalid(format!(
-                "compaction.at_tokens must be at least {MIN_COMPACT_AT_TOKENS}"
+                "compaction.at_percent must be from {} to {}",
+                COMPACT_AT_PERCENT.start(),
+                COMPACT_AT_PERCENT.end()
             )));
         }
     }
@@ -97,9 +99,10 @@ pub async fn patch(
     Ok(Json(read(&state, project).await?))
 }
 
-/// The smallest compaction threshold: below it a coordinator would compact
-/// right after its prompt and memories load.
-const MIN_COMPACT_AT_TOKENS: u64 = 10_000;
+/// The compaction thresholds allowed, in percent of the context window:
+/// lower would compact right after the prompt and memories load, higher
+/// leaves no room for the wrap up before the harness compacts on its own.
+const COMPACT_AT_PERCENT: std::ops::RangeInclusive<u8> = 10..=95;
 
 fn no_project_repo() -> ApiError {
     ApiError::new(

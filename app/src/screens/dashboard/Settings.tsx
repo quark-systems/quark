@@ -1,5 +1,5 @@
 // Project dashboard, Settings tab: every per-Project switch in one place. Standing approval,
-// the coordinator's compaction and each source's holdout tests change here; delivery and the agent are shown as chosen at creation;
+// the coordinator's agent and compaction and each source's holdout tests change here; delivery is shown as chosen at creation;
 // issue sync rules are edited here; dispatch rules, pools and memory are summarized with a link to the screen that edits them.
 import React, { useEffect, useState } from "react";
 import { api, ApiError, CompactionSettings, NotAvailable, ProjectSettings, SourceVerification } from "../../api";
@@ -11,6 +11,7 @@ import { StandingApproval } from "../../components/StandingApproval";
 import { PersonaPicker } from "../../components/PersonaPicker";
 import { IssueSync } from "./IssueSync";
 import { ProjectLifecycle } from "../../components/ProjectLifecycle";
+import { ChangeAgent } from "../../components/ChangeAgent";
 import { Button, TextInput } from "../../ui";
 import "./settings.css";
 import "./overview.css";
@@ -78,7 +79,8 @@ export function Settings({ project: pid }: { project: string }) {
                 <dt>Pool</dt><dd className="mono" data-testid="settings-pool">{agent.pool ?? "default account"}</dd>
               </dl>
             ) : <p className="faint">No agent configured.</p>}
-            <p className="faint">The coordinator runs with this agent, and workers do too unless dispatch rules pick another. Chosen when the project was created; a blank model or effort is the harness's own default.</p>
+            <p className="faint">The coordinator runs with this agent, and workers do too unless dispatch rules pick another. A blank model or effort is the harness's own default.</p>
+            <ChangeAgent pid={pid} agent={agent} onChanged={() => void load()} />
             <a className="btn" href={href({ name: "accounts" })}>Accounts and pools</a>
           </Section>
 
@@ -141,16 +143,16 @@ export function Settings({ project: pid }: { project: string }) {
 
 /** The coordinator's automatic compaction: on or off, and the context size that sets it off. */
 function Compaction({ pid, value, onSaved }: { pid: string; value: CompactionSettings; onSaved: (s: ProjectSettings) => void }) {
-  const [k, setK] = useState(String(Math.round(value.at_tokens / 1000)));
+  const [pct, setPct] = useState(String(value.at_percent));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { setK(String(Math.round(value.at_tokens / 1000))); }, [value.at_tokens]);
+  useEffect(() => { setPct(String(value.at_percent)); }, [value.at_percent]);
   const save = async (next: CompactionSettings) => {
     setBusy(true); setErr(null);
     try { onSaved(await api.updateProjectSettings(pid, { compaction: next })); } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
   };
-  const at = Number(k) * 1000;
-  const valid = Number.isInteger(Number(k)) && at >= 10_000;
+  const at = Number(pct);
+  const valid = pct !== "" && Number.isInteger(at) && at >= 10 && at <= 95;
   return (
     <>
       <label className={"standing" + (value.auto ? " on" : "")} data-testid="settings-compaction-auto">
@@ -160,15 +162,15 @@ function Compaction({ pid, value, onSaved }: { pid: string; value: CompactionSet
         <span>{value.auto ? "Compact automatically" : "Off: the harness compacts on its own when the context is nearly full"}</span>
       </label>
       <div className="set-row">
-        <span>Compact when the context reaches</span>
-        <TextInput mono value={k} inputMode="numeric" style={{ width: 80 }} disabled={busy} invalid={!valid}
-          aria-label="Compaction threshold in thousands of tokens" data-testid="settings-compaction-at"
-          onChange={(e) => setK(e.target.value.trim())}
-          onKeyDown={(e) => { if (e.key === "Enter" && valid && at !== value.at_tokens) void save({ ...value, at_tokens: at }); }} />
-        <span>thousand tokens</span>
-        {valid && at !== value.at_tokens && <Button disabled={busy} onClick={() => void save({ ...value, at_tokens: at })} data-testid="settings-compaction-save">Save</Button>}
+        <span>Compact when the context window is</span>
+        <TextInput mono value={pct} inputMode="numeric" style={{ width: 64 }} disabled={busy} invalid={!valid}
+          aria-label="Compaction threshold in percent of the context window" data-testid="settings-compaction-at"
+          onChange={(e) => setPct(e.target.value.trim())}
+          onKeyDown={(e) => { if (e.key === "Enter" && valid && at !== value.at_percent) void save({ ...value, at_percent: at }); }} />
+        <span>% full</span>
+        {valid && at !== value.at_percent && <Button disabled={busy} onClick={() => void save({ ...value, at_percent: at })} data-testid="settings-compaction-save">Save</Button>}
       </div>
-      {!valid && <div className="set-error" role="alert">Use a whole number of at least 10.</div>}
+      {!valid && <div className="set-error" role="alert">Use a whole number from 10 to 95.</div>}
       {err && <div className="set-error" role="alert">{err}</div>}
     </>
   );

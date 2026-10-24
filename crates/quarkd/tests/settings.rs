@@ -232,8 +232,9 @@ async fn compaction_is_set_in_settings_and_shown_with_the_coordinator_context() 
     assert_eq!(c["agent_config"]["model"], "opus[1m]");
     assert_eq!(c["agent_config"]["effort"], "high");
     assert_eq!(c["window_tokens"], 1_000_000);
+    assert_eq!(c["compact_at_tokens"], 700_000);
     assert_eq!(c["context_tokens"], Value::Null);
-    assert_eq!(c["compaction"], json!({"auto": true, "at_tokens": 140_000}));
+    assert_eq!(c["compaction"], json!({"auto": true, "at_percent": 70}));
     assert_eq!(c["compacting"], "idle");
 
     let settings = format!("/v1/projects/{}/settings", project.id);
@@ -241,7 +242,7 @@ async fn compaction_is_set_in_settings_and_shown_with_the_coordinator_context() 
         &app,
         "PATCH",
         &settings,
-        Some(json!({"compaction": {"auto": true, "at_tokens": 500}})),
+        Some(json!({"compaction": {"auto": true, "at_percent": 99}})),
     )
     .await;
     assert_eq!(status, 400, "{e}");
@@ -249,19 +250,13 @@ async fn compaction_is_set_in_settings_and_shown_with_the_coordinator_context() 
         &app,
         "PATCH",
         &settings,
-        Some(json!({"compaction": {"auto": false, "at_tokens": 300_000}})),
+        Some(json!({"compaction": {"auto": false, "at_percent": 50}})),
     )
     .await;
     assert_eq!(status, 200, "{s}");
-    assert_eq!(
-        s["compaction"],
-        json!({"auto": false, "at_tokens": 300_000})
-    );
+    assert_eq!(s["compaction"], json!({"auto": false, "at_percent": 50}));
     let (_, c) = call(&app, "GET", &context, None).await;
-    assert_eq!(
-        c["compaction"],
-        json!({"auto": false, "at_tokens": 300_000})
-    );
+    assert_eq!(c["compaction"], json!({"auto": false, "at_percent": 50}));
 
     // Compact now types the harness's /compact, with what to keep.
     let (status, a) = call(
@@ -283,4 +278,88 @@ async fn compaction_is_set_in_settings_and_shown_with_the_coordinator_context() 
     let sent = chat.sent();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].1.starts_with("/compact Keep"), "{}", sent[0].1);
+}
+
+#[tokio::test]
+async fn the_coordinators_agent_is_changed_through_a_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let harnesses = Arc::new(quarkd::harness::HarnessRegistry::new(
+        quarkd::harness::builtin(),
+        quarkd::harness::HostEnv::default(),
+    ));
+    let app = quarkd::api::router(quarkd::api::AppState {
+        store: store.clone(),
+        engine: Arc::new(StubEngine::new()),
+        harnesses: harnesses.clone(),
+        accounts: Arc::new(quarkd::accounts::Accounts::new(
+            store.clone(),
+            harnesses,
+            Arc::new(quarkd::accounts::StubQuota::new()),
+            &["CLAUDE_CONFIG_DIR"],
+        )),
+        sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
+        layout: quarkd::provision::Layout::new(dir.path()),
+        chat: Arc::new(quarkd::chat::RecordingInput::new()),
+        forge: Arc::new(quarkd::forge::StubForge::new()),
+        events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
+        triggers: None,
+        compaction: Default::default(),
+        beads: Default::default(),
+    });
+    let project = store
+        .create_project(CreateProject {
+            name: "Quark".into(),
+            agent_config: Some(AgentConfig {
+                harness: "claude-code".into(),
+                model: Some("sonnet".into()),
+                effort: None,
+                pool: None,
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    let agent = format!("/v1/coordinators/{}/agent", project.id);
+    let opus = json!({"harness": "claude-code", "model": "opus", "effort": "high"});
+
+    // Not before the Project has a coordinator.
+    let (status, e) = call(&app, "PUT", &agent, Some(opus.clone())).await;
+    assert_eq!(status, 409, "{e}");
+    store
+        .set_project_status(
+            &project.id,
+            ProjectStatus::Ready,
+            None,
+            Some(&dir.path().display().to_string()),
+            None,
+        )
+        .unwrap();
+    // Another harness cannot run the native coordinator yet.
+    let (status, e) = call(&app, "PUT", &agent, Some(json!({"harness": "codex"}))).await;
+    assert_eq!(status, 400, "{e}");
+    assert!(e.to_string().contains("claude-code only"), "{e}");
+    // The agent it already runs.
+    let (status, e) = call(
+        &app,
+        "PUT",
+        &agent,
+        Some(json!({"harness": "claude", "model": "sonnet", "effort": ""})),
+    )
+    .await;
+    assert_eq!(status, 400, "{e}");
+
+    let (status, s) = call(&app, "PUT", &agent, Some(opus.clone())).await;
+    assert_eq!(status, 202, "{s}");
+    assert_eq!(s["kind"], "resume");
+    assert_eq!(s["state"], "requested");
+    assert_eq!(s["from"]["model"], "sonnet");
+    assert_eq!(s["to"]["model"], "opus");
+    // One at a time.
+    let (status, e) = call(&app, "PUT", &agent, Some(json!({"harness": "claude-code"}))).await;
+    assert_eq!(status, 409, "{e}");
+    // The header shows it.
+    let context = format!("/v1/coordinators/{}/context", project.id);
+    let (_, c) = call(&app, "GET", &context, None).await;
+    assert_eq!(c["switch"]["id"], s["id"]);
+    assert_eq!(c["switch"]["state"], "requested");
 }
