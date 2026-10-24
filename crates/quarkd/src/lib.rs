@@ -44,6 +44,7 @@ pub mod sessions;
 pub mod settings;
 pub mod spend;
 pub mod store;
+pub mod switch;
 pub mod task_brief;
 pub mod transcripts;
 pub mod usage;
@@ -258,6 +259,19 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         sessions.clone(),
         quark_transcript::SessionRoots::from_env(),
     ));
+    // Coordinators change agents through durable switches.
+    let switch_task = native_engine.then(|| {
+        let switches = switch::Switches::new(
+            store.clone(),
+            engine.clone(),
+            accounts.clone(),
+            sessions.clone(),
+            chat_input.clone(),
+            layout.command_workspace(),
+            layout.home.clone(),
+        );
+        tokio::spawn(switches.run(switch::INTERVAL))
+    });
     let compactor = Arc::new(compaction::Compactor::from_env(
         quark_transcript::SessionRoots::from_env(),
     ));
@@ -354,6 +368,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .await?;
     projector_task.abort();
     if let Some(t) = recovery_task {
+        t.abort();
+    }
+    if let Some(t) = switch_task {
         t.abort();
     }
     usage_task.abort();

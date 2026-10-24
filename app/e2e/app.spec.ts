@@ -147,7 +147,7 @@ test("coordinator header: its agent, a context meter, compaction settings and Co
   await meter.click();
   const pop = page.getByTestId("context-popover");
   await expect(pop.getByTestId("context-line")).toContainText(/\d+k of 272k tokens/);
-  await expect(pop.getByTestId("compaction-line")).toHaveText("Compacts at 140k tokens, after a wrap up.");
+  await expect(pop.getByTestId("compaction-line")).toHaveText("Compacts when the context is 70% full (190k tokens), after a wrap up.");
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/01-context-popover.png` });
   await pop.getByTestId("compact-now").click();
   await expect(chat.getByTestId("transcript-compaction")).toContainText("The conversation was compacted at");
@@ -158,7 +158,7 @@ test("coordinator header: its agent, a context meter, compaction settings and Co
   await page.getByTestId("nav-settings").click();
   const section = page.getByTestId("settings-compaction");
   await expect(section).toContainText("Compact automatically");
-  await section.getByTestId("settings-compaction-at").fill("300");
+  await section.getByTestId("settings-compaction-at").fill("50");
   await section.getByTestId("settings-compaction-save").click();
   await expect(section.getByTestId("settings-compaction-save")).toHaveCount(0);
   await section.getByTestId("settings-compaction-auto").click();
@@ -168,7 +168,35 @@ test("coordinator header: its agent, a context meter, compaction settings and Co
   await chat.getByTestId("context-meter").click();
   await expect(page.getByTestId("compaction-line")).toContainText("Automatic compaction is off.");
   const s = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/website/settings")).json());
-  expect(s.compaction).toEqual({ auto: false, at_tokens: 300_000 });
+  expect(s.compaction).toEqual({ auto: false, at_percent: 50 });
+});
+
+test("settings: change the coordinator's agent, by handoff to another harness", async ({ page }) => {
+  await open(page, "#/");
+  const pid = await page.evaluate(async () => {
+    const r = await fetch("http://127.0.0.1:7392/v1/projects", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Switch test", repos: [{ url: "git@github.com:quark-systems/quark.git" }], agent_config: { harness: "codex", model: "gpt-5-codex" } }) });
+    return (await r.json()).id as string;
+  });
+  await open(page, `#/p/${pid}/settings`);
+  const section = page.getByTestId("settings-agent");
+  await expect(section).toContainText("codex");
+  await section.getByTestId("change-agent").click();
+  const form = section.getByTestId("change-agent-form");
+  // Only Claude Code coordinates natively so far; another harness means a handoff.
+  await expect(form).toContainText("writes a handoff");
+  await form.getByLabel("Model", { exact: true }).fill("opus");
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/04-change-agent.png` });
+  await form.getByTestId("change-agent-save").click();
+  const line = section.getByTestId("agent-switch");
+  await expect(line).toHaveText("Changed from Codex, gpt-5-codex, default effort to Claude Code, opus, default effort, with a handoff.");
+  await expect(section.locator("dd").first()).toHaveText("claude-code");
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/05-changed.png` });
+  // The same agent again is refused, with the daemon's reason.
+  await section.getByTestId("change-agent").click();
+  await form.getByLabel("Model", { exact: true }).fill("opus");
+  await form.getByTestId("change-agent-save").click();
+  await expect(form).toContainText("already runs this agent");
 });
 
 test("worker cards show the harness, its mark and how much the worker changed", async ({ page }) => {

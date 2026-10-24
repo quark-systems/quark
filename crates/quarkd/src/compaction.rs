@@ -4,8 +4,9 @@
 //! A harness compacts on its own only when the context window is nearly
 //! full: close to a million tokens on a 1M model, every turn of which reads
 //! the whole context again. So Quark compacts earlier. When a coordinator
-//! turn ends with its context at the Project's threshold or more
-//! ([`CompactionSettings`], default [`COMPACT_AT_TOKENS`]), the engine asks
+//! turn ends with its context at the Project's threshold or more (a share
+//! of the model's context window, [`CompactionSettings`], default
+//! [`COMPACT_AT_PERCENT`]), the engine asks
 //! it to wrap up (save what only its conversation holds); when that turn
 //! ends, it types the harness's `/compact` with what the summary must keep.
 //! Every coordinator harness (Claude Code, Codex, Pi) has `/compact`. The
@@ -34,10 +35,13 @@ use crate::coordinator_commands::{self, Asked, CommandError};
 use crate::engine::WorkspaceRef;
 use crate::store::Store;
 
-/// The context size, in tokens, at which Quark compacts a coordinator that
-/// has no setting of its own: 70% of a 200k window, leaving room for the
-/// wrap up before the harness would compact on its own.
-pub const COMPACT_AT_TOKENS: u64 = 140_000;
+/// The share of the context window, in percent, at which Quark compacts a
+/// coordinator that has no setting of its own: room is left for the wrap up
+/// before the harness would compact on its own.
+pub const COMPACT_AT_PERCENT: u8 = 70;
+
+/// The window assumed when Quark does not know the model's.
+pub const ASSUMED_WINDOW: u64 = 200_000;
 
 /// What the summary must keep, passed to `/compact`.
 pub const KEEP: &str = "Keep the user's standing rules and preferences, the open decisions, \
@@ -100,7 +104,7 @@ impl Default for Compactor {
         Self::new(
             CompactionSettings {
                 auto: true,
-                at_tokens: COMPACT_AT_TOKENS,
+                at_percent: COMPACT_AT_PERCENT,
             },
             SessionRoots::default(),
         )
@@ -116,28 +120,25 @@ impl Compactor {
         }
     }
 
-    /// The default threshold from `QUARK_COORDINATOR_COMPACT_AT_TOKENS`
-    /// (or the older `QUARK_COORDINATOR_WRAP_UP_TOKENS`), else
-    /// [`COMPACT_AT_TOKENS`]; `0` turns automatic compaction off by default.
+    /// The default threshold from `QUARK_COORDINATOR_COMPACT_AT_PERCENT`,
+    /// else [`COMPACT_AT_PERCENT`]; `0` turns automatic compaction off by
+    /// default.
     pub fn from_env(roots: SessionRoots) -> Self {
-        let at = [
-            "QUARK_COORDINATOR_COMPACT_AT_TOKENS",
-            "QUARK_COORDINATOR_WRAP_UP_TOKENS",
-        ]
-        .iter()
-        .find_map(|v| std::env::var(v).ok()?.trim().parse::<u64>().ok());
+        let at = std::env::var("QUARK_COORDINATOR_COMPACT_AT_PERCENT")
+            .ok()
+            .and_then(|v| v.trim().parse::<u8>().ok());
         let default = match at {
             Some(0) => CompactionSettings {
                 auto: false,
-                at_tokens: COMPACT_AT_TOKENS,
+                at_percent: COMPACT_AT_PERCENT,
             },
-            Some(at_tokens) => CompactionSettings {
+            Some(p) => CompactionSettings {
                 auto: true,
-                at_tokens,
+                at_percent: p.min(100),
             },
             None => CompactionSettings {
                 auto: true,
-                at_tokens: COMPACT_AT_TOKENS,
+                at_percent: COMPACT_AT_PERCENT,
             },
         };
         Self::new(default, roots)
@@ -148,22 +149,36 @@ impl Compactor {
         self.default
     }
 
-    /// Record a coordinator turn that ended with `context` tokens (when
-    /// known), and say what follows it.
-    pub fn turn_ended(
+    /// The context size, in tokens, at which a coordinator running `agent`
+    /// compacts under `settings`: the share of its window, or of
+    /// [`ASSUMED_WINDOW`] when the window is unknown. `None` when off.
+    pub fn threshold(
         &self,
         project: &str,
-        context: Option<u64>,
+        agent: Option<&AgentConfig>,
         settings: CompactionSettings,
-    ) -> Step {
-        self.turn_ended_at(project, context, settings, OffsetDateTime::now_utc())
+    ) -> Option<u64> {
+        let (model, context) = self
+            .live
+            .lock()
+            .unwrap()
+            .get(project)
+            .map(|l| (l.model.clone(), l.context))
+            .unwrap_or_default();
+        threshold(agent, model.as_deref(), context, settings)
+    }
+
+    /// Record a coordinator turn that ended with `context` tokens (when
+    /// known), and say what follows it: compacting starts at `at` tokens.
+    pub fn turn_ended(&self, project: &str, context: Option<u64>, at: Option<u64>) -> Step {
+        self.turn_ended_at(project, context, at, OffsetDateTime::now_utc())
     }
 
     fn turn_ended_at(
         &self,
         project: &str,
         context: Option<u64>,
-        settings: CompactionSettings,
+        at: Option<u64>,
         now: OffsetDateTime,
     ) -> Step {
         let mut live = self.live.lock().unwrap();
@@ -192,10 +207,8 @@ impl Compactor {
             }
             CompactionPhase::Idle => {}
         }
-        match context {
-            Some(tokens)
-                if settings.auto && settings.at_tokens > 0 && tokens >= settings.at_tokens =>
-            {
+        match (context, at) {
+            (Some(tokens), Some(at)) if at > 0 && tokens >= at => {
                 l.phase = CompactionPhase::WrappingUp;
                 l.since = now;
                 l.before = tokens;
@@ -203,6 +216,12 @@ impl Compactor {
             }
             _ => Step::Nothing,
         }
+    }
+
+    /// Note the context a turn ended with, before its threshold is read.
+    fn seen(&self, project: &str, context: u64) {
+        let mut live = self.live.lock().unwrap();
+        live.entry(project.to_string()).or_default().context = Some(context);
     }
 
     /// The user asked to compact now: no wrap up first.
@@ -266,6 +285,7 @@ impl Compactor {
         };
         let agent = project.agent_config.clone();
         let window = window_tokens(agent.as_ref(), l.model.as_deref(), context);
+        let compact_at = threshold(agent.as_ref(), l.model.as_deref(), context, compaction);
         let model_seen = l
             .model
             .clone()
@@ -278,8 +298,10 @@ impl Compactor {
             window_tokens: window,
             measured_at: l.measured_at.clone(),
             compaction,
+            compact_at_tokens: compact_at,
             compacting: l.phase,
             last_compaction,
+            switch: store.latest_switch(&project.id)?,
         })
     }
 }
@@ -312,6 +334,20 @@ fn read_log(roots: &SessionRoots, root: &Path, l: &mut Live) {
             .and_then(|t| OffsetDateTime::from(t).format(&Rfc3339).ok());
     }
     l.log = Some((path, next));
+}
+
+/// The context size at which a coordinator compacts under `settings`.
+fn threshold(
+    agent: Option<&AgentConfig>,
+    model: Option<&str>,
+    context: Option<u64>,
+    settings: CompactionSettings,
+) -> Option<u64> {
+    if !settings.auto || settings.at_percent == 0 {
+        return None;
+    }
+    let window = window_tokens(agent, model, context).unwrap_or(ASSUMED_WINDOW);
+    Some(window * u64::from(settings.at_percent.min(100)) / 100)
 }
 
 /// The newest coordinator session log of the workspace at `root`.
@@ -378,16 +414,27 @@ pub fn after_turn(
     tokio::spawn(async move {
         let s = store.clone();
         let (id, default) = (project.clone(), compactor.defaults());
-        let settings =
-            match tokio::task::spawn_blocking(move || s.compaction_settings(&id, default)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => {
-                    tracing::warn!(%project, error = %e, "could not read compaction settings");
-                    return;
-                }
-                Err(_) => return,
-            };
-        match compactor.turn_ended(&project, context, settings) {
+        let read = tokio::task::spawn_blocking(move || {
+            Ok::<_, crate::store::StoreError>((
+                s.compaction_settings(&id, default)?,
+                s.get_project(&id)?.agent_config,
+            ))
+        })
+        .await;
+        let (settings, agent) = match read {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                tracing::warn!(%project, error = %e, "could not read compaction settings");
+                return;
+            }
+            Err(_) => return,
+        };
+        if let Some(c) = context {
+            // The window follows the size seen, so read it with this turn's.
+            compactor.seen(&project, c);
+        }
+        let at = compactor.threshold(&project, agent.as_ref(), settings);
+        match compactor.turn_ended(&project, context, at) {
             Step::Nothing => {}
             Step::WrapUp { tokens } => {
                 let ran = coordinator_commands::run(
@@ -471,10 +518,7 @@ async fn compact(
 mod tests {
     use super::*;
 
-    const ON: CompactionSettings = CompactionSettings {
-        auto: true,
-        at_tokens: 100,
-    };
+    const ON: Option<u64> = Some(100);
 
     #[test]
     fn a_full_turn_wraps_up_then_compacts_then_waits_for_it_to_shrink() {
@@ -514,11 +558,48 @@ mod tests {
     #[test]
     fn off_or_unknown_never_compacts() {
         let c = Compactor::default();
-        let off = CompactionSettings { auto: false, ..ON };
-        assert_eq!(c.turn_ended("p", Some(1_000_000), off), Step::Nothing);
+        assert_eq!(c.turn_ended("p", Some(1_000_000), None), Step::Nothing);
         assert_eq!(c.turn_ended("p", None, ON), Step::Nothing);
-        let zero = CompactionSettings { at_tokens: 0, ..ON };
-        assert_eq!(c.turn_ended("p", Some(1_000_000), zero), Step::Nothing);
+        assert_eq!(c.turn_ended("p", Some(1_000_000), Some(0)), Step::Nothing);
+    }
+
+    #[test]
+    fn the_threshold_is_a_share_of_the_window() {
+        let at = |percent, model: Option<&str>, context| {
+            let agent = AgentConfig {
+                harness: "claude-code".into(),
+                model: model.map(Into::into),
+                effort: None,
+                pool: None,
+            };
+            let s = CompactionSettings {
+                auto: true,
+                at_percent: percent,
+            };
+            threshold(Some(&agent), None, context, s)
+        };
+        assert_eq!(at(70, None, None), Some(140_000));
+        assert_eq!(at(70, Some("opus[1m]"), None), Some(700_000));
+        // Seen past 200k: a 1M window.
+        assert_eq!(at(50, None, Some(300_000)), Some(500_000));
+        assert_eq!(at(0, None, None), None);
+        let off = CompactionSettings {
+            auto: false,
+            at_percent: 70,
+        };
+        assert_eq!(threshold(None, None, None, off), None);
+        // Unknown window: the assumed one.
+        let pi = AgentConfig {
+            harness: "pi".into(),
+            model: Some("kimi-k2".into()),
+            effort: None,
+            pool: None,
+        };
+        let s = CompactionSettings {
+            auto: true,
+            at_percent: 50,
+        };
+        assert_eq!(threshold(Some(&pi), None, None, s), Some(100_000));
     }
 
     #[test]

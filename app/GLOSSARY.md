@@ -66,6 +66,10 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: memory (that is the project's), tokens used (that is spend), session.
 - **Compact**: replace the coordinator's conversation with a summary, so each turn reads less. Quark compacts when the context reaches the project's threshold, after a wrap up; Compact now in the context popover skips the wrap up. Set in Settings › Compaction.
   _Avoid_: clear, reset, summarize (as the action), truncate.
+- **Change agent**: give the coordinator another harness, model, effort or pool. On the same harness it keeps its conversation; on another it writes a **handoff** for the new coordinator first. Settings › Agent.
+  _Avoid_: swap, migrate, restart, switch (as the button).
+- **Handoff**: what an old coordinator leaves its successor when the harness changes: its brief, plus the open decisions and unfinished work.
+  _Avoid_: summary, transfer, checkpoint.
 
 ## State words
 

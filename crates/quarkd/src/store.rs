@@ -29,6 +29,8 @@ mod failover;
 mod memory;
 mod migrations;
 mod pull_requests;
+mod switches;
+pub use switches::SwitchRow;
 
 pub use accounts::{default_account_id, AccountRow, KEYCHAIN_PREFIX};
 pub use coordinator::{coordinator_decision_id, coordinator_decision_key};

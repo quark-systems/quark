@@ -283,6 +283,13 @@ async fn hook(
         .await
     {
         Ok(turn) => {
+            // A switch waiting on this coordinator's wrap up may go on.
+            let (store, pid) = (r.store.clone(), project.clone());
+            if let Ok(Err(e)) =
+                tokio::task::spawn_blocking(move || store.switch_turn_ended(&pid)).await
+            {
+                tracing::warn!(%project, error = %e, "could not mark a switch's wrap up");
+            }
             if let Some(w) = &r.wrap_up {
                 compaction::after_turn(
                     w.compactor.clone(),

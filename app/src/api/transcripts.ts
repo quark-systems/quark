@@ -43,8 +43,30 @@ export interface CoordinatorContext {
   window_tokens?: number | null;
   measured_at?: string | null;
   compaction: CompactionSettings;
+  /** The context size it compacts at (`at_percent` of the window); absent when automatic compaction is off. */
+  compact_at_tokens?: number | null;
   compacting: CompactionPhase;
   last_compaction?: { at?: string | null; text: string } | null;
+  /** Its latest change of agent, under way or finished. */
+  switch?: CoordinatorSwitch | null;
+}
+
+/** How a change of agent carries the conversation over: the same session, or a handoff brief. */
+export type SwitchKind = "resume" | "handoff";
+export type SwitchState = "requested" | "wrapping_up" | "switching" | "starting" | "briefing" | "done" | "failed";
+
+/** A change of the coordinator's harness, model, effort or pool (`PUT /v1/coordinators/{id}/agent`). */
+export interface CoordinatorSwitch {
+  id: string;
+  project_id: string;
+  from?: AgentConfig | null;
+  to: AgentConfig;
+  kind: SwitchKind;
+  state: SwitchState;
+  brief?: string | null;
+  error?: string | null;
+  requested_at: string;
+  updated_at: string;
 }
 
 export const transcriptsApi = {
@@ -53,5 +75,6 @@ export const transcriptsApi = {
   runCommand: (cid: string, command: CoordinatorCommand) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:run`, { command }),
   coordinatorContext: (cid: string) => req<CoordinatorContext>("GET", `/v1/coordinators/${enc(cid)}/context`),
   compactCoordinator: (cid: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:compact`),
+  switchCoordinatorAgent: (cid: string, agent: AgentConfig) => req<CoordinatorSwitch | undefined>("PUT", `/v1/coordinators/${enc(cid)}/agent`, agent),
   transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
 };

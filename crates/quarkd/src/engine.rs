@@ -422,6 +422,12 @@ pub trait EngineAdapter: Send + Sync {
         resume: bool,
     ) -> Result<(), EngineError>;
 
+    /// Whether the daemon's switch driver ([`crate::switch`]) changes this
+    /// engine's coordinators' agents.
+    fn switches_coordinators(&self) -> bool {
+        false
+    }
+
     /// Account variables (`CLAUDE_CONFIG_DIR` and equivalents) this engine
     /// carries into the agents it launches. A harness whose variable is not
     /// listed runs only under its default account.
@@ -855,6 +861,10 @@ impl StubEngine {
 impl EngineAdapter for StubEngine {
     fn name(&self) -> &'static str {
         "stub"
+    }
+
+    fn switches_coordinators(&self) -> bool {
+        true
     }
 
     async fn coordinator_terminals(

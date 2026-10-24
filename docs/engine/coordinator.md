@@ -84,12 +84,16 @@ A harness compacts its conversation on its own only when the context window is n
 2. The wrap up's turn ends: the engine types `/compact` with what the summary must keep (standing rules, open decisions, tasks under way with their ids, branches and pull requests, promises, next steps). Claude Code, Codex and Pi all have `/compact`.
 3. A later turn ending smaller, or the compaction entry in the session log, ends it. A compaction not seen in 15 minutes is given up on, and the next full turn starts again.
 
-Each Project sets it in Settings (`compaction` in `GET`/`PATCH /v1/projects/{id}/settings`): `auto` on or off and `at_tokens`, at least 10,000. A Project that never set it uses `QUARK_COORDINATOR_COMPACT_AT_TOKENS` (or the older `QUARK_COORDINATOR_WRAP_UP_TOKENS`), else 140,000; `0` turns it off by default. With it off, the harness's own compaction still applies.
+Each Project sets it in Settings (`compaction` in `GET`/`PATCH /v1/projects/{id}/settings`): `auto` on or off and `at_percent`, the share of the model's context window to compact at, 10 to 95. The threshold in tokens follows the model the coordinator runs, and a window Quark does not know counts as 200k. A Project that never set it uses `QUARK_COORDINATOR_COMPACT_AT_PERCENT`, else 70; `0` turns it off by default. With it off, the harness's own compaction still applies.
 `POST /v1/coordinators/{id}:compact` compacts now, with no wrap up.
 Only harnesses with a turn-end hook (Claude Code) set the automatic steps off; the context itself is read from any coordinator's session log.
 
 Every compaction, whoever started it, is one `compaction` entry in the conversation (Claude Code's `compact_boundary` line, Codex's `compacted`, Pi's `compaction`), and the `/compact` command line is left out.
-`GET /v1/coordinators/{id}/context` returns the coordinator's agent config, the model its log names, the context its last turn ended on, the model's window when known (Claude 200k, or 1M for a `[1m]` model or one seen past 200k; Codex GPT-5 272k), the compaction settings, where a compaction is, and the last compaction. The coordinator's header shows it as a meter.
+`GET /v1/coordinators/{id}/context` returns the coordinator's agent config, the model its log names, the context its last turn ended on, the model's window when known (Claude 200k, or 1M for a `[1m]` model or one seen past 200k; Codex GPT-5 272k), the compaction settings and the threshold in tokens (`compact_at_tokens`), where a compaction is, the last compaction, and the latest change of agent (`switch`). The coordinator's header shows it as a meter.
+
+### Changing the agent
+
+`PUT /v1/coordinators/{id}/agent` changes the coordinator's harness, model, effort or pool through a durable switch: on the same harness it continues its conversation; on another, the old coordinator writes a handoff brief first. See [coordinator-switch.md](coordinator-switch.md).
 
 ## Durability
 

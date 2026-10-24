@@ -205,6 +205,10 @@ impl EngineAdapter for NativeEngine {
         "native"
     }
 
+    fn switches_coordinators(&self) -> bool {
+        true
+    }
+
     async fn snapshot(&self, ws: &WorkspaceRef) -> Result<FleetSnapshot, EngineError> {
         self.catch_up().await?;
         let p = project(ws);

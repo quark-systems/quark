@@ -125,15 +125,16 @@ pub struct UpdateProjectSettings {
 }
 
 /// When Quark compacts a Project coordinator's conversation. With `auto`
-/// on, a turn that ends with the context at `at_tokens` or more is followed
+/// on, a turn that ends with the context at `at_percent` of the model's
+/// window or more (of 200k when the window is unknown) is followed
 /// by a wrap up, then the harness's `/compact`. With it off, Quark leaves
 /// compaction to the harness, which compacts on its own only when the
 /// context window is nearly full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CompactionSettings {
     pub auto: bool,
-    /// The context size, in tokens, that sets off a compaction.
-    pub at_tokens: u64,
+    /// How full the context window is, in percent, when a compaction starts.
+    pub at_percent: u8,
 }
 
 /// A Project coordinator's agent and how full its context is, for the
@@ -154,10 +155,94 @@ pub struct CoordinatorContext {
     /// When the turn that `context_tokens` was read from ended.
     pub measured_at: Option<String>,
     pub compaction: CompactionSettings,
+    /// The context size, in tokens, at which it compacts: `at_percent` of
+    /// the window. Absent when automatic compaction is off.
+    pub compact_at_tokens: Option<u64>,
     /// What Quark is doing about compaction right now.
     pub compacting: CompactionPhase,
     /// The last time the conversation was compacted, by anyone.
     pub last_compaction: Option<CompactionRecord>,
+    /// The latest change of its agent, under way or finished.
+    #[serde(default)]
+    pub switch: Option<CoordinatorSwitch>,
+}
+
+/// A change of a coordinator's harness, model, effort or pool, and how far
+/// it got. See `docs/engine/coordinator-switch.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CoordinatorSwitch {
+    pub id: String,
+    pub project_id: String,
+    pub from: Option<AgentConfig>,
+    pub to: AgentConfig,
+    pub kind: SwitchKind,
+    pub state: SwitchState,
+    /// What the old coordinator wrote for the new one (handoff only).
+    pub brief: Option<String>,
+    /// Why it failed.
+    pub error: Option<String>,
+    pub requested_at: String,
+    pub updated_at: String,
+}
+
+/// How the conversation carries over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SwitchKind {
+    /// Same harness: the conversation continues under the new model.
+    Resume,
+    /// Another harness: a handoff brief carries over.
+    Handoff,
+}
+
+/// A switch's step. Each is recorded before its effect happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SwitchState {
+    Requested,
+    /// The old coordinator was asked to save what it knows and write a brief.
+    WrappingUp,
+    /// The new agent is committed; the old coordinator is being closed.
+    Switching,
+    /// The new coordinator is being started.
+    Starting,
+    /// The new coordinator is being told what changed.
+    Briefing,
+    Done,
+    /// The new agent could not start; the old one was put back.
+    Failed,
+}
+
+impl SwitchState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::WrappingUp => "wrapping_up",
+            Self::Switching => "switching",
+            Self::Starting => "starting",
+            Self::Briefing => "briefing",
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "requested" => Self::Requested,
+            "wrapping_up" => Self::WrappingUp,
+            "switching" => Self::Switching,
+            "starting" => Self::Starting,
+            "briefing" => Self::Briefing,
+            "done" => Self::Done,
+            "failed" => Self::Failed,
+            _ => return None,
+        })
+    }
+
+    /// Whether the switch still has steps to take.
+    pub fn open(self) -> bool {
+        !matches!(self, Self::Done | Self::Failed)
+    }
 }
 
 /// Where a Quark-run compaction is.

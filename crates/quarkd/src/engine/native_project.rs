@@ -292,7 +292,12 @@ impl ProjectSetup {
         tokio::task::spawn_blocking(move || {
             let (prompt, _) = crate::native_coordinator::build_prompt(&layout, &pid, &root)
                 .map_err(|e| EngineError::Invalid(format!("the coordinator's prompt: {e}")))?;
-            let text = prompt_text(&prompt);
+            let mut text = prompt_text(&prompt);
+            // The last switch's handoff, until the next one replaces it.
+            let handoff = root.join(STATE_DIR).join(crate::switch::HANDOFF_FILE);
+            if let Ok(h) = std::fs::read_to_string(&handoff) {
+                text = format!("{}\n\n{}", text.trim_end(), h.trim());
+            }
             let path = root.join(STATE_DIR).join(PROMPT_FILE);
             write_atomic(&path, text.as_bytes())?;
             Ok(path)

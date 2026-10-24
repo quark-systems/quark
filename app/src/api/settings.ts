@@ -12,8 +12,8 @@ export interface SourceVerification { source: string; checks: GateCheck[]; journ
 export interface VerificationSettings { revision?: string | null; sources: SourceVerification[]; error?: string | null }
 export interface DispatchSummary { rules: number; default_candidates: number; classifier?: string | null; error?: string | null }
 export interface MemorySummary { entries: number; proposals_to_review: number }
-/** With `auto` on, Quark compacts the coordinator (a wrap up, then `/compact`) when a turn ends at `at_tokens` or more. */
-export interface CompactionSettings { auto: boolean; at_tokens: number }
+/** With `auto` on, Quark compacts the coordinator (a wrap up, then `/compact`) when a turn ends with its context window `at_percent` full. */
+export interface CompactionSettings { auto: boolean; at_percent: number }
 export interface ProjectSettings {
   project_id: string; standing_approval: boolean;
   /** Chosen at creation; read-only for now. */

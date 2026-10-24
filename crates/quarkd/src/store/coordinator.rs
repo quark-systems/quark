@@ -131,12 +131,12 @@ impl Store {
     ) -> Result<CompactionSettings> {
         self.read(|c| {
             Ok(c.query_row(
-                "SELECT auto, at_tokens FROM coordinator_compaction WHERE project_id = ?1",
+                "SELECT auto, at_percent FROM coordinator_compaction WHERE project_id = ?1",
                 params![project_id],
                 |r| {
                     Ok(CompactionSettings {
                         auto: r.get(0)?,
-                        at_tokens: r.get::<_, i64>(1)?.max(0) as u64,
+                        at_percent: r.get::<_, i64>(1)?.clamp(0, 100) as u8,
                     })
                 },
             )
@@ -149,17 +149,13 @@ impl Store {
     pub fn set_compaction_settings(&self, project_id: &str, s: CompactionSettings) -> Result<()> {
         self.write(|tx, _| {
             tx.execute(
-                "INSERT INTO coordinator_compaction (project_id, auto, at_tokens, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO coordinator_compaction
+                   (project_id, auto, at_tokens, at_percent, updated_at)
+                 VALUES (?1, ?2, 0, ?3, ?4)
                  ON CONFLICT(project_id) DO UPDATE SET
-                   auto = excluded.auto, at_tokens = excluded.at_tokens,
+                   auto = excluded.auto, at_percent = excluded.at_percent,
                    updated_at = excluded.updated_at",
-                params![
-                    project_id,
-                    s.auto,
-                    i64::try_from(s.at_tokens).unwrap_or(i64::MAX),
-                    now_rfc3339()
-                ],
+                params![project_id, s.auto, s.at_percent, now_rfc3339()],
             )?;
             Ok(())
         })
@@ -287,12 +283,12 @@ mod tests {
         let p = project(&store);
         let default = CompactionSettings {
             auto: true,
-            at_tokens: 140_000,
+            at_percent: 70,
         };
         assert_eq!(store.compaction_settings(&p, default).unwrap(), default);
         let off = CompactionSettings {
             auto: false,
-            at_tokens: 300_000,
+            at_percent: 50,
         };
         store.set_compaction_settings(&p, off).unwrap();
         assert_eq!(store.compaction_settings(&p, default).unwrap(), off);
