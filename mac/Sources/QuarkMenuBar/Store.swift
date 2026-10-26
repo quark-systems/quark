@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import QuarkKit
+import WidgetKit
 
 /// What quarkd last told the menubar. Read on a timer and again whenever an
 /// event says something changed; nothing here is computed from anything but
@@ -78,6 +79,18 @@ final class Store: ObservableObject {
         if let hs = try? await harnesses, !hs.isEmpty {
             harnessNames = Dictionary(hs.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         }
+        reloadWidgetsIfChanged()
+    }
+
+    private var widgetsShow: (StatusView?, [Account])?
+
+    /// The widgets read quarkd themselves every few minutes; this brings them
+    /// up to date as soon as what they show changes.
+    private func reloadWidgetsIfChanged() {
+        let now = (status, accounts)
+        if let last = widgetsShow, last.0 == now.0, last.1 == now.1 { return }
+        widgetsShow = now
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     /// Reads again shortly, folding a burst of events into one read.

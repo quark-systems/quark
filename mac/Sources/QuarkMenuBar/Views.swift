@@ -1,54 +1,10 @@
 import AppKit
 import QuarkKit
+import QuarkUI
 import SwiftUI
 
 /// Width of the rich rows hosted in the menu.
 let rowWidth: CGFloat = 320
-
-extension Tone {
-    var color: NSColor {
-        switch self {
-        case .busy: return .systemBlue
-        case .needsYou: return .systemPurple
-        case .ready: return .systemGreen
-        case .failed: return .systemRed
-        case .parked: return .systemOrange
-        case .idle, .unknown: return .tertiaryLabelColor
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .busy: return "Busy"
-        case .needsYou: return "Needs you"
-        case .ready: return "Ready"
-        case .failed: return "Failed"
-        case .parked: return "Parked"
-        case .idle, .unknown: return "Idle"
-        }
-    }
-}
-
-extension ToneCounts {
-    /// "1 needs you · 2 busy · 1 ready", most urgent first; empty when all idle.
-    var summary: String {
-        [(needsYou, "needs you", "need you"), (failed, "failed", "failed"), (busy, "busy", "busy"),
-         (ready, "ready", "ready"), (parked, "parked", "parked")]
-            .filter { $0.0 > 0 }
-            .map { "\($0.0) \($0.0 == 1 ? $0.1 : $0.2)" }
-            .joined(separator: " · ")
-    }
-
-    /// The tone a group of workers shows: its most urgent one.
-    var lead: Tone {
-        if needsYou > 0 { return .needsYou }
-        if failed > 0 { return .failed }
-        if busy > 0 { return .busy }
-        if ready > 0 { return .ready }
-        if parked > 0 { return .parked }
-        return .idle
-    }
-}
 
 /// The top of the menu: is Quark running, and how is everything doing.
 struct HeaderView: View {
@@ -134,10 +90,7 @@ struct WindowBar: View {
         }
     }
 
-    private var tint: Color {
-        let p = window.percentRemaining ?? 0
-        return p <= 10 ? .red : p <= 30 ? .orange : .accentColor
-    }
+    private var tint: Color { quotaTint(window.percentRemaining ?? 0) }
 }
 
 /// One host: health, CPU and memory.
@@ -189,21 +142,6 @@ struct LabeledMeter: View {
             Meter(fraction: fraction, tint: fraction > 0.85 ? .orange : .accentColor)
             Text("\(label) \(Format.percent(fraction * 100))").font(.caption).foregroundStyle(.secondary)
         }
-    }
-}
-
-struct Meter: View {
-    let fraction: Double
-    let tint: Color
-
-    var body: some View {
-        GeometryReader { g in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.1))
-                Capsule().fill(tint).frame(width: g.size.width * min(max(fraction, 0), 1))
-            }
-        }
-        .frame(height: 5)
     }
 }
 

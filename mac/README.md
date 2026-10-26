@@ -20,6 +20,10 @@ something quarkd doesn't answer yet, add it to quarkd, not here.
   - **Open QuarkBar at Login.**
 
   Clicking an item opens that place in the Quark desktop app (`quark://open/<route>`).
+- **Widgets** (desktop and Notification Center): Needs you, Projects, Quota
+  and Hosts. Each reads quarkd itself every few minutes, and QuarkBar reloads
+  them as soon as what they show changes. Clicking one opens the desktop app at
+  that item.
 - **Notifications:** quarkd's `notice.posted` updates. The project's away
   policy decides what's worth telling you.
 - **quarkd:** the quarkd bundled in QuarkBar.app runs as the LaunchAgent
@@ -49,6 +53,12 @@ environment. The default is `--engine native`.
 - `Sources/QuarkKit`: API models, client, event stream, links, formatting. No
   AppKit; tested in `Tests/QuarkKitTests` against JSON fixtures shaped like
   quarkd's answers.
+- `Sources/QuarkUI`: how state words look (tone colors, summaries, meters),
+  shared by the menubar and the widgets.
+- `Sources/QuarkWidgets`: the WidgetKit extension. `scripts/package.sh` wraps
+  it as `Contents/PlugIns/QuarkWidgets.appex`, sandboxed with network access to
+  reach quarkd. Widgets show up in the gallery after QuarkBar.app has run once.
 - `Sources/QuarkMenuBar`: the app. AppKit status item and menu, with SwiftUI
   rows for meters.
-- `Resources`: Info.plist, the LaunchAgent plist and quarkd's launch script.
+- `Resources`: the Info.plists, the widgets' entitlements, the LaunchAgent plist
+  and quarkd's launch script.
