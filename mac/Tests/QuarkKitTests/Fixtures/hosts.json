@@ -1,0 +1,42 @@
+{
+  "hours": 1,
+  "hosts": [
+    {
+      "id": "host_local",
+      "name": "XMQHR2YYJ2",
+      "runtime": "local",
+      "os": "macos",
+      "arch": "aarch64",
+      "capacity": {"cpus": 12, "memory_bytes": 34359738368, "disk_bytes": 0, "max_workers": 0},
+      "health": {"status": "healthy", "reason": null, "since": "2026-10-26T20:00:00Z"},
+      "latest": {
+        "at": "2026-10-26T22:19:00Z",
+        "cpu": 0.31,
+        "memory_used_bytes": 20000000000,
+        "memory_total_bytes": 34359738368,
+        "memory_pressure": 0.2,
+        "disk_free_bytes": 200000000000,
+        "quark_disk": {"worktrees_bytes": 1, "logs_bytes": 2, "caches_bytes": 3, "event_log_bytes": 4}
+      },
+      "series": [],
+      "projects": [
+        {"project_id": "prj_1", "project_name": "Quark", "cpu": 0.2, "memory_bytes": 4000000000, "disk_bytes": 10, "parts": []}
+      ],
+      "worktrees": {"at": "2026-10-26T22:19:00Z", "idle": 3, "in_use": 2, "dirty": 0, "leased": 2, "quarantined": 0, "error": null, "slots": []}
+    },
+    {
+      "id": "host_cloud",
+      "name": "builder-1",
+      "runtime": "private_cloud",
+      "os": "linux",
+      "arch": "x86_64",
+      "capacity": {"cpus": 8, "memory_bytes": 17179869184, "disk_bytes": 0, "max_workers": 4},
+      "health": {"status": "unreachable", "reason": "ssh: connection refused", "since": null},
+      "latest": null,
+      "series": [],
+      "projects": [],
+      "worktrees": null
+    }
+  ],
+  "error": null
+}

@@ -1,0 +1,19 @@
+{
+  "attention": [
+    {"key": "pr:pr_1", "kind": "pull_request", "target_id": "pr_1", "title": "Fix login", "project_id": "prj_1", "project_name": "Quark", "since": "2026-10-08T02:00:00Z"},
+    {"key": "decision:dec_1", "kind": "decision", "target_id": "dec_1", "title": "Which database?", "project_id": "prj_1", "project_name": "Quark", "since": "2026-10-08T03:00:00Z"},
+    {"key": "x:1", "kind": "something_new", "target_id": "1", "title": "?", "project_id": "prj_1", "project_name": "Quark", "since": ""}
+  ],
+  "counts": {"busy": 1, "needs_you": 1, "ready": 0, "failed": 1, "parked": 0, "idle": 0},
+  "projects": [
+    {
+      "id": "prj_1", "name": "Quark", "status": "ready", "status_detail": null,
+      "attention": 2, "open_decisions": 1, "open_pull_requests": 2, "failing_pull_requests": 1,
+      "counts": {"busy": 1, "needs_you": 1, "ready": 0, "failed": 1, "parked": 0, "idle": 0},
+      "workers": [
+        {"id": "tsk_1", "title": "Menubar app", "state": "running", "tone": "busy", "note": "building QuarkKit", "harness": "claude-code", "pull_request_url": null, "updated_at": "2026-10-08T04:00:00Z"}
+      ],
+      "last_activity": "2026-10-08T04:00:00Z"
+    }
+  ]
+}

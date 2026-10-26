@@ -1,0 +1,10 @@
+#!/bin/zsh -l
+# Starts the quarkd bundled beside this script for launchd. A login shell so
+# quarkd finds what the user's shell finds (tmux, git, gh and the harness
+# CLIs); launchd's own PATH has none of them. Output goes to
+# ~/Library/Logs/Quark/quarkd.log, which QuarkBar's Show Log opens.
+# QUARKD_ARGS, if set in the login environment, replaces the default arguments.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+log_dir="$HOME/Library/Logs/Quark"
+mkdir -p "$log_dir"
+exec "${0:A:h}/../MacOS/quarkd" ${=QUARKD_ARGS:---engine native} >>"$log_dir/quarkd.log" 2>&1
