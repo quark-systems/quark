@@ -47,6 +47,8 @@ Useful flags (`cargo run -p quarkd -- --help` lists them all):
 
 The daemon logs to stderr and, as JSON lines, to `<home>/logs/quarkd.<date>.jsonl`, one file a day, keeping a week. Every hour it also prunes the store: successful engine reads after a day, failed ones after 30 days, and a finished task's terminal output down to its last 256 KB.
 
+`quarkd diagnose [--home <home>] [--hours 24] [--json]` reports what went wrong lately: warnings and errors from that log, failed engine reads, supervisor and dispatch trouble, workers gone quiet, decisions left waiting and an oversized store. It reads the home directly, so it works with the daemon down; `GET /v1/diagnostics?hours=24` returns the same report. Each finding has a fingerprint that stays the same while the trouble does.
+
 ## Run the app
 
 ```sh

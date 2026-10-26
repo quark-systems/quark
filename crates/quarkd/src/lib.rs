@@ -16,6 +16,7 @@ pub mod coordinator_commands;
 pub mod coordinator_hands;
 pub mod coordinator_http;
 pub mod crew_dispatch;
+pub mod diagnose;
 pub mod dispatch;
 pub mod dispatch_test;
 pub mod engine;

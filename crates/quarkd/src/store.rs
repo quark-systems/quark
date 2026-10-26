@@ -73,6 +73,9 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// The schema version this build migrates `quark.db` to.
+pub const SCHEMA_VERSION: i64 = migrations::SCHEMA_VERSION;
+
 /// A transcript the daemon projects into events.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TranscriptSource {

@@ -30,6 +30,20 @@ enum Command {
         #[command(subcommand)]
         provider: QuotaCommand,
     },
+    /// Report what went wrong lately: logged warnings and errors, failed
+    /// engine reads, supervisor and dispatch trouble, quiet workers. Reads
+    /// the home directly, so it works with the daemon down.
+    Diagnose {
+        /// Quark home directory [default: $QUARK_HOME or ~/.quark]
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Hours back to look.
+        #[arg(long, default_value_t = 24)]
+        hours: u32,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Bring projects over from another tool, through the running daemon.
     Import {
         #[command(subcommand)]
@@ -166,6 +180,18 @@ async fn main() -> anyhow::Result<()> {
         Command::Quota { home, provider } => {
             let home = home.unwrap_or_else(config::default_home);
             quota(&home, provider).await
+        }
+        Command::Diagnose { home, hours, json } => {
+            let home = home.unwrap_or_else(config::default_home);
+            let now = time::OffsetDateTime::now_utc();
+            let report =
+                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", quarkd::diagnose::render(&report));
+            }
+            Ok(())
         }
         Command::Import { source } => import(source).await,
         Command::Openapi => {

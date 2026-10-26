@@ -7,6 +7,7 @@ mod clear;
 mod dashboard;
 mod decision_beads;
 mod decisions;
+mod diagnostics;
 mod dispatch;
 mod error;
 mod events;
@@ -145,6 +146,10 @@ const MODULES: &[Module] = &[
     Module {
         router: status::router,
         openapi: <status::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: diagnostics::router,
+        openapi: <diagnostics::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,
