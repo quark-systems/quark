@@ -43,6 +43,7 @@ pub mod secrets;
 pub mod sessions;
 pub mod settings;
 pub mod spend;
+pub mod status;
 pub mod store;
 pub mod switch;
 pub mod task_brief;

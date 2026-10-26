@@ -4604,6 +4604,27 @@
         }
       }
     },
+    "/v1/status": {
+      "get": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "What waits on you across every Project, oldest first: open decisions,\nopen pull requests with a failing check, and failed or blocked workers\nnot already waiting on a decision. With it, each unarchived Project's\nlisted workers (unfinished, or failed in the last three days) by tone,\nits open decisions and pull requests, and its latest activity.",
+        "description": "Changes arrive as `task.*`, `decision.*`, `pr.updated`, `check.updated`\nand `project.*` events; read again on any of them.",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}": {
       "get": {
         "tags": [
@@ -5853,6 +5874,55 @@
           "video",
           "log",
           "report"
+        ]
+      },
+      "AttentionItem": {
+        "type": "object",
+        "description": "One thing that waits on you.",
+        "required": [
+          "key",
+          "kind",
+          "target_id",
+          "title",
+          "project_id",
+          "project_name",
+          "since"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "`decision:<id>`, `pr:<id>` or `worker:<id>`; stable while it waits."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AttentionKind"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string",
+            "description": "When it started waiting (RFC 3339)."
+          },
+          "target_id": {
+            "type": "string",
+            "description": "The decision's id, the pull request's id or the worker's task id."
+          },
+          "title": {
+            "type": "string",
+            "description": "The question, the pull request's title or the worker's title."
+          }
+        }
+      },
+      "AttentionKind": {
+        "type": "string",
+        "description": "What an attention item is.",
+        "enum": [
+          "decision",
+          "pull_request",
+          "worker"
         ]
       },
       "AuthState": {
@@ -10908,6 +10978,77 @@
           "failed"
         ]
       },
+      "ProjectSummary": {
+        "type": "object",
+        "description": "One Project's status.",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "attention",
+          "open_decisions",
+          "open_pull_requests",
+          "failing_pull_requests",
+          "counts",
+          "workers",
+          "last_activity"
+        ],
+        "properties": {
+          "attention": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items in `StatusView.attention` from this Project.",
+            "minimum": 0
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ToneCounts",
+            "description": "Listed workers per tone."
+          },
+          "failing_pull_requests": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Open pull requests with a failing check.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_activity": {
+            "type": "string",
+            "description": "The newest change to the Project, its workers, decisions or pull\nrequests (RFC 3339)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "open_decisions": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "open_pull_requests": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Open and draft pull requests.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProjectStatus"
+          },
+          "status_detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerSummary"
+            },
+            "description": "Listed workers: unfinished ones, and failed ones from the last three\ndays, most recent activity first."
+          }
+        }
+      },
       "ProjectUsage": {
         "type": "object",
         "description": "One Project's share of a host.",
@@ -11816,6 +11957,35 @@
           }
         }
       },
+      "StatusView": {
+        "type": "object",
+        "description": "Every Project's status and everything that waits on you.",
+        "required": [
+          "attention",
+          "counts",
+          "projects"
+        ],
+        "properties": {
+          "attention": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttentionItem"
+            },
+            "description": "Everything that waits on you, oldest first."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ToneCounts",
+            "description": "Listed workers across all Projects, per tone."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectSummary"
+            },
+            "description": "Projects by name; archived ones are left out."
+          }
+        }
+      },
       "SupervisionConfidence": {
         "type": "string",
         "description": "How confidently the daemon can tell when an agent is busy or done.",
@@ -12538,6 +12708,62 @@
           }
         }
       },
+      "Tone": {
+        "type": "string",
+        "description": "How a worker's state reads: the glossary's state words.",
+        "enum": [
+          "busy",
+          "needs_you",
+          "ready",
+          "failed",
+          "parked",
+          "idle"
+        ]
+      },
+      "ToneCounts": {
+        "type": "object",
+        "description": "Workers per tone.",
+        "required": [
+          "busy",
+          "needs_you",
+          "ready",
+          "failed",
+          "parked",
+          "idle"
+        ],
+        "properties": {
+          "busy": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "idle": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "needs_you": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "parked": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ready": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "ToolDiffLine": {
         "type": "object",
         "description": "One line of a [`ToolInfo`] diff preview.",
@@ -13133,6 +13359,53 @@
               "$ref": "#/components/schemas/SourceVerification"
             },
             "description": "One per workspace source, in `project.yaml` order."
+          }
+        }
+      },
+      "WorkerSummary": {
+        "type": "object",
+        "description": "One listed worker.",
+        "required": [
+          "id",
+          "title",
+          "state",
+          "tone",
+          "updated_at"
+        ],
+        "properties": {
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The worker's latest status line, when it has one."
+          },
+          "pull_request_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone"
+          },
+          "updated_at": {
+            "type": "string"
           }
         }
       },

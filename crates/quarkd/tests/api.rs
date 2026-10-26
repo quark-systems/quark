@@ -221,6 +221,24 @@ async fn projects_tasks_decisions_and_event_replay() {
     let (_, answered) = call(&h.app, "GET", "/v1/decisions?state=answered", None).await;
     assert!(answered.as_array().unwrap().is_empty());
 
+    // The status summary reaches the worker through its decision.
+    let (status, summary) = call(&h.app, "GET", "/v1/status", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let attention = summary["attention"].as_array().unwrap();
+    assert_eq!(attention.len(), 1);
+    assert_eq!(attention[0]["kind"], "decision");
+    assert_eq!(attention[0]["title"], "Ship behind a flag?");
+    assert_eq!(attention[0]["project_name"], "Quark");
+    assert_eq!(summary["counts"]["needs_you"], 1);
+    let p = &summary["projects"][0];
+    assert_eq!(
+        (p["id"].as_str(), p["attention"].as_u64()),
+        (Some(pid.as_str()), Some(1))
+    );
+    assert_eq!(p["open_decisions"], 1);
+    assert_eq!(p["workers"][0]["id"], tid.as_str());
+    assert_eq!(p["workers"][0]["tone"], "needs_you");
+
     let (status, patched) = call(
         &h.app,
         "PATCH",
