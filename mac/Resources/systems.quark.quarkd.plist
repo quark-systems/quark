@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- quarkd as a per-user LaunchAgent, registered by QuarkBar through SMAppService.
+     launchd starts it at login and restarts it if it exits. -->
+<dict>
+	<key>Label</key>
+	<string>systems.quark.quarkd</string>
+	<key>BundleProgram</key>
+	<string>Contents/Resources/quarkd-launch</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>systems.quark.bar</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<!-- Another quarkd already holding the port makes this one exit; don't spin. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+</dict>
+</plist>
