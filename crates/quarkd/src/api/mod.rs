@@ -22,6 +22,7 @@ mod personas;
 pub mod pull_requests;
 mod repositories;
 mod routes;
+mod status;
 mod terminals;
 
 use std::sync::Arc;
@@ -140,6 +141,10 @@ const MODULES: &[Module] = &[
     Module {
         router: hosts::router,
         openapi: <hosts::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: status::router,
+        openapi: <status::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,
