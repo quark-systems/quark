@@ -8,15 +8,22 @@ set -euo pipefail
 
 mac="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$mac/.." && pwd)"
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/quarkd/Cargo.toml" | head -1)"
+# quarkd takes its version from the workspace.
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
 build="$(git -C "$repo" rev-list --count HEAD 2>/dev/null || echo 1)"
 app="$mac/dist/QuarkBar.app"
 
 echo "building quarkd $version"
 cargo build --release --manifest-path "$repo/Cargo.toml" -p quarkd
 echo "building QuarkBar"
-swift build -c release --package-path "$mac" --product QuarkMenuBar
-bin="$(swift build -c release --package-path "$mac" --show-bin-path)"
+# With only the Command Line Tools, SwiftPM's default build system fails to
+# start ("Unknown error parsing property list"); the native one works.
+swift_flags=(-c release --package-path "$mac")
+if [[ "$(xcode-select -p 2>/dev/null)" == */CommandLineTools ]]; then
+  swift_flags+=(--build-system native)
+fi
+swift build "${swift_flags[@]}" --product QuarkMenuBar
+bin="$(swift build "${swift_flags[@]}" --show-bin-path)"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Library/LaunchAgents"
