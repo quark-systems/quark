@@ -363,9 +363,9 @@ function coordinatorContextOf(proj) {
   return {
     coordinator_id: proj.id, agent_config: proj.agent_config,
     model_seen: proj.agent_config?.model ? null : codex ? "gpt-5-codex" : "claude-opus-5-5",
-    context_tokens: compacted && Date.now() - Date.parse(compacted.at) < 30_000 ? null : used, window_tokens: codex ? 272_000 : 200_000,
+    context_tokens: compacted && Date.now() - Date.parse(compacted.at) < 30_000 ? null : used, window_tokens: codex ? 272_000 : 1_000_000,
     measured_at: now(), compaction: compactionOf(proj.id),
-    compact_at_tokens: compactionOf(proj.id).auto ? Math.round((codex ? 272_000 : 200_000) * compactionOf(proj.id).at_percent / 100) : null,
+    compact_at_tokens: compactionOf(proj.id).auto ? Math.round((codex ? 272_000 : 1_000_000) * compactionOf(proj.id).at_percent / 100) : null,
     compacting: "idle", last_compaction: compacted ?? null, switch: switches.get(proj.id) ?? null,
   };
 }

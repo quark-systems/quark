@@ -362,43 +362,115 @@ pub fn newest_log(roots: &SessionRoots, root: &Path) -> Option<(PathBuf, Session
         })
 }
 
-/// The context window of the coordinator's model, when Quark knows it: 1M
-/// for a Claude model asked for with `[1m]` (or seen holding more than
-/// 200k), 200k for other Claude models, 272k for Codex's GPT-5 models.
+/// The context window of the coordinator's model, when Quark knows it,
+/// from the providers' published windows (see [`claude_window`]): 1M for
+/// current Claude models, 200k for older ones, 272k of input for OpenAI's
+/// GPT-5 models. The model its session log names wins over the configured
+/// one, which may be an alias. A context seen past a Claude window means
+/// the larger window.
 pub fn window_tokens(
     agent: Option<&AgentConfig>,
     seen: Option<&str>,
     context: Option<u64>,
 ) -> Option<u64> {
-    let configured = agent.and_then(|a| a.model.as_deref()).unwrap_or("");
+    let configured = agent
+        .and_then(|a| a.model.as_deref())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let harness = agent.map(|a| a.harness.as_str()).unwrap_or("");
-    let seen = seen.unwrap_or("");
-    let lower = |s: &str| s.to_ascii_lowercase();
-    let (configured, seen) = (lower(configured), lower(seen));
-    let any = |f: &dyn Fn(&str) -> bool| f(&configured) || f(&seen);
-    let claude = harness == "claude-code"
-        || harness == "claude"
-        || any(&|m: &str| {
-            ["claude", "opus", "sonnet", "haiku", "fable"]
-                .iter()
-                .any(|k| m.contains(k))
-        });
-    let window = if claude {
-        if any(&|m: &str| m.contains("[1m]")) {
-            1_000_000
-        } else {
-            200_000
-        }
-    } else if any(&|m: &str| m.starts_with("gpt-5")) || harness == "codex" {
-        272_000
-    } else {
-        return None;
-    };
+    let seen = seen.unwrap_or("").to_ascii_lowercase();
+    let models: Vec<&str> = [seen.as_str(), configured.as_str()]
+        .into_iter()
+        .filter(|m| !m.is_empty())
+        .collect();
+    let window = models
+        .iter()
+        .find_map(|m| claude_window(m).or_else(|| openai_window(m)))
+        .or_else(|| match harness {
+            // The harness's own default model.
+            "claude-code" | "claude"
+                if models.is_empty() || models.iter().all(|m| *m == "default") =>
+            {
+                Some(CLAUDE_WINDOW)
+            }
+            "codex" => Some(GPT5_WINDOW),
+            _ => None,
+        })?;
     match context {
-        Some(c) if c > window && claude => Some(1_000_000),
+        Some(c)
+            if c > window
+                && window < CLAUDE_WINDOW
+                && models.iter().any(|m| claude_window(m).is_some()) =>
+        {
+            Some(CLAUDE_WINDOW)
+        }
         Some(c) if c > window => None,
         _ => Some(window),
     }
+}
+
+/// Current Claude models' window: Opus and Sonnet from 4.6, Haiku from 5,
+/// Fable and Mythos (Anthropic's model overview).
+const CLAUDE_WINDOW: u64 = 1_000_000;
+/// Older Claude models' window.
+const CLAUDE_OLD_WINDOW: u64 = 200_000;
+/// GPT-5 models' input window (400k in all, 128k of it output).
+const GPT5_WINDOW: u64 = 272_000;
+
+/// A Claude model's window, by id or Claude Code alias: `claude-opus-5-5`,
+/// `opus`, `sonnet[1m]`, `anthropic/claude-haiku-4-5`, `claude-3-7-sonnet`.
+/// A family named without a version is the latest, so a newer model than
+/// Quark knows gets the current window.
+fn claude_window(model: &str) -> Option<u64> {
+    if model.contains("[1m]") {
+        return Some(CLAUDE_WINDOW);
+    }
+    const FAMILIES: [&str; 5] = ["opus", "sonnet", "haiku", "fable", "mythos"];
+    let family = FAMILIES.iter().find(|f| model.contains(*f));
+    if family.is_none() && !model.contains("claude") {
+        return None;
+    }
+    // The version: numbers right after the family, or (old ids) right
+    // after `claude-`, ignoring a date.
+    let numbers = |s: &str| -> Vec<u32> {
+        s.split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|p| !p.is_empty())
+            .take_while(|p| p.chars().all(|c| c.is_ascii_digit()) && p.len() < 4)
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    };
+    let after = |key: &str| {
+        model
+            .split_once(key)
+            .map(|(_, r)| numbers(r))
+            .unwrap_or_default()
+    };
+    let mut version = family.map(|f| after(f)).unwrap_or_default();
+    if version.is_empty() {
+        version = after("claude");
+    }
+    let (major, minor) = match version.as_slice() {
+        [] => return Some(CLAUDE_WINDOW),
+        [m] => (*m, 0),
+        [m, n, ..] => (*m, *n),
+    };
+    let current = match family.copied() {
+        Some("opus" | "sonnet") => (major, minor) >= (4, 6),
+        Some("haiku") => major >= 5,
+        Some(_) => true,
+        None => major >= 5,
+    };
+    Some(if current {
+        CLAUDE_WINDOW
+    } else {
+        CLAUDE_OLD_WINDOW
+    })
+}
+
+/// An OpenAI GPT-5 model's input window.
+fn openai_window(model: &str) -> Option<u64> {
+    let m = model.rsplit('/').next().unwrap_or(model);
+    m.starts_with("gpt-5").then_some(GPT5_WINDOW)
 }
 
 /// After a coordinator turn that ended with `context` tokens, take the
@@ -578,10 +650,14 @@ mod tests {
             };
             threshold(Some(&agent), None, context, s)
         };
-        assert_eq!(at(70, None, None), Some(140_000));
-        assert_eq!(at(70, Some("opus[1m]"), None), Some(700_000));
+        // Claude Code's default model: 1M.
+        assert_eq!(at(70, None, None), Some(700_000));
+        assert_eq!(at(70, Some("claude-haiku-4-5"), None), Some(140_000));
         // Seen past 200k: a 1M window.
-        assert_eq!(at(50, None, Some(300_000)), Some(500_000));
+        assert_eq!(
+            at(50, Some("claude-haiku-4-5"), Some(300_000)),
+            Some(500_000)
+        );
         assert_eq!(at(0, None, None), None);
         let off = CompactionSettings {
             auto: false,
@@ -610,24 +686,74 @@ mod tests {
             effort: None,
             pool: None,
         };
+        // Claude Code's default and its aliases are current models: 1M.
         let a = agent("claude-code", None);
-        assert_eq!(window_tokens(Some(&a), None, Some(50_000)), Some(200_000));
+        assert_eq!(window_tokens(Some(&a), None, Some(50_000)), Some(1_000_000));
+        for m in [
+            "opus",
+            "sonnet",
+            "haiku",
+            "opus[1m]",
+            "claude-opus-5-5",
+            "claude-sonnet-4-6",
+            "claude-haiku-5-5",
+            "claude-fable-5-1",
+            "anthropic/claude-opus-4-8",
+        ] {
+            assert_eq!(
+                window_tokens(Some(&agent("claude-code", Some(m))), None, None),
+                Some(1_000_000),
+                "{m}"
+            );
+        }
+        // Older models: 200k, unless asked for with [1m] or seen past it.
+        for m in [
+            "claude-haiku-4-5",
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-5",
+            "claude-3-7-sonnet-latest",
+            "claude-opus-4-1",
+        ] {
+            assert_eq!(
+                window_tokens(Some(&agent("claude-code", Some(m))), None, None),
+                Some(200_000),
+                "{m}"
+            );
+        }
+        let a = agent("claude-code", Some("claude-sonnet-4-5"));
         assert_eq!(
             window_tokens(Some(&a), None, Some(400_000)),
             Some(1_000_000)
         );
-        let a = agent("claude-code", Some("opus[1m]"));
         assert_eq!(
-            window_tokens(Some(&a), Some("claude-opus-5-5"), None),
+            window_tokens(
+                Some(&agent("claude-code", Some("sonnet-4-5[1m]"))),
+                None,
+                None
+            ),
             Some(1_000_000)
+        );
+        // The model the log names wins over the alias.
+        let a = agent("claude-code", Some("haiku"));
+        assert_eq!(
+            window_tokens(Some(&a), Some("claude-haiku-4-5-20251001"), None),
+            Some(200_000)
         );
         let a = agent("codex", Some("gpt-5-codex"));
         assert_eq!(window_tokens(Some(&a), None, None), Some(272_000));
+        assert_eq!(
+            window_tokens(Some(&agent("codex", None)), None, None),
+            Some(272_000)
+        );
         let a = agent("pi", Some("kimi-k2"));
         assert_eq!(window_tokens(Some(&a), None, None), None);
         assert_eq!(
+            window_tokens(Some(&agent("pi", Some("openai/gpt-5.1"))), None, None),
+            Some(272_000)
+        );
+        assert_eq!(
             window_tokens(None, Some("claude-sonnet-5-5"), None),
-            Some(200_000)
+            Some(1_000_000)
         );
     }
 }
