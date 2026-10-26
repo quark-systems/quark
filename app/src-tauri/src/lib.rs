@@ -4,11 +4,15 @@
 // - QUARK_QUERY is appended to the page URL as-is (e.g. "renderer=webgl").
 // - QUARK_GLASS=0 keeps the macOS window opaque.
 //
+// `quark://open/<route>` links (from QuarkBar, notifications and widgets) bring the window
+// forward on that route: <route> is the page's own hash route (src/nav.ts), e.g.
+// `quark://open/t/<task id>`. macOS only delivers them to the bundled app.
+//
 // On macOS the window is translucent with a native blur behind it (an NSVisualEffectView
 // through Tauri's window effects) and the title bar overlays the page; the page learns that
 // from `glass=1&platform=macos` and paints its panels partly transparent. The approach is
 // adapted from MonoCode (https://github.com/hardbeat920/monocode), MIT, Copyright (c) 2026 Nick.
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// Query flags describing the window to the page.
 fn shell_flags() -> Vec<String> {
@@ -57,12 +61,44 @@ fn encode(s: &str) -> String {
         .collect()
 }
 
+/// The page hash a `quark://open/<route>` link names, e.g. `#/t/tsk_1`. Anything else, or
+/// a route with characters a hash route never holds, names none.
+fn link_hash(url: &str) -> Option<String> {
+    let route = url.strip_prefix("quark://open")?;
+    let route = route.strip_prefix('/').unwrap_or(route);
+    let route = route.split(['?', '#']).next().unwrap_or("");
+    let ok = route
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"/-_.~%".contains(&b));
+    ok.then(|| format!("#/{route}"))
+}
+
+/// Shows the main window on the route `url` names.
+fn open_link(app: &AppHandle, url: &str) {
+    let (Some(hash), Some(window)) = (link_hash(url), app.get_webview_window("main")) else {
+        return;
+    };
+    // `link_hash` only lets through characters that need no escaping in a JS string.
+    let _ = window.eval(format!("location.hash = '{hash}'"));
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            use tauri_plugin_deep_link::DeepLinkExt;
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    open_link(&handle, url.as_str());
+                }
+            });
             let builder = WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -89,6 +125,12 @@ pub fn run() {
                 }
             };
             builder.build()?;
+            // Launched by a link: open its route once the window exists.
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                for url in urls {
+                    open_link(app.handle(), url.as_str());
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -97,7 +139,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode, page_path};
+    use super::{encode, link_hash, page_path};
+
+    #[test]
+    fn links_name_hash_routes() {
+        assert_eq!(
+            link_hash("quark://open/t/tsk_1").as_deref(),
+            Some("#/t/tsk_1")
+        );
+        assert_eq!(
+            link_hash("quark://open/p/prj_1/work").as_deref(),
+            Some("#/p/prj_1/work")
+        );
+        assert_eq!(link_hash("quark://open/").as_deref(), Some("#/"));
+        assert_eq!(link_hash("quark://open").as_deref(), Some("#/"));
+        assert_eq!(
+            link_hash("quark://open/inbox/a%2Fb?x=1").as_deref(),
+            Some("#/inbox/a%2Fb")
+        );
+        assert_eq!(link_hash("quark://open/t/x';alert(1)//"), None);
+        assert_eq!(link_hash("https://example.com"), None);
+    }
 
     #[test]
     fn encodes_daemon_urls() {
