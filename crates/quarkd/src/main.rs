@@ -30,6 +30,50 @@ enum Command {
         #[command(subcommand)]
         provider: QuotaCommand,
     },
+    /// Report what went wrong lately: logged warnings and errors, failed
+    /// engine reads, supervisor and dispatch trouble, quiet workers. Reads
+    /// the home directly, so it works with the daemon down.
+    Diagnose {
+        /// Quark home directory [default: $QUARK_HOME or ~/.quark]
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Hours back to look.
+        #[arg(long, default_value_t = 24)]
+        hours: u32,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// File what `diagnose` finds as beads: a new finding becomes a bug, one
+    /// seen again gets a comment, one that came back after closing is
+    /// reopened.
+    Triage {
+        /// Quark home directory [default: $QUARK_HOME or ~/.quark]
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Hours back to look.
+        #[arg(long, default_value_t = 24)]
+        hours: u32,
+        /// The Beads database to file into (a `.beads` directory).
+        #[arg(long, env = "BEADS_DIR", required_unless_present = "project")]
+        beads_dir: Option<PathBuf>,
+        /// File into this Project's Beads database instead.
+        #[arg(long, conflicts_with = "beads_dir")]
+        project: Option<String>,
+        /// Least severe finding to file.
+        #[arg(long, value_enum, default_value_t = quarkd::diagnose::Severity::Warn)]
+        min: quarkd::diagnose::Severity,
+        /// Print what would be filed without filing it.
+        #[arg(long)]
+        dry_run: bool,
+        /// `bd dolt pull` first and `bd dolt push` after, for a database
+        /// shared between Macs.
+        #[arg(long)]
+        sync: bool,
+        /// bd binary.
+        #[arg(long, env = "QUARKD_BD", default_value = "bd")]
+        bd: PathBuf,
+    },
     /// Bring projects over from another tool, through the running daemon.
     Import {
         #[command(subcommand)]
@@ -143,15 +187,22 @@ struct ServeArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("QUARKD_LOG")
-                .unwrap_or_else(|_| "quarkd=info,tower_http=info".into()),
-        )
-        .init();
-
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve(cli.serve)) {
+    let command = cli.command.unwrap_or(Command::Serve(cli.serve));
+    // The daemon also logs to <home>/logs, so a daemon the app launched
+    // (whose stderr goes nowhere) still leaves a log to diagnose from.
+    let log_dir = match &command {
+        Command::Serve(args) => Some(
+            args.home
+                .clone()
+                .unwrap_or_else(config::default_home)
+                .join("logs"),
+        ),
+        _ => None,
+    };
+    let _log_guard = init_tracing(log_dir.as_deref());
+
+    match command {
         Command::Ptyd { socket } => {
             quark_sessions::pty::run_daemon(&socket).await?;
             Ok(())
@@ -159,6 +210,41 @@ async fn main() -> anyhow::Result<()> {
         Command::Quota { home, provider } => {
             let home = home.unwrap_or_else(config::default_home);
             quota(&home, provider).await
+        }
+        Command::Diagnose { home, hours, json } => {
+            let home = home.unwrap_or_else(config::default_home);
+            let now = time::OffsetDateTime::now_utc();
+            let report =
+                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", quarkd::diagnose::render(&report));
+            }
+            Ok(())
+        }
+        Command::Triage {
+            home,
+            hours,
+            beads_dir,
+            project,
+            min,
+            dry_run,
+            sync,
+            bd,
+        } => {
+            let home = home.unwrap_or_else(config::default_home);
+            let beads_dir = match (beads_dir, project) {
+                (_, Some(p)) => quarkd::triage::project_beads_dir(&home, &p),
+                (Some(d), None) => d,
+                (None, None) => anyhow::bail!("give --beads-dir or --project"),
+            };
+            let now = time::OffsetDateTime::now_utc();
+            let report =
+                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now);
+            let bd = quarkd::triage::Bd { bin: bd, beads_dir };
+            quarkd::triage::triage(&report, &bd, min, dry_run, sync)?;
+            Ok(())
         }
         Command::Import { source } => import(source).await,
         Command::Openapi => {
@@ -179,6 +265,51 @@ async fn main() -> anyhow::Result<()> {
             quarkd::serve(config, args.engine).await
         }
     }
+}
+
+/// Logs to stderr, and with `log_dir` also as JSON lines to a file there
+/// that rolls daily, keeping a week. The returned guard flushes the file on
+/// drop.
+fn init_tracing(
+    log_dir: Option<&std::path::Path>,
+) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
+
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_env("QUARKD_LOG")
+            .unwrap_or_else(|_| "quarkd=info,tower_http=info".into())
+    };
+    let stderr = tracing_subscriber::fmt::layer().with_filter(filter());
+    let file = log_dir.and_then(|dir| {
+        let appender = tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("quarkd")
+            .filename_suffix("jsonl")
+            .max_log_files(7)
+            .build(dir)
+            .map_err(|e| eprintln!("quarkd: not logging to {}: {e}", dir.display()))
+            .ok()?;
+        Some(tracing_appender::non_blocking(appender))
+    });
+    let (file_layer, guard) = match file {
+        Some((writer, guard)) => (
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_writer(writer)
+                    .with_filter(filter()),
+            ),
+            Some(guard),
+        ),
+        None => (None, None),
+    };
+    tracing_subscriber::registry()
+        .with(stderr)
+        .with(file_layer)
+        .init();
+    guard
 }
 
 async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result<()> {

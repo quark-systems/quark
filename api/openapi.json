@@ -869,6 +869,42 @@
         }
       }
     },
+    "/v1/diagnostics": {
+      "get": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Trouble in this Quark home over the last `hours`: warnings and errors\nthe daemon logged, failed engine reads, supervisor and dispatch\ntrouble, quiet workers, waiting decisions and an oversized store. Each\nfinding's fingerprint stays the same while the trouble does.",
+        "operationId": "diagnostics",
+        "parameters": [
+          {
+            "name": "hours",
+            "in": "query",
+            "description": "Hours back the report covers; 24 when unset.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Diagnostics"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/events": {
       "get": {
         "tags": [
@@ -7122,6 +7158,52 @@
           "direct"
         ]
       },
+      "Diagnostics": {
+        "type": "object",
+        "required": [
+          "home",
+          "host",
+          "version",
+          "generated_at",
+          "since",
+          "sizes",
+          "findings"
+        ],
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "description": "Worst first, then most frequent."
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "home": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "last_log_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the daemon last logged, if it logs to the home."
+          },
+          "since": {
+            "type": "string"
+          },
+          "sizes": {
+            "$ref": "#/components/schemas/StoreSizes"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "DiffSide": {
         "type": "string",
         "description": "Which side of a diff a line comment is on.",
@@ -8256,6 +8338,63 @@
           "type_changed",
           "untracked"
         ]
+      },
+      "Finding": {
+        "type": "object",
+        "description": "One kind of trouble seen in the window.",
+        "required": [
+          "fingerprint",
+          "severity",
+          "source",
+          "summary",
+          "count",
+          "first_seen",
+          "last_seen",
+          "projects",
+          "samples"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "Stable while the trouble is the same: masks numbers and ids."
+          },
+          "first_seen": {
+            "type": "string"
+          },
+          "last_seen": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projects it was seen in."
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A few instances, as they were."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where it was seen: `log`, `adapter_call`, `event`, `task`,\n`decision` or `store`."
+          },
+          "summary": {
+            "type": "string",
+            "description": "What it is, with numbers and ids masked."
+          }
+        }
       },
       "FirstmateImportReport": {
         "type": "object",
@@ -11763,6 +11902,14 @@
           }
         }
       },
+      "Severity": {
+        "type": "string",
+        "enum": [
+          "info",
+          "warn",
+          "error"
+        ]
+      },
       "SourceVerification": {
         "type": "object",
         "description": "One workspace source's gates.",
@@ -11983,6 +12130,31 @@
               "$ref": "#/components/schemas/ProjectSummary"
             },
             "description": "Projects by name; archived ones are left out."
+          }
+        }
+      },
+      "StoreSizes": {
+        "type": "object",
+        "required": [
+          "quark_db_bytes",
+          "events_db_bytes",
+          "logs_bytes"
+        ],
+        "properties": {
+          "events_db_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "logs_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "quark_db_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

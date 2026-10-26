@@ -1661,3 +1661,12 @@ async fn clearing_finished_workers_hides_them_and_keeps_unlanded_work() {
     let (_, shown) = call(&h.app, "GET", &list, None).await;
     assert_eq!(shown.as_array().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn diagnostics_reports_the_home() {
+    let h = harness().await;
+    let (status, body) = call(&h.app, "GET", "/v1/diagnostics?hours=1", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["findings"].is_array());
+    assert!(body["sizes"]["quark_db_bytes"].is_u64());
+}

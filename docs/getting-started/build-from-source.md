@@ -45,6 +45,12 @@ Useful flags (`cargo run -p quarkd -- --help` lists them all):
 | `--pr-refresh-secs` | | `30` |
 | | `QUARKD_LOG` | `quarkd=info,tower_http=info` |
 
+The daemon logs to stderr and, as JSON lines, to `<home>/logs/quarkd.<date>.jsonl`, one file a day, keeping a week. Every hour it also prunes the store: successful engine reads after a day, failed ones after 30 days, and a finished task's terminal output down to its last 256 KB.
+
+`quarkd diagnose [--home <home>] [--hours 24] [--json]` reports what went wrong lately: warnings and errors from that log, failed engine reads, supervisor and dispatch trouble, workers gone quiet, decisions left waiting and an oversized store. It reads the home directly, so it works with the daemon down; `GET /v1/diagnostics?hours=24` returns the same report. Each finding has a fingerprint that stays the same while the trouble does.
+
+`quarkd triage --project <id> | --beads-dir <dir> [--sync] [--dry-run]` files those findings (warnings and worse by default) as beads: a new one becomes a bug labelled `diagnostics` with `external_ref diag:<fingerprint>`, one seen again gets a comment, and one that came back after it was closed is reopened. `--sync` runs `bd dolt pull` before and `bd dolt push` after, for a database shared between Macs. A Quark trigger runs it daily.
+
 ## Run the app
 
 ```sh
