@@ -89,7 +89,7 @@ Each Project sets it in Settings (`compaction` in `GET`/`PATCH /v1/projects/{id}
 Only harnesses with a turn-end hook (Claude Code) set the automatic steps off; the context itself is read from any coordinator's session log.
 
 Every compaction, whoever started it, is one `compaction` entry in the conversation (Claude Code's `compact_boundary` line, Codex's `compacted`, Pi's `compaction`), and the `/compact` command line is left out.
-`GET /v1/coordinators/{id}/context` returns the coordinator's agent config, the model its log names, the context its last turn ended on, the model's window when known (Claude 200k, or 1M for a `[1m]` model or one seen past 200k; Codex GPT-5 272k), the compaction settings and the threshold in tokens (`compact_at_tokens`), where a compaction is, the last compaction, and the latest change of agent (`switch`). The coordinator's header shows it as a meter.
+`GET /v1/coordinators/{id}/context` returns the coordinator's agent config, the model its log names, the context its last turn ended on, the model's window when known, from the providers' published windows (1M for current Claude models: Opus and Sonnet from 4.6, Haiku from 5, Fable, and Claude Code's aliases; 200k for older ones unless asked for with `[1m]` or seen past it; 272k of input for GPT-5 models), the model the session log names winning over a configured alias, the compaction settings and the threshold in tokens (`compact_at_tokens`), where a compaction is, the last compaction, and the latest change of agent (`switch`). The coordinator's header shows it as a meter.
 
 ### Changing the agent
 
