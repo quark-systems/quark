@@ -142,7 +142,7 @@ struct WindowBar: View {
 
 /// One host: health, CPU and memory.
 struct HostRow: View {
-    let host: Host
+    let host: HostView
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

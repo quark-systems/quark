@@ -154,11 +154,11 @@ public struct Harness: Codable, Equatable, Identifiable, Sendable {
 /// `GET /v1/hosts`.
 public struct HostsView: Codable, Equatable, Sendable {
     public var hours: UInt32
-    public var hosts: [Host]
+    public var hosts: [HostView]
     public var error: String?
 }
 
-public struct Host: Codable, Equatable, Identifiable, Sendable {
+public struct HostView: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var name: String
     public var runtime: HostRuntime
