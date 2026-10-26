@@ -1457,7 +1457,86 @@ impl Store {
         })
     }
 
+    /// Trims the output of a terminal whose task finished: deletes
+    /// everything before the newest snapshot that still leaves at least
+    /// `keep_bytes`, so a replay starts from a full screen. A terminal with
+    /// no such snapshot is left as it is.
+    pub fn trim_finished_terminal(&self, terminal_id: &str, keep_bytes: u64) -> Result<usize> {
+        self.read(|c| {
+            let start: Option<i64> = c.query_row(
+                "SELECT MAX(seq) FROM (
+                     SELECT seq, payload, SUM(size) OVER (ORDER BY seq DESC) AS kept
+                     FROM events WHERE subject = ?1 AND type = 'worker.output'
+                 ) WHERE kept >= ?2 AND json_extract(payload, '$.kind') = 'snapshot'",
+                params![terminal_id, keep_bytes as i64],
+                |r| r.get(0),
+            )?;
+            let Some(start) = start else {
+                return Ok(0);
+            };
+            Ok(c.execute(
+                "DELETE FROM events WHERE subject = ?1 AND type = 'worker.output' AND seq < ?2",
+                params![terminal_id, start],
+            )?)
+        })
+    }
+
+    /// Done or failed tasks, last changed before `before`, whose terminal
+    /// still keeps more than `keep_bytes` of output.
+    pub fn finished_terminals_over(&self, before: &str, keep_bytes: u64) -> Result<Vec<String>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT t.id FROM tasks t JOIN events e ON e.subject = t.id
+                 WHERE t.state IN ('done', 'failed') AND t.updated_at < ?1
+                   AND e.type = 'worker.output'
+                 GROUP BY t.id HAVING SUM(e.size) > ?2",
+            )?;
+            let rows = stmt.query_map(params![before, keep_bytes as i64], |r| r.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Gives free pages back to the filesystem when at least `min_free`
+    /// bytes and half the file are free, as after the first prune of a
+    /// long-running home. Returns the bytes freed.
+    pub fn vacuum_if_mostly_free(&self, min_free: u64) -> Result<u64> {
+        self.read(|c| {
+            let (free, total): (i64, i64) = c.query_row(
+                "SELECT f.freelist_count * s.page_size, n.page_count * s.page_size
+                 FROM pragma_freelist_count f, pragma_page_count n, pragma_page_size s",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if (free as u64) < min_free || free * 2 < total {
+                return Ok(0);
+            }
+            c.execute_batch("VACUUM")?;
+            Ok(free as u64)
+        })
+    }
+
     // Adapter calls
+
+    /// Deletes up to `limit` adapter calls that succeeded before
+    /// `ok_before` or failed before `failed_before`. Returns how many went,
+    /// so a caller clears a backlog in batches without holding the store.
+    pub fn prune_adapter_calls(
+        &self,
+        ok_before: &str,
+        failed_before: &str,
+        limit: u32,
+    ) -> Result<usize> {
+        self.read(|c| {
+            Ok(c.execute(
+                "DELETE FROM adapter_calls WHERE id IN (
+                     SELECT id FROM adapter_calls
+                     WHERE (ok = 1 AND ts < ?1) OR (ok = 0 AND ts < ?2)
+                     LIMIT ?3
+                 )",
+                params![ok_before, failed_before, limit],
+            )?)
+        })
+    }
 
     /// Outcomes of a Project's most recent adapter calls for `operation`
     /// (`snapshot`, `gates`, `dispatch`...), newest first: whether each
@@ -2320,5 +2399,139 @@ mod tests {
             "user",
             "Merge #12 when green"
         )));
+    }
+
+    #[test]
+    fn prune_adapter_calls_keeps_recent_and_failures() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .record_adapter_call(Some(&p.id), "status", true, 1, None)
+            .unwrap();
+        store
+            .record_adapter_call(Some(&p.id), "status", false, 1, Some("boom"))
+            .unwrap();
+        store
+            .read(|c| {
+                c.execute("UPDATE adapter_calls SET ts = '2026-01-01T00:00:00Z'", [])?;
+                Ok(())
+            })
+            .unwrap();
+        store
+            .record_adapter_call(Some(&p.id), "status", true, 1, None)
+            .unwrap();
+
+        // Old successes go, an old failure inside its window stays.
+        let n = store
+            .prune_adapter_calls("2026-02-01T00:00:00Z", "2025-12-01T00:00:00Z", 10)
+            .unwrap();
+        assert_eq!(n, 1);
+        let left = store.recent_adapter_calls(&p.id, "status", 10).unwrap();
+        assert_eq!(left, [(true, None), (false, Some("boom".into()))]);
+
+        // Batches stop at the limit.
+        let n = store
+            .prune_adapter_calls("2099-01-01T00:00:00Z", "2099-01-01T00:00:00Z", 1)
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn finished_terminal_trims_to_a_snapshot() {
+        use base64::Engine as _;
+        use quark_systems::{TerminalChunkKind, TerminalRole};
+
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_snapshot(
+                &p.id,
+                &FleetSnapshot {
+                    tasks: vec![engine_task("a", TaskState::Done)],
+                },
+            )
+            .unwrap();
+        let task_id: String = store
+            .read(|c| Ok(c.query_row("SELECT id FROM tasks", [], |r| r.get(0))?))
+            .unwrap();
+        let chunk = |kind, len: usize| TerminalOutput {
+            project_id: Some(p.id.clone()),
+            output: quark_systems::TerminalOutput {
+                terminal_id: task_id.clone(),
+                role: TerminalRole::Worker,
+                task_id: Some(task_id.clone()),
+                kind,
+                data_b64: base64::engine::general_purpose::STANDARD.encode(vec![b'x'; len]),
+                cols: None,
+                rows: None,
+            },
+        };
+        // snapshot, 100, snapshot, 100, snapshot, 100 bytes of output.
+        let mut rows = Vec::new();
+        for _ in 0..3 {
+            rows.push(chunk(TerminalChunkKind::Snapshot, 10));
+            rows.push(chunk(TerminalChunkKind::Output, 100));
+        }
+        let events = store.append_terminal_output(&rows).unwrap();
+        let count = || -> i64 {
+            store
+                .read(|c| {
+                    Ok(c.query_row(
+                        "SELECT COUNT(*) FROM events WHERE type = 'worker.output'",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .unwrap()
+        };
+
+        // Changed after the cutoff: not listed.
+        assert!(store
+            .finished_terminals_over("2000-01-01T00:00:00Z", 150)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .finished_terminals_over("2099-01-01T00:00:00Z", 150)
+                .unwrap(),
+            [task_id.as_str()]
+        );
+        // Keeping 150 bytes starts at the second snapshot.
+        assert_eq!(store.trim_finished_terminal(&task_id, 150).unwrap(), 2);
+        assert_eq!(count(), 4);
+        let first: i64 = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT MIN(seq) FROM events WHERE type = 'worker.output'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(first, events[2].seq);
+        // Asking to keep more than is there removes nothing.
+        assert_eq!(store.trim_finished_terminal(&task_id, 10_000).unwrap(), 0);
+        assert_eq!(count(), 4);
+    }
+
+    #[test]
+    fn vacuum_runs_only_when_mostly_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("quark.db")).unwrap();
+        let p = project(&store);
+        assert_eq!(store.vacuum_if_mostly_free(0).unwrap(), 0);
+        let detail = "x".repeat(4096);
+        for _ in 0..200 {
+            store
+                .record_adapter_call(Some(&p.id), "status", false, 1, Some(&detail))
+                .unwrap();
+        }
+        // Too little free for the floor.
+        store
+            .prune_adapter_calls("2099-01-01T00:00:00Z", "2099-01-01T00:00:00Z", 1000)
+            .unwrap();
+        assert_eq!(store.vacuum_if_mostly_free(u64::MAX).unwrap(), 0);
+        assert!(store.vacuum_if_mostly_free(0).unwrap() > 0);
+        assert_eq!(store.vacuum_if_mostly_free(0).unwrap(), 0);
     }
 }

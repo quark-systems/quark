@@ -26,6 +26,7 @@ pub mod gates;
 pub mod harness;
 pub mod host_sources;
 pub mod hosts;
+pub mod housekeeping;
 pub mod memory;
 pub mod metrics;
 pub mod native;
@@ -153,6 +154,8 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let forge: Arc<dyn forge::Forge> = Arc::new(forge::GhForge::default());
     let pr_center = pr_center::PrCenter::new(store.clone(), engine.clone(), forge.clone());
     let pr_task = tokio::spawn(pr_center.run(config.pr_refresh_interval));
+    let housekeeping_task =
+        tokio::spawn(housekeeping::Housekeeping::new(store.clone()).run(housekeeping::INTERVAL));
     let harnesses = Arc::new(harness::HarnessRegistry::load(
         &config.home.join("harnesses"),
     ));
@@ -383,6 +386,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         t.abort();
     }
     pr_task.abort();
+    housekeeping_task.abort();
     quota_task.abort();
     if let Some(t) = dispatch_task {
         t.abort();
