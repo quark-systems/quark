@@ -50,6 +50,7 @@ pub mod store;
 pub mod switch;
 pub mod task_brief;
 pub mod transcripts;
+pub mod triage;
 pub mod usage;
 pub mod worktree;
 

@@ -46,7 +46,9 @@ const SAMPLES: usize = 3;
 /// Longest sample text.
 const SAMPLE_CHARS: usize = 400;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, ToSchema, clap::ValueEnum,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     Info,

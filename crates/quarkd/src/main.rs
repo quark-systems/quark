@@ -44,6 +44,36 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// File what `diagnose` finds as beads: a new finding becomes a bug, one
+    /// seen again gets a comment, one that came back after closing is
+    /// reopened.
+    Triage {
+        /// Quark home directory [default: $QUARK_HOME or ~/.quark]
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Hours back to look.
+        #[arg(long, default_value_t = 24)]
+        hours: u32,
+        /// The Beads database to file into (a `.beads` directory).
+        #[arg(long, env = "BEADS_DIR", required_unless_present = "project")]
+        beads_dir: Option<PathBuf>,
+        /// File into this Project's Beads database instead.
+        #[arg(long, conflicts_with = "beads_dir")]
+        project: Option<String>,
+        /// Least severe finding to file.
+        #[arg(long, value_enum, default_value_t = quarkd::diagnose::Severity::Warn)]
+        min: quarkd::diagnose::Severity,
+        /// Print what would be filed without filing it.
+        #[arg(long)]
+        dry_run: bool,
+        /// `bd dolt pull` first and `bd dolt push` after, for a database
+        /// shared between Macs.
+        #[arg(long)]
+        sync: bool,
+        /// bd binary.
+        #[arg(long, env = "QUARKD_BD", default_value = "bd")]
+        bd: PathBuf,
+    },
     /// Bring projects over from another tool, through the running daemon.
     Import {
         #[command(subcommand)]
@@ -191,6 +221,29 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 print!("{}", quarkd::diagnose::render(&report));
             }
+            Ok(())
+        }
+        Command::Triage {
+            home,
+            hours,
+            beads_dir,
+            project,
+            min,
+            dry_run,
+            sync,
+            bd,
+        } => {
+            let home = home.unwrap_or_else(config::default_home);
+            let beads_dir = match (beads_dir, project) {
+                (_, Some(p)) => quarkd::triage::project_beads_dir(&home, &p),
+                (Some(d), None) => d,
+                (None, None) => anyhow::bail!("give --beads-dir or --project"),
+            };
+            let now = time::OffsetDateTime::now_utc();
+            let report =
+                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now);
+            let bd = quarkd::triage::Bd { bin: bd, beads_dir };
+            quarkd::triage::triage(&report, &bd, min, dry_run, sync)?;
             Ok(())
         }
         Command::Import { source } => import(source).await,
