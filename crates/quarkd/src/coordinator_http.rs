@@ -466,6 +466,10 @@ pub fn install_claude(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bo
         // A suggested next prompt would sit in the coordinator's input as if
         // someone had typed it, and nobody types there but the engine.
         v["promptSuggestionEnabled"] = json!(false);
+        // Claude Code's SendFeedback tool queues a bug report for review with
+        // its own /feedback command, which Quark's chat does not have, so the
+        // coordinator would point the user at a command they cannot run.
+        v["feedbackDrafts"] = json!("off");
         let approved = &mut v["enabledMcpjsonServers"];
         if !approved.is_array() {
             *approved = json!([]);
@@ -784,6 +788,7 @@ mod tests {
         assert_eq!(s["permissions"]["allow"][0], "Bash(ls)");
         assert_eq!(s["enabledMcpjsonServers"], json!([SERVER_NAME]));
         assert_eq!(s["promptSuggestionEnabled"], json!(false));
+        assert_eq!(s["feedbackDrafts"], json!("off"));
         let stop = s["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2);
         assert_eq!(stop[0]["hooks"][0]["command"], "mine");
