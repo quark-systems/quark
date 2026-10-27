@@ -147,17 +147,22 @@ impl UsageIngest {
         // Locating scans harness directories: off the async threads.
         let (coordinator, workers) = tokio::task::spawn_blocking(move || {
             let roots = roots_with_accounts(&store, &roots);
-            let coordinator = locate_any(&ws, &SessionFormat::COORDINATOR, &roots);
+            let coordinator = locate_any(&ws, &SessionFormat::COORDINATOR, &roots, None);
             let workers = store
                 .task_agents(&pid)?
                 .into_iter()
-                .filter_map(|(id, harness, worktree)| {
-                    if crate::engine::engine_harness(&harness) == "bob" {
-                        return Some((id, Source::Bob(worktree.map(PathBuf::from))));
+                .filter_map(|a| {
+                    let id = a.engine_id;
+                    if crate::engine::engine_harness(&a.harness) == "bob" {
+                        return Some((
+                            id,
+                            Source::Bob(a.worktree.map(PathBuf::from), a.worktree_at),
+                        ));
                     }
-                    let format = SessionFormat::for_harness(&harness)?;
-                    let log =
-                        worktree.and_then(|w| locate_any(&PathBuf::from(w), &[format], &roots));
+                    let format = SessionFormat::for_harness(&a.harness)?;
+                    let log = a.worktree.and_then(|w| {
+                        locate_any(&PathBuf::from(w), &[format], &roots, a.worktree_at)
+                    });
                     Some((id, Source::Log(log)))
                 })
                 .collect::<Vec<_>>();
@@ -218,11 +223,11 @@ impl UsageIngest {
                     .await?
                     .map_err(anyhow::Error::from)
             }
-            Source::Bob(None) => return Ok((0, None)),
-            Source::Bob(Some(worktree)) => {
+            Source::Bob(None, _) => return Ok((0, None)),
+            Source::Bob(Some(worktree), since) => {
                 let saved = saved.clone();
                 let db = self.bob_db.clone();
-                tokio::task::spawn_blocking(move || read_bob(saved, &db, &worktree)).await?
+                tokio::task::spawn_blocking(move || read_bob(saved, &db, &worktree, since)).await?
             }
         };
         let (logs, turns) = read?;
@@ -274,21 +279,30 @@ impl UsageIngest {
 enum Source {
     /// Its session log, if one is found.
     Log(Option<(PathBuf, SessionFormat)>),
-    /// IBM Bob's database, for the worker's working copy if it has one.
-    Bob(Option<PathBuf>),
+    /// IBM Bob's database, for the worker's working copy if it has one,
+    /// and when the task took it.
+    Bob(Option<PathBuf>, Option<SystemTime>),
 }
 
 /// The growth in spend of each Bob task run in `worktree` since `logs` was
-/// saved, one turn per task that spent more. Blocking.
+/// saved, one turn per task that spent more. Tasks created before `since`
+/// are an earlier occupant's of a reused slot. Blocking.
 fn read_bob(
     mut logs: Logs,
     db: &std::path::Path,
     worktree: &std::path::Path,
+    since: Option<SystemTime>,
 ) -> anyhow::Result<(Logs, Vec<(&'static str, TurnUsage)>)> {
     let tasks =
         quark_dispatch::local::bob::task_costs(db, worktree).map_err(|e| anyhow::anyhow!(e))?;
+    let since_ms = since
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as f64);
     let mut turns = Vec::new();
     for t in tasks {
+        if since_ms.is_some_and(|since| t.created_ms.is_some_and(|c| c < since)) {
+            continue;
+        }
         let before = logs.bob.get(&t.id).copied();
         let was = before.unwrap_or_default();
         let now = BobSpent {
@@ -484,6 +498,7 @@ mod tests {
                         pull_request_url: None,
                         terminal: None,
                         worktree: Some(wt.clone()),
+                        worktree_at: None,
                     }],
                 },
             )
@@ -581,6 +596,7 @@ mod tests {
             pull_request_url: None,
             terminal: None,
             worktree: Some(wt.clone()),
+            worktree_at: None,
         };
         store
             .apply_snapshot(

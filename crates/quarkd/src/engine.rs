@@ -73,6 +73,11 @@ pub struct EngineTask {
     /// the session log by this directory.
     #[serde(default)]
     pub worktree: Option<PathBuf>,
+    /// When the task took `worktree`, where the engine knows. Pool slots are
+    /// reused, so a session log in the directory last written before this
+    /// is an earlier task's.
+    #[serde(skip)]
+    pub worktree_at: Option<std::time::SystemTime>,
 }
 
 /// Which agent a task's current worker was started with.

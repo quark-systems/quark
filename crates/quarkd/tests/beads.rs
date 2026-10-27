@@ -497,6 +497,7 @@ fn task(state: TaskState) -> FleetSnapshot {
             harness: Some("claude".into()),
             pull_request_url: Some("https://github.com/quark-systems/quark/pull/42".into()),
             worktree: None,
+            worktree_at: None,
             terminal: None,
         }],
     }

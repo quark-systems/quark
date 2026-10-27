@@ -807,6 +807,7 @@ mod tests {
                         pull_request_url: Some(URL.into()),
                         terminal: None,
                         worktree: None,
+                        worktree_at: None,
                     }],
                 },
             )
@@ -1048,6 +1049,7 @@ mod tests {
             pull_request_url: Some(URL.into()),
             terminal: None,
             worktree: None,
+            worktree_at: None,
         };
         FleetSnapshot { tasks: vec![et] }
     }

@@ -42,6 +42,7 @@ fn task(id: &str, terminal: Option<&str>, worktree: Option<PathBuf>) -> EngineTa
         pull_request_url: None,
         terminal: terminal.map(Into::into),
         worktree,
+        worktree_at: None,
     }
 }
 

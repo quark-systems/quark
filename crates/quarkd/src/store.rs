@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::engine::{FleetSnapshot, Hold, StatusEntry};
 use quark_systems::{
@@ -117,6 +118,22 @@ pub struct TaskTarget {
     pub project_id: String,
     pub engine_id: String,
     pub workspace_path: Option<String>,
+}
+
+/// A task that ran a worker, from [`Store::task_agents`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskAgent {
+    pub engine_id: String,
+    pub harness: String,
+    /// Its working copy, while it exists.
+    pub worktree: Option<String>,
+    /// When the task took `worktree`, where the engine says.
+    pub worktree_at: Option<SystemTime>,
+}
+
+fn epoch_ms(t: SystemTime) -> i64 {
+    t.duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 pub struct Store {
@@ -596,6 +613,7 @@ impl Store {
                     .worktree
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned());
+                let worktree_at = et.worktree.as_ref().and(et.worktree_at).map(epoch_ms);
                 match existing.get(&et.id) {
                     None => {
                         let task = Task {
@@ -621,8 +639,8 @@ impl Store {
                         tx.execute(
                             "INSERT INTO tasks (id, project_id, engine_id, title, kind, state,
                                  state_note, harness, pull_request_url, created_at, updated_at,
-                                 worktree_path, account_id)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                 worktree_path, account_id, worktree_at_ms)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                             params![
                                 task.id,
                                 task.project_id,
@@ -636,7 +654,8 @@ impl Store {
                                 task.created_at,
                                 task.updated_at,
                                 worktree,
-                                task.account_id
+                                task.account_id,
+                                worktree_at
                             ],
                         )?;
                         append_event(
@@ -673,10 +692,10 @@ impl Store {
                         // The worktree is not part of the API's task, so a
                         // move alone updates the row without an event.
                         tx.execute(
-                            "UPDATE tasks SET worktree_path = ?3
+                            "UPDATE tasks SET worktree_path = ?3, worktree_at_ms = ?4
                              WHERE project_id = ?1 AND engine_id = ?2
-                               AND worktree_path IS NOT ?3",
-                            params![project_id, et.id, worktree],
+                               AND (worktree_path IS NOT ?3 OR worktree_at_ms IS NOT ?4)",
+                            params![project_id, et.id, worktree, worktree_at],
                         )?;
                         if !changed {
                             continue;
@@ -809,15 +828,25 @@ impl Store {
         })
     }
 
-    /// Each of a Project's tasks that ran a worker: engine id, harness and
-    /// working copy (while it exists), for reading its session log.
-    pub fn task_agents(&self, project_id: &str) -> Result<Vec<(String, String, Option<String>)>> {
+    /// Each of a Project's tasks that ran a worker: engine id, harness,
+    /// working copy (while it exists) and when the task took it (where
+    /// known), for reading its session log.
+    pub fn task_agents(&self, project_id: &str) -> Result<Vec<TaskAgent>> {
         self.read(|c| {
             let mut stmt = c.prepare(
-                "SELECT engine_id, harness, worktree_path FROM tasks
+                "SELECT engine_id, harness, worktree_path, worktree_at_ms FROM tasks
                  WHERE project_id = ?1 AND harness IS NOT NULL ORDER BY engine_id",
             )?;
-            let rows = stmt.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            let rows = stmt.query_map([project_id], |r| {
+                Ok(TaskAgent {
+                    engine_id: r.get(0)?,
+                    harness: r.get(1)?,
+                    worktree: r.get(2)?,
+                    worktree_at: r
+                        .get::<_, Option<i64>>(3)?
+                        .map(|ms| UNIX_EPOCH + Duration::from_millis(ms.max(0) as u64)),
+                })
+            })?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
     }
@@ -2030,6 +2059,7 @@ mod tests {
             harness: Some("claude".into()),
             pull_request_url: None,
             worktree: None,
+            worktree_at: None,
             terminal: None,
         }
     }

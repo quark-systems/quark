@@ -100,6 +100,7 @@ async fn harness() -> Harness {
                     pull_request_url: Some(URL.into()),
                     terminal: None,
                     worktree: None,
+                    worktree_at: None,
                 }],
             },
         )

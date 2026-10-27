@@ -449,6 +449,7 @@ fn queued_task(p: &Pending) -> EngineTask {
         pull_request_url: None,
         terminal: None,
         worktree: None,
+        worktree_at: None,
     }
 }
 

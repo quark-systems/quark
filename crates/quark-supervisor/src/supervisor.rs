@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use quark_core::harness::HarnessManifest;
 use quark_core::isolation::ProcessSpec;
@@ -89,12 +89,15 @@ impl Config {
 /// instead of starting over.
 pub trait Conversations: Send + Sync {
     /// `env` is the worker's extra environment, which may point the harness
-    /// at an account's config directory.
+    /// at an account's config directory. Only conversations written at or
+    /// after `since`, when the task took the directory, count: a reused
+    /// worktree slot still holds the conversations of tasks before it.
     fn exists(
         &self,
         manifest: &HarnessManifest,
         cwd: &Path,
         env: &BTreeMap<String, String>,
+        since: Option<SystemTime>,
     ) -> bool;
 }
 
@@ -1295,7 +1298,8 @@ impl Supervisor {
     }
 
     /// Whether the worker's next generation can continue its conversation:
-    /// its harness resumes, and has logged a conversation in the worktree.
+    /// its harness resumes, and has logged a conversation in the worktree
+    /// since this task took it.
     fn resumable(&self, w: &Worker) -> bool {
         let (Some(conversations), Some(worktree)) = (&self.conversations, &w.worktree) else {
             return false;
@@ -1306,7 +1310,7 @@ impl Supervisor {
             .map_or(&w.assignment.harness, |g| &g.harness);
         self.manifests.resolve(harness).is_some_and(|m| {
             !m.launch.resume.is_empty()
-                && conversations.exists(m, &worktree.path, &w.assignment.env)
+                && conversations.exists(m, &worktree.path, &w.assignment.env, w.worktree_at)
         })
     }
 

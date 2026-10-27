@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
 use quark_core::harness::HarnessManifest;
@@ -26,7 +26,7 @@ use quark_harness::ManifestRegistry;
 use quark_isolation::HostIsolation;
 use quark_sessions::pty::PtyClient;
 use quark_supervisor::{Conversations, Supervisor, WorkerUrls};
-use quark_transcript::{locate, SessionFormat, SessionRoots};
+use quark_transcript::{locate_since, SessionFormat, SessionRoots};
 use quark_worktree::TreehouseProvider;
 
 use crate::config::Config;
@@ -131,9 +131,15 @@ impl Transcripts {
 }
 
 impl Conversations for Transcripts {
-    fn exists(&self, m: &HarnessManifest, cwd: &Path, env: &BTreeMap<String, String>) -> bool {
+    fn exists(
+        &self,
+        m: &HarnessManifest,
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+        since: Option<SystemTime>,
+    ) -> bool {
         if quark_harness::engine_name(m) == "bob" {
-            return quark_dispatch::local::bob::has_task(&self.bob_db, cwd);
+            return quark_dispatch::local::bob::has_task(&self.bob_db, cwd, since);
         }
         // Kiro CLI has no account directory, so no `transcript` locator: its
         // sessions are found under `$KIRO_HOME` by working directory.
@@ -154,7 +160,7 @@ impl Conversations for Transcripts {
         if let Some(dir) = account {
             roots.for_format_mut(format).insert(0, PathBuf::from(dir));
         }
-        locate(format, cwd, &roots).is_some()
+        locate_since(format, cwd, &roots, since).is_some()
     }
 }
 
@@ -189,7 +195,7 @@ mod tests {
             "CLAUDE_CONFIG_DIR".to_string(),
             account.to_string_lossy().into_owned(),
         )]);
-        assert!(!t.exists(claude, &worktree, &env));
+        assert!(!t.exists(claude, &worktree, &env, None));
 
         let slug: String = worktree
             .to_string_lossy()
@@ -199,12 +205,12 @@ mod tests {
         let logs = account.join("projects").join(slug);
         std::fs::create_dir_all(&logs).unwrap();
         std::fs::write(logs.join("s1.jsonl"), "{}\n").unwrap();
-        assert!(t.exists(claude, &worktree, &env));
+        assert!(t.exists(claude, &worktree, &env, None));
 
         // A harness with no transcript format has nothing to continue.
         let mut none = (**claude).clone();
         none.transcript = None;
-        assert!(!t.exists(&none, &worktree, &env));
+        assert!(!t.exists(&none, &worktree, &env, None));
     }
 
     #[test]
@@ -220,7 +226,7 @@ mod tests {
             roots: SessionRoots::default(),
         };
         let wt = dir.path().join("wt");
-        assert!(!t.exists(bob, &wt, &BTreeMap::new()));
+        assert!(!t.exists(bob, &wt, &BTreeMap::new(), None));
         let con = rusqlite::Connection::open(&t.bob_db).unwrap();
         con.execute_batch(
             "CREATE TABLE tasks (id TEXT, parent_id TEXT, directory TEXT, task_type TEXT)",
@@ -232,7 +238,7 @@ mod tests {
         )
         .unwrap();
         drop(con);
-        assert!(t.exists(bob, &wt, &BTreeMap::new()));
+        assert!(t.exists(bob, &wt, &BTreeMap::new(), None));
     }
 
     #[test]
@@ -261,7 +267,7 @@ mod tests {
             },
         };
         let wt = dir.path().join("wt");
-        assert!(!t.exists(kiro, &wt, &BTreeMap::new()));
+        assert!(!t.exists(kiro, &wt, &BTreeMap::new(), None));
         let sess = home.join("sessions").join("3f2a").join("sess_1");
         std::fs::create_dir_all(&sess).unwrap();
         std::fs::write(
@@ -270,6 +276,22 @@ mod tests {
         )
         .unwrap();
         std::fs::write(sess.join("messages.jsonl"), "").unwrap();
-        assert!(t.exists(kiro, &wt, &BTreeMap::new()));
+        assert!(t.exists(kiro, &wt, &BTreeMap::new(), None));
+
+        // The slot is reused: a task that took it after that session was
+        // last written has no conversation of its own to resume.
+        std::thread::sleep(Duration::from_millis(20));
+        let took = SystemTime::now();
+        assert!(!t.exists(kiro, &wt, &BTreeMap::new(), Some(took)));
+        std::thread::sleep(Duration::from_millis(20));
+        let mine = home.join("sessions").join("3f2a").join("sess_2");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::write(
+            mine.join("session.json"),
+            serde_json::json!({"id": "sess_2", "workspacePaths": [wt]}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(mine.join("messages.jsonl"), "").unwrap();
+        assert!(t.exists(kiro, &wt, &BTreeMap::new(), Some(took)));
     }
 }
