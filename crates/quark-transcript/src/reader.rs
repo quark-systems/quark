@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::{RateLimit, SessionFormat, TranscriptEntry, TranscriptRole};
+use crate::{ApiError, RateLimit, SessionFormat, TranscriptEntry, TranscriptRole};
 
 /// Most bytes one [`read_from`] call consumes; the next call continues from
 /// `next_offset`, so a large backlog is projected over several ticks.
@@ -28,6 +28,9 @@ pub struct ReadBatch {
     /// of its own after it. A limit the agent already worked past is not
     /// reported.
     pub rate_limit: Option<RateLimit>,
+    /// The passing API error the agent's last turn ended on, by the same
+    /// rule as `rate_limit`.
+    pub api_error: Option<ApiError>,
 }
 
 /// Parses complete lines appended to `path` since byte `offset`.
@@ -60,6 +63,10 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
                     let entries = format.parse_value(&v);
                     if let Some(limit) = format.rate_limit(&v) {
                         batch.rate_limit = Some(limit);
+                        batch.api_error = None;
+                    } else if let Some(error) = format.api_error(&v) {
+                        batch.api_error = Some(error);
+                        batch.rate_limit = None;
                     } else if entries.iter().any(|e| {
                         matches!(
                             e.role,
@@ -69,6 +76,7 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
                         )
                     }) {
                         batch.rate_limit = None;
+                        batch.api_error = None;
                     }
                     batch.entries.extend(entries.into_iter().map(|e| (pos, e)));
                 }
@@ -79,6 +87,7 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
     }
     if !at_end {
         batch.rate_limit = None;
+        batch.api_error = None;
     }
     batch.next_offset = pos;
     Ok(batch)
@@ -166,5 +175,21 @@ mod tests {
         std::fs::write(&path, format!("{LIMITED}\n{USER}\n{REPLY}\n")).unwrap();
         let batch = read_from(&path, 0, SessionFormat::Claude).unwrap();
         assert_eq!(batch.rate_limit, None);
+    }
+
+    const SLEPT: &str = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Your computer went to sleep mid-response."}]}}"#;
+
+    #[test]
+    fn reports_an_api_error_the_agent_is_stopped_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, format!("{USER}\n{REPLY}\n{SLEPT}\n")).unwrap();
+        let batch = read_from(&path, 0, SessionFormat::Claude).unwrap();
+        assert!(batch.api_error.is_some());
+        assert_eq!(batch.rate_limit, None);
+
+        std::fs::write(&path, format!("{SLEPT}\n{USER}\n{REPLY}\n")).unwrap();
+        let past = read_from(&path, 0, SessionFormat::Claude).unwrap();
+        assert_eq!(past.api_error, None);
     }
 }

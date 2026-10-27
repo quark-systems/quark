@@ -67,6 +67,52 @@ pub(crate) fn claude(v: &Value) -> Option<RateLimit> {
     Some(limit(CLAUDE_API_ERROR, &text, str_at(v, "timestamp")))
 }
 
+/// A turn the harness gave up on for a reason that passes by itself: the
+/// network dropped, the Mac slept mid-response, the API had an outage.
+/// Asking the agent to carry on is enough once it has passed.
+///
+/// Claude Code writes such a turn as
+/// `{"type":"assistant","isApiErrorMessage":true,...}` whose text starts
+/// "API Error:" (for example "Your computer went to sleep mid-response",
+/// "Can't reach the API server"), with an `error` other than the lasting
+/// ones in [`LASTING_ERRORS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiError {
+    /// What the harness said, when it said anything.
+    pub message: Option<String>,
+    /// When the harness wrote the line (RFC 3339), when the line says.
+    pub ts: Option<String>,
+}
+
+/// Claude Code `error` values that carrying on does not fix.
+const LASTING_ERRORS: &[&str] = &[
+    "rate_limit",
+    "authentication_failed",
+    "billing_error",
+    "invalid_request",
+];
+
+pub(crate) fn claude_api_error(v: &Value) -> Option<ApiError> {
+    let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+    if str_at(v, "type") != Some("assistant")
+        || !flag("isApiErrorMessage")
+        || flag("isSidechain")
+        || str_at(v, "error").is_some_and(|e| LASTING_ERRORS.contains(&e))
+    {
+        return None;
+    }
+    let text = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .map(text_of)
+        .unwrap_or_default();
+    let l = limit(CLAUDE_API_ERROR, &text, str_at(v, "timestamp"));
+    Some(ApiError {
+        message: l.message,
+        ts: l.ts,
+    })
+}
+
 pub(crate) fn codex(v: &Value) -> Option<RateLimit> {
     if str_at(v, "type") != Some("event_msg") {
         return None;
@@ -177,5 +223,26 @@ mod tests {
     fn pi_reports_none() {
         let line = r#"{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit"}"#;
         assert_eq!(of(SessionFormat::Pi, line), None);
+    }
+
+    #[test]
+    fn claude_reports_a_turn_lost_to_a_passing_error() {
+        let api = |line: &str| claude_api_error(&serde_json::from_str(line).unwrap());
+        let slept = r#"{"type":"assistant","timestamp":"2026-10-18T20:15:23Z","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Your computer went to sleep mid-response."}]}}"#;
+        let e = api(slept).unwrap();
+        assert_eq!(
+            e.message.as_deref(),
+            Some("API Error: Your computer went to sleep mid-response.")
+        );
+        assert_eq!(e.ts.as_deref(), Some("2026-10-18T20:15:23Z"));
+        assert!(api(r#"{"type":"assistant","isApiErrorMessage":true,"error":"server_error","message":{"content":"API Error"}}"#).is_some());
+        for lasting in [
+            r#"{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"content":"limit"}}"#,
+            r#"{"type":"assistant","isApiErrorMessage":true,"error":"authentication_failed","message":{"content":"x"}}"#,
+            r#"{"type":"assistant","isApiErrorMessage":true,"isSidechain":true,"message":{"content":"x"}}"#,
+            r#"{"type":"assistant","message":{"content":"API Error: not flagged"}}"#,
+        ] {
+            assert_eq!(api(lasting), None, "{lasting}");
+        }
     }
 }
