@@ -30,6 +30,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -66,6 +67,9 @@ pub struct CoordinatorRecovery {
     /// The coordinator window name prefix for Projects with no record; see
     /// [`CoordinatorRecovery::adopting`].
     adopt: Option<String>,
+    /// Set after the first pass. What that pass restarts was stopped with
+    /// the daemon, so it is resumed, not recovered from a loss.
+    started: AtomicBool,
 }
 
 impl CoordinatorRecovery {
@@ -86,6 +90,7 @@ impl CoordinatorRecovery {
             home,
             attempts: Mutex::new(HashMap::new()),
             adopt: None,
+            started: AtomicBool::new(false),
         }
     }
 
@@ -110,8 +115,13 @@ impl CoordinatorRecovery {
         let Ok(server) = self.sessions.server() else {
             return;
         };
+        let resuming = !self.started.swap(true, Ordering::Relaxed);
         if !server.is_running().await {
-            tracing::warn!("the tmux server is gone; starting it again");
+            if resuming {
+                tracing::info!("no tmux server yet; starting it");
+            } else {
+                tracing::warn!("the tmux server is gone; starting it again");
+            }
             if let Err(e) = self.sessions.ensure_server().await {
                 tracing::warn!(error = %e, "could not start the tmux server again");
                 return;
@@ -185,7 +195,7 @@ impl CoordinatorRecovery {
             if !self.due(&project.id) {
                 continue;
             }
-            let ok = self.relaunch(&project, &target).await;
+            let ok = self.relaunch(&project, &target, resuming).await;
             self.record(&project.id, ok);
         }
     }
@@ -224,7 +234,9 @@ impl CoordinatorRecovery {
     }
 
     /// Whether the coordinator is running again.
-    async fn relaunch(&self, project: &Project, target: &str) -> bool {
+    /// `resuming`: the daemon just started, so the coordinator stopped with
+    /// it rather than being lost.
+    async fn relaunch(&self, project: &Project, target: &str, resuming: bool) -> bool {
         let (Some(agent), Some(root)) = (&project.agent_config, &project.workspace_path) else {
             return false;
         };
@@ -238,7 +250,11 @@ impl CoordinatorRecovery {
             project_id: project.id.clone(),
             root: PathBuf::from(root),
         };
-        tracing::warn!(project = %project.id, %target, "coordinator window is gone; starting the coordinator again");
+        if resuming {
+            tracing::info!(project = %project.id, %target, "resuming the coordinator after a daemon start");
+        } else {
+            tracing::warn!(project = %project.id, %target, "coordinator window is gone; starting the coordinator again");
+        }
         // The lease the coordinator already holds, so it keeps its account.
         let env = match self
             .accounts
