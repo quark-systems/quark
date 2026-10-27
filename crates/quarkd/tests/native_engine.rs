@@ -152,6 +152,40 @@ async fn reads_steers_answers_and_controls_natively() {
     assert!(t.worktree.is_some(), "cancel keeps the worktree");
 }
 
+/// A worker that asked, then reported itself blocked, still has its
+/// question answered: the hold closes and is not asked again.
+#[tokio::test]
+async fn an_answer_after_the_worker_blocked_closes_the_hold() {
+    let env = Env::new();
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let engine = NativeEngine::new(env.log(), sup.clone());
+    let ws = ws(&env);
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+
+    engine.send_message(&ws, "t1", "ask now").await.unwrap();
+    eventually("a decision", async || {
+        state(&engine, &ws, "t1").await == TaskState::NeedsDecision
+    })
+    .await;
+    engine.send_message(&ws, "t1", "block").await.unwrap();
+    eventually("blocked", async || {
+        state(&engine, &ws, "t1").await == TaskState::Blocked
+    })
+    .await;
+    assert_eq!(engine.holds(&ws).await.unwrap().len(), 1);
+
+    engine.answer(&ws, "t1:k1", "left", "matt").await.unwrap();
+    assert!(engine.holds(&ws).await.unwrap().is_empty());
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::Blocked);
+    assert!(engine.answer(&ws, "t1:k1", "again", "matt").await.is_err());
+    eventually("the answer", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Answer to [k1]: left")
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn unknown_tasks_and_unserved_operations_are_refused() {
     let env = Env::new();

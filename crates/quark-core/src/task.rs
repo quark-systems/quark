@@ -52,6 +52,7 @@ pub trait TaskMachine: Send + Sync {
 /// | `Queued`, `Running`, `Blocked`, `Paused`, `Failed`, `InReview` | `Started` | `Running` |
 /// | `Running` | `DecisionNeeded` | `NeedsDecision` |
 /// | `NeedsDecision` | `DecisionAnswered` | `Running` |
+/// | any other | `DecisionAnswered` | unchanged (the worker moved on) |
 /// | `Running`, `NeedsDecision` | `Blocked` / `Paused` | `Blocked` / `Paused` |
 /// | `Blocked`, `Paused` | `Resumed` | `Running` |
 /// | `Running` | `InReview` | `InReview` |
@@ -73,6 +74,9 @@ impl TaskMachine for ReferenceMachine {
             ) => Some(S::Running),
             (S::Running, TaskEvent::DecisionNeeded { .. }) => Some(S::NeedsDecision),
             (S::NeedsDecision, TaskEvent::DecisionAnswered { .. }) => Some(S::Running),
+            // A question the worker asked before it blocked, paused or
+            // finished is still answered: it closes, the state stays.
+            (s, TaskEvent::DecisionAnswered { .. }) => Some(s),
             (S::Running | S::NeedsDecision, TaskEvent::Blocked { .. }) => Some(S::Blocked),
             (S::Running | S::NeedsDecision, TaskEvent::Paused { .. }) => Some(S::Paused),
             (S::Blocked | S::Paused, TaskEvent::Resumed) => Some(S::Running),
@@ -146,14 +150,28 @@ mod tests {
     }
 
     #[test]
-    fn answer_without_question_is_illegal() {
-        let err = run(&[
+    fn an_answer_after_the_worker_moved_on_keeps_the_state() {
+        let asked = [
             TaskEvent::Queued { title: "t".into() },
             TaskEvent::Started {
                 generation: "1".into(),
             },
-            TaskEvent::DecisionAnswered { key: "k".into() },
-        ]);
-        assert!(err.is_err());
+            TaskEvent::DecisionNeeded {
+                key: "k".into(),
+                question: "q".into(),
+            },
+            TaskEvent::Blocked {
+                reason: "polling".into(),
+            },
+        ];
+        let answered = TaskEvent::DecisionAnswered { key: "k".into() };
+        let s = run(&[&asked[..], std::slice::from_ref(&answered)].concat());
+        assert_eq!(s, Ok(TaskState::Blocked));
+        let s = run(&[
+            &asked[..],
+            &[TaskEvent::Resumed, TaskEvent::Completed, answered],
+        ]
+        .concat());
+        assert_eq!(s, Ok(TaskState::Done));
     }
 }
