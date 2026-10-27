@@ -4,6 +4,10 @@
 //! finds a worker's log from its worktree and a coordinator's from its
 //! workspace root. When several sessions ran in one directory the most
 //! recently written one wins, which follows a relaunch onto its new log.
+//!
+//! Worktree slots are reused, so a directory can hold the logs of a task
+//! that ran there before. [`locate_since`] skips logs last written before
+//! the current occupant took the directory.
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -73,6 +77,18 @@ impl SessionRoots {
 /// The most recently written session log of `format` for an agent working in
 /// `cwd`, or `None` when that harness has no log for it.
 pub fn locate(format: SessionFormat, cwd: &Path, roots: &SessionRoots) -> Option<PathBuf> {
+    locate_since(format, cwd, roots, None)
+}
+
+/// [`locate`], counting only logs written at or after `since`: the time the
+/// agent's task took `cwd`, so a previous occupant's log is never taken for
+/// its own.
+pub fn locate_since(
+    format: SessionFormat,
+    cwd: &Path,
+    roots: &SessionRoots,
+    since: Option<SystemTime>,
+) -> Option<PathBuf> {
     let mut cwds = vec![cwd.to_path_buf()];
     if let Ok(real) = fs::canonicalize(cwd) {
         if real != cwd {
@@ -92,6 +108,9 @@ pub fn locate(format: SessionFormat, cwd: &Path, roots: &SessionRoots) -> Option
             };
             if let Some(path) = found {
                 let mtime = modified(&path);
+                if since.is_some_and(|since| mtime < since) {
+                    continue;
+                }
                 if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
                     best = Some((mtime, path));
                 }

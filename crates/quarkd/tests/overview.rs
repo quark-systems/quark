@@ -77,6 +77,7 @@ async fn overview_reports_live_status_and_what_changed_since() {
                     pull_request_url: None,
                     terminal: None,
                     worktree: None,
+                    worktree_at: None,
                 }],
             },
         )

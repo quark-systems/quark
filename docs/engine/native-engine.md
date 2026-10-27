@@ -116,7 +116,7 @@ With `--engine native`, the slice 7 engine (`native_triggers.rs`) acts: the user
 ## Durability
 
 Workers run in the PTY supervisor's sessions (`quarkd ptyd`, which quarkd starts itself, or the `quark-ptyd` binary `QUARK_PTYD` names), which outlive the daemon and the tmux server; the coordinator runs on quarkd's tmux server.
-A worker whose session is lost (a reboot) is relaunched by the supervisor in the same worktree, and continues its conversation when its harness can (`launch.resume` in the manifest) and has logged one there (`native::Transcripts`, under the account's config directory when the worker runs on one); otherwise it starts fresh with its brief.
+A worker whose session is lost (a reboot) is relaunched by the supervisor in the same worktree, and continues its conversation when its harness can (`launch.resume` in the manifest) and has logged one there since the task took the worktree (`native::Transcripts`, under the account's config directory when the worker runs on one; a reused slot's earlier conversations do not count); otherwise it starts fresh with its brief.
 A lost coordinator is relaunched by coordinator recovery with `resume`.
 `verify-quark`'s durability journeys (`quark-verify journey durability -- --engine native --harness fake`) and its native journey (`quark-verify journey native`) check this, and the Project, dispatch, steering, decision and lifecycle paths, from outside with no firstmate checkout.
 

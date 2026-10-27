@@ -350,6 +350,7 @@ mod tests {
                         harness: None,
                         pull_request_url: Some("https://github.com/o/r/pull/7".into()),
                         worktree: None,
+                        worktree_at: None,
                         terminal: None,
                     }],
                 },

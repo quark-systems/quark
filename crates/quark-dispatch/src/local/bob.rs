@@ -665,8 +665,10 @@ fn ledger(db: &Path, since_ms: f64) -> Result<(f64, f64), String> {
 
 /// Whether Bob has a conversation to continue in `dir`: a top-level task
 /// started there, which `bob chat --resume latest` picks up. Read from
-/// Bob's database at `db` (`~/.bob/db/bob.db`).
-pub fn has_task(db: &Path, dir: &Path) -> bool {
+/// Bob's database at `db` (`~/.bob/db/bob.db`). With `since`, only a task
+/// created at or after it counts, so a reused worktree slot does not offer
+/// an earlier occupant's task.
+pub fn has_task(db: &Path, dir: &Path, since: Option<std::time::SystemTime>) -> bool {
     if db.as_os_str().is_empty() || !db.is_file() {
         return false;
     }
@@ -690,10 +692,22 @@ pub fn has_task(db: &Path, dir: &Path) -> bool {
         if has("parent_id") {
             sql.push_str(" AND parent_id IS NULL");
         }
+        // `created_at` is epoch milliseconds.
+        let since_ms = since.filter(|_| has("created_at")).map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64)
+        });
+        if since_ms.is_some() {
+            sql.push_str(" AND created_at >= ?2");
+        }
         sql.push_str(" LIMIT 1");
         let mut stmt = con.prepare(&sql)?;
         for d in &dirs {
-            if stmt.exists([d])? {
+            let found = match since_ms {
+                Some(ms) => stmt.exists(rusqlite::params![d, ms])?,
+                None => stmt.exists([d])?,
+            };
+            if found {
                 return Ok(true);
             }
         }
@@ -976,7 +990,7 @@ mod tests {
         let db = dir.path().join("bob.db");
         let wt = dir.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
-        assert!(!has_task(&db, &wt), "no database");
+        assert!(!has_task(&db, &wt, None), "no database");
         let con = rusqlite::Connection::open(&db).unwrap();
         con.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -990,15 +1004,45 @@ mod tests {
             [&wt_s],
         )
         .unwrap();
-        assert!(!has_task(&db, &wt));
+        assert!(!has_task(&db, &wt, None));
         con.execute(
             "INSERT INTO tasks VALUES ('d', NULL, ?1, 'normal')",
             [&wt_s],
         )
         .unwrap();
         drop(con);
-        assert!(has_task(&db, &wt));
-        assert!(!has_task(&db, &dir.path().join("other")));
+        assert!(has_task(&db, &wt, None));
+        assert!(!has_task(&db, &dir.path().join("other"), None));
+    }
+
+    #[test]
+    fn an_earlier_occupants_task_is_not_resumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("bob.db");
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, task_type TEXT, created_at INTEGER);",
+        )
+        .unwrap();
+        let wt_s = wt.to_string_lossy().into_owned();
+        // The slot's previous task, started at 1_000_000 ms.
+        con.execute(
+            "INSERT INTO tasks VALUES ('old', NULL, ?1, 'normal', 1000000)",
+            [&wt_s],
+        )
+        .unwrap();
+        let took = std::time::UNIX_EPOCH + std::time::Duration::from_millis(2_000_000);
+        assert!(has_task(&db, &wt, None));
+        assert!(!has_task(&db, &wt, Some(took)));
+        con.execute(
+            "INSERT INTO tasks VALUES ('new', NULL, ?1, 'normal', 2000500)",
+            [&wt_s],
+        )
+        .unwrap();
+        drop(con);
+        assert!(has_task(&db, &wt, Some(took)));
     }
 
     #[tokio::test]

@@ -155,6 +155,7 @@ async fn session_logs_become_coordinator_and_worker_events() {
             harness: Some("claude".into()),
             pull_request_url: None,
             worktree: Some(worktree.clone()),
+            worktree_at: None,
             terminal: None,
         }],
     });
@@ -247,6 +248,77 @@ async fn session_logs_become_coordinator_and_worker_events() {
     assert_eq!(new.len(), 1);
     assert_eq!(new[0].event_type, EventType::WorkerTranscript);
     assert_eq!(new[0].payload["entry"]["text"], "Tests pass.");
+}
+
+#[tokio::test]
+async fn a_reused_worktree_slot_never_shows_the_previous_tasks_log() {
+    let h = harness();
+    let workspace = h.dir.path().join("workspace");
+    let worktree = h.dir.path().join("pool/3/repo");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Quark", "workspace_path": workspace})),
+    )
+    .await;
+
+    // The task that held the slot before left its conversation there.
+    let logs = h
+        .dir
+        .path()
+        .join(format!("claude/projects/{}", slug(&worktree)));
+    append(
+        &logs.join("earlier.jsonl"),
+        &[claude_user("Fix #41"), claude_reply("Done with #41.")],
+    );
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let took = std::time::SystemTime::now();
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![EngineTask {
+            id: "fix-43".into(),
+            title: "Fix #43".into(),
+            kind: Some(TaskKind::Ship),
+            state: TaskState::Running,
+            state_note: None,
+            state_source: None,
+            harness: Some("claude".into()),
+            pull_request_url: None,
+            worktree: Some(worktree.clone()),
+            worktree_at: Some(took),
+            terminal: None,
+        }],
+    });
+    let projector = h.projector();
+    projector.refresh_all().await.unwrap();
+    let worker = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter(|e| e.event_type == EventType::WorkerTranscript)
+            .map(|e| {
+                e.payload["entry"]["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect()
+    };
+    assert!(
+        worker(&h.events(0)).is_empty(),
+        "attached the earlier task's log"
+    );
+
+    // Its own session starts: only that is its transcript.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    append(
+        &logs.join("mine.jsonl"),
+        &[claude_user("Fix #43"), claude_reply("On #43.")],
+    );
+    let restarted = h.projector();
+    restarted.refresh_all().await.unwrap();
+    assert_eq!(worker(&h.events(0)), ["Fix #43", "On #43."]);
 }
 
 #[tokio::test]

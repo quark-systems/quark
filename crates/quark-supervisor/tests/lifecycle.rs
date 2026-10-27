@@ -160,6 +160,7 @@ impl Conversations for Logged {
         _: &quark_core::harness::HarnessManifest,
         _: &std::path::Path,
         _: &std::collections::BTreeMap<String, String>,
+        _: Option<std::time::SystemTime>,
     ) -> bool {
         true
     }
@@ -200,6 +201,57 @@ async fn lost_sessions_resume_their_conversation() {
     .await;
     // The conversation has the brief already.
     assert!(!received(&env, "t1", &new.id).contains(&"Fix the parser.".to_string()));
+}
+
+/// A reused worktree slot: the only conversation in it was logged by the
+/// task that held the slot before, at `at`.
+struct Earlier {
+    at: std::time::SystemTime,
+}
+
+impl Conversations for Earlier {
+    fn exists(
+        &self,
+        _: &quark_core::harness::HarnessManifest,
+        _: &std::path::Path,
+        _: &std::collections::BTreeMap<String, String>,
+        since: Option<std::time::SystemTime>,
+    ) -> bool {
+        since.is_none_or(|since| self.at >= since)
+    }
+}
+
+#[tokio::test]
+async fn a_reused_slot_never_resumes_the_previous_tasks_conversation() {
+    let env = Env::new();
+    let (p, t) = ids("t1");
+    let before = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    let first = {
+        let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+        sup.spawn(env.request("t1")).await.unwrap().current.unwrap()
+    };
+    eventually("the first worker", async || {
+        received(&env, "t1", &first.id).contains(&"args: ".to_string())
+    })
+    .await;
+    let sup = env
+        .supervisor(Arc::new(PtySupervisor::new()))
+        .await
+        .with_conversations(Arc::new(Earlier { at: before }));
+    let w = sup.task(&p, &t).unwrap().1;
+    assert!(w.worktree_at.is_some_and(|at| at > before));
+    sup.recover().await.unwrap();
+    assert_eq!(sup.tick().await.unwrap().recovered, 1);
+
+    // A new session with the brief, not `--continue` into the other task's
+    // conversation without it.
+    let new = sup.task(&p, &t).unwrap().1.current.unwrap();
+    eventually("the relaunched worker", async || {
+        let got = received(&env, "t1", &new.id);
+        got.contains(&"args: ".to_string()) && got.contains(&"Fix the parser.".to_string())
+    })
+    .await;
+    assert!(!received(&env, "t1", &new.id).contains(&"args: --continue".to_string()));
 }
 
 #[tokio::test]

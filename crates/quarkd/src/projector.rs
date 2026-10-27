@@ -428,6 +428,7 @@ impl Projector {
                     source,
                     &ws.root,
                     &SessionFormat::COORDINATOR,
+                    None,
                 ) {
                     tracing::debug!(project = %ws.project_id, error = %e, "coordinator transcript");
                 }
@@ -453,7 +454,9 @@ impl Projector {
             let coordinator = TranscriptSource::Coordinator {
                 project_id: project_id.clone(),
             };
-            if let Err(e) = tap.poll(project_id, coordinator, &ws.root, &SessionFormat::COORDINATOR) {
+            if let Err(e) =
+                tap.poll(project_id, coordinator, &ws.root, &SessionFormat::COORDINATOR, None)
+            {
                 tracing::warn!(project = %project_id, error = %e, "coordinator transcript");
             }
             for t in tasks {
@@ -474,7 +477,7 @@ impl Projector {
                 let source = TranscriptSource::Task {
                     task_id: task_id.clone(),
                 };
-                match tap.poll(project_id, source, worktree, &[format]) {
+                match tap.poll(project_id, source, worktree, &[format], t.worktree_at) {
                     Ok(Some(limit)) => limited.push((task_id, limit)),
                     Ok(None) => {}
                     Err(e) => {

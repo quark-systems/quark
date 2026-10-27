@@ -377,6 +377,7 @@ fn engine_task(id: &str, harness: &str, state: TaskState) -> EngineTask {
         pull_request_url: None,
         terminal: None,
         worktree: None,
+        worktree_at: None,
     }
 }
 

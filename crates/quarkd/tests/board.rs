@@ -45,6 +45,7 @@ fn engine_task(id: &str, worktree: Option<PathBuf>) -> EngineTask {
         pull_request_url: None,
         terminal: None,
         worktree,
+        worktree_at: None,
     }
 }
 

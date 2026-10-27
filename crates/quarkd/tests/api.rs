@@ -134,6 +134,7 @@ fn task(state: TaskState) -> EngineTask {
         harness: Some("claude".into()),
         pull_request_url: None,
         worktree: None,
+        worktree_at: None,
         terminal: None,
     }
 }
@@ -1099,6 +1100,7 @@ async fn creating_a_project_provisions_workspace_repo_and_coordinator() {
             harness: Some("claude".into()),
             pull_request_url: None,
             worktree: None,
+            worktree_at: None,
             terminal: None,
         }],
     });

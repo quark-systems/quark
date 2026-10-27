@@ -28,7 +28,7 @@ mod reader;
 mod tool;
 mod usage;
 
-pub use locate::{locate, SessionRoots};
+pub use locate::{locate, locate_since, SessionRoots};
 pub use quark_systems::{
     ToolDiffLine, ToolDiffLineKind, ToolInfo, ToolKind, TranscriptEntry, TranscriptRole,
 };

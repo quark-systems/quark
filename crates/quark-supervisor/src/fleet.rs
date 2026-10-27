@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use quark_core::event::kinds;
@@ -60,6 +61,10 @@ pub struct Worker {
     pub task: TaskId,
     pub assignment: Assignment,
     pub worktree: Option<Worktree>,
+    /// When the task took its worktree. Pool slots are reused, so session
+    /// logs in the directory from before this belong to an earlier task.
+    #[serde(default)]
+    pub worktree_at: Option<SystemTime>,
     pub current: Option<Generation>,
     /// Generations started by the supervisor itself since the last spawn
     /// or relaunch a caller asked for.
@@ -224,7 +229,12 @@ impl ReadModel for Fleet {
         };
         let key = (event.project.clone(), task.clone());
         match (inner.workers.get_mut(&key), e) {
-            (Some(w), e) => w.apply(e),
+            (Some(w), e) => {
+                if matches!(e, SupervisorEvent::Worktree { .. }) {
+                    w.worktree_at = Some(SystemTime::from(event.ts));
+                }
+                w.apply(e)
+            }
             (None, SupervisorEvent::Assigned { assignment }) => {
                 inner.workers.insert(
                     key,
@@ -233,6 +243,7 @@ impl ReadModel for Fleet {
                         task,
                         assignment,
                         worktree: None,
+                        worktree_at: None,
                         current: None,
                         recoveries: 0,
                         steers: Vec::new(),

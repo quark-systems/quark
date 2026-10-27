@@ -196,6 +196,7 @@ fn engine_task(record: &TaskRecord, worker: &Worker, last: Option<&StatusEntry>)
             .as_ref()
             .filter(|_| !worker.is_released())
             .map(|w| w.path.clone()),
+        worktree_at: worker.worktree_at,
     }
 }
 

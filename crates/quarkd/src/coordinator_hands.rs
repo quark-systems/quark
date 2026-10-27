@@ -403,6 +403,7 @@ mod tests {
             pull_request_url: None,
             terminal: None,
             worktree: None,
+            worktree_at: None,
         }
     }
 
