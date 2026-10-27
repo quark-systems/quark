@@ -130,6 +130,9 @@ pub async fn reconcile(state: &AppState, project_id: &str) -> Result<(), BeadsEr
         if d.state == DecisionState::Open {
             if let Some(answer) = bead.beads_answer() {
                 answer_from_beads(state, d, answer).await;
+            } else if bead.gate.is_none() && !bead.closed {
+                // Its gate was never made (a failed earlier pass).
+                beads.gate_decision_bead(&home, d, &bead.id).await?;
             }
             continue;
         }

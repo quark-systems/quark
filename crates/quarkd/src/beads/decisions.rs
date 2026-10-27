@@ -32,8 +32,9 @@ pub const RULE_LABEL: &str = "standing-rule";
 /// Longest close reason written to Beads, in bytes.
 const MAX_REASON: usize = 1000;
 
-/// Longest bead title `bd` accepts (500 characters), held to in bytes.
-const MAX_TITLE: usize = 500;
+/// Longest title Quark gives a bead, in bytes; the whole question goes in
+/// the description. `bd` itself refuses titles over 500 characters.
+const MAX_TITLE: usize = 120;
 
 /// A decision bead as Quark needs it.
 #[derive(Debug, Clone, PartialEq)]
@@ -232,7 +233,7 @@ fn cut(text: &str, max: usize) -> String {
     format!("{}…", &t[..end])
 }
 
-/// A bead title for `text`: `bd` refuses titles over [`MAX_TITLE`].
+/// A short bead title for `text`, cut to [`MAX_TITLE`].
 fn title(text: &str) -> String {
     cut(text, MAX_TITLE)
 }
@@ -294,37 +295,56 @@ impl Beads {
             .await?;
         let bead = created.id;
         if d.state == quark_systems::DecisionState::Open {
-            let title = title(&format!("Waiting on D-{}: {}", d.number, d.question));
-            let gate: Created = self
-                .json(
-                    &dir,
-                    &[
-                        "gate",
-                        "create",
-                        "--type",
-                        "human",
-                        "--blocks",
-                        &bead,
-                        "--title",
-                        &title,
-                        "--reason",
-                        "A person answers this decision in Quark or in Beads",
-                    ],
-                )
-                .await?;
-            let meta = format!("gate={}", gate.id);
-            self.bd(&dir, &["update", &bead, "--set-metadata", &meta], &[])
-                .await?;
-            for blocked in d.brief.blocks.iter().filter(|b| bead_like(b)) {
-                // A name that is not a bead here is left alone.
-                if let Err(e) = self.bd(&dir, &["dep", "add", blocked, &bead], &[]).await {
-                    tracing::debug!(bead = %blocked, error = %e, "not blocking a bead on a decision");
-                }
-            }
+            self.gate_decision_bead(home, d, &bead).await?;
         } else {
             self.close_decision_bead(home, d, &bead, None).await?;
         }
         Ok(bead)
+    }
+
+    /// Gives the open decision `d`'s bead a human gate, and blocks the
+    /// beads `d` names on it.
+    pub async fn gate_decision_bead(
+        &self,
+        home: &Path,
+        d: &Decision,
+        bead: &str,
+    ) -> Result<(), BeadsError> {
+        let dir = Self::ready_dir(home, &d.project_id)?;
+        // `bd` before 1.2 has no `gate create --title`, so the title is set
+        // after.
+        let gate: Created = self
+            .json(
+                &dir,
+                &[
+                    "gate",
+                    "create",
+                    "--type",
+                    "human",
+                    "--blocks",
+                    bead,
+                    "--reason",
+                    "A person answers this decision in Quark or in Beads",
+                ],
+            )
+            .await?;
+        let meta = format!("gate={}", gate.id);
+        self.bd(&dir, &["update", bead, "--set-metadata", &meta], &[])
+            .await?;
+        let title = title(&format!("Waiting on D-{}: {}", d.number, d.question));
+        if let Err(e) = self
+            .bd(&dir, &["update", &gate.id, "--title", &title], &[])
+            .await
+        {
+            tracing::debug!(gate = %gate.id, error = %e, "not titling a decision gate");
+        }
+        for blocked in d.brief.blocks.iter().filter(|b| bead_like(b)) {
+            // A name that is not a bead here is left alone.
+            if let Err(e) = self.bd(&dir, &["dep", "add", blocked, bead], &[]).await {
+                tracing::debug!(bead = %blocked, error = %e, "not blocking a bead on a decision");
+            }
+        }
+        Ok(())
     }
 
     /// Records the answer to `d` on its bead and closes the bead and its
@@ -571,5 +591,58 @@ mod tests {
         let t = title(&long);
         assert!(t.len() <= MAX_TITLE);
         assert!(t.ends_with('…'));
+    }
+
+    /// A decision gated with a `bd` from before 1.2, which has no
+    /// `gate create --title`.
+    #[tokio::test]
+    async fn an_open_decision_is_gated_without_gate_create_title() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let dir = crate::beads::dir_of(home.path(), "p1");
+        std::fs::create_dir_all(dir.join(".beads")).unwrap();
+        std::fs::write(dir.join(".beads/metadata.json"), "{}").unwrap();
+        let log = home.path().join("calls");
+        let bd = home.path().join("bd");
+        std::fs::write(
+            &bd,
+            format!(
+                r#"#!/bin/sh
+echo "$*" >> '{}'
+if [ "$1 $2" = "gate create" ]; then
+  for a in "$@"; do
+    if [ "$a" = "--title" ]; then echo "Error: unknown flag: --title" >&2; exit 1; fi
+  done
+  echo '{{"id":"qk-g1"}}'
+elif [ "$1" = "create" ]; then
+  echo '{{"id":"qk-1"}}'
+fi
+"#,
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let d = Decision {
+            id: "d1".into(),
+            project_id: "p1".into(),
+            number: 12,
+            question: "Is Downloads still shared? ".repeat(20),
+            state: quark_systems::DecisionState::Open,
+            ..Default::default()
+        };
+        let beads = Beads::new(Some(bd), String::new());
+        let id = beads.create_decision_bead(home.path(), &d).await.unwrap();
+        assert_eq!(id, "qk-1");
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("update qk-1 --set-metadata gate=qk-g1"),
+            "{calls}"
+        );
+        let titled = calls
+            .lines()
+            .find(|l| l.starts_with("update qk-g1 --title Waiting on D-12: Is Downloads"))
+            .unwrap_or_else(|| panic!("gate not titled: {calls}"));
+        assert!(titled.len() < 160, "gate title is short: {titled}");
     }
 }
