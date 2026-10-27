@@ -45,6 +45,8 @@ pub struct Projector {
     sessions: Option<Sessions>,
     /// Moves rate-limited workers to another account, when set.
     failover: Option<Arc<Failover>>,
+    /// Workers to ask to carry on after a passing API error.
+    nudges: Arc<crate::nudge::Nudges>,
     /// Command-center workspace whose secondmates are the coordinators.
     command: Option<PathBuf>,
     /// Coordinator targets last handed to the session layer, by Project id.
@@ -68,6 +70,7 @@ impl Projector {
             transcripts,
             sessions: None,
             failover: None,
+            nudges: Arc::default(),
             command: None,
             coordinators: Mutex::default(),
             gates: Mutex::default(),
@@ -447,9 +450,11 @@ impl Projector {
         let tap = self.transcripts.clone();
         let store = self.store.clone();
         let project = ws.clone();
+        let nudges = self.nudges.clone();
         let res = tokio::task::spawn_blocking(move || {
             let ws = project;
             let mut limited: Vec<(String, RateLimit)> = Vec::new();
+            let now = std::time::Instant::now();
             let project_id = &ws.project_id;
             let coordinator = TranscriptSource::Coordinator {
                 project_id: project_id.clone(),
@@ -478,8 +483,24 @@ impl Projector {
                     task_id: task_id.clone(),
                 };
                 match tap.poll(project_id, source, worktree, &[format], t.worktree_at) {
-                    Ok(Some(limit)) => limited.push((task_id, limit)),
-                    Ok(None) => {}
+                    Ok(polled) => {
+                        if let Some(error) = polled.api_error {
+                            nudges.stopped(
+                                crate::nudge::Due {
+                                    project_id: project_id.clone(),
+                                    task_id: task_id.clone(),
+                                    engine_id: t.id.clone(),
+                                    error: error.message.unwrap_or_default(),
+                                },
+                                now,
+                            );
+                        } else if polled.moved {
+                            nudges.progressed(&task_id);
+                        }
+                        if let Some(limit) = polled.rate_limit {
+                            limited.push((task_id, limit));
+                        }
+                    }
                     Err(e) => {
                         tracing::warn!(project = %project_id, task = %t.id, error = %e, "worker transcript")
                     }
@@ -495,6 +516,23 @@ impl Projector {
                 return;
             }
         };
+        for due in self
+            .nudges
+            .take_due(&ws.project_id, std::time::Instant::now())
+        {
+            match self
+                .engine
+                .send_message(ws, &due.engine_id, crate::nudge::MESSAGE)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(project = %due.project_id, task = %due.task_id, error = %due.error, "asked a worker to carry on after an API error")
+                }
+                Err(e) => {
+                    tracing::warn!(project = %due.project_id, task = %due.task_id, error = %e, "could not ask a worker to carry on")
+                }
+            }
+        }
         let Some(failover) = &self.failover else {
             return;
         };

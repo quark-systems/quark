@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use quark_transcript::{locate_since, read_from, RateLimit, SessionFormat, SessionRoots};
+use quark_transcript::{locate_since, read_from, ApiError, RateLimit, SessionFormat, SessionRoots};
 
 use crate::store::{Store, TranscriptSource};
 
@@ -25,6 +25,17 @@ use crate::store::{Store, TranscriptSource};
 const RELOCATE_AFTER: Duration = Duration::from_secs(10);
 
 type Located = Option<(PathBuf, SessionFormat)>;
+
+/// What one [`TranscriptTap::poll`] read.
+#[derive(Debug, Default)]
+pub struct Polled {
+    /// The log gained lines.
+    pub moved: bool,
+    /// The rate limit the new lines leave the agent stopped at.
+    pub rate_limit: Option<RateLimit>,
+    /// The passing API error the new lines leave the agent stopped at.
+    pub api_error: Option<ApiError>,
+}
 
 pub struct TranscriptTap {
     store: Arc<Store>,
@@ -46,10 +57,11 @@ impl TranscriptTap {
     }
 
     /// Reads whatever `cwd`'s session log gained since the last call and
-    /// appends it as events. Returns the rate limit the new lines leave the
-    /// agent stopped at, if any; each is returned once, when its line is
-    /// first read. `since` is when the agent's task took `cwd`, where known.
-    /// Blocking: call from a blocking task.
+    /// appends it as events. Returns whether the log moved and the rate
+    /// limit or passing API error the new lines leave the agent stopped at,
+    /// if any; each is returned once, when its line is first read. `since`
+    /// is when the agent's task took `cwd`, where known. Blocking: call from
+    /// a blocking task.
     pub fn poll(
         &self,
         project_id: &str,
@@ -57,9 +69,9 @@ impl TranscriptTap {
         cwd: &Path,
         formats: &[SessionFormat],
         since: Option<SystemTime>,
-    ) -> anyhow::Result<Option<RateLimit>> {
+    ) -> anyhow::Result<Polled> {
         let Some((path, format)) = self.locate(&source, cwd, formats, since) else {
-            return Ok(None);
+            return Ok(Polled::default());
         };
         let path_str = path.to_string_lossy().into_owned();
         let _polling = self.polling.lock().unwrap_or_else(|e| e.into_inner());
@@ -82,7 +94,7 @@ impl TranscriptTap {
         let moved = cursor.as_ref().map(|(p, o)| (p.as_str(), *o))
             != Some((path_str.as_str(), batch.next_offset));
         if !moved {
-            return Ok(None);
+            return Ok(Polled::default());
         }
         {
             let entries: Vec<_> = batch.entries.into_iter().map(|(_, e)| e).collect();
@@ -98,7 +110,11 @@ impl TranscriptTap {
             // The agent is about to be replaced: look for its new log.
             self.located.lock().unwrap().remove(&source);
         }
-        Ok(batch.rate_limit)
+        Ok(Polled {
+            moved: true,
+            rate_limit: batch.rate_limit,
+            api_error: batch.api_error,
+        })
     }
 
     fn locate(

@@ -35,6 +35,7 @@ pub mod native_coordinator;
 pub mod native_dispatch;
 pub mod native_triggers;
 pub mod native_worktrees;
+pub mod nudge;
 pub mod overview;
 pub mod pr_center;
 pub mod project_repo;

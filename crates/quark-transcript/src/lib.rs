@@ -32,7 +32,7 @@ pub use locate::{locate, locate_since, SessionRoots};
 pub use quark_systems::{
     ToolDiffLine, ToolDiffLineKind, ToolInfo, ToolKind, TranscriptEntry, TranscriptRole,
 };
-pub use rate_limit::RateLimit;
+pub use rate_limit::{ApiError, RateLimit};
 pub use reader::{read_from, ReadBatch, MAX_BATCH_BYTES};
 pub use tool::MAX_DIFF_LINES;
 pub use usage::{read_turns, ModelUsage, TurnUsage, UsageCursor, BOBCOIN, KIRO_CREDIT};
@@ -116,6 +116,15 @@ impl SessionFormat {
             SessionFormat::Claude => rate_limit::claude(v),
             SessionFormat::Codex => rate_limit::codex(v),
             SessionFormat::Pi | SessionFormat::Kiro => None,
+        }
+    }
+
+    /// The passing API error one already-parsed log line reports, if it
+    /// reports one. Claude Code only; see [`ApiError`].
+    pub fn api_error(self, v: &Value) -> Option<ApiError> {
+        match self {
+            SessionFormat::Claude => rate_limit::claude_api_error(v),
+            _ => None,
         }
     }
 }
