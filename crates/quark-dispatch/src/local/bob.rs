@@ -682,10 +682,10 @@ pub fn has_task(db: &Path, dir: &Path, since: Option<std::time::SystemTime>) -> 
     let query = |con: &rusqlite::Connection| -> Result<bool, rusqlite::Error> {
         let cols = columns(con)?;
         let has = |c: &str| cols.iter().any(|x| x == c);
-        if !has("directory") {
+        let Some(in_dir) = in_dir(&has) else {
             return Err(rusqlite::Error::InvalidQuery);
-        }
-        let mut sql = "SELECT 1 FROM tasks WHERE directory = ?1".to_string();
+        };
+        let mut sql = format!("SELECT 1 FROM tasks WHERE {in_dir}");
         if has("task_type") {
             sql.push_str(" AND (task_type IS NULL OR task_type = 'normal')");
         }
@@ -751,16 +751,16 @@ pub fn task_costs(db: &Path, dir: &Path) -> Result<Vec<TaskCost>, String> {
     let query = |con: &rusqlite::Connection| -> Result<Vec<Row>, rusqlite::Error> {
         let cols = columns(con)?;
         let has = |c: &str| cols.iter().any(|x| x == c);
-        if !has("costs") || !has("directory") || !has("id") {
+        let Some(in_dir) = in_dir(&has).filter(|_| has("costs") && has("id")) else {
             return Ok(Vec::new());
-        }
+        };
         let created = if has("created_at") {
             "created_at"
         } else {
             "NULL"
         };
         let mut sql =
-            format!("SELECT CAST(id AS TEXT), {created}, costs FROM tasks WHERE directory = ?1");
+            format!("SELECT CAST(id AS TEXT), {created}, costs FROM tasks WHERE {in_dir}");
         if has("task_type") {
             sql.push_str(" AND (task_type IS NULL OR task_type <> 'subagent')");
         }
@@ -825,6 +825,18 @@ pub fn task_costs(db: &Path, dir: &Path) -> Result<Vec<TaskCost>, String> {
 }
 
 /// The `tasks` table's columns.
+/// The condition for a task run in the directory `?1`. Bob 2.x leaves
+/// `directory` empty and names the workspace in `project_id` as
+/// `file:<path>`; older versions fill `directory`.
+fn in_dir(has: &impl Fn(&str) -> bool) -> Option<&'static str> {
+    match (has("directory"), has("project_id")) {
+        (true, true) => Some("(directory = ?1 OR project_id = 'file:' || ?1)"),
+        (true, false) => Some("directory = ?1"),
+        (false, true) => Some("project_id = 'file:' || ?1"),
+        (false, false) => None,
+    }
+}
+
 fn columns(con: &rusqlite::Connection) -> Result<Vec<String>, rusqlite::Error> {
     con.prepare("PRAGMA table_info(tasks)")?
         .query_map([], |r| r.get::<_, String>(1))?
@@ -1013,6 +1025,32 @@ mod tests {
         drop(con);
         assert!(has_task(&db, &wt, None));
         assert!(!has_task(&db, &dir.path().join("other"), None));
+    }
+
+    #[test]
+    fn a_task_keyed_by_project_id_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("bob.db");
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, project_id TEXT,
+                 task_type TEXT, created_at INTEGER, costs TEXT);",
+        )
+        .unwrap();
+        // How Bob 2.x records a task: no directory, the workspace in project_id.
+        con.execute(
+            "INSERT INTO tasks VALUES ('t1', NULL, '', ?1, 'normal', 1000, '{\"cost\": 3}')",
+            [format!("file:{}", wt.to_string_lossy())],
+        )
+        .unwrap();
+        drop(con);
+        assert!(has_task(&db, &wt, None));
+        assert!(!has_task(&db, &dir.path().join("other"), None));
+        let costs = task_costs(&db, &wt).unwrap();
+        assert_eq!(costs.len(), 1);
+        assert_eq!(costs[0].coins, 3.0);
     }
 
     #[test]

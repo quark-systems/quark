@@ -655,3 +655,94 @@ exit = "/exit"
     })
     .await;
 }
+
+/// A paste harness with an idle pattern, loaded as `fake`, whose `busy`
+/// signal comes from hooks or nowhere.
+fn paste_agent(env: &mut Env, script: &str, busy: &str) {
+    let agent = env.dir.path().join("agent.sh");
+    std::fs::write(&agent, script).unwrap();
+    let manifest = quark_harness::parse(&format!(
+        r#"
+schema = 1
+id = "fake"
+name = "Fake agent"
+efforts = ["low", "high"]
+[detect]
+bins = ["sh"]
+[launch]
+argv = ["sh", "{agent}"]
+prompt_via = "paste"
+[turn_signals]
+busy = "{busy}"
+turn_end = "none"
+idle_patterns = ["ready for work"]
+[keys]
+interrupt = ["C-c"]
+exit = "/exit"
+"#,
+        agent = agent.display()
+    ))
+    .unwrap();
+    env.manifests = Arc::new(quark_harness::ManifestRegistry::with([manifest]));
+}
+
+/// Shows a still loading screen for longer than `ready_quiet`, throwing
+/// away anything typed meanwhile, before its composer is live.
+const SLOW_START_AGENT: &str = r#"#!/bin/sh
+dir=$(dirname "$QUARK_STATUS_FILE")
+echo "Loading..."
+sleep 3
+python3 -c 'import termios; termios.tcflush(0, termios.TCIFLUSH)'
+echo "ready for work"
+while IFS= read -r line; do
+  printf '%s\n' "$line" | tr -d '\033\r' | sed 's/\[20[01]~//g' >> "$dir/received"
+done
+"#;
+
+#[tokio::test]
+async fn a_still_loading_screen_is_not_taken_for_a_ready_composer() {
+    let mut env = Env::new();
+    paste_agent(&mut env, SLOW_START_AGENT, "none");
+    let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+    eventually("the brief", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Fix the parser.")
+    })
+    .await;
+}
+
+/// Draws its idle prompt, then drops whatever arrives in its first two
+/// seconds, the way Kiro loses a paste sent before its input is live.
+const DROPS_FIRST_PASTE_AGENT: &str = r#"#!/bin/sh
+dir=$(dirname "$QUARK_STATUS_FILE")
+echo "ready for work"
+sleep 2
+python3 -c 'import termios; termios.tcflush(0, termios.TCIFLUSH)'
+while IFS= read -r line; do
+  printf '%s\n' "$line" | tr -d '\033\r' | sed 's/\[20[01]~//g' >> "$dir/received"
+done
+"#;
+
+#[tokio::test]
+async fn a_brief_with_no_busy_signal_is_typed_again() {
+    let mut env = Env::new();
+    paste_agent(&mut env, DROPS_FIRST_PASTE_AGENT, "hooks");
+    let mut config = env.config();
+    // Hooks would reach here; this agent never calls them.
+    config.worker_urls = Some(quark_supervisor::WorkerUrls {
+        base: "http://127.0.0.1:9/worker".into(),
+    });
+    config.brief_confirm = std::time::Duration::from_millis(1500);
+    let sup = env
+        .supervisor_with(Arc::new(PtySupervisor::new()), config)
+        .await;
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+    eventually("the brief, typed again", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Fix the parser.")
+    })
+    .await;
+}

@@ -52,6 +52,9 @@ pub struct Config {
     /// typed. Kiro draws its composer a moment before it reads input, and
     /// a paste in that moment is dropped.
     pub ready_settle: Duration,
+    /// How long to wait for a hook harness's `busy` signal after typing the
+    /// brief before treating it as lost and sending it again.
+    pub brief_confirm: Duration,
     /// No screen change or worker message for this long is reported stale.
     pub stale_after: Duration,
     /// Times in a row the supervisor relaunches a worker whose session
@@ -75,6 +78,7 @@ impl Config {
             ready_timeout: Duration::from_secs(30),
             ready_quiet: Duration::from_millis(1500),
             ready_settle: Duration::from_millis(1000),
+            brief_confirm: Duration::from_secs(10),
             stale_after: Duration::from_secs(15 * 60),
             max_recoveries: 2,
             exit_grace: Duration::from_secs(3),
@@ -557,14 +561,8 @@ impl Supervisor {
             .await?;
         }
         if plan.type_brief {
-            self.wait_ready(&info.id, &manifest).await;
-            self.sessions
-                .input(&info.id, &launch::paste(&plan.brief))
+            self.type_brief(task, &generation, &info.id, &manifest, &plan.brief)
                 .await?;
-            if let Some(ms) = manifest.launch.enter_again_ms {
-                tokio::time::sleep(Duration::from_millis(ms)).await;
-                self.sessions.input(&info.id, b"\r").await?;
-            }
         }
         // Missed steering went into the brief, so it has been delivered.
         for s in steers {
@@ -588,9 +586,90 @@ impl Supervisor {
             .ok_or_else(|| CoreError::Backend("launched generation not recorded".into()))
     }
 
+    /// Type the brief into a `paste`/`stdin` harness once it is ready. A
+    /// harness that reports `busy` through hooks is watched for it: a brief
+    /// pasted while the agent's input was not yet live is lost without a
+    /// trace, so without the signal Enter is pressed (a paste left in the
+    /// composer) and then the brief is pasted once more.
+    async fn type_brief(
+        &self,
+        task: &TaskId,
+        generation: &str,
+        session: &SessionId,
+        manifest: &HarnessManifest,
+        brief: &str,
+    ) -> Result<()> {
+        let confirm = manifest.turn_signals.busy == "hooks" && self.config.worker_urls.is_some();
+        let mut after = if confirm {
+            self.log.head().await?
+        } else {
+            Seq::ZERO
+        };
+        self.wait_ready(session, manifest).await;
+        self.sessions.input(session, &launch::paste(brief)).await?;
+        if let Some(ms) = manifest.launch.enter_again_ms {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            self.sessions.input(session, b"\r").await?;
+        }
+        if !confirm {
+            return Ok(());
+        }
+        let wait = self.config.brief_confirm;
+        if self.heard_from(task, generation, &mut after, wait).await? {
+            return Ok(());
+        }
+        tracing::warn!(%task, %generation, harness = %manifest.id, "no busy signal after the brief; pressing Enter");
+        self.sessions.input(session, b"\r").await?;
+        if self.heard_from(task, generation, &mut after, wait).await? {
+            return Ok(());
+        }
+        tracing::warn!(%task, %generation, harness = %manifest.id, "brief looks lost; typing it again");
+        self.wait_ready(session, manifest).await;
+        self.sessions.input(session, &launch::paste(brief)).await?;
+        if !self.heard_from(task, generation, &mut after, wait).await? {
+            tracing::warn!(%task, %generation, harness = %manifest.id, "still no busy signal after typing the brief again");
+        }
+        Ok(())
+    }
+
+    /// Whether the worker of `generation` sends any message within `wait`,
+    /// reading the log from `after` on.
+    async fn heard_from(
+        &self,
+        task: &TaskId,
+        generation: &str,
+        after: &mut Seq,
+        wait: Duration,
+    ) -> Result<bool> {
+        let deadline = Instant::now() + wait;
+        loop {
+            loop {
+                let events = self.log.read(*after, BATCH).await?;
+                let Some(last) = events.last().map(|e| e.seq) else {
+                    break;
+                };
+                *after = last;
+                let heard = events
+                    .iter()
+                    .filter(|e| is_worker_message(e) && e.task.as_ref() == Some(task))
+                    .filter_map(|e| e.decode::<WorkerEnvelope>().ok())
+                    .any(|env| env.generation == generation);
+                if heard {
+                    return Ok(true);
+                }
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
     /// Wait until the agent looks ready for input: an idle pattern has
-    /// stayed on screen for `ready_settle`, or the screen has something on
-    /// it and has stopped changing.
+    /// stayed on screen for `ready_settle`, or, for a harness with no idle
+    /// pattern, the screen has something on it and has stopped changing. A
+    /// harness with idle patterns waits for one: a still splash screen
+    /// is not a live composer, and a brief pasted into it is lost.
     /// Start-up questions the manifest lists (`launch.dialogs`) are answered
     /// first, and the screen never counts as ready while one shows.
     async fn wait_ready(&self, session: &SessionId, manifest: &HarnessManifest) {
@@ -625,6 +704,9 @@ impl Supervisor {
                     continue;
                 }
                 ready::Screen::Answer(_) | ready::Screen::Busy => {
+                    last = None;
+                }
+                ready::Screen::Unknown if !manifest.turn_signals.idle_patterns.is_empty() => {
                     last = None;
                 }
                 ready::Screen::Unknown => {
