@@ -765,7 +765,7 @@ impl Supervisor {
         let record = self.ledger.states().get(project, task);
         let events = record
             .as_ref()
-            .and_then(|r| crate::rules::answer_transitions(r.state, &r.open_decisions, key));
+            .and_then(|r| crate::rules::answer_transitions(&r.open_decisions, key));
         let Some(events) = events else {
             return Err(CoreError::NotFound(format!(
                 "open decision {key} on {task}"

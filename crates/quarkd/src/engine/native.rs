@@ -247,6 +247,10 @@ impl EngineAdapter for NativeEngine {
         let p = project(ws);
         let mut holds = Vec::new();
         for (record, worker) in self.tasks(ws).await? {
+            // A finished task asks nothing more.
+            if record.state == quark_systems::TaskState::Done {
+                continue;
+            }
             for key in &record.open_decisions {
                 let question = self
                     .lines

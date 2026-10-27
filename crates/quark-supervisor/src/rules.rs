@@ -59,19 +59,13 @@ pub fn message_transitions(
 
 /// The transitions answering the open decision `key` records; `None` when
 /// no such decision is open, which the supervisor refuses.
-pub fn answer_transitions(
-    state: TaskState,
-    open_decisions: &BTreeSet<String>,
-    key: &str,
-) -> Option<Vec<TaskEvent>> {
+pub fn answer_transitions(open_decisions: &BTreeSet<String>, key: &str) -> Option<Vec<TaskEvent>> {
     if !open_decisions.contains(key) {
         return None;
     }
-    Some(if state == TaskState::NeedsDecision {
-        vec![TaskEvent::DecisionAnswered {
-            key: key.to_string(),
-        }]
-    } else {
-        Vec::new()
-    })
+    // Recorded whatever the task's state, or the question stays open and
+    // is asked again after every answer.
+    Some(vec![TaskEvent::DecisionAnswered {
+        key: key.to_string(),
+    }])
 }
