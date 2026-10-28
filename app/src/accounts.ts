@@ -1,5 +1,5 @@
 // Accounts screen helpers (quark#23): health and quota labels, grouping and pool parsing.
-import type { Account, AccountQuota, AuthState, HarnessInfo } from "./api";
+import type { Account, AccountQuota, AuthState, HarnessInfo, QuotaWindow } from "./api";
 
 export const healthMeta: Record<AuthState, { label: string; cls: string }> = {
   configured: { label: "Logged in", cls: "green" },
@@ -16,6 +16,16 @@ export function quotaText(q: AccountQuota): string {
     case "error": return "Quota read failed";
     case "unsupported": return "Quota not tracked";
   }
+}
+
+const amount = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+/** What a window has spent, e.g. "435 of 1,500 Bobcoins used", with any overage; "" when not counted. */
+export function usageText(w: QuotaWindow): string {
+  if (w.used == null || w.limit == null) return "";
+  const unit = w.unit ? ` ${w.unit}` : "";
+  const over = w.overage ? `, ${amount(w.overage)} over (overage)` : "";
+  return `${amount(w.used)} of ${amount(w.limit)}${unit} used${over}`;
 }
 
 /** Pill colour for the quota: plenty, getting low, out, or no reading. */

@@ -69,6 +69,11 @@ final class QuarkKitTests: XCTestCase {
         XCTAssertEqual(Format.resets(now.addingTimeInterval(20), now: now), "resets in 1m")
         XCTAssertEqual(Format.resets(now.addingTimeInterval(-5), now: now), "resets now")
         XCTAssertEqual(Format.percent(37.6), "38%")
+        let month = QuotaWindow(id: "monthly", label: "month", used: 435.5, limit: 1500, unit: "Bobcoins")
+        XCTAssertEqual(Format.usage(month), "435.5 of 1,500 Bobcoins used")
+        let over = QuotaWindow(id: "monthly", label: "month", used: 1100, limit: 1000, unit: "credits", overage: 100)
+        XCTAssertEqual(Format.usage(over), "1,100 of 1,000 credits used, 100 over (overage)")
+        XCTAssertNil(Format.usage(QuotaWindow(id: "weekly", label: "week", percentRemaining: 40)))
         XCTAssertEqual(Format.checked(now.addingTimeInterval(-180), now: now), "checked 3m ago")
     }
 

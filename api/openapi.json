@@ -11626,6 +11626,22 @@
             "type": "string",
             "description": "e.g. `session`, `week`."
           },
+          "limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The window's allowance, in [`Self::unit`]."
+          },
+          "overage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The part of `used` past `limit`, billed as overage (Kiro)."
+          },
           "percent_remaining": {
             "type": [
               "number",
@@ -11639,6 +11655,21 @@
               "null"
             ],
             "description": "RFC 3339 UTC."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What `used` and `limit` count, e.g. `Bobcoins`, `credits`."
+          },
+          "used": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "How much of the allowance is spent, in [`Self::unit`], when the\nprovider counts it (Bob, Kiro)."
           }
         }
       },

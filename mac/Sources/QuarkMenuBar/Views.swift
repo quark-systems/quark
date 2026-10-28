@@ -53,6 +53,9 @@ struct QuotaRow: View {
                 if !account.default || account.label != "Default" {
                     Text(account.label).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
+                if let plan = account.quota.plan {
+                    Text(plan).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Spacer()
                 if let p = account.shownRemaining {
                     Text("\(Format.percent(p)) left").font(.system(size: 12).monospacedDigit())
@@ -87,6 +90,11 @@ struct WindowBar: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if let usage = Format.usage(window) {
+                Text(usage).font(.caption.monospacedDigit())
+                    .foregroundStyle(window.overage ?? 0 > 0 ? .orange : .secondary)
+                    .lineLimit(1)
+            }
         }
     }
 

@@ -969,6 +969,11 @@ struct ProviderReport {
 struct LocalDetail {
     plan: Option<String>,
     allowance_coins: Option<f64>,
+    /// Bob's coins spent this month.
+    estimated_used_coins: Option<f64>,
+    /// Kiro's credits spent and covered this month.
+    used_credits: Option<f64>,
+    plan_credits: Option<f64>,
     resets_at: Option<String>,
     period_end: Option<String>,
     reason: Option<String>,
@@ -1060,16 +1065,31 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
             label: w.label.clone().unwrap_or_else(|| w.id.clone()),
             percent_remaining: w.percent_remaining,
             resets_at: w.resets_at.clone(),
+            used: None,
+            limit: None,
+            unit: None,
+            overage: None,
         })
         .collect();
     // A quarkd reading is one monthly allowance.
     let resets_at = local.resets_at.or(local.period_end);
     if windows.is_empty() && remaining.is_some() && resets_at.is_some() {
+        let (used, limit, unit) = match (local.used_credits, local.plan_credits) {
+            (Some(u), Some(l)) => (Some(u), Some(l), Some("credits")),
+            _ => match (local.estimated_used_coins, local.allowance_coins) {
+                (Some(u), Some(l)) => (Some(u), Some(l), Some("Bobcoins")),
+                _ => (None, None, None),
+            },
+        };
         windows.push(QuotaWindow {
             id: "monthly".into(),
             label: "month".into(),
             percent_remaining: remaining,
             resets_at,
+            used,
+            limit,
+            unit: unit.map(Into::into),
+            overage: used.zip(limit).map(|(u, l)| u - l).filter(|o| *o > 0.0),
         });
     }
     let plan = p.plan.or(local.plan).or_else(|| {
@@ -1127,6 +1147,30 @@ mod tests {
         assert_eq!(q.windows.len(), 2);
         assert_eq!(q.windows[0].label, "session");
         assert_eq!(q.detail, None);
+    }
+
+    #[test]
+    fn bob_and_kiro_months_say_how_much_is_used() {
+        let kiro = r#"{"schemaVersion":5,"providers":[{"provider":"kiro","state":{"status":"fresh"},
+            "quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":99.63}]},
+            "kiro":{"usedCredits":3.69,"planCredits":1000,"plan":"KIRO PRO","resetsAt":"2026-11-01T00:00:00Z"}}]}"#;
+        let w = &parse_quota("kiro", kiro).windows[0];
+        assert_eq!((w.used, w.limit), (Some(3.69), Some(1000.0)));
+        assert_eq!(w.unit.as_deref(), Some("credits"));
+        assert_eq!(w.overage, None);
+        let over = kiro.replace("3.69", "1100");
+        assert_eq!(parse_quota("kiro", &over).windows[0].overage, Some(100.0));
+
+        let bob = r#"{"schemaVersion":5,"providers":[{"provider":"bob","state":{"status":"fresh"},
+            "quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":75}]},
+            "bob":{"estimatedUsedCoins":375,"allowanceCoins":1500,"periodEnd":"2026-11-01T00:00:00Z"}}]}"#;
+        let q = parse_quota("bob", bob);
+        let w = &q.windows[0];
+        assert_eq!((w.used, w.limit), (Some(375.0), Some(1500.0)));
+        assert_eq!(w.unit.as_deref(), Some("Bobcoins"));
+        assert_eq!(q.plan.as_deref(), Some("1500 Bobcoins a month"));
+
+        assert_eq!(parse_quota("codex", CODEX).windows[0].used, None);
     }
 
     #[test]
