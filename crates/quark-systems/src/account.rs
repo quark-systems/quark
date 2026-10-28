@@ -131,6 +131,19 @@ pub struct QuotaWindow {
     pub percent_remaining: Option<f64>,
     /// RFC 3339 UTC.
     pub resets_at: Option<String>,
+    /// How much of the allowance is spent, in [`Self::unit`], when the
+    /// provider counts it (Bob, Kiro).
+    #[serde(default)]
+    pub used: Option<f64>,
+    /// The window's allowance, in [`Self::unit`].
+    #[serde(default)]
+    pub limit: Option<f64>,
+    /// What `used` and `limit` count, e.g. `Bobcoins`, `credits`.
+    #[serde(default)]
+    pub unit: Option<String>,
+    /// The part of `used` past `limit`, billed as overage (Kiro).
+    #[serde(default)]
+    pub overage: Option<f64>,
 }
 
 /// An account's latest quota reading.

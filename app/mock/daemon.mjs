@@ -876,11 +876,13 @@ function seed() {
   addAccount({ id: "default-bob", harness: "bob", label: "Default", config_dir: "/home/demo/.bob", default: true,
     health: { state: "configured", detail: "found /home/demo/.bob/settings/auth-secrets.json" },
     quota: { state: "known", remaining_percent: 71, plan: "1500 Bobcoins a month", detail: null, checked_at: now(),
-      windows: [{ id: "monthly", label: "month", percent_remaining: 71, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString() }] } });
+      windows: [{ id: "monthly", label: "month", percent_remaining: 71, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString(),
+        used: 435, limit: 1500, unit: "Bobcoins", overage: null }] } });
   addAccount({ id: "default-kiro", harness: "kiro", label: "Default", config_dir: null, default: true,
     health: { state: "unknown", detail: "Kiro CLI has no credential Quark can check" },
     quota: { state: "known", remaining_percent: 54, plan: "KIRO PRO", detail: null, checked_at: now(),
-      windows: [{ id: "monthly", label: "month", percent_remaining: 54, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString() }] } });
+      windows: [{ id: "monthly", label: "month", percent_remaining: 54, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString(),
+        used: 460, limit: 1000, unit: "credits", overage: null }] } });
 
   const quark = addProject({
     id: "quark", name: "Quark MVP", goal: "Ship Phase 1: one Project end to end, from creation to a reviewed PR.",

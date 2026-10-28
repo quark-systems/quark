@@ -3,7 +3,13 @@ import { HarnessAuth } from "./harnesses";
 
 // Accounts and pools per harness, with per-account quota (quark#23, ADR-11).
 export type QuotaState = "pending" | "known" | "unavailable" | "error" | "unsupported";
-export interface QuotaWindow { id: string; label: string; percent_remaining?: number | null; resets_at?: string | null }
+export interface QuotaWindow {
+  id: string; label: string; percent_remaining?: number | null; resets_at?: string | null;
+  /** Spent and allowed this window, in `unit` (Bob's Bobcoins, Kiro's credits). */
+  used?: number | null; limit?: number | null; unit?: string | null;
+  /** The part of `used` past `limit`, billed as overage. */
+  overage?: number | null;
+}
 export interface AccountQuota {
   state: QuotaState;
   /** What limits the account now, 0 to 100. */

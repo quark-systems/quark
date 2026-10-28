@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addable, groupByHarness, loginHint, parsePools, poolsFor, POOL_RE, quotaCls, quotaText, whereText } from "./accounts";
+import { addable, usageText, groupByHarness, loginHint, parsePools, poolsFor, POOL_RE, quotaCls, quotaText, whereText } from "./accounts";
 import type { Account, AccountQuota, HarnessInfo } from "./api";
 
 const quota = (over: Partial<AccountQuota> = {}): AccountQuota => ({ state: "known", remaining_percent: 62.4, windows: [], ...over });
@@ -13,6 +13,13 @@ const harness = (id: string, name: string, account_env: string | null): HarnessI
 });
 
 describe("quota labels", () => {
+  it("says how much of a counted allowance is used, and any overage", () => {
+    const w = { id: "monthly", label: "month", used: 435.5, limit: 1500, unit: "Bobcoins" };
+    expect(usageText(w)).toBe("435.5 of 1,500 Bobcoins used");
+    expect(usageText({ ...w, used: 1100, limit: 1000, unit: "credits", overage: 100 })).toBe("1,100 of 1,000 credits used, 100 over (overage)");
+    expect(usageText({ id: "weekly", label: "week", percent_remaining: 40 })).toBe("");
+  });
+
   it("says how much is left, or why there is no number", () => {
     expect(quotaText(quota())).toBe("62% left");
     expect(quotaText(quota({ state: "pending", remaining_percent: null }))).toBe("Reading quota…");

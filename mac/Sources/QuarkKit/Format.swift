@@ -17,6 +17,23 @@ public enum Format {
         "\(Int(p.rounded()))%"
     }
 
+    /// "435 of 1,500 Bobcoins used", with any overage; nil when the window is not counted.
+    public static func usage(_ w: QuotaWindow) -> String? {
+        guard let used = w.used, let limit = w.limit else { return nil }
+        let unit = w.unit.map { " \($0)" } ?? ""
+        let over = w.overage.map { $0 > 0 ? ", \(amount($0)) over (overage)" : "" } ?? ""
+        return "\(amount(used)) of \(amount(limit))\(unit) used\(over)"
+    }
+
+    /// "1,500", "3.69": grouped, at most two decimals.
+    public static func amount(_ n: Double) -> String {
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US")
+        f.numberStyle = .decimal
+        f.maximumFractionDigits = 2
+        return f.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+
     /// "12.3 GB" in base-10 units, as Finder shows sizes.
     public static func bytes(_ b: UInt64) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(clamping: b), countStyle: .file)

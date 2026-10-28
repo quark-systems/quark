@@ -5,7 +5,7 @@
 // Quota readings arrive live as `account.quota_changed`.
 import React, { useEffect, useMemo, useState } from "react";
 import { Account, api, HarnessInfo, NotAvailable } from "../api";
-import { addable, groupByHarness, healthMeta, loginHint, parsePools, POOL_RE, quotaCls, quotaText, whereText } from "../accounts";
+import { addable, groupByHarness, healthMeta, loginHint, parsePools, POOL_RE, quotaCls, quotaText, usageText, whereText } from "../accounts";
 import { loadAccounts, setAccounts, useStore } from "../store";
 import { ago, errText } from "../util";
 import { Unavailable } from "../components/Unavailable";
@@ -119,7 +119,7 @@ function AccountRow({ account: a, onError }: { account: Account; onError: (e: st
         {q.windows.length > 0 && (
           <div className="faint quota-windows">
             {q.windows.map((w) => (
-              <span key={w.id}>{w.label} {w.percent_remaining != null ? `${Math.round(w.percent_remaining)}%` : "?"}</span>
+              <span key={w.id}>{w.label} {w.percent_remaining != null ? `${Math.round(w.percent_remaining)}%` : "?"}{usageText(w) && ` · ${usageText(w)}`}</span>
             ))}
           </div>
         )}

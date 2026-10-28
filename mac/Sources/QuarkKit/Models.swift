@@ -141,6 +141,12 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     public var label: String
     public var percentRemaining: Double?
     public var resetsAt: Date?
+    /// Spent and allowed this window, in `unit` (Bob's Bobcoins, Kiro's credits).
+    public var used: Double?
+    public var limit: Double?
+    public var unit: String?
+    /// The part of `used` past `limit`, billed as overage.
+    public var overage: Double?
 }
 
 /// `GET /v1/harnesses`: the menubar only needs each harness's display name.
