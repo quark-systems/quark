@@ -6,7 +6,9 @@
 //
 // `quark://open/<route>` links (from QuarkBar, notifications and widgets) bring the window
 // forward on that route: <route> is the page's own hash route (src/nav.ts), e.g.
-// `quark://open/t/<task id>`. macOS only delivers them to the bundled app.
+// `quark://open/t/<task id>`. macOS only delivers them to the bundled app, so the app also
+// takes them, one per line, on the socket `link_socket` names: QuarkBar writes there first,
+// which reaches a desktop app run with `npm run tauri dev` too.
 //
 // On macOS the window is translucent with a native blur behind it (an NSVisualEffectView
 // through Tauri's window effects) and the title bar overlays the page; the page learns that
@@ -85,6 +87,40 @@ fn open_link(app: &AppHandle, url: &str) {
     let _ = window.set_focus();
 }
 
+/// The socket QuarkBar sends links to: ~/Library/Application Support/Quark/desktop.sock,
+/// as mac/Sources/QuarkMenuBar/Opener.swift expects.
+#[cfg(unix)]
+fn link_socket(home: &std::path::Path) -> std::path::PathBuf {
+    home.join("Library/Application Support/Quark/desktop.sock")
+}
+
+/// Takes `quark://open/...` links, one per line, on `path` and hands each to `open`.
+/// Replaces a socket left by an earlier run; gives up quietly when it cannot listen.
+#[cfg(unix)]
+fn serve_links(
+    path: std::path::PathBuf,
+    open: impl Fn(&str) + Send + 'static,
+) -> std::io::Result<()> {
+    use std::io::BufRead;
+    use std::os::unix::net::UnixListener;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            for line in std::io::BufReader::new(stream)
+                .lines()
+                .map_while(Result::ok)
+            {
+                open(line.trim());
+            }
+        }
+    });
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -99,6 +135,11 @@ pub fn run() {
                     open_link(&handle, url.as_str());
                 }
             });
+            #[cfg(unix)]
+            if let Ok(home) = app.path().home_dir() {
+                let handle = app.handle().clone();
+                let _ = serve_links(link_socket(&home), move |url| open_link(&handle, url));
+            }
             let builder = WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -140,6 +181,29 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{encode, link_hash, page_path};
+
+    #[cfg(unix)]
+    #[test]
+    fn takes_links_on_the_socket() {
+        use std::io::Write;
+        use std::sync::mpsc;
+        let dir = std::env::temp_dir().join(format!("quark-links-{}", std::process::id()));
+        let path = super::link_socket(&dir);
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        super::serve_links(path.clone(), move |url| {
+            let _ = tx.lock().unwrap().send(url.to_string());
+        })
+        .unwrap();
+        let mut s = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        s.write_all(b"quark://open/t/tsk_1\nquark://open/hosts\n")
+            .unwrap();
+        drop(s);
+        let wait = std::time::Duration::from_secs(5);
+        assert_eq!(rx.recv_timeout(wait).unwrap(), "quark://open/t/tsk_1");
+        assert_eq!(rx.recv_timeout(wait).unwrap(), "quark://open/hosts");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn links_name_hash_routes() {

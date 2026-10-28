@@ -1,54 +1,10 @@
 import AppKit
 import QuarkKit
+import QuarkUI
 import SwiftUI
 
 /// Width of the rich rows hosted in the menu.
 let rowWidth: CGFloat = 320
-
-extension Tone {
-    var color: NSColor {
-        switch self {
-        case .busy: return .systemBlue
-        case .needsYou: return .systemPurple
-        case .ready: return .systemGreen
-        case .failed: return .systemRed
-        case .parked: return .systemOrange
-        case .idle, .unknown: return .tertiaryLabelColor
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .busy: return "Busy"
-        case .needsYou: return "Needs you"
-        case .ready: return "Ready"
-        case .failed: return "Failed"
-        case .parked: return "Parked"
-        case .idle, .unknown: return "Idle"
-        }
-    }
-}
-
-extension ToneCounts {
-    /// "1 needs you · 2 busy · 1 ready", most urgent first; empty when all idle.
-    var summary: String {
-        [(needsYou, "needs you", "need you"), (failed, "failed", "failed"), (busy, "busy", "busy"),
-         (ready, "ready", "ready"), (parked, "parked", "parked")]
-            .filter { $0.0 > 0 }
-            .map { "\($0.0) \($0.0 == 1 ? $0.1 : $0.2)" }
-            .joined(separator: " · ")
-    }
-
-    /// The tone a group of workers shows: its most urgent one.
-    var lead: Tone {
-        if needsYou > 0 { return .needsYou }
-        if failed > 0 { return .failed }
-        if busy > 0 { return .busy }
-        if ready > 0 { return .ready }
-        if parked > 0 { return .parked }
-        return .idle
-    }
-}
 
 /// The top of the menu: is Quark running, and how is everything doing.
 struct HeaderView: View {
@@ -134,10 +90,7 @@ struct WindowBar: View {
         }
     }
 
-    private var tint: Color {
-        let p = window.percentRemaining ?? 0
-        return p <= 10 ? .red : p <= 30 ? .orange : .accentColor
-    }
+    private var tint: Color { quotaTint(window.percentRemaining ?? 0) }
 }
 
 /// One host: health, CPU and memory.
@@ -192,21 +145,6 @@ struct LabeledMeter: View {
     }
 }
 
-struct Meter: View {
-    let fraction: Double
-    let tint: Color
-
-    var body: some View {
-        GeometryReader { g in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.1))
-                Capsule().fill(tint).frame(width: g.size.width * min(max(fraction, 0), 1))
-            }
-        }
-        .frame(height: 5)
-    }
-}
-
 /// A menu item holding a SwiftUI view, sized to fit it.
 func hostedItem<V: View>(_ view: V) -> NSMenuItem {
     let item = NSMenuItem()
@@ -216,25 +154,36 @@ func hostedItem<V: View>(_ view: V) -> NSMenuItem {
     return item
 }
 
-/// A small filled circle in `color`, for menu item images.
-func dot(_ color: NSColor, size: CGFloat = 8) -> NSImage {
-    let image = NSImage(size: NSSize(width: size + 4, height: size + 4), flipped: false) { rect in
-        color.setFill()
-        NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
-        return true
+/// A two-line menu item title: the main text, and a smaller secondary line,
+/// each clipped so a long title cannot stretch the whole menu. With `dot`, a
+/// colored dot leads the first line and the second line lines up under the text.
+/// (Menu item images do not show next to multi-line titles on every macOS, so
+/// the dot is part of the text.)
+func twoLine(_ title: String, _ detail: String?, dot: NSColor? = nil) -> NSAttributedString {
+    let s = NSMutableAttributedString()
+    let titleFont = NSFont.menuFont(ofSize: 13)
+    let para = NSMutableParagraphStyle()
+    if let dot {
+        let lead = NSAttributedString(string: "\u{25CF}  ", attributes: [
+            .font: NSFont.menuFont(ofSize: 10), .foregroundColor: dot, .baselineOffset: 1,
+        ])
+        para.headIndent = ceil(lead.size().width)
+        s.append(lead)
     }
-    image.isTemplate = false
-    return image
-}
-
-/// A two-line menu item title: the main text, and a smaller secondary line.
-func twoLine(_ title: String, _ detail: String?) -> NSAttributedString {
-    let s = NSMutableAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 13)])
+    s.append(NSAttributedString(string: clip(title, 56), attributes: [.font: titleFont]))
     if let detail, !detail.isEmpty {
-        s.append(NSAttributedString(string: "\n" + detail, attributes: [
+        // A line separator, not a newline, keeps one paragraph so headIndent applies.
+        s.append(NSAttributedString(string: "\u{2028}" + clip(detail, 64), attributes: [
             .font: NSFont.menuFont(ofSize: 11),
             .foregroundColor: NSColor.secondaryLabelColor,
         ]))
     }
+    s.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: s.length))
     return s
+}
+
+/// `s` cut to `max` characters with an ellipsis.
+func clip(_ s: String, _ max: Int) -> String {
+    let flat = s.replacingOccurrences(of: "\n", with: " ")
+    return flat.count <= max ? flat : String(flat.prefix(max - 1)).trimmingCharacters(in: .whitespaces) + "\u{2026}"
 }

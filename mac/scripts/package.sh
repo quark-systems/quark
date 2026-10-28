@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds dist/QuarkBar.app: the menubar app with quarkd inside, run as a
-# LaunchAgent. Run on a Mac from anywhere in the repo:
+# Builds dist/QuarkBar.app: the menubar app with its widgets and quarkd inside,
+# quarkd run as a LaunchAgent. Run on a Mac from anywhere in the repo:
 #   mac/scripts/package.sh            # release build, ad-hoc signed
 #   SIGN_ID="Developer ID Application: …" mac/scripts/package.sh
 # Needs Xcode or the Command Line Tools (Swift 5.9+) and a Rust toolchain.
@@ -23,10 +23,15 @@ if [[ "$(xcode-select -p 2>/dev/null)" == */CommandLineTools ]]; then
   swift_flags+=(--build-system native)
 fi
 swift build "${swift_flags[@]}" --product QuarkMenuBar
+swift build "${swift_flags[@]}" --product QuarkWidgets
 bin="$(swift build "${swift_flags[@]}" --show-bin-path)"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Library/LaunchAgents"
+widgets="$app/Contents/PlugIns/QuarkWidgets.appex"
+mkdir -p "$widgets/Contents/MacOS"
+cp -f "$bin/QuarkWidgets" "$widgets/Contents/MacOS/QuarkWidgets"
+sed -e "s/__VERSION__/$version/" -e "s/__BUILD__/$build/" "$mac/Resources/Widgets-Info.plist" > "$widgets/Contents/Info.plist"
 cp -f "$bin/QuarkMenuBar" "$app/Contents/MacOS/QuarkBar"
 cp -f "$repo/target/release/quarkd" "$app/Contents/MacOS/quarkd"
 cp -f "$mac/Resources/quarkd-launch" "$app/Contents/Resources/quarkd-launch"
@@ -40,6 +45,8 @@ fi
 # Inside out: the helpers first, then the app.
 sign="${SIGN_ID:--}"
 codesign --force --options runtime --timestamp=none --sign "$sign" "$app/Contents/MacOS/quarkd"
+codesign --force --options runtime --timestamp=none --sign "$sign" \
+  --entitlements "$mac/Resources/Widgets.entitlements" "$widgets"
 codesign --force --options runtime --timestamp=none --sign "$sign" "$app"
 codesign --verify --deep --strict "$app"
 echo "built $app"

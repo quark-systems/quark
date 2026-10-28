@@ -78,6 +78,9 @@ final class QuarkKitTests: XCTestCase {
         XCTAssertEqual(DeskLink(status.attention[1]).path, "inbox/dec_1")
         XCTAssertEqual(DeskLink.worker("a/b").path, "t/a%2Fb")
         XCTAssertEqual(DeskLink.home.url.absoluteString, "quark://open/")
+        XCTAssertEqual(DeskLink.hosts.barURL.absoluteString, "quarkbar://open/hosts")
+        XCTAssertEqual(DeskLink.deskURL(fromBar: DeskLink.worker("a/b").barURL)?.absoluteString, "quark://open/t/a%2Fb")
+        XCTAssertNil(DeskLink.deskURL(fromBar: DeskLink.home.url))
     }
 
     func testClientURLs() {

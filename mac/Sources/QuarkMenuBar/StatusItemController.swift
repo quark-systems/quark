@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import QuarkKit
+import QuarkUI
 
 /// The menubar icon and its menu. The icon carries a count of what needs you;
 /// the menu leads with that, then each Project and its agents, then hosts and
@@ -90,19 +91,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(.sectionHeader(title: "Needs you"))
         for a in status.attention.prefix(attentionShown) {
-            let kind: String
-            let symbol: String
-            switch a.kind {
-            case .decision: (kind, symbol) = ("Decision", "questionmark.bubble")
-            case .pullRequest: (kind, symbol) = ("Check failed", "xmark.octagon")
-            case .worker: (kind, symbol) = ("Worker stuck", "exclamationmark.triangle")
-            case .unknown: (kind, symbol) = ("Waiting", "circle")
-            }
-            let detail = [a.projectName, kind, a.sinceDate.map(ago)].compactMap { $0 }.joined(separator: " · ")
-            let mi = action(twoLine(a.title, detail)) { Opener.open(DeskLink(a)) }
-            mi.image = NSImage(systemSymbolName: symbol, accessibilityDescription: kind)?
-                .withSymbolConfiguration(.init(paletteColors: [.systemPurple]))
-            menu.addItem(mi)
+            let kind = a.kind.label
+            let detail = [a.projectName, kind, a.sinceDate.map { ago($0) }].compactMap { $0 }.joined(separator: " · ")
+            menu.addItem(action(twoLine(a.title, detail, dot: .systemPurple)) { Opener.open(DeskLink(a)) })
         }
         let more = status.attention.count - attentionShown
         if more > 0 {
@@ -120,14 +111,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return
         }
         for p in status.projects {
-            var parts: [String] = []
-            if p.status == "provisioning" { parts.append("Setting up") }
-            if p.status == "failed" { parts.append("Setup failed") }
-            if !p.counts.summary.isEmpty { parts.append(p.counts.summary) }
-            if p.failingPullRequests > 0 { parts.append("\(p.failingPullRequests) PR\(p.failingPullRequests == 1 ? "" : "s") red") }
-            if parts.isEmpty { parts.append(p.lastActivity.map { "Quiet · \(ago($0))" } ?? "Quiet") }
-            let mi = action(twoLine(p.name, parts.joined(separator: " · "))) { Opener.open(.project(p.id)) }
-            mi.image = dot(p.status == "failed" ? .systemRed : p.counts.lead.color)
+            let mi = action(twoLine(p.name, p.line(), dot: p.tone.nsColor)) { Opener.open(.project(p.id)) }
             mi.submenu = projectMenu(p)
             menu.addItem(mi)
         }
@@ -150,9 +134,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         sub.addItem(.sectionHeader(title: p.workers.isEmpty ? "No workers" : "Workers"))
         for w in p.workers {
             let detail = [w.tone.label, w.note, w.harness.map(store.harnessName)].compactMap { $0 }.joined(separator: " · ")
-            let mi = action(twoLine(w.title, detail)) { Opener.open(.worker(w.id)) }
-            mi.image = dot(w.tone.color)
-            sub.addItem(mi)
+            sub.addItem(action(twoLine(w.title, detail, dot: w.tone.nsColor)) { Opener.open(.worker(w.id)) })
         }
         return sub
     }
@@ -178,7 +160,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func addActions() {
         let open = action(NSAttributedString(string: "Open Quark"), key: "o") { Opener.open(.home) }
-        open.isEnabled = Opener.desktopInstalled
+        open.isEnabled = Opener.desktopAvailable
         menu.addItem(open)
         let refresh = action(NSAttributedString(string: store.refreshingQuota ? "Reading quota…" : "Refresh"), key: "r") { [store] in
             store.loadSoon()
@@ -192,7 +174,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             daemon.setLaunchesAtLogin(!daemon.launchesAtLogin)
         }
         login.state = daemon.launchesAtLogin ? .on : .off
-        login.isEnabled = daemon.state != .notBundled
+        login.isEnabled = Bundle.main.bundleIdentifier != nil
         menu.addItem(login)
         menu.addItem(.separator())
         menu.addItem(action(NSAttributedString(string: "Quit QuarkBar"), key: "q") { NSApp.terminate(nil) })
@@ -210,8 +192,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         case (_, false): line = "Not running"
         }
         let top = NSMenuItem()
-        top.attributedTitle = twoLine("quarkd", line)
-        top.image = dot(running ? .systemGreen : state == .managed ? .systemOrange : .systemRed)
+        top.attributedTitle = twoLine("quarkd", line, dot: running ? .systemGreen : state == .managed ? .systemOrange : .systemRed)
         let sub = NSMenu()
         sub.autoenablesItems = false
         switch state {
@@ -263,14 +244,4 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 private final class Handler {
     let run: () -> Void
     init(_ run: @escaping () -> Void) { self.run = run }
-}
-
-private let relative: RelativeDateTimeFormatter = {
-    let f = RelativeDateTimeFormatter()
-    f.unitsStyle = .abbreviated
-    return f
-}()
-
-private func ago(_ date: Date) -> String {
-    relative.localizedString(for: date, relativeTo: Date())
 }

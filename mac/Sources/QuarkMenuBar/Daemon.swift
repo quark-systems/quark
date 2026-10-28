@@ -35,9 +35,17 @@ final class Daemon: ObservableObject {
         case .enabled: return .managed
         case .requiresApproval: return .needsApproval
         case .notRegistered: return .off
-        case .notFound: return .notBundled
-        @unknown default: return .notBundled
+        // macOS can report an agent it has never registered as not found, so
+        // "not found" only means not bundled when the plist really is missing.
+        case .notFound: return plistBundled ? .off : .notBundled
+        @unknown default: return plistBundled ? .off : .notBundled
         }
+    }
+
+    private var plistBundled: Bool {
+        let plist = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/LaunchAgents/\(Daemon.label).plist")
+        return FileManager.default.fileExists(atPath: plist.path)
     }
 
     /// The first time QuarkBar.app runs, it starts quarkd unless one is

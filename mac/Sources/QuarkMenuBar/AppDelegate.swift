@@ -1,4 +1,5 @@
 import AppKit
+import QuarkKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -14,5 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = StatusItemController(store: store, daemon: daemon)
         daemon.startIfFirstRun()
         store.start()
+    }
+
+    /// `quarkbar://open/<route>` links, from the widgets.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if let desk = DeskLink.deskURL(fromBar: url) { Opener.open(desk) }
+        }
     }
 }
