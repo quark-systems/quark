@@ -61,15 +61,26 @@ struct QuotaRow: View {
             }
             if let note = account.quotaNote {
                 Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            } else {
-                ForEach(account.quota.windows) { w in
-                    WindowBar(window: w, now: now)
-                }
+            } else if let w = limiting {
+                WindowBar(window: w, now: now)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
         .frame(width: rowWidth, alignment: .leading)
+    }
+}
+
+extension QuotaRow {
+    /// The window that limits the account now: the one at quarkd's
+    /// `remaining_percent`, else the one with the least left.
+    var limiting: QuotaWindow? {
+        let ws = account.quota.windows
+        if let p = account.quota.remainingPercent,
+           let w = ws.first(where: { $0.percentRemaining.map { abs($0 - p) < 0.5 } ?? false }) {
+            return w
+        }
+        return ws.min { ($0.percentRemaining ?? 100) < ($1.percentRemaining ?? 100) }
     }
 }
 
@@ -154,25 +165,36 @@ func hostedItem<V: View>(_ view: V) -> NSMenuItem {
     return item
 }
 
-/// A small filled circle in `color`, for menu item images.
-func dot(_ color: NSColor, size: CGFloat = 8) -> NSImage {
-    let image = NSImage(size: NSSize(width: size + 4, height: size + 4), flipped: false) { rect in
-        color.setFill()
-        NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
-        return true
+/// A two-line menu item title: the main text, and a smaller secondary line,
+/// each clipped so a long title cannot stretch the whole menu. With `dot`, a
+/// colored dot leads the first line and the second line lines up under the text.
+/// (Menu item images do not show next to multi-line titles on every macOS, so
+/// the dot is part of the text.)
+func twoLine(_ title: String, _ detail: String?, dot: NSColor? = nil) -> NSAttributedString {
+    let s = NSMutableAttributedString()
+    let titleFont = NSFont.menuFont(ofSize: 13)
+    let para = NSMutableParagraphStyle()
+    if let dot {
+        let lead = NSAttributedString(string: "\u{25CF}  ", attributes: [
+            .font: NSFont.menuFont(ofSize: 10), .foregroundColor: dot, .baselineOffset: 1,
+        ])
+        para.headIndent = ceil(lead.size().width)
+        s.append(lead)
     }
-    image.isTemplate = false
-    return image
-}
-
-/// A two-line menu item title: the main text, and a smaller secondary line.
-func twoLine(_ title: String, _ detail: String?) -> NSAttributedString {
-    let s = NSMutableAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 13)])
+    s.append(NSAttributedString(string: clip(title, 56), attributes: [.font: titleFont]))
     if let detail, !detail.isEmpty {
-        s.append(NSAttributedString(string: "\n" + detail, attributes: [
+        // A line separator, not a newline, keeps one paragraph so headIndent applies.
+        s.append(NSAttributedString(string: "\u{2028}" + clip(detail, 64), attributes: [
             .font: NSFont.menuFont(ofSize: 11),
             .foregroundColor: NSColor.secondaryLabelColor,
         ]))
     }
+    s.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: s.length))
     return s
+}
+
+/// `s` cut to `max` characters with an ellipsis.
+func clip(_ s: String, _ max: Int) -> String {
+    let flat = s.replacingOccurrences(of: "\n", with: " ")
+    return flat.count <= max ? flat : String(flat.prefix(max - 1)).trimmingCharacters(in: .whitespaces) + "\u{2026}"
 }

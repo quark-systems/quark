@@ -92,12 +92,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.sectionHeader(title: "Needs you"))
         for a in status.attention.prefix(attentionShown) {
             let kind = a.kind.label
-            let symbol = a.kind.symbol
             let detail = [a.projectName, kind, a.sinceDate.map { ago($0) }].compactMap { $0 }.joined(separator: " · ")
-            let mi = action(twoLine(a.title, detail)) { Opener.open(DeskLink(a)) }
-            mi.image = NSImage(systemSymbolName: symbol, accessibilityDescription: kind)?
-                .withSymbolConfiguration(.init(paletteColors: [.systemPurple]))
-            menu.addItem(mi)
+            menu.addItem(action(twoLine(a.title, detail, dot: .systemPurple)) { Opener.open(DeskLink(a)) })
         }
         let more = status.attention.count - attentionShown
         if more > 0 {
@@ -115,8 +111,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return
         }
         for p in status.projects {
-            let mi = action(twoLine(p.name, p.line())) { Opener.open(.project(p.id)) }
-            mi.image = dot(p.tone.nsColor)
+            let mi = action(twoLine(p.name, p.line(), dot: p.tone.nsColor)) { Opener.open(.project(p.id)) }
             mi.submenu = projectMenu(p)
             menu.addItem(mi)
         }
@@ -139,9 +134,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         sub.addItem(.sectionHeader(title: p.workers.isEmpty ? "No workers" : "Workers"))
         for w in p.workers {
             let detail = [w.tone.label, w.note, w.harness.map(store.harnessName)].compactMap { $0 }.joined(separator: " · ")
-            let mi = action(twoLine(w.title, detail)) { Opener.open(.worker(w.id)) }
-            mi.image = dot(w.tone.nsColor)
-            sub.addItem(mi)
+            sub.addItem(action(twoLine(w.title, detail, dot: w.tone.nsColor)) { Opener.open(.worker(w.id)) })
         }
         return sub
     }
@@ -181,7 +174,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             daemon.setLaunchesAtLogin(!daemon.launchesAtLogin)
         }
         login.state = daemon.launchesAtLogin ? .on : .off
-        login.isEnabled = daemon.state != .notBundled
+        login.isEnabled = Bundle.main.bundleIdentifier != nil
         menu.addItem(login)
         menu.addItem(.separator())
         menu.addItem(action(NSAttributedString(string: "Quit QuarkBar"), key: "q") { NSApp.terminate(nil) })
@@ -199,8 +192,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         case (_, false): line = "Not running"
         }
         let top = NSMenuItem()
-        top.attributedTitle = twoLine("quarkd", line)
-        top.image = dot(running ? .systemGreen : state == .managed ? .systemOrange : .systemRed)
+        top.attributedTitle = twoLine("quarkd", line, dot: running ? .systemGreen : state == .managed ? .systemOrange : .systemRed)
         let sub = NSMenu()
         sub.autoenablesItems = false
         switch state {
