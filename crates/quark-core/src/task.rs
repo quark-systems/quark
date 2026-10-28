@@ -55,9 +55,9 @@ pub trait TaskMachine: Send + Sync {
 /// | any other | `DecisionAnswered` | unchanged (the worker moved on) |
 /// | `Running`, `NeedsDecision` | `Blocked` / `Paused` | `Blocked` / `Paused` |
 /// | `Blocked`, `Paused` | `Resumed` | `Running` |
-/// | `Running` | `InReview` | `InReview` |
+/// | `Running`, `NeedsDecision` | `InReview` | `InReview` |
 /// | `InReview` | `Completed` | `Done` |
-/// | `Running` | `Completed` | `Done` (reports, local-only) |
+/// | `Running`, `NeedsDecision` | `Completed` | `Done` (reports, local-only) |
 /// | any but `Done`, `Failed` | `Failed` / `Cancelled` | `Failed` |
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReferenceMachine;
@@ -80,8 +80,9 @@ impl TaskMachine for ReferenceMachine {
             (S::Running | S::NeedsDecision, TaskEvent::Blocked { .. }) => Some(S::Blocked),
             (S::Running | S::NeedsDecision, TaskEvent::Paused { .. }) => Some(S::Paused),
             (S::Blocked | S::Paused, TaskEvent::Resumed) => Some(S::Running),
-            (S::Running, TaskEvent::InReview { .. }) => Some(S::InReview),
-            (S::InReview | S::Running, TaskEvent::Completed) => Some(S::Done),
+            // A worker can finish without waiting for its question.
+            (S::Running | S::NeedsDecision, TaskEvent::InReview { .. }) => Some(S::InReview),
+            (S::InReview | S::Running | S::NeedsDecision, TaskEvent::Completed) => Some(S::Done),
             (s, TaskEvent::Failed { .. } | TaskEvent::Cancelled) if !terminal && s != S::Failed => {
                 Some(S::Failed)
             }
@@ -173,5 +174,23 @@ mod tests {
         ]
         .concat());
         assert_eq!(s, Ok(TaskState::Done));
+    }
+
+    #[test]
+    fn a_worker_can_finish_with_its_question_open() {
+        let asked = [
+            TaskEvent::Queued { title: "t".into() },
+            TaskEvent::Started {
+                generation: "1".into(),
+            },
+            TaskEvent::DecisionNeeded {
+                key: "k".into(),
+                question: "q".into(),
+            },
+        ];
+        let done = run(&[&asked[..], &[TaskEvent::Completed]].concat());
+        assert_eq!(done, Ok(TaskState::Done));
+        let review = run(&[&asked[..], &[TaskEvent::InReview { pull_request: None }]].concat());
+        assert_eq!(review, Ok(TaskState::InReview));
     }
 }

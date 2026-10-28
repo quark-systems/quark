@@ -2166,6 +2166,49 @@ mod tests {
     }
 
     #[test]
+    fn the_coordinator_does_not_copy_a_question_its_task_already_asks() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_snapshot(
+                &p.id,
+                &FleetSnapshot {
+                    tasks: vec![engine_task("a", TaskState::NeedsDecision)],
+                },
+            )
+            .unwrap();
+        let hold = Hold {
+            id: "a:suspend".into(),
+            task_id: Some("a".into()),
+            question: "Suspend the VM?".into(),
+            answer: None,
+            answered_by: None,
+            brief: crate::engine::worker_brief("a"),
+        };
+        store
+            .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
+            .unwrap();
+        let worker = store.list_decisions(Some(DecisionState::Open)).unwrap();
+        let brief = DecisionBrief {
+            blocks: vec!["a".into()],
+            asked_by: Some("coordinator".into()),
+            ..Default::default()
+        };
+        let d = store
+            .ask_from_coordinator(&p.id, "suspend", "Suspend the VM, or I will?", brief)
+            .unwrap();
+        assert_eq!(d, worker[0], "the task's own decision, unchanged");
+        assert_eq!(store.list_decisions(None).unwrap().len(), 1);
+
+        // A question that blocks no task is asked as before.
+        let d = store
+            .ask_from_coordinator(&p.id, "other", "Ship?", DecisionBrief::default())
+            .unwrap();
+        assert!(d.task_id.is_none());
+        assert_eq!(store.list_decisions(None).unwrap().len(), 2);
+    }
+
+    #[test]
     fn holds_open_then_answer() {
         let store = Store::open_in_memory().unwrap();
         let p = project(&store);
