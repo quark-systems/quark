@@ -20,10 +20,14 @@ something quarkd doesn't answer yet, add it to quarkd, not here.
   - **Open QuarkBar at Login.**
 
   Clicking an item opens that place in the Quark desktop app (`quark://open/<route>`).
+  A running desktop app gets the link on its socket,
+  `~/Library/Application Support/Quark/desktop.sock`, so this works with
+  `npm run tauri dev` too, where macOS never delivers `quark://`. When no desktop app
+  runs, the link goes to the installed Quark.app; with neither, QuarkBar beeps.
 - **Widgets** (desktop and Notification Center): Needs you, Projects, Quota
   and Hosts. Each reads quarkd itself every few minutes, and QuarkBar reloads
   them as soon as what they show changes. Clicking one opens the desktop app at
-  that item.
+  that item, through QuarkBar (`quarkbar://open/<route>`).
 - **Notifications:** quarkd's `notice.posted` updates. The project's away
   policy decides what's worth telling you.
 - **quarkd:** the quarkd bundled in QuarkBar.app runs as the LaunchAgent

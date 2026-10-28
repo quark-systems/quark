@@ -25,6 +25,17 @@ public enum DeskLink {
 
     public var url: URL { URL(string: "quark://open/\(path)")! }
 
+    /// The same place as a `quarkbar://open/<path>` link, which QuarkBar opens. Widgets
+    /// use it, so a click reaches a desktop app that macOS cannot hand `quark://` to.
+    public var barURL: URL { URL(string: "quarkbar://open/\(path)")! }
+
+    /// The `quark://` link a `quarkbar://` link stands for.
+    public static func deskURL(fromBar url: URL) -> URL? {
+        guard url.scheme == "quarkbar" else { return nil }
+        let s = url.absoluteString
+        return URL(string: "quark" + s.dropFirst("quarkbar".count))
+    }
+
     /// Where an attention item is answered.
     public init(_ item: AttentionItem) {
         switch item.kind {

@@ -160,7 +160,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func addActions() {
         let open = action(NSAttributedString(string: "Open Quark"), key: "o") { Opener.open(.home) }
-        open.isEnabled = Opener.desktopInstalled
+        open.isEnabled = Opener.desktopAvailable
         menu.addItem(open)
         let refresh = action(NSAttributedString(string: store.refreshingQuota ? "Reading quota…" : "Refresh"), key: "r") { [store] in
             store.loadSoon()

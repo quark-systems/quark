@@ -21,6 +21,18 @@
 	<!-- A menubar app: no Dock icon, no main menu. -->
 	<key>LSUIElement</key>
 	<true/>
+	<!-- quarkbar://open/<route>: widget clicks, passed on to the desktop app. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>systems.quark.bar</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>quarkbar</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License</string>
 </dict>

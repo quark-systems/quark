@@ -116,7 +116,7 @@ struct NeedsYouView: View {
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .widgetURL(items.first.map { DeskLink($0).url } ?? DeskLink.home.url)
+        .widgetURL(items.first.map { DeskLink($0).barURL } ?? DeskLink.home.barURL)
     }
 
     private func list(_ items: [AttentionItem], max: Int) -> some View {
@@ -134,7 +134,7 @@ struct NeedsYouView: View {
                 Spacer()
             } else {
                 ForEach(items.prefix(max)) { item in
-                    Link(destination: DeskLink(item).url) {
+                    Link(destination: DeskLink(item).barURL) {
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: item.kind.symbol).foregroundStyle(Tone.needsYou.color)
                             VStack(alignment: .leading, spacing: 1) {
@@ -193,7 +193,7 @@ struct ProjectsView: View {
                     Spacer()
                 } else {
                     ForEach(projects.prefix(max)) { p in
-                        Link(destination: DeskLink.project(p.id).url) {
+                        Link(destination: DeskLink.project(p.id).barURL) {
                             HStack(spacing: 8) {
                                 Circle().fill(p.tone.color).frame(width: 8, height: 8)
                                 VStack(alignment: .leading, spacing: 1) {
@@ -262,7 +262,7 @@ struct QuotaView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .widgetURL(DeskLink.accounts.url)
+            .widgetURL(DeskLink.accounts.barURL)
         }
     }
 
@@ -321,7 +321,7 @@ struct HostsView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .widgetURL(DeskLink.hosts.url)
+            .widgetURL(DeskLink.hosts.barURL)
         }
     }
 
