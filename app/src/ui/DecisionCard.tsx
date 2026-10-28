@@ -195,6 +195,14 @@ function AnswerForm({ d, send, answerBox, ...status }: {
   return (
     <form className="dc-form" onSubmit={(e) => { e.preventDefault(); submit(); }} onKeyDown={onKey}>
       {opts.length > 0 && (
+        <div className="dc-buttons" role="group" aria-label="Answer with one tap">
+          {sortedOptions(d).map((o) => (
+            <Button key={o.label} kind={isRecommended(d, o) ? "primary" : "secondary"} disabled={status.busy}
+              title={o.consequence ?? undefined} onClick={() => void send(o.label, { why })}>{o.label}</Button>
+          ))}
+        </div>
+      )}
+      {opts.length > 0 && (
         <fieldset className="dc-options">
           <legend>Options</legend>
           {opts.map((o) => (
