@@ -268,6 +268,10 @@ impl QuotaSource for FixedQuota {
     }
 }
 
+/// The longest a built-in reader may take; each bounds its own commands
+/// well inside this.
+const BUILTIN_READING_CAP: Duration = Duration::from_secs(90);
+
 /// `quota-axi --json`, plus local readings for providers it does not report:
 /// a built-in reader ([`crate::local`], IBM Bob and Kiro) or a command that
 /// prints one. A local reading joins the snapshot only when it is a valid
@@ -319,7 +323,9 @@ impl QuotaAxi {
 
     async fn local_reading(&self, provider: &str) -> Option<QuotaSnapshot> {
         let out = if let Some(r) = self.readings.iter().find(|r| r.provider() == provider) {
-            tokio::time::timeout(self.timeout, r.read())
+            // A built-in reader bounds its own commands and never fails, so
+            // this only stops one that hangs outright.
+            tokio::time::timeout(BUILTIN_READING_CAP, r.read())
                 .await
                 .ok()?
                 .to_string()

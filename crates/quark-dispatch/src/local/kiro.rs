@@ -12,7 +12,8 @@
 //! The engine is always pinned with `--v2`: under `--v3` the same text is
 //! not a slash command but a prompt the model answers, which spends
 //! credits. The read runs in a fixed probe directory (Kiro records one empty
-//! session for it per read) with stdin closed and a hard bound.
+//! session for it per read) with stdin closed and a hard bound, generous
+//! because a `KIRO_API_KEY` sign-in makes `/usage` take tens of seconds.
 //!
 //! The reading is one `all_models` row: the plan credits not yet used as
 //! `effectivePercentRemaining`, quota-axi's `spendPriority` over the month
@@ -63,7 +64,9 @@ impl KiroUsage {
             bin: "kiro-cli".into(),
             probe_dir: home.join("run").join("kiro-usage-probe"),
             config: home.join("quota").join("kiro.json"),
-            timeout: Duration::from_secs(12),
+            // With KIRO_API_KEY set, /usage takes 20-30s (2s on an SSO
+            // sign-in alone).
+            timeout: Duration::from_secs(45),
         }
     }
 
