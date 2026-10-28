@@ -395,7 +395,10 @@ impl Judge<'_> {
         if !prov.measured() {
             return with(
                 Verdict::Unranked {
-                    reason: format!("provider {p} unmeasured ({})", prov.status),
+                    reason: match &prov.reason {
+                        Some(why) => format!("provider {p} unmeasured ({}: {why})", prov.status),
+                        None => format!("provider {p} unmeasured ({})", prov.status),
+                    },
                     unknown: true,
                 },
                 rows.first().copied(),
@@ -904,6 +907,22 @@ mod tests {
         let r = run(&answered("rule_3", 0.9), &q);
         assert_eq!(r.status, Status::Escalate);
         assert!(r.reason.unwrap().contains("codex:-"));
+        // A local reader's reason says why the provider is unmeasured.
+        let q = quota(serde_json::json!([
+            {"provider":"claude","quotaSemantics":{"status":"known","effectiveAvailability":[row("all_models", 70.0, 0.4)]}},
+            {"provider":"codex","quotaSemantics":{"status":"unknown","effectiveAvailability":[]},
+             "codex":{"reason":"Not logged in"}}
+        ]));
+        let r = run(&answered("rule_3", 0.9), &q);
+        assert_eq!(r.status, Status::Escalate);
+        assert!(
+            r.reason
+                .as_deref()
+                .unwrap()
+                .ends_with("provider codex unmeasured (unknown: Not logged in)"),
+            "{:?}",
+            r.reason
+        );
     }
 
     #[test]

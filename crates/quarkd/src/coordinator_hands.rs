@@ -195,6 +195,23 @@ fn started(s: &TaskStart) -> String {
     }
 }
 
+/// What the coordinator is told after its `choose_profile`. A pick that
+/// escalates again must not read like the first escalation, or the
+/// coordinator cannot tell its call was heard.
+fn picked(s: &TaskStart) -> String {
+    let t = &s.task_id;
+    match &s.outcome {
+        StartOutcome::Escalated { reason } => format!(
+            "Your pick for {t} ran, but dispatch still cannot place it: {reason}. Picking the \
+             same rule again gets the same answer until that changes. Name an agent instead, \
+             with `agent` as an object: \
+             choose_profile {{\"task\": \"{t}\", \"agent\": {{\"harness\": \"<harness id>\", \"model\": \"<model id>\"}}}}, \
+             or tell the user what blocks it."
+        ),
+        _ => started(s),
+    }
+}
+
 fn not_yet(what: &str, slice: &str) -> CoreError {
     CoreError::Unsupported(format!("{what} needs {slice}, which is not native yet"))
 }
@@ -347,7 +364,7 @@ impl Hands for EngineHands {
                     }
                 }
                 .map_err(core)?;
-                Ok(started(&start))
+                Ok(picked(&start))
             }
             ToolCall::AckMessage { channel, id } => {
                 let channels = self.channels.as_ref().ok_or_else(|| {
@@ -665,6 +682,28 @@ mod tests {
         // An engine without dispatch refuses.
         engine.fail_writes(Some("no"));
         assert!(hands.run(&p, &start).await.is_err());
+    }
+
+    #[test]
+    fn a_pick_that_escalates_again_says_so() {
+        let start = TaskStart {
+            task_id: "t1".into(),
+            outcome: StartOutcome::Escalated {
+                reason: "provider kiro unmeasured (unknown: Not logged in)".into(),
+            },
+        };
+        let out = picked(&start);
+        assert!(
+            out.starts_with("Your pick for t1 ran, but dispatch still cannot place it: provider kiro unmeasured"),
+            "{out}"
+        );
+        assert_ne!(out, started(&start));
+        // The example call is valid JSON, so it can be copied as is.
+        let call = out.split("choose_profile ").nth(1).unwrap();
+        let call = &call[..call.find("}}").unwrap() + 2];
+        let v: serde_json::Value = serde_json::from_str(call).unwrap();
+        assert_eq!(v["task"], "t1");
+        assert!(v["agent"].is_object());
     }
 
     #[tokio::test]
