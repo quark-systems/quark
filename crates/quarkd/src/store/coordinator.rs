@@ -37,6 +37,8 @@ impl Store {
     /// `decision.opened`. Asking again while it is still open updates its
     /// question and brief in place (and emits `decision.opened` again when
     /// either changed); asking after it was answered opens a new one.
+    /// Returns the task's own open decision instead, unchanged, when the
+    /// question blocks a task that already asks one.
     pub fn ask_from_coordinator(
         &self,
         project_id: &str,
@@ -47,6 +49,24 @@ impl Store {
         let engine_id = coordinator_decision_id(key);
         self.write(|tx, events| {
             let brief = api_task_ids(tx, project_id, brief.normalized())?;
+            // A task the question blocks may already ask it as its own
+            // decision; a second copy would be answered in one place and
+            // left open in the other.
+            for task in &brief.blocks {
+                let asked = tx
+                    .query_row(
+                        &format!(
+                            "{DECISION_SELECT} WHERE project_id = ?1 AND task_id = ?2
+                             AND state = 'open' ORDER BY rowid DESC LIMIT 1"
+                        ),
+                        params![project_id, task],
+                        decision_from_row,
+                    )
+                    .optional()?;
+                if let Some(d) = asked {
+                    return Ok(d);
+                }
+            }
             let open = tx
                 .query_row(
                     &format!(

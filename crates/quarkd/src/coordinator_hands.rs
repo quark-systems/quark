@@ -294,10 +294,16 @@ impl Hands for EngineHands {
                 let (key, question) = (key.clone(), question.clone());
                 let d = blocking(move || store.ask_from_coordinator(&pid, &key, &question, brief))
                     .await?;
-                Ok(format!(
-                    "Asked the user (decision {}). Their answer wakes you; keep the rest of the work moving.",
-                    d.number
-                ))
+                Ok(match d.task_id {
+                    Some(_) => format!(
+                        "Not asked again: the task already asks the user this as decision {}, still open. Their answer goes to the worker and wakes you; keep the rest of the work moving.",
+                        d.number
+                    ),
+                    None => format!(
+                        "Asked the user (decision {}). Their answer wakes you; keep the rest of the work moving.",
+                        d.number
+                    ),
+                })
             }
             ToolCall::TellUser { text } => {
                 let (store, pid, text) = (self.store.clone(), ws.project_id.clone(), text.clone());
