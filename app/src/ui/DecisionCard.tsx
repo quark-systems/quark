@@ -152,7 +152,7 @@ function PhoneCard({ d, send, ...status }: { d: Decision; send: Send } & Status)
 function AnswerLine({ d }: { d: Decision }) {
   return (
     <div className="dc-answered" data-testid="decision-answer">
-      <b>{d.answer ?? "Answered elsewhere"}</b>
+      <b>{d.answer ?? "Closed with no answer in Quark"}</b>
       {d.answered_by && <span className="faint"> · {d.answered_by}</span>}
       {d.outcome && <div className="faint">{d.outcome}</div>}
     </div>

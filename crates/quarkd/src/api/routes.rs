@@ -800,7 +800,14 @@ pub async fn answer_decision(
     if !ANSWER_CHANNELS.contains(&via.as_str()) {
         return Err(ApiError::invalid("via must be app, phone or chat"));
     }
-    answer(&state, id, input, via).await.map(Json)
+    let text = input.answer.clone();
+    answer(&state, id.clone(), input, via)
+        .await
+        .map(Json)
+        .inspect_err(|e| {
+            // The typed answer is in the log, so a refused one is not lost.
+            tracing::warn!(decision = %id, code = e.code(), error = e.message(), answer = %text, "answering a decision failed");
+        })
 }
 
 /// Answers an open decision through the engine and records it, from any

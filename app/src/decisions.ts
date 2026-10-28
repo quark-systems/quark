@@ -68,7 +68,7 @@ export function rowSummary(d: Decision, tasks: Record<string, Task>, rules: Reco
     const blocks = blockLabels(d, tasks);
     return blocks.length ? `Open · blocks ${joinAnd(blocks)}` : `Open · asked by ${askedBy(d, tasks)}`;
   }
-  const parts = [firstLine(d.answer ?? "Answered elsewhere")];
+  const parts = [firstLine(d.answer ?? "Closed with no answer in Quark")];
   if (d.rule_id) {
     const rule = rules[d.rule_id];
     const from = rule?.decision_id ? byId[rule.decision_id] : undefined;
