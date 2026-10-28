@@ -15,6 +15,10 @@ test("decision log: answer with a reason and a standing rule, then revoke the ru
   await expect(page.getByTestId("decision-meta")).toContainText("D-1 · asked by the coordinator");
   await expect(page.getByTestId("decision-meta")).toContainText("blocks PR #7");
   await expect(card.getByRole("radio", { name: /Behind a flag/ })).toBeChecked();
+  // Each option is also a one-tap answer, the recommended one first.
+  const taps = card.getByRole("group", { name: "Answer with one tap" }).getByRole("button");
+  await expect(taps.first()).toHaveText(/Behind a flag/);
+  await expect(taps).toHaveCount(2);
   await expect(card).toContainText("Why: Comparing costs a week");
   await expect(page.getByTestId("decision-evidence")).toContainText("Page checks, 14 of 14 green");
   await expect(card.getByRole("listitem").filter({ hasText: "Asked" })).toHaveAttribute("aria-current", "step");
