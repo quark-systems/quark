@@ -40,6 +40,10 @@ pub struct ProviderQuota {
     /// `quotaSemantics.status`: `known`, `partial`, `unknown`, ...
     pub status: String,
     pub rows: Vec<QuotaRow>,
+    /// Why a local reader could not measure the provider, from the
+    /// disclosure object it writes under the provider's own name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl ProviderQuota {
@@ -95,10 +99,16 @@ impl QuotaSnapshot {
                 .and_then(Value::as_array)
                 .map(|rows| rows.iter().map(row).collect())
                 .unwrap_or_default();
+            let reason = p
+                .get(provider)
+                .and_then(|d| d.get("reason"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
             providers.push(ProviderQuota {
                 provider: provider.to_string(),
                 status,
                 rows,
+                reason,
             });
         }
         Ok(Self { providers })

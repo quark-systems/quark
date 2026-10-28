@@ -206,7 +206,11 @@ fn reading(
             .map(str::trim)
             .filter(|l| !l.is_empty())
             .collect();
-        if !lines.is_empty() {
+        if let Some(last) = lines.last() {
+            // The last line is usually why, such as a lapsed sign-in.
+            kiro["reason"] = json!(format!(
+                "no recognizable credit line in /usage output, which ended: {last}"
+            ));
             kiro["output"] = json!(lines[lines.len().saturating_sub(3)..]);
         }
         return unknown(kiro);
@@ -398,6 +402,12 @@ mod tests {
         assert_eq!(
             v["providers"][0]["kiro"]["output"],
             json!(["b", "c", "Not logged in"])
+        );
+        // Dispatch's verdict carries the reader's reason.
+        let snap = QuotaSnapshot::parse_checked(&v.to_string()).unwrap();
+        assert_eq!(
+            snap.provider("kiro").unwrap().reason.as_deref(),
+            Some("no recognizable credit line in /usage output, which ended: Not logged in")
         );
     }
 
