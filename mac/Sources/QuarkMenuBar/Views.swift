@@ -61,26 +61,15 @@ struct QuotaRow: View {
             }
             if let note = account.quotaNote {
                 Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            } else if let w = limiting {
-                WindowBar(window: w, now: now)
+            } else {
+                ForEach(account.quota.windows) { w in
+                    WindowBar(window: w, now: now)
+                }
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
         .frame(width: rowWidth, alignment: .leading)
-    }
-}
-
-extension QuotaRow {
-    /// The window that limits the account now: the one at quarkd's
-    /// `remaining_percent`, else the one with the least left.
-    var limiting: QuotaWindow? {
-        let ws = account.quota.windows
-        if let p = account.quota.remainingPercent,
-           let w = ws.first(where: { $0.percentRemaining.map { abs($0 - p) < 0.5 } ?? false }) {
-            return w
-        }
-        return ws.min { ($0.percentRemaining ?? 100) < ($1.percentRemaining ?? 100) }
     }
 }
 
