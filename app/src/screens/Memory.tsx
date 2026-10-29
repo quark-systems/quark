@@ -269,7 +269,7 @@ function EvidenceLinks({ ev }: { ev: MemoryEvidence }) {
       {!ev.task_id && ev.task_title && <div>{ev.task_title} <span className="faint">· task</span></div>}
       {ev.pull_request_url && (
         <div>
-          {pr ? <a href={href({ name: "pr", id: pr.id })}>{pr.repo}#{pr.number}</a>
+          {pr ? <a href={href({ name: "pulls", project: pr.project_id, id: pr.id })}>{pr.repo}#{pr.number}</a>
             : <a href={ev.pull_request_url} target="_blank" rel="noreferrer">{prLabel(ev.pull_request_url)}</a>}
           <span className="faint"> · pull request</span>
         </div>

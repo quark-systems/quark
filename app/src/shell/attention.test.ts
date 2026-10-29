@@ -20,7 +20,9 @@ describe("attentionQueue", () => {
   });
   it("walks the queue from the item on screen, wrapping to the oldest", () => {
     expect(nextAttention(q, { name: "projects" })?.key).toBe("pr:p1");
+    expect(nextAttention(q, { name: "pulls", project: "p", id: "p1" })?.key).toBe("decision:d1");
     expect(nextAttention(q, { name: "pr", id: "p1" })?.key).toBe("decision:d1");
+    expect(nextAttention(q, { name: "inbox", id: "d1" })?.key).toBe("worker:t1");
     expect(nextAttention(q, { name: "task", id: "t1" })?.key).toBe("pr:p1");
     expect(nextAttention([], { name: "projects" })).toBeNull();
   });

@@ -79,14 +79,14 @@ test("next attention: one button and Ctrl+J walk what waits on you, oldest first
   for (let i = 0; i < waiting; i++) {
     if (i === 0) await next.click(); else await page.keyboard.press("Control+j");
     await expect.poll(() => new URL(page.url()).hash).not.toBe(seen[seen.length - 1] ?? "#/accounts");
-    await expect(page).toHaveURL(/#\/(p\/[^/]+\/decisions|pr|t)\/[^/]+$/);
+    await expect(page).toHaveURL(/#\/(p\/[^/]+\/(decisions|prs)|t)\/[^/]+$/);
     seen.push(new URL(page.url()).hash);
   }
   // Every item once, then back to the oldest.
   expect(new Set(seen).size).toBe(waiting);
   await page.keyboard.press("Control+j");
   await expect(page).toHaveURL(new RegExp(seen[0].replace(/[/#]/g, "\\$&") + "$"));
-  expect(seen.some((h) => h.startsWith("#/pr/"))).toBe(true);
+  expect(seen.some((h) => /^#\/p\/[^/]+\/prs\//.test(h))).toBe(true);
   expect(seen.some((h) => h.startsWith("#/t/"))).toBe(true);
 });
 
@@ -122,7 +122,7 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   // The project opens on its Conversation: the coordinator in the middle, what changed and what needs you beside it.
   await open(page, "#/p/quark");
   const tabs = page.getByRole("navigation", { name: "Project", exact: true });
-  await expect(tabs.getByRole("link")).toHaveText(["Conversation", "Overview", "Work", "Issues", /^Decisions/, /^Memory/, "Metrics"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Conversation", "Overview", "Work", "Issues", "Pull requests", /^Decisions/, /^Memory/, "Metrics"]);
   await expect(tabs.getByRole("link", { name: "Conversation" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("coordinator-chat")).toBeVisible();
   const since = page.getByRole("complementary", { name: "Since you looked" });
@@ -138,6 +138,15 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   await expect(page.getByTestId("decision-log-row").first()).toBeVisible();
   await tabs.getByRole("link", { name: "Issues" }).click();
   await expect(page.getByTestId("beads-strip")).toBeVisible();
+
+  // Pull requests is the PR center's list and PR view, scoped to the project and kept under its tabs.
+  await tabs.getByRole("link", { name: "Pull requests" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/prs$/);
+  await expect(page.getByRole("combobox", { name: "Project" })).toHaveCount(0);
+  await page.getByTestId("pr-row").filter({ hasText: "Terminal sessions over tmux control mode" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/prs\/[^/]+$/);
+  await expect(tabs.getByRole("link", { name: "Pull requests" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("pr-state")).toHaveText("Open");
 
   // Settings is one page; Dispatch and Automation are its sections, and their old links open there.
   await page.getByTestId("nav-settings").click();

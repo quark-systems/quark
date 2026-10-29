@@ -99,7 +99,7 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
       <section>
         <SectionLabel>Open PRs</SectionLabel>
         {open.length ? open.map((p) => (
-          <a key={p.id} className="since-item" href={href({ name: "pr", id: p.id })}>
+          <a key={p.id} className="since-item" href={href({ name: "pulls", project: pid, id: p.id })}>
             <StatusDot tone={p.checks_state === "failing" ? "failed" : p.checks_state === "passing" ? "ready" : "busy"} />
             <span className="since-title">{p.title ?? `${p.repo}#${p.number}`}</span><span className="since-kind">#{p.number}</span>
           </a>

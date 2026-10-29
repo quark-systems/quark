@@ -1,4 +1,4 @@
-// The project's header: its name, the tabs (Conversation, Overview, Work, Issues, Decisions,
+// The project's header: its name, the tabs (Conversation, Overview, Work, Issues, Pull requests, Decisions,
 // Memory, Metrics) and Settings. Every project screen sits under it.
 import React, { useMemo } from "react";
 import { href, Route } from "../nav";
@@ -8,13 +8,13 @@ import { CountBadge } from "../ui";
 import { swatchFor } from "./groups";
 import { UnarchiveButton } from "../components/ProjectLifecycle";
 
-export type ProjectTab = "conversation" | "overview" | "work" | "issues" | "decisions" | "memory" | "metrics" | "settings";
+export type ProjectTab = "conversation" | "overview" | "work" | "issues" | "pulls" | "decisions" | "memory" | "metrics" | "settings";
 
 /** The tab a project route belongs to; Dispatch and Automation are sections of Settings. */
 export function tabOf(route: Route): ProjectTab | null {
   switch (route.name) {
     case "project": return "conversation";
-    case "overview": case "work": case "issues": case "decisions": case "memory": case "metrics": return route.name;
+    case "overview": case "work": case "issues": case "pulls": case "decisions": case "memory": case "metrics": return route.name;
     case "settings": case "dispatch": case "automation": return "settings";
     default: return null;
   }
@@ -35,6 +35,7 @@ export function ProjectHeader({ project: pid, current }: { project: string; curr
     { tab: "overview", label: "Overview" },
     { tab: "work", label: "Work" },
     { tab: "issues", label: "Issues" },
+    { tab: "pulls", label: "Pull requests" },
     { tab: "decisions", label: "Decisions", count: <span data-testid="decisions-count"><CountBadge n={open} tone="needs-you" label={`${open} open`} /></span> },
     { tab: "memory", label: l.ui("memory", "Memory"), count: toReview > 0 ? <span className="ui-count accent" data-testid="memory-count">{toReview}</span> : null },
     { tab: "metrics", label: "Metrics" },

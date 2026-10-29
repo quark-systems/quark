@@ -21,7 +21,7 @@ export function attentionQueue(decisions: Record<string, Decision>, prs: Record<
   }
   for (const p of Object.values(prs)) {
     if ((p.state !== "open" && p.state !== "draft") || p.checks_state !== "failing") continue;
-    items.push({ key: "pr:" + p.id, kind: "pr", title: p.title ?? `${p.repo}#${p.number}`, projectId: p.project_id, since: time(p.updated_at ?? p.opened_at), route: { name: "pr", id: p.id } });
+    items.push({ key: "pr:" + p.id, kind: "pr", title: p.title ?? `${p.repo}#${p.number}`, projectId: p.project_id, since: time(p.updated_at ?? p.opened_at), route: { name: "pulls", project: p.project_id, id: p.id } });
   }
   for (const t of Object.values(tasks)) {
     // A worker waiting on a decision is reached through that decision.
@@ -33,8 +33,12 @@ export function attentionQueue(decisions: Record<string, Decision>, prs: Record<
 
 /** The item the current route shows, if any. */
 export function currentIndex(queue: AttentionItem[], route: Route): number {
-  return queue.findIndex((i) => i.route.name === route.name && "id" in route && (i.route as { id?: string }).id === route.id);
+  // An item opens in its project; the all-projects inbox and PR center show the same thing.
+  const same = (i: AttentionItem) => i.route.name === route.name || ALSO_AT[i.kind] === route.name;
+  return queue.findIndex((i) => same(i) && "id" in route && (i.route as { id?: string }).id === route.id);
 }
+
+const ALSO_AT: Record<AttentionKind, Route["name"]> = { decision: "inbox", pr: "pr", worker: "task" };
 
 /** Where Next attention goes from `route`: the item after the one shown, else the oldest. */
 export function nextAttention(queue: AttentionItem[], route: Route): AttentionItem | null {

@@ -735,7 +735,7 @@ test("memory: review proposals from the keyboard, browse entries with their comm
   await expect(rows.first()).toContainText("Regenerate api/openapi.json");
   const evidence = detail.getByTestId("memory-evidence");
   await expect(evidence.getByRole("link", { name: "OpenAPI check in CI" })).toHaveAttribute("href", /^#\/t\//);
-  await expect(evidence.getByRole("link", { name: "quark-systems/quark#2" })).toHaveAttribute("href", "#/pr/pr-1");
+  await expect(evidence.getByRole("link", { name: "quark-systems/quark#2" })).toHaveAttribute("href", "#/p/quark/prs/pr-1");
   await expect(evidence).toContainText("crates/quarkd/tests/api.rs");
 
   // j/k move the selection.

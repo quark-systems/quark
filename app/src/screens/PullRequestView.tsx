@@ -17,7 +17,8 @@ import { Unavailable } from "../components/Unavailable";
 import { evidenceOutcome, checkOutcome, checksMeta, mergeBlocker, prStateMeta, prTitle, reviewLabel, reviewMeta, sortChecks } from "../prs";
 import { useDraft } from "../drafts";
 
-export function PullRequestView({ id }: { id: string }) {
+/** One PR; given a project it sits in that project's Pull requests tab and leads back to it. */
+export function PullRequestView({ id, project: scope }: { id: string; project?: string }) {
   const pr = useStore((s) => s.pullRequests[id]);
   const project = useStore((s) => (pr ? s.projects[pr.project_id] : undefined));
   const activity = useStore((s) => s.prActivity[id] ?? 0);
@@ -64,7 +65,7 @@ export function PullRequestView({ id }: { id: string }) {
   return (
     <>
       <div className="header">
-        <a className="crumb" href={href({ name: "prs" })}>Pull requests</a>
+        <a className="crumb" href={href(scope ? { name: "pulls", project: scope } : { name: "prs" })}>Pull requests</a>
         <span className="faint">/</span>
         <h1 className="ellipsis" title={prTitle(pr)}>{prTitle(pr)}</h1>
         <span className={"pill " + st.cls} data-testid="pr-state">{st.label}</span>
