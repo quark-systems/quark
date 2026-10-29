@@ -79,7 +79,7 @@ test("next attention: one button and Ctrl+J walk what waits on you, oldest first
   for (let i = 0; i < waiting; i++) {
     if (i === 0) await next.click(); else await page.keyboard.press("Control+j");
     await expect.poll(() => new URL(page.url()).hash).not.toBe(seen[seen.length - 1] ?? "#/accounts");
-    await expect(page).toHaveURL(/#\/(inbox|pr|t)\/[^/]+$/);
+    await expect(page).toHaveURL(/#\/(p\/[^/]+\/decisions|pr|t)\/[^/]+$/);
     seen.push(new URL(page.url()).hash);
   }
   // Every item once, then back to the oldest.

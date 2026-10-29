@@ -115,7 +115,7 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
         <section>
           <SectionLabel right={<a href={href({ name: "decisions", project: pid })}>All</a>}>Recent decisions</SectionLabel>
           {recent.map((d) => (
-            <a key={d.id} className="since-item" href={href({ name: "inbox", id: d.id })}>
+            <a key={d.id} className="since-item" href={href({ name: "decisions", project: pid, id: d.id })}>
               <span className="since-title">{d.question}</span><span className="since-kind">{d.answer}</span>
             </a>
           ))}

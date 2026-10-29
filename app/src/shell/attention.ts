@@ -17,7 +17,7 @@ export function attentionQueue(decisions: Record<string, Decision>, prs: Record<
   for (const d of Object.values(decisions)) {
     if (d.state !== "open") continue;
     if (d.task_id) asked.add(d.task_id);
-    items.push({ key: "decision:" + d.id, kind: "decision", title: d.question, projectId: d.project_id, since: d.opened_at, route: { name: "inbox", id: d.id } });
+    items.push({ key: "decision:" + d.id, kind: "decision", title: d.question, projectId: d.project_id, since: d.opened_at, route: { name: "decisions", project: d.project_id, id: d.id } });
   }
   for (const p of Object.values(prs)) {
     if ((p.state !== "open" && p.state !== "draft") || p.checks_state !== "failing") continue;

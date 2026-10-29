@@ -108,8 +108,9 @@ test("coordinator chat: workers started and questions asked show as cards", asyn
   // opens a new day.
   const newDay = new Date(Date.now() - 35 * 60_000).toDateString() !== new Date().toDateString();
   await expect(chat.getByRole("separator")).toHaveCount(newDay ? 2 : 1);
-  await question.getByRole("link", { name: "Open inbox" }).click();
-  await expect(page).toHaveURL(/#\/inbox/);
+  // The decision opens in the project's Decisions tab, not the all-projects inbox.
+  await question.getByRole("link", { name: "Open decision" }).click();
+  await expect(page).toHaveURL(/#\/p\/quark\/decisions/);
 });
 
 test("coordinator chat: a question asked with ask_user shows as the decision, answerable in place", async ({ page }) => {

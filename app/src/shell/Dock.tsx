@@ -29,7 +29,7 @@ export function dockContext(route: Route, s: Lookup, fallbackProject: string | n
     projectId ? { projectId, pinned: true, about, link: about ? href(route) : null } : { projectId: fallbackProject, pinned: false, about: null, link: null };
   if (route.name === "task") { const t = s.tasks[route.id]; return at(t?.project_id, t?.title ?? null); }
   if (route.name === "pr") { const p = s.pullRequests[route.id]; return at(p?.project_id, p ? p.title ?? `${p.repo}#${p.number}` : null); }
-  if (route.name === "inbox" && route.id) { const d = s.decisions[route.id]; return at(d?.project_id, d?.question ?? null); }
+  if ((route.name === "inbox" || route.name === "decisions") && route.id) { const d = s.decisions[route.id]; return at(d?.project_id, d?.question ?? null); }
   if ("project" in route && typeof route.project === "string") return at(route.project, null);
   return at(undefined, null);
 }
