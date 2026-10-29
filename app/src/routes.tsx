@@ -35,6 +35,7 @@ export const SCREENS: Screens = {
   project: (r) => framed(r, r.id, <Conversation key={r.id} id={r.id} />),
   work: (r) => framed(r, r.project, <ProjectBoard key={r.project} id={r.project} />),
   issues: (r) => framed(r, r.project, <Issues key={r.project} project={r.project} id={r.id} />),
+  pulls: (r) => framed(r, r.project, r.id ? <PullRequestView key={r.id} id={r.id} project={r.project} /> : <PullRequests key={r.project} project={r.project} />),
   decisions: (r) => framed(r, r.project, <Decisions key={r.project} project={r.project} id={r.id} />),
   memory: (r) => framed(r, r.project, <Memory key={r.project} project={r.project} id={r.id} />),
   dispatch: (r) => framed(r, r.project, <Dispatch key={r.project} project={r.project} />),

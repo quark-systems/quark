@@ -153,7 +153,7 @@ function PrPanel({ prId, url }: { prId: string | null; url: string | null }) {
         <>
           <div className="pr-brief-title">{pr.title ?? `${pr.repo}#${pr.number}`} <span className="faint mono">#{pr.number}</span></div>
           <div className="faint">{pr.state} · checks {pr.checks_state} · {pr.repo}</div>
-          <a className="btn" href={href({ name: "pr", id: pr.id })}>Open the PR</a>
+          <a className="btn" href={href({ name: "pulls", project: pr.project_id, id: pr.id })}>Open the PR</a>
         </>
       ) : url ? <a href={url} target="_blank" rel="noreferrer">{url}</a> : null}
     </div>

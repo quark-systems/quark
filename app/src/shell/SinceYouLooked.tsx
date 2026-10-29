@@ -99,7 +99,7 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
       <section>
         <SectionLabel>Open PRs</SectionLabel>
         {open.length ? open.map((p) => (
-          <a key={p.id} className="since-item" href={href({ name: "pr", id: p.id })}>
+          <a key={p.id} className="since-item" href={href({ name: "pulls", project: pid, id: p.id })}>
             <StatusDot tone={p.checks_state === "failing" ? "failed" : p.checks_state === "passing" ? "ready" : "busy"} />
             <span className="since-title">{p.title ?? `${p.repo}#${p.number}`}</span><span className="since-kind">#{p.number}</span>
           </a>
@@ -115,7 +115,7 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
         <section>
           <SectionLabel right={<a href={href({ name: "decisions", project: pid })}>All</a>}>Recent decisions</SectionLabel>
           {recent.map((d) => (
-            <a key={d.id} className="since-item" href={href({ name: "inbox", id: d.id })}>
+            <a key={d.id} className="since-item" href={href({ name: "decisions", project: pid, id: d.id })}>
               <span className="since-title">{d.question}</span><span className="since-kind">{d.answer}</span>
             </a>
           ))}

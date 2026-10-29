@@ -11,6 +11,7 @@ export const ROUTES = {
   project: "p/:id", // the project's Conversation tab: its coordinator, and what changed since you looked
   work: "p/:project/work", // the project's Work tab: one column per worker state
   issues: "p/:project/issues/:id?", // the project's Issues tab: its Beads issues, optionally with one selected
+  pulls: "p/:project/prs/:id?", // the project's Pull requests tab: its PRs, or one of them
   decisions: "p/:project/decisions/:id?", // the project's Decisions tab: its decision log, optionally with one decision selected
   memory: "p/:project/memory/:id?", // the Project's memory, optionally with one proposal or entry selected
   dispatch: "p/:project/dispatch", // Settings › Dispatch: the dispatch rules: edit, save, test

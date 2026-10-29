@@ -91,7 +91,12 @@ function StepRow({ step, live }: { step: Step; live?: Activity }) {
 
 /** A worker the coordinator started, or a question it put to the person, linking to where it is answered. */
 function ActionCard({ id, action }: { id: number; action: CoordinatorAction }) {
-  const { freshAfter } = useTranscript();
+  const { freshAfter, project } = useTranscript();
+  // The decision a hold filed: the newest asked by that worker in this project.
+  const held = useStore((s) => action.kind === "decision" && project
+    ? Object.values(s.decisions).filter((d) => d.project_id === project && d.task_id === action.task)
+      .sort((x, y) => y.opened_at.localeCompare(x.opened_at))[0]?.id
+    : undefined);
   if (action.kind === "ask") return <AskCard id={id} action={action} />;
   const decision = action.kind === "decision";
   return (
@@ -103,7 +108,7 @@ function ActionCard({ id, action }: { id: number; action: CoordinatorAction }) {
           <span className="mono ellipsis">{action.task}</span>
         </div>
         {decision && action.reason && <div className="tx-action-reason">{action.reason}</div>}
-        {decision && <a className="tx-action-link" href={href({ name: "inbox" })}>Open inbox</a>}
+        {decision && project && <a className="tx-action-link" href={href({ name: "decisions", project, id: held })}>Open decision</a>}
       </div>
     </div>
   );

@@ -1,24 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Decision } from "./api";
-import { inboxList, nextAfterAnswer, step } from "./inbox";
+import { nextAfterAnswer, step } from "./inbox";
 
 const d = (id: string, over: Partial<Decision> = {}): Decision => ({
   id, project_id: "p1", question: `Q ${id}`, state: "open", opened_at: "2026-10-02T10:00:00Z", ...over,
-});
-
-describe("inboxList", () => {
-  const all = [
-    d("b", { opened_at: "2026-10-02T11:00:00Z" }),
-    d("a", { opened_at: "2026-10-02T10:00:00Z" }),
-    d("x", { state: "answered", answered_at: "2026-10-02T09:00:00Z" }),
-    d("y", { state: "answered", answered_at: "2026-10-02T12:00:00Z" }),
-  ];
-  it("lists open decisions oldest first", () => {
-    expect(inboxList(all, "open").map((x) => x.id)).toEqual(["a", "b"]);
-  });
-  it("lists answered decisions most recently answered first", () => {
-    expect(inboxList(all, "answered").map((x) => x.id)).toEqual(["y", "x"]);
-  });
 });
 
 describe("step", () => {
