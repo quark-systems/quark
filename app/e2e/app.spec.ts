@@ -1507,3 +1507,47 @@ test("finished workers can be cleared one at a time or a column at once", async 
   await open(page, "#/p/quark/work");
   await expect(page.getByTestId("col-done")).not.toContainText("Daemon skeleton");
 });
+
+test("prompt boxes take pasted images and picked or dropped files, and send their paths", async ({ page }) => {
+  await open(page, "#/p/quark");
+  const chat = page.getByTestId("coordinator-chat");
+  const box = chat.getByLabel("Message the coordinator");
+  await box.fill("What is wrong here?");
+  // A screenshot pasted from the system clipboard arrives as image.png.
+  await box.evaluate((el) => {
+    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([png], "image.png", { type: "image/png" }));
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  const chips = chat.getByTestId("attachments");
+  await expect(chips).toContainText(/pasted-\d{8}-\d{6}\.png/);
+  await expect(chips.getByRole("button", { name: /Preview pasted-/ })).toBeVisible();
+  // Any file can be picked too.
+  await chat.locator("input[type=file]").setInputFiles({ name: "crash.log", mimeType: "text/plain", buffer: Buffer.from("panic at line 4") });
+  await expect(chips).toContainText("crash.log");
+  // Like drafts, attachments survive a reload.
+  await page.reload();
+  await expect(chat.getByTestId("attachments")).toContainText("crash.log");
+  await chat.getByRole("button", { name: "Remove crash.log" }).click();
+  await expect(chips).not.toContainText("crash.log");
+  await box.press("Enter");
+  const sent = chat.locator(".msg", { hasText: "What is wrong here?" }).last();
+  await expect(sent).toContainText(/Attached file:\s*- \/home\/mock\/\.quark\/attachments\/quark\/att-\w+\/pasted-\d{8}-\d{6}\.png/);
+  await expect(chat.getByTestId("attachments")).toHaveCount(0);
+
+  // Files dropped on a worker's message box go with the message.
+  await page.getByTestId("nav-work").click();
+  await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
+  const steer = page.locator(".composer.steer");
+  await steer.evaluate((el) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["a,b\n1,2\n"], "numbers.csv", { type: "text/csv" }));
+    el.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    el.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  await expect(steer.getByTestId("attachments")).toContainText("numbers.csv");
+  await steer.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("status")).toHaveText("Delivered to the worker's inbox");
+  await expect(page.getByTestId("transcript")).toContainText(/Attached file:\s*- \S+\/numbers\.csv/);
+});

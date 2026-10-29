@@ -12,6 +12,7 @@ import { PersonaPicker } from "../components/PersonaPicker";
 import { CoordinatorContext } from "../components/CoordinatorContext";
 import { useLabels } from "../persona";
 import { useDraft } from "../drafts";
+import { readAttached, useAttachments, withAttachments } from "../attachments";
 import { CommandButton, usePendingCommands, useRunCommand } from "../components/CoordinatorCommand";
 import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
 
@@ -167,6 +168,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
   const [text, setText] = useDraft(`coordinator:${cid}`);
+  const attach = useAttachments(cid, `coordinator:${cid}`);
   const typed = useRef(text);
   typed.current = text;
   // What you sent shows at once, then stays until the coordinator's session records it.
@@ -199,24 +201,28 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   };
 
   const send = async () => {
-    const t = text.trim();
-    if (!t) return;
+    const typedText = text.trim();
+    const files = attach.items;
+    if ((!typedText && !files.length) || attach.uploading) return;
     // A slash command is a request, not a message: it shows as its command card.
-    const command = fromSlash(t);
+    const command = files.length ? null : fromSlash(typedText);
     if (command) return ask(command);
+    const t = withAttachments(typedText, files);
     setErr(null);
     // Only entries recorded after this point can be this message.
     const key = Date.now() + Math.random();
     setPending((p) => [...p, { key, text: t, sending: true, confirmed: false, after: lastId(items) }]);
     setText("");
+    attach.clear();
     try {
       const r = await api.sendChat(cid, t);
       setPending((p) => p.map((x) => x.key === key ? { ...x, sending: false, confirmed: r?.confirmed ?? true } : x));
     } catch (e) {
       setErr(errText(e));
       setPending((p) => p.filter((x) => x.key !== key));
-      // Give the text back unless something new was typed meanwhile.
-      if (!typed.current.trim()) setText(t);
+      // Give the text and files back unless something new was typed or attached meanwhile.
+      if (!typed.current.trim()) setText(typedText);
+      if (!readAttached(`coordinator:${cid}`).length) attach.set(files);
     }
   };
 
@@ -250,7 +256,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
               ))}
             </div>
           )}
-          <Composer value={text} onChange={setText} onSend={() => void send()} sending={false}
+          <Composer value={text} onChange={setText} onSend={() => void send()} sending={false} attachments={attach}
             label={`Message the ${coordinator}`} placeholder={`Message the ${coordinator} (Enter to send, Shift+Enter for a newline)`} />
         </>
       )}

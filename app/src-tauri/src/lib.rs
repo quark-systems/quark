@@ -147,7 +147,10 @@ pub fn run() {
             )
             .title("Quark")
             .inner_size(1440.0, 900.0)
-            .min_inner_size(960.0, 600.0);
+            .min_inner_size(960.0, 600.0)
+            // Files dropped on the window reach the page as HTML drop events,
+            // so a prompt box can take them as attachments.
+            .disable_drag_drop_handler();
             #[cfg(target_os = "macos")]
             let builder = {
                 use tauri::window::{Effect, EffectState, EffectsBuilder};

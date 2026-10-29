@@ -31,6 +31,9 @@ export interface CreateProject {
 export interface Health { status: string; version: string; engine: string; last_seq: number }
 
 export const projectsApi = {
+  /** Saves a file pasted or dropped into a prompt box where the Project's agents can read it. */
+  attach: (pid: string, file: Blob, name: string) =>
+    req<Attachment>("POST", `/v1/projects/${enc(pid)}/attachments?name=${enc(name)}`, file),
   forgeRepositories: (refresh = false) => req<ForgeRepository[]>("GET", `/v1/forge/repositories${refresh ? "?refresh=true" : ""}`),
   health: () => req<Health>("GET", "/v1/health"),
   /** Every project, archived ones too; screens hide those with `archived_at`. */
@@ -52,3 +55,6 @@ export interface ForgeRepository {
   full_name: string; private: boolean; archived: boolean; description?: string | null;
   pushed_at?: string | null; ssh_url: string; clone_url: string;
 }
+
+/** A file saved by `POST /v1/projects/{id}/attachments`; `path` is on the daemon's machine. */
+export interface Attachment { path: string; name: string; bytes: number }

@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, UsageMeter, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, UsageMeter, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -45,6 +45,20 @@ function ImagePreviewExample() {
       <Button onClick={() => setOpen(true)}>Preview image</Button>
       <ImagePreview open={open} onOpenChange={setOpen} title="sample.svg" images={[{ src: SAMPLE_IMAGE, label: "Sample", alt: "A sample picture" }]} />
     </>
+  );
+}
+
+function AttachmentsExample() {
+  const [items, setItems] = useState<AttachmentChip[]>([
+    { path: "/Users/you/.quark/attachments/p/1/pasted-20261029-2101.png", name: "pasted-20261029-2101.png", bytes: 184_320, image: true, preview: SAMPLE_IMAGE },
+    { path: "/Users/you/.quark/attachments/p/2/crash.log", name: "crash.log", bytes: 5_210, image: false },
+  ]);
+  return (
+    <div className="composer" style={{ margin: 0, maxWidth: 420 }}>
+      <AttachmentList items={items} onRemove={(p) => setItems((l) => l.filter((a) => a.path !== p))} />
+      <AttachButton onFiles={(files) => setItems((l) => [...l, ...files.map((f, i) => ({ path: `${f.name}-${Date.now()}-${i}`, name: f.name, bytes: f.size, image: f.type.startsWith("image/") }))])} />
+      <textarea rows={1} aria-label="Message" placeholder="Paste an image or drop files here" />
+    </div>
   );
 }
 
@@ -206,6 +220,18 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "Any folder on disk: a workspace, a local repository. Never a plain text box for a path.",
     contract: "value, onChange, title (the dialog's), label. Opens the system folder dialog in the desktop app when the daemon runs on this machine; otherwise falls back to typing the path, and says why.",
     example: () => <FolderPickerExample />,
+  },
+  {
+    name: "AttachButton",
+    when: "Beside a prompt box whose message goes to an agent, so files can be attached as well as pasted or dropped.",
+    contract: "onFiles(files) with what was picked (any type, several at once); disabled; label (default Attach files).",
+    example: () => <AttachmentsExample />,
+  },
+  {
+    name: "AttachmentList",
+    when: "Above a prompt box's text: the files that go with the message. useAttachments (src/attachments.ts) uploads them and supplies the props.",
+    contract: "items of { path, name, bytes, image, preview? }, uploading count, error, onRemove(path). Image chips with a preview open ImagePreview; renders nothing when empty.",
+    example: () => <AttachmentsExample />,
   },
   {
     name: "ImagePreview",

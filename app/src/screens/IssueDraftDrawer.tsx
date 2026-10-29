@@ -7,6 +7,8 @@ import { loadIssueDrafts, upsertIssueDraft, useStore } from "../store";
 import { draftBlockers, openDraft, parseLabels, pushedTo } from "../issues";
 import { errText } from "../util";
 import { useDraft } from "../drafts";
+import { useAttachments, withAttachments } from "../attachments";
+import { AttachButton, AttachmentList, cx } from "../ui";
 
 export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated }: {
   pid: string; beads: BeadsStatus; issues: Issue[]; seed: string | null;
@@ -17,6 +19,7 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
   const [draftId, setDraftId] = useState<string | null>(null);
   const draft: IssueDraft | undefined = draftId ? drafts[draftId] : openDraft(Object.values(drafts), pid);
   const [text, setText] = useDraft(`issue-draft:${pid}`);
+  const attach = useAttachments(pid, `issue-draft:${pid}`);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -33,14 +36,15 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
   };
 
   const send = async (message: string) => {
-    const t = message.trim();
-    if (!t || busy) return;
+    const t = withAttachments(message, attach.items);
+    if (!t || busy || attach.uploading) return;
     setBusy(true); setErr(null);
     try {
       const d = draft && draft.state === "open" ? await api.refineIssueDraft(draft.id, t) : await api.startIssueDraft(pid, t);
       upsertIssueDraft(d);
       setDraftId(d.id);
       setText("");
+      attach.clear();
     } catch (e) { setErr(errText(e)); }
     finally { setBusy(false); }
   };
@@ -115,11 +119,15 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
           {edited && !waiting && <div className="faint small-text">Edited here. A new message asks Quark to redraft from its own copy.</div>}
         </div>
         <div className="drawer-foot">
-          <form className="draft-composer" onSubmit={(e) => { e.preventDefault(); void send(text); }}>
+          <form className={cx("draft-composer", attach.dragging && "dropping")} {...attach.dropProps}
+            onSubmit={(e) => { e.preventDefault(); void send(text); }}>
+            <AttachmentList items={attach.items} uploading={attach.uploading} error={attach.error} onRemove={attach.remove} />
+            <AttachButton onFiles={(f) => void attach.add(f)} />
             <label htmlFor="issue-draft-input" className="sr-only">Refine the issues</label>
             <input id="issue-draft-input" ref={input} value={text} onChange={(e) => setText(e.target.value)} autoComplete="off"
-              placeholder="Refine: split, merge, change priority, add detail…" />
-            <button type="submit" className="icon-btn" aria-label="Send" disabled={busy || !text.trim()}>
+              onPaste={attach.onPaste} placeholder="Refine: split, merge, change priority, add detail…" />
+            <button type="submit" className="icon-btn" aria-label="Send"
+              disabled={busy || attach.uploading > 0 || (!text.trim() && !attach.items.length)}>
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </form>

@@ -1511,6 +1511,15 @@ const server = http.createServer(async (req, res) => {
     if (!proj) return notFound(res);
     return send(res, 200, automationOf(proj));
   }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/attachments$/)) && req.method === "POST") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    let bytes = 0;
+    for await (const chunk of req) bytes += chunk.length;
+    if (!bytes) return invalid(res, "the file is empty");
+    const name = (url.searchParams.get("name") ?? "").split(/[\\/]/).pop().replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "") || "attachment";
+    return send(res, 201, { path: `/home/mock/.quark/attachments/${proj.id}/${nextId("att")}/${name}`, name, bytes });
+  }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/inbox$/)) && req.method === "POST") {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);

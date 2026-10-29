@@ -276,6 +276,10 @@ html.is-mac .drag-strip { display: block; flex: none; height: 28px; }
 @keyframes blink { 50% { opacity: 0; } }
 .composer { flex: none; display: flex; gap: 6px; align-items: flex-end; margin: 8px 10px 10px; padding: 6px 6px 6px 10px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 10px; transition: border-color var(--motion-feedback-duration) var(--motion-ease-out), background-color var(--motion-feedback-duration) var(--motion-ease-out); }
 .composer:focus-within { border-color: var(--fg-faint); }
+/* Files held over a prompt box; the attachment chips take their own line above the text. */
+.composer, .draft-composer { flex-wrap: wrap; }
+.composer.dropping, .draft-composer.dropping { border-color: var(--accent); background: var(--accent-soft); }
+.composer .ui-attach { align-self: flex-end; }
 .composer textarea { flex: 1; resize: none; min-height: 22px; max-height: 200px; background: none; color: var(--fg); border: 0; padding: 4px 0; font: 13px/1.45 var(--sans); outline: none; }
 .composer .btn.send { flex: none; width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border-radius: 7px; background: var(--fg); color: var(--bg); border: 0; }
 .composer .btn.send:disabled { background: var(--bg-3); color: var(--fg-faint); cursor: default; }
