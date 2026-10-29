@@ -120,6 +120,7 @@
 .dl-num { font: 12px var(--mono); color: var(--fg-faint); width: 40px; flex: none; }
 .dl-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .dl-q { font-weight: 500; }
+.dl-project { font: 11px var(--mono); color: var(--fg-faint); }
 .dl-sub { font-size: 12px; color: var(--fg-dim); }
 .dl-sub.needs-you { color: var(--tone-needs-you); }
 .dl-sub.accent { color: var(--accent); }

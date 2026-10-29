@@ -347,7 +347,7 @@ test("command palette jumps to a task", async ({ page }) => {
   await expect(page.locator(".header h1")).toHaveText("Pricing page on the new grid");
 });
 
-test("decisions inbox: answer from the keyboard, then see who answered", async ({ page }) => {
+test("decisions inbox: the project decision log across every project, answered from the keyboard", async ({ page }) => {
   await open(page, "#/");
   await expect(page.getByTestId("inbox-count")).toHaveText("2");
 
@@ -358,38 +358,26 @@ test("decisions inbox: answer from the keyboard, then see who answered", async (
   await expect(page).toHaveURL(/#\/inbox\/d-1$/);
   const detail = page.getByTestId("decision-detail");
   await expect(detail).toContainText("Keep the full answer history per decision");
-  await expect(detail).toContainText("Decision records carry who answered");
+  await expect(page.getByTestId("decision-evidence")).toBeVisible();
 
-  // Open decisions are listed across projects, oldest first; j/k move the selection.
-  const rows = page.getByTestId("decision-row");
+  // Open decisions from every project, each row tagged with its project; j/k move the selection.
+  const rows = page.getByTestId("decision-log-row");
   await expect(rows).toHaveCount(2);
-  await expect(rows.nth(1)).toContainText("Website refresh");
+  await expect(rows.filter({ hasText: "Launch the new design" })).toContainText("Website refresh");
   await page.keyboard.press("j");
   await expect(page).toHaveURL(/#\/inbox\/d-2$/);
   await page.keyboard.press("k");
   await expect(page).toHaveURL(/#\/inbox\/d-1$/);
-  // The URL changes before the route re-renders; wait for d-1's panel before typing into it.
   await expect(detail).toContainText("Keep the full answer history per decision");
 
-  // r focuses the answer box; Ctrl+Enter sends and moves on to the next open decision.
+  // r focuses the answer box; Ctrl+Enter sends the picked option.
   await page.keyboard.press("r");
-  await expect(page.getByLabel("Answer", { exact: true })).toBeFocused();
-  await page.getByLabel("Answering as").fill("matt");
-  await page.getByLabel("Answer", { exact: true }).fill("Only the latest answer.");
-  await page.getByLabel("Answer", { exact: true }).press("Control+Enter");
-  await expect(page).toHaveURL(/#\/inbox\/d-2$/);
+  await expect(detail.getByLabel("Why (optional, goes in the log)")).toBeFocused();
+  await detail.getByRole("radio", { name: /Only the latest answer/ }).check();
+  await detail.getByLabel("Why (optional, goes in the log)").press("Control+Enter");
+  await expect(page.getByTestId("decision-answer")).toContainText("Only the latest answer");
+  await page.getByTestId("decisions-filter-open").click();
   await expect(rows).toHaveCount(1);
-
-  // The answered list shows who answered.
-  await page.locator("body").click();
-  await page.keyboard.press("a");
-  await rows.filter({ hasText: "answer history" }).click();
-  await expect(page.getByTestId("decision-answer")).toContainText("Answered by matt");
-  await expect(page.getByTestId("decision-answer")).toContainText("Only the latest answer.");
-
-  // The task that asked is running again.
-  await page.getByTestId("decision-detail").getByRole("link", { name: "Decision records carry who answered" }).click();
-  await expect(page.getByTestId("task-state")).toHaveText("Running");
 });
 
 test("PR center: list by state, checks, line comment, merge, standing approval", async ({ page }) => {
