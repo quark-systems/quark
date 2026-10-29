@@ -17,8 +17,9 @@ import { WorkerBrief } from "../components/WorkerBrief";
 import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 import { useLabels } from "../persona";
 import { Dock } from "../shell/Dock";
-import { StatusDot, taskTone, TONE_LABEL } from "../ui";
+import { AttachButton, AttachmentList, cx, StatusDot, taskTone, TONE_LABEL } from "../ui";
 import { useDraft } from "../drafts";
+import { useAttachments, withAttachments } from "../attachments";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
@@ -282,18 +283,21 @@ function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: strin
 // ---- steering ----
 
 function SteerBox({ taskId }: { taskId: string }) {
-  const worker = useLabels(useStore((s) => s.tasks[taskId]?.project_id)).role("worker");
+  const pid = useStore((s) => s.tasks[taskId]?.project_id);
+  const worker = useLabels(pid).role("worker");
   const [text, setText] = useDraft(`worker:${taskId}`);
+  const attach = useAttachments(pid, `worker:${taskId}`);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const ready = !!text.trim() || attach.items.length > 0;
 
   const send = async () => {
-    const t = text.trim();
-    if (!t || busy) return;
+    if (!ready || busy || attach.uploading) return;
     setBusy(true); setNote(null);
     try {
-      await api.steer(taskId, t);
+      await api.steer(taskId, withAttachments(text, attach.items));
       setText("");
+      attach.clear();
       setNote({ ok: true, text: `Delivered to the ${worker}'s inbox` });
     } catch (e) {
       setNote({ ok: false, text: e instanceof NotAvailable ? `Messaging a ${worker} is not available from this daemon yet` : errText(e) });
@@ -301,15 +305,17 @@ function SteerBox({ taskId }: { taskId: string }) {
   };
 
   return (
-    <div className="composer steer">
+    <div className={cx("composer steer", attach.dragging && "dropping")} {...attach.dropProps}>
+      <AttachmentList items={attach.items} uploading={attach.uploading} error={attach.error} onRemove={attach.remove} />
+      <AttachButton onFiles={(f) => void attach.add(f)} />
       <textarea rows={2} value={text} aria-label={`Message the ${worker}`}
         placeholder={`Message the ${worker} (Enter to send, Shift+Enter for a newline)`}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => setText(e.target.value)} onPaste={attach.onPaste}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
         }} />
       <div className="steer-side">
-        <button className="btn" onClick={() => void send()} disabled={busy || !text.trim()}>{busy ? "Sending…" : "Send"}</button>
+        <button className="btn" onClick={() => void send()} disabled={busy || !ready || attach.uploading > 0}>{busy ? "Sending…" : "Send"}</button>
         {note && <span className={(note.ok ? "ok" : "bad") + " small-text"} role="status">{note.text}</span>}
       </div>
     </div>

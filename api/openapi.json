@@ -1763,6 +1763,73 @@
         }
       }
     },
+    "/v1/projects/{id}/attachments": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Saves the request body as a file an agent of this Project can read.\nEach upload gets its own folder, so two files with the same name never\nclash.",
+        "operationId": "upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "The file's name, e.g. `screenshot.png`. Only its last path part is\nused; characters outside letters, digits, `.`, `-` and `_` become `_`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty body"
+          },
+          "404": {
+            "description": "No such Project"
+          },
+          "413": {
+            "description": "Larger than 25 MB"
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/automation": {
       "get": {
         "tags": [
@@ -5911,6 +5978,29 @@
           "log",
           "report"
         ]
+      },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "path",
+          "name",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The file name as saved."
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the saved file on the daemon's machine."
+          }
+        }
       },
       "AttentionItem": {
         "type": "object",

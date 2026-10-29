@@ -1,6 +1,7 @@
 //! The `/v1` HTTP API and event stream.
 
 mod accounts;
+mod attachments;
 pub(crate) mod automation;
 mod beads;
 mod clear;
@@ -166,6 +167,10 @@ const MODULES: &[Module] = &[
     Module {
         router: clear::router,
         openapi: <clear::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: attachments::router,
+        openapi: <attachments::Api as OpenApi>::openapi,
     },
 ];
 

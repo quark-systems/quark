@@ -8,7 +8,8 @@ import { useLabels } from "../persona";
 import { errText } from "../util";
 import { fromSlash } from "../commands";
 import { runCommand } from "../components/CoordinatorCommand";
-import { Button, CoordinatorMark, Kbd } from "../ui";
+import { AttachButton, AttachmentList, Button, CoordinatorMark, Kbd } from "../ui";
+import { useAttachments, withAttachments } from "../attachments";
 
 export interface DockContext {
   projectId: string | null;
@@ -65,15 +66,17 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
   const [err, setErr] = useState<string | null>(null);
   const coordinator = l.role("coordinator");
 
+  const attach = useAttachments(projectId ?? undefined, `dock:${projectId}`);
+
   const send = async () => {
     const t = text.trim();
-    if (!t || !projectId || sending) return;
+    if ((!t && !attach.items.length) || !projectId || sending || attach.uploading) return;
     setSending(true); setErr(null); setSent(null);
     // A slash command asks for a catch up, status report or wrap up; it carries no context.
-    const command = fromSlash(t);
+    const command = attach.items.length ? null : fromSlash(t);
     try {
-      await (command ? runCommand(projectId, command) : api.sendChat(projectId, dockMessage(t, ctx)));
-      setText(""); setSent(projectId);
+      await (command ? runCommand(projectId, command) : api.sendChat(projectId, dockMessage(withAttachments(t, attach.items), ctx)));
+      setText(""); attach.clear(); setSent(projectId);
     }
     catch (e) { setErr(errText(e)); }
     finally { setSending(false); }
@@ -86,7 +89,8 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
   const placeholder = ctx.about ? `Ask the ${coordinator} about ${ctx.about}…` : `Ask the ${coordinator} anything, or describe new work…`;
   return (
     <div className="dock" data-testid="dock">
-      <div className="dock-box">
+      <AttachmentList className="dock-attachments" items={attach.items} uploading={attach.uploading} error={attach.error} onRemove={attach.remove} />
+      <div className={"dock-box" + (attach.dragging ? " dropping" : "")} {...attach.dropProps}>
         <CoordinatorMark size={24} />
         {ctx.about ? <span className="dock-about" data-testid="dock-about" title={ctx.about}>about {ctx.about}</span>
           : scope ? <span className="dock-about" title={scope}>about {scope}</span>
@@ -96,8 +100,9 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
             </select>
           ) : null}
         <input ref={ref} className="dock-input" aria-label={`Message the ${coordinator}`} placeholder={placeholder} value={text}
-          onChange={(e) => { setText(e.target.value); setSent(null); }}
+          onChange={(e) => { setText(e.target.value); setSent(null); }} onPaste={attach.onPaste}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } if (e.key === "Escape") (e.target as HTMLInputElement).blur(); }} />
+        <AttachButton onFiles={(f) => void attach.add(f)} disabled={!projectId} />
         <Kbd keys={`${mod}K`} />
         {projectId && <Button className="dock-open" onClick={() => go({ name: "project", id: projectId })}>Open</Button>}
       </div>

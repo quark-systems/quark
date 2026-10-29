@@ -34,11 +34,14 @@ export function setDaemonUrl(url: string) {
 
 export const enc = (s: string) => encodeURIComponent(s);
 
+/** A Blob body is sent as is, with its own type; anything else as JSON. */
 export async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const raw = body instanceof Blob;
   const r = await fetch(daemon + path, {
     method,
-    headers: body !== undefined ? { "content-type": "application/json" } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    headers: raw ? { "content-type": body.type || "application/octet-stream" }
+      : body !== undefined ? { "content-type": "application/json" } : undefined,
+    body: raw ? body : body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (r.status === 404 || r.status === 405 || r.status === 501) {
     // A 404 with a daemon error body naming a missing entity is a real "not found", not a missing route.

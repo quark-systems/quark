@@ -1672,3 +1672,49 @@ async fn diagnostics_reports_the_home() {
     assert!(body["findings"].is_array());
     assert!(body["sizes"]["quark_db_bytes"].is_u64());
 }
+
+async fn upload(app: &Router, uri: &str, bytes: Vec<u8>) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "image/png")
+        .body(Body::from(bytes))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn attachments_are_saved_where_agents_can_read_them() {
+    let h = harness().await;
+    let (_, project) = call(&h.app, "POST", "/v1/projects", Some(json!({"name": "p"}))).await;
+    let pid = project["id"].as_str().unwrap();
+    let uri = format!("/v1/projects/{pid}/attachments?name=..%2FScreen%20Shot.png");
+
+    let (status, a) = upload(&h.app, &uri, vec![1, 2, 3]).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(a["name"], "Screen_Shot.png");
+    assert_eq!(a["bytes"], 3);
+    let path = std::path::PathBuf::from(a["path"].as_str().unwrap());
+    assert!(path.starts_with(h._home.path().join("attachments").join(pid)));
+    assert_eq!(std::fs::read(&path).unwrap(), vec![1, 2, 3]);
+
+    // The same name again gets its own folder.
+    let (_, b) = upload(&h.app, &uri, vec![4]).await;
+    assert_ne!(a["path"], b["path"]);
+
+    let (status, _) = upload(&h.app, &uri, vec![]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = upload(&h.app, "/v1/projects/nope/attachments", vec![1]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Bigger than the default 2 MB body limit, under ours.
+    let (status, _) = upload(&h.app, &uri, vec![0; 3 * 1024 * 1024]).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = upload(&h.app, &uri, vec![0; 26 * 1024 * 1024]).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
