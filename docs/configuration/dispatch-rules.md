@@ -15,18 +15,29 @@ A file that does not compile, or that the engine refuses, is recorded as a faile
 ## Classifier
 
 The optional classifier (`crates/quarkd/src/classifier.rs`) is a System-1-compatible provider you choose; Quark ships none.
+It can be the hosted System One API (`system1`, e.g. Jev) or an [Ollama](https://docs.ollama.com/api/systemone) server running a decision model such as `d1` (`ollama`).
 Its block takes:
 
 | Field | Default | Meaning |
 | :--- | :--- | :--- |
-| `provider` | `none` | `system1` or `none` |
+| `provider` | `none` | `system1`, `ollama` or `none` |
 | `model` | | the classifier's model |
-| `credential` | | a keychain reference, `keychain:<service>`, never a key |
+| `credential` | | a keychain reference, `keychain:<service>`, never a key; `ollama` needs none for local models |
+| `url` | `https://api.typesafe.ai` (`system1`), `http://localhost:11434` (`ollama`) | the server; `/v1/systemone` is added |
 | `confidence_floor` | `0.6` | below it the classifier's pick is not used |
 | `timeout_ms` | `5000` | |
 | `on_failure` | `coordinator` | `coordinator` or `default` |
 
 Any other field is refused, and so is an inline key. Store a key with `security add-generic-password -U -s <service> -a "$USER" -w`.
+
+For a model in a local Ollama:
+
+```yaml
+classifier:
+  provider: ollama
+  model: d1
+  url: http://mac.lan:11434   # only when the server is on another machine
+```
 
 A user-level default lives under `classifier:` in `~/.quark/config.yaml`; a Project's `dispatch.yaml` overrides it field by field, and with neither the provider is `none`, so the coordinator picks every rule.
 The block in effect is compiled into `crew-dispatch.json`, and a change to `config.yaml` is applied on the next refresh.

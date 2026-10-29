@@ -7,7 +7,7 @@ It sits in front of the slice 4 supervisor (`docs/engine/supervision.md`) and ke
 
 1. **Request.** `Dispatcher::submit` records `dispatch.requested` with the task's title, brief, repo, branch, isolation and environment. A request may name a profile itself; then the rules are skipped.
 2. **Resolve.** The Project's rules (`dispatch.yaml`, compiled to `crew-dispatch.json`) are resolved exactly as firstmate resolves them, and the result is recorded as `dispatch.resolved`:
-   - the classifier (the System-1 API; `classify::SystemOne`) picks a rule or `default` from the brief, with a confidence;
+   - the classifier (the System-1 API, hosted or an Ollama server's; `classify::SystemOne`) picks a rule or `default` from the brief, with a confidence;
    - a rule needing approval, or whose floor cannot be verified, escalates; a rule floor below falls through to the default profiles; below the confidence floor the result is `ambiguous`, unless `on_failure: default` sends it (and any classifier failure) to the default profiles;
    - each candidate is judged on one `quota-axi --json` snapshot, plus IBM Bob's and Kiro CLI's own readings ([Bob and Kiro quota](#bob-and-kiro-quota)): exhausted runway, 0% left without overage, or a profile floor below rule it out; missing or unverifiable evidence leaves it eligible but unranked; `pricing: budget` needs no quota;
    - `ordered` takes the first eligible candidate (escalating if its evidence is unverifiable), `quota-balanced` takes the highest spend priority, a budget candidate only when none ranks, and escalates on a tie.

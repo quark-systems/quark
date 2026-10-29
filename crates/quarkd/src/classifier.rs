@@ -4,9 +4,10 @@
 //!
 //! ```yaml
 //! classifier:
-//!   provider: system1            # system1 | none
+//!   provider: system1            # system1 | ollama | none
 //!   model: <model-id>            # Quark ships no default model
 //!   credential: keychain:quark/classifier   # a keychain reference, never an inline key
+//!   url: http://mac.lan:11434    # the server; the provider's own when absent
 //!   confidence_floor: 0.6        # below this, on_failure decides
 //!   timeout_ms: 5000
 //!   on_failure: coordinator      # coordinator | default (fall back to the default rule)
@@ -45,6 +46,9 @@ const KEYCHAIN_PREFIX: &str = "keychain:";
 pub enum Provider {
     None,
     System1,
+    /// An Ollama server's System One endpoint, local unless `url` says
+    /// otherwise; it needs no credential.
+    Ollama,
 }
 
 /// Where a task goes when the classifier answers below the floor, times out
@@ -69,6 +73,8 @@ pub struct Block {
     model: Option<String>,
     #[serde(default)]
     credential: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default)]
     confidence_floor: Option<f64>,
     #[serde(default)]
@@ -124,9 +130,13 @@ impl Serialize for KeychainRef {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct System1 {
     pub model: String,
-    /// `None` leaves the key to the engine's own environment.
+    /// `None` leaves the key to the engine's own environment (`system1`),
+    /// or sends none (`ollama`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<KeychainRef>,
+    /// `None` is the provider's own server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub confidence_floor: f64,
     pub timeout_ms: u64,
     pub on_failure: OnFailure,
@@ -140,6 +150,7 @@ pub enum Classifier {
     #[default]
     None,
     System1(System1),
+    Ollama(System1),
 }
 
 /// Read one `classifier` block. `None` is an absent block.
@@ -159,6 +170,12 @@ pub fn block(v: Option<&serde_json::Value>) -> Result<Option<Block>, String> {
 fn check(b: &Block) -> Result<(), String> {
     if let Some(c) = &b.credential {
         KeychainRef::parse(c)?;
+    }
+    if b.url
+        .as_ref()
+        .is_some_and(|u| !(u.starts_with("http://") || u.starts_with("https://")))
+    {
+        return Err("url must start with http:// or https://".into());
     }
     if b.model.as_ref().is_some_and(|m| m.trim().is_empty()) {
         return Err("model is empty".into());
@@ -181,30 +198,41 @@ fn check(b: &Block) -> Result<(), String> {
 pub fn effective(project: Option<&Block>, user: Option<&Block>) -> Result<Classifier, String> {
     let none = Block::default();
     let (p, u) = (project.unwrap_or(&none), user.unwrap_or(&none));
-    if p.provider.or(u.provider).unwrap_or(Provider::None) == Provider::None {
+    let provider = p.provider.or(u.provider).unwrap_or(Provider::None);
+    if provider == Provider::None {
         return Ok(Classifier::None);
     }
+    let name = if provider == Provider::Ollama {
+        "ollama"
+    } else {
+        "system1"
+    };
     let model = p
         .model
         .clone()
         .or_else(|| u.model.clone())
-        .ok_or("classifier: provider system1 needs a model")?;
+        .ok_or(format!("classifier: provider {name} needs a model"))?;
     let credential = p
         .credential
         .as_deref()
         .or(u.credential.as_deref())
         .map(KeychainRef::parse)
         .transpose()?;
-    Ok(Classifier::System1(System1 {
+    let settings = System1 {
         model,
         credential,
+        url: p.url.clone().or_else(|| u.url.clone()),
         confidence_floor: p
             .confidence_floor
             .or(u.confidence_floor)
             .unwrap_or(DEFAULT_CONFIDENCE_FLOOR),
         timeout_ms: p.timeout_ms.or(u.timeout_ms).unwrap_or(DEFAULT_TIMEOUT_MS),
         on_failure: p.on_failure.or(u.on_failure).unwrap_or_default(),
-    }))
+    };
+    Ok(match provider {
+        Provider::Ollama => Classifier::Ollama(settings),
+        _ => Classifier::System1(settings),
+    })
 }
 
 /// The user-level settings file. Keys other than `classifier` are not this
@@ -324,6 +352,34 @@ mod tests {
             effective(off.as_ref(), user.as_ref()).unwrap(),
             Classifier::None
         );
+    }
+
+    #[test]
+    fn ollama_needs_no_credential() {
+        let b = parse("provider: ollama\nmodel: d1\n").unwrap();
+        assert_eq!(
+            serde_json::to_value(effective(b.as_ref(), None).unwrap()).unwrap(),
+            json!({
+                "provider": "ollama",
+                "model": "d1",
+                "confidence_floor": 0.6,
+                "timeout_ms": 5000,
+                "on_failure": "coordinator"
+            })
+        );
+        // A Project can point at another machine's server.
+        let user = parse("provider: ollama\nmodel: d1\n").unwrap();
+        let project = parse("url: http://mac.lan:11434").unwrap();
+        let Classifier::Ollama(s) = effective(project.as_ref(), user.as_ref()).unwrap() else {
+            panic!("ollama");
+        };
+        assert_eq!(s.url.as_deref(), Some("http://mac.lan:11434"));
+        let err = parse("provider: ollama")
+            .and_then(|b| effective(b.as_ref(), None))
+            .unwrap_err();
+        assert!(err.contains("provider ollama needs a model"), "{err}");
+        let err = parse("url: mac.lan:11434").unwrap_err();
+        assert!(err.contains("url must start with http"), "{err}");
     }
 
     #[test]
