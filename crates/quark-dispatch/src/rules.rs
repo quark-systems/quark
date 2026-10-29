@@ -24,6 +24,16 @@ pub const DEFAULT_CONFIDENCE_FLOOR: f64 = 0.6;
 pub const DEFAULT_TIMEOUT_MS: u64 = 5000;
 /// The default System One model.
 pub const DEFAULT_CLASSIFIER_MODEL: &str = "jev-latest";
+/// The provider for the hosted System One API.
+pub const SYSTEM1: &str = "system1";
+/// The provider for an Ollama server's System One endpoint.
+pub const OLLAMA: &str = "ollama";
+/// The hosted System One server.
+pub const SYSTEM1_URL: &str = "https://api.typesafe.ai";
+/// A local Ollama server.
+pub const OLLAMA_URL: &str = "http://localhost:11434";
+/// The System One endpoint's path on either server.
+pub const SYSTEM_ONE_PATH: &str = "/v1/systemone";
 
 /// How a candidate list is resolved.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +138,10 @@ pub struct ClassifierBlock {
     /// `keychain:<service>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
+    /// The server, e.g. `http://mac.lan:11434`; the provider's own when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence_floor: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,8 +206,13 @@ impl DispatchConfig {
                     return Err("classifier credential must be keychain:<service>".into());
                 }
             }
+            if let Some(u) = &c.url {
+                if !(u.starts_with("http://") || u.starts_with("https://")) {
+                    return Err(format!("classifier url {u:?} is not http(s)"));
+                }
+            }
             match c.provider.as_deref() {
-                None | Some("none") | Some("system1") => {}
+                None | Some("none") | Some(SYSTEM1) | Some(OLLAMA) => {}
                 Some(p) => return Err(format!("classifier provider {p:?}")),
             }
         }
@@ -261,6 +280,10 @@ impl DispatchConfig {
 pub struct ClassifierSettings {
     /// Whether the classifier is asked at all.
     pub on: bool,
+    /// `system1` or `ollama`.
+    pub provider: String,
+    /// The System One endpoint.
+    pub url: String,
     pub model: String,
     pub credential: Option<String>,
     pub confidence_floor: f64,
@@ -276,11 +299,25 @@ impl ClassifierSettings {
         let block = config.classifier.clone().unwrap_or_default();
         let on = match (&config.classifier, block.provider.as_deref()) {
             (None, _) => key_present,
-            (Some(_), Some("system1")) => true,
+            (Some(_), Some(SYSTEM1 | OLLAMA)) => true,
             (Some(_), _) => false,
         };
+        let provider = match block.provider.as_deref() {
+            Some(OLLAMA) => OLLAMA,
+            _ => SYSTEM1,
+        };
+        let server = block.url.unwrap_or_else(|| {
+            if provider == OLLAMA {
+                OLLAMA_URL
+            } else {
+                SYSTEM1_URL
+            }
+            .into()
+        });
         Self {
             on,
+            provider: provider.into(),
+            url: endpoint(&server),
             model: block
                 .model
                 .unwrap_or_else(|| DEFAULT_CLASSIFIER_MODEL.to_string()),
@@ -289,6 +326,16 @@ impl ClassifierSettings {
             timeout_ms: block.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
             on_failure: block.on_failure.unwrap_or_default(),
         }
+    }
+}
+
+/// The System One endpoint on `server`, which may already name it.
+pub fn endpoint(server: &str) -> String {
+    let server = server.trim_end_matches('/');
+    if server.ends_with(SYSTEM_ONE_PATH) {
+        server.to_string()
+    } else {
+        format!("{server}{SYSTEM_ONE_PATH}")
     }
 }
 
@@ -353,5 +400,35 @@ mod tests {
         assert_eq!(s.confidence_floor, 0.8);
         assert_eq!(s.on_failure, OnFailure::Default);
         assert_eq!(s.model, DEFAULT_CLASSIFIER_MODEL);
+        assert_eq!(s.provider, SYSTEM1);
+        assert_eq!(s.url, "https://api.typesafe.ai/v1/systemone");
+    }
+
+    #[test]
+    fn ollama_classifier() {
+        let local =
+            DispatchConfig::parse(r#"{"classifier":{"provider":"ollama","model":"d1"}}"#).unwrap();
+        let s = ClassifierSettings::from_config(&local, false);
+        assert!(s.on);
+        assert_eq!(s.provider, OLLAMA);
+        assert_eq!(s.model, "d1");
+        assert_eq!(s.url, "http://localhost:11434/v1/systemone");
+        for url in [
+            "http://mac.lan:11434",
+            "http://mac.lan:11434/",
+            "http://mac.lan:11434/v1/systemone",
+        ] {
+            let c = DispatchConfig::parse(&format!(
+                r#"{{"classifier":{{"provider":"ollama","model":"d1","url":"{url}"}}}}"#
+            ))
+            .unwrap();
+            let s = ClassifierSettings::from_config(&c, false);
+            assert_eq!(s.url, "http://mac.lan:11434/v1/systemone", "{url}");
+        }
+        assert!(
+            DispatchConfig::parse(r#"{"classifier":{"provider":"ollama","url":"mac.lan"}}"#)
+                .is_err()
+        );
+        assert!(DispatchConfig::parse(r#"{"classifier":{"provider":"llama"}}"#).is_err());
     }
 }

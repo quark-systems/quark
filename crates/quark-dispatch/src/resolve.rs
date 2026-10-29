@@ -523,6 +523,8 @@ pub fn resolve_rule(
     };
     let settings = ClassifierSettings {
         on: true,
+        provider: String::new(),
+        url: String::new(),
         model: String::new(),
         credential: None,
         confidence_floor: 0.0,

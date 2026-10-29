@@ -3,7 +3,8 @@
 //! The System-1 API is the contract: one Choice question whose options are
 //! every rule's `when` plus a fixed `default`, answered with the chosen
 //! option, a confidence and a probability per option. Quark ships no
-//! classifier model; [`SystemOne`] calls the provider the user configured.
+//! classifier model; [`SystemOne`] calls the provider the user configured:
+//! the hosted System One API, or an Ollama server's endpoint (`ollama`).
 //! The model never sees quota, profiles, approvals or `why`.
 
 use std::collections::BTreeMap;
@@ -15,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 
-use crate::rules::{ClassifierSettings, DispatchConfig};
+use crate::rules::{ClassifierSettings, DispatchConfig, OLLAMA};
 
 /// The `default` option's criterion: no listed rule applies.
 pub const DEFAULT_WHEN: &str = "No listed rule applies to this task.";
@@ -24,8 +25,6 @@ pub const DEFAULT_CHOICE: &str = "default";
 /// The environment variable holding the System One API key when no
 /// keychain credential is configured.
 pub const KEY_ENV: &str = "TYPESAFE_API_KEY";
-/// The System One endpoint.
-pub const SYSTEM_ONE_URL: &str = "https://api.typesafe.ai/v1/systemone";
 
 /// The classifier's answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,27 +173,26 @@ pub fn parse_answer(body: &Value, rule_count: usize) -> Result<Answer, String> {
     })
 }
 
-/// Calls the System One API with `curl`. The key comes from the keychain
-/// credential when the settings name one (macOS `security`), else from
-/// [`KEY_ENV`]; it reaches curl on stdin as a config line, never on argv,
-/// and is never logged.
+/// Calls the settings' System One endpoint with `curl`. The key comes from
+/// the keychain credential when the settings name one (macOS `security`),
+/// else from [`KEY_ENV`]; it reaches curl on stdin as a config line, never
+/// on argv, and is never logged. An Ollama server needs no key unless a
+/// credential is named (ollama.com cloud models).
 #[derive(Debug, Clone)]
 pub struct SystemOne {
-    pub url: String,
     pub curl: String,
 }
 
 impl Default for SystemOne {
     fn default() -> Self {
         Self {
-            url: SYSTEM_ONE_URL.into(),
             curl: "curl".into(),
         }
     }
 }
 
 impl SystemOne {
-    async fn key(&self, settings: &ClassifierSettings) -> Result<String, String> {
+    async fn key(&self, settings: &ClassifierSettings) -> Result<Option<String>, String> {
         if let Some(service) = settings
             .credential
             .as_deref()
@@ -215,17 +213,22 @@ impl SystemOne {
             if !out.status.success() || key.is_empty() {
                 return Err(format!("no keychain item for service {service}"));
             }
-            return Ok(key);
+            return Ok(Some(key));
+        }
+        if settings.provider == OLLAMA {
+            return Ok(None);
         }
         std::env::var(KEY_ENV)
             .ok()
             .filter(|k| !k.is_empty())
+            .map(Some)
             .ok_or_else(|| format!("{KEY_ENV} is not set"))
     }
 
     async fn post(
         &self,
-        key: &str,
+        url: &str,
+        key: Option<&str>,
         body: &str,
         timeout: Duration,
     ) -> Result<(u16, String), String> {
@@ -255,7 +258,7 @@ impl SystemOne {
                     "--data-binary",
                 ])
                 .arg(format!("@{}", file.display()))
-                .arg(&self.url)
+                .arg(url)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -263,10 +266,12 @@ impl SystemOne {
                 .spawn()
                 .map_err(|e| format!("curl: {e}"))?;
             let mut stdin = child.stdin.take().ok_or("curl stdin")?;
-            stdin
-                .write_all(format!("header = \"Authorization: Bearer {key}\"\n").as_bytes())
-                .await
-                .map_err(|e| e.to_string())?;
+            if let Some(key) = key {
+                stdin
+                    .write_all(format!("header = \"Authorization: Bearer {key}\"\n").as_bytes())
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
             drop(stdin);
             let out =
                 tokio::time::timeout(timeout + Duration::from_secs(2), child.wait_with_output())
@@ -308,7 +313,10 @@ impl Classifier for SystemOne {
         let body = request(project, brief, config, &settings.model).to_string();
         let started = Instant::now();
         let timeout = Duration::from_millis(settings.timeout_ms);
-        let (code, text) = match self.post(&key, &body, timeout).await {
+        let (code, text) = match self
+            .post(&settings.url, key.as_deref(), &body, timeout)
+            .await
+        {
             Ok(r) => r,
             Err(e) => return failed(e),
         };
@@ -375,5 +383,48 @@ mod tests {
         let mut usage = ok;
         usage["usage"] = json!({"input_tokens":"x"});
         assert!(parse_answer(&usage, 2).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn asks_a_local_ollama_server_without_a_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let seen = dir.path().join("seen");
+        let curl = dir.path().join("curl");
+        std::fs::write(
+            &curl,
+            format!(
+                "#!/bin/sh\n{{ for a in \"$@\"; do echo \"$a\"; done; echo stdin:; cat; }} > '{}'\n\
+                 printf '%s\\n200' '{}'\n",
+                seen.display(),
+                json!({"model":"d1","answers":{"rule":{"type":"choice","choice":"rule_1",
+                    "confidence":0.8,"probabilities":{"rule_1":0.9,"rule_2":0.05,"default":0.05}}},
+                    "usage":{"input_tokens":52,"output_tokens":0}})
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let c = DispatchConfig::parse(
+            r#"{"classifier":{"provider":"ollama","model":"d1","url":"http://mac.lan:11434"},
+                "rules":[{"when":"a","use":{"harness":"claude"}},{"when":"b","use":{"harness":"codex"}}]}"#,
+        )
+        .unwrap();
+        let settings = ClassifierSettings::from_config(&c, false);
+        let s = SystemOne {
+            curl: curl.display().to_string(),
+        };
+        let Classification::Answered { answer } = s.classify(None, "Fix it.", &c, &settings).await
+        else {
+            panic!("no answer");
+        };
+        assert_eq!(answer.choice, "rule_1");
+        assert_eq!(answer.model.as_deref(), Some("d1"));
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        assert!(
+            seen.contains("http://mac.lan:11434/v1/systemone\n"),
+            "{seen}"
+        );
+        assert!(!seen.contains("Authorization"), "{seen}");
     }
 }
