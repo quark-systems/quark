@@ -21,7 +21,11 @@ fn daemon_listening() -> bool {
 
 /// The quarkd bundled next to the app's own binary, if this is an installed app.
 fn bundled_quarkd(exe: &Path) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "quarkd.exe" } else { "quarkd" };
+    let name = if cfg!(windows) {
+        "quarkd.exe"
+    } else {
+        "quarkd"
+    };
     let path = exe.parent()?.join(name);
     path.is_file().then_some(path)
 }
@@ -51,23 +55,23 @@ pub fn start_bundled_daemon(app: &AppHandle) {
     if std::env::var_os("QUARK_DAEMON").is_some() || daemon_listening() {
         return;
     }
-    let Some(quarkd) = std::env::current_exe().ok().and_then(|e| bundled_quarkd(&e)) else {
+    let Some(quarkd) = std::env::current_exe()
+        .ok()
+        .and_then(|e| bundled_quarkd(&e))
+    else {
         return;
     };
-    let log = app
-        .path()
-        .app_log_dir()
-        .ok()
-        .and_then(|dir| {
-            std::fs::create_dir_all(&dir).ok()?;
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("quarkd.log"))
-                .ok()
-        });
+    let log = app.path().app_log_dir().ok().and_then(|dir| {
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("quarkd.log"))
+            .ok()
+    });
     let mut cmd = std::process::Command::new(quarkd);
-    cmd.args(["--engine", "native"]).stdin(std::process::Stdio::null());
+    cmd.args(["--engine", "native"])
+        .stdin(std::process::Stdio::null());
     if let Some(path) = login_path() {
         cmd.env("PATH", path);
     }
@@ -141,7 +145,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("quark-desktop");
         assert_eq!(bundled_quarkd(&exe), None);
-        let name = if cfg!(windows) { "quarkd.exe" } else { "quarkd" };
+        let name = if cfg!(windows) {
+            "quarkd.exe"
+        } else {
+            "quarkd"
+        };
         std::fs::write(dir.join(name), b"").unwrap();
         assert_eq!(bundled_quarkd(&exe), Some(dir.join(name)));
         let _ = std::fs::remove_dir_all(&dir);
