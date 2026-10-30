@@ -69,6 +69,9 @@ pub struct AppState {
     pub compaction: Arc<crate::compaction::Compactor>,
     /// Each Project's Beads database: issues, decision beads and memories.
     pub beads: Arc<crate::beads::Beads>,
+    /// The native coordinator's wakes and turns; `None` when that engine
+    /// is off.
+    pub coordinator: Option<Arc<quark_coordinator::Coordinator>>,
 }
 
 /// One API module: its routes and its part of the OpenAPI document.

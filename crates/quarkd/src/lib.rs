@@ -283,7 +283,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         quark_transcript::SessionRoots::from_env(),
     ));
     // The native engine's coordinator wakes and acts.
-    let (coordinator_routes, coordinator_task) = if native_engine {
+    let (coordinator_routes, coordinator_task, native_turns) = if native_engine {
         let wiring = native_coordinator::Wiring {
             brain: Arc::new(coordinator_hands::InputBrain::new(
                 store.clone(),
@@ -306,6 +306,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         {
             Ok(c) => {
                 let c = c.with_sessions(sessions.clone());
+                let turns = c.coordinator();
                 let routes = coordinator_http::router_wrapping_up(
                     c.coordinator(),
                     c.tokens(),
@@ -320,15 +321,16 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                 (
                     Some(routes),
                     Some(tokio::spawn(c.run(config.refresh_interval))),
+                    Some(turns),
                 )
             }
             Err(e) => {
                 tracing::warn!(error = %format!("{e:#}"), "slice 6 coordinator not started");
-                (None, None)
+                (None, None, None)
             }
         }
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let beads = Arc::new(
@@ -357,6 +359,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         triggers,
         compaction: compactor,
         beads,
+        coordinator: native_turns,
     };
     let decision_beads_task = api::spawn_decision_beads(state.clone());
     let mut app = api::router(state);

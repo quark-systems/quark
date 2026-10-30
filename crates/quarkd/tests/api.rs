@@ -62,6 +62,7 @@ async fn harness() -> Harness {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -76,6 +76,7 @@ async fn settings_read_every_switch_and_change_holdout_and_standing_approval() {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
 
     let project = store
@@ -211,6 +212,7 @@ async fn compaction_is_set_in_settings_and_shown_with_the_coordinator_context() 
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     let project = store
         .create_project(CreateProject {
@@ -225,6 +227,13 @@ async fn compaction_is_set_in_settings_and_shown_with_the_coordinator_context() 
             ..Default::default()
         })
         .unwrap();
+
+    let interrupt = format!("/v1/coordinators/{}:interrupt", project.id);
+    let (status, body) = call(&app, "POST", &interrupt, None).await;
+    assert_eq!(status, 202, "{body}");
+    assert_eq!(chat.interrupted().len(), 1);
+    let (status, _) = call(&app, "POST", "/v1/coordinators/nope:interrupt", None).await;
+    assert_eq!(status, 404);
 
     let context = format!("/v1/coordinators/{}/context", project.id);
     let (status, c) = call(&app, "GET", &context, None).await;
@@ -306,6 +315,7 @@ async fn the_coordinators_agent_is_changed_through_a_switch() {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     let project = store
         .create_project(CreateProject {

@@ -51,6 +51,9 @@ pub enum ChatError {
 #[async_trait]
 pub trait CoordinatorInput: Send + Sync {
     async fn send(&self, ws: &WorkspaceRef, text: &str) -> Result<Delivery, ChatError>;
+
+    /// Interrupt the coordinator's current turn. Its session keeps running.
+    async fn interrupt(&self, ws: &WorkspaceRef) -> Result<(), ChatError>;
 }
 
 /// The input used while no terminal session client is attached.
@@ -60,6 +63,12 @@ pub struct NoSessions;
 #[async_trait]
 impl CoordinatorInput for NoSessions {
     async fn send(&self, _ws: &WorkspaceRef, _text: &str) -> Result<Delivery, ChatError> {
+        Err(ChatError::Unavailable(
+            "no terminal session client is attached to this daemon".into(),
+        ))
+    }
+
+    async fn interrupt(&self, _ws: &WorkspaceRef) -> Result<(), ChatError> {
         Err(ChatError::Unavailable(
             "no terminal session client is attached to this daemon".into(),
         ))
@@ -91,6 +100,10 @@ pub fn engine_note(what: &str, quoted: &str) -> String {
 /// bracketed paste; [`validate`] already refuses escape characters, so the
 /// text cannot end the paste itself. The submit is confirmed when the
 /// coordinator's session log records a user message starting with the text.
+///
+/// An interrupt is one Escape, the interrupt key of every supported
+/// coordinator harness. A second one soon after opens Claude Code's rewind
+/// menu, which would swallow the next message.
 pub struct SessionsInput {
     sessions: Sessions,
     roots: SessionRoots,
@@ -165,6 +178,20 @@ impl CoordinatorInput for SessionsInput {
             tokio::time::sleep(CONFIRM_POLL).await;
         }
     }
+
+    async fn interrupt(&self, ws: &WorkspaceRef) -> Result<(), ChatError> {
+        let terminal = ws.project_id.as_str();
+        self.sessions.get(terminal).map_err(|e| match e {
+            SessionError::NotFound => {
+                ChatError::Unavailable("the coordinator has no live terminal".into())
+            }
+            other => ChatError::Unavailable(other.to_string()),
+        })?;
+        self.sessions
+            .input(terminal, b"\x1b", None)
+            .await
+            .map_err(|e| ChatError::Failed(e.to_string()))
+    }
 }
 
 /// A coordinator session log and its length before typing.
@@ -220,6 +247,7 @@ fn first_line(text: &str) -> &str {
 pub struct RecordingInput {
     outcome: Mutex<Result<Delivery, String>>,
     sent: Mutex<Vec<(WorkspaceRef, String)>>,
+    interrupted: Mutex<Vec<WorkspaceRef>>,
 }
 
 impl Default for RecordingInput {
@@ -227,6 +255,7 @@ impl Default for RecordingInput {
         Self {
             outcome: Mutex::new(Ok(Delivery::Confirmed)),
             sent: Mutex::new(Vec::new()),
+            interrupted: Mutex::new(Vec::new()),
         }
     }
 }
@@ -244,6 +273,11 @@ impl RecordingInput {
     pub fn sent(&self) -> Vec<(WorkspaceRef, String)> {
         self.sent.lock().unwrap().clone()
     }
+
+    /// The coordinators interrupted so far.
+    pub fn interrupted(&self) -> Vec<WorkspaceRef> {
+        self.interrupted.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
@@ -260,6 +294,11 @@ impl CoordinatorInput for RecordingInput {
             }
             Err(e) => Err(ChatError::Failed(e)),
         }
+    }
+
+    async fn interrupt(&self, ws: &WorkspaceRef) -> Result<(), ChatError> {
+        self.interrupted.lock().unwrap().push(ws.clone());
+        Ok(())
     }
 }
 

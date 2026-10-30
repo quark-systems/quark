@@ -775,6 +775,10 @@ mod tests {
             self.0.lock().unwrap().push(text.to_string());
             Ok(Delivery::Confirmed)
         }
+
+        async fn interrupt(&self, _: &WorkspaceRef) -> std::result::Result<(), ChatError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]

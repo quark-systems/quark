@@ -80,6 +80,7 @@ async fn metrics_count_the_projects_own_events() {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     let project = store
         .create_project(CreateProject {

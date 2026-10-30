@@ -57,6 +57,7 @@ fn harness() -> Harness {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     Harness {
         home,

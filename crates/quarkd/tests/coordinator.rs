@@ -108,6 +108,7 @@ async fn ask_the_user_and_wake_on_the_answer() {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     })
     .nest(
         coordinator_http::PREFIX,

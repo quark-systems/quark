@@ -64,6 +64,7 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: stow, save, checkpoint.
 - **Context**: what the coordinator's conversation holds right now, in tokens, against its model's window. The meter in the coordinator's header.
   _Avoid_: memory (that is the project's), tokens used (that is spend), session.
+- **Stop**: interrupt what the coordinator is doing, from its header. It stays running and reads your next message; whatever woke it is not sent again.
 - **Compact**: replace the coordinator's conversation with a summary, so each turn reads less. Quark compacts when the context reaches the project's threshold, after a wrap up; Compact now in the context popover skips the wrap up. Set in Settings › Compaction.
   _Avoid_: clear, reset, summarize (as the action), truncate.
 - **Change agent**: give the coordinator another harness, model, effort or pool. On the same harness it keeps its conversation; on another it writes a **handoff** for the new coordinator first. Settings › Agent.

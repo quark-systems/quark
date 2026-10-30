@@ -258,6 +258,7 @@ async fn harness_routes() {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
         sessions: quarkd::sessions::Sessions::disabled("not used in this test"),
         layout: quarkd::provision::Layout::new(dir.path().join("quark-home")),
         harnesses,

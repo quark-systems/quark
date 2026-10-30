@@ -90,6 +90,7 @@ fn setup_with(forwarded: &'static [&'static str]) -> Setup {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     Setup {
         projector: Projector::new(store.clone(), engine.clone())

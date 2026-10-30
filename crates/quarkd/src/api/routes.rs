@@ -1152,11 +1152,14 @@ pub async fn run_coordinator_command(
         Some((id, "compact")) => {
             return compact_coordinator(State(state), Path(id.to_string())).await
         }
+        Some((id, "interrupt")) => {
+            return interrupt_coordinator(State(state), Path(id.to_string())).await
+        }
         _ => {
             return Err(ApiError::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "method_not_allowed",
-                "use POST /v1/coordinators/{id}:run or :compact",
+                "use POST /v1/coordinators/{id}:run, :compact or :interrupt",
             ))
         }
     };
@@ -1352,6 +1355,76 @@ pub async fn compact_coordinator(
     ))
 }
 
+/// Stop what a Project coordinator is doing.
+///
+/// Served as `POST /v1/coordinators/{id}:interrupt`, with no body. Presses
+/// the harness's interrupt key in the coordinator's session and closes its
+/// open turn, so what woke it is not delivered again. The session keeps
+/// running and reads the next message.
+#[utoipa::path(
+    post,
+    path = "/v1/coordinators/{id}:interrupt",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    responses(
+        (status = 202, body = CoordinatorMessageAccepted),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The Project has no workspace yet", body = ErrorBody),
+        (status = 502, description = "Pressing the key failed", body = ErrorBody),
+        (status = 503, description = "No live coordinator session", body = ErrorBody)
+    )
+)]
+pub async fn interrupt_coordinator(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
+    let store = state.store.clone();
+    let pid = id.clone();
+    let project = tokio::task::spawn_blocking(move || store.get_project(&pid))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
+    let Some(root) = project.workspace_path else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "no_workspace",
+            "the Project has no workspace, so it has no coordinator yet",
+        ));
+    };
+    let ws = WorkspaceRef {
+        project_id: project.id,
+        root: PathBuf::from(root),
+    };
+    match state.chat.interrupt(&ws).await {
+        Ok(()) => {}
+        Err(ChatError::Unavailable(m)) => {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session_unavailable",
+                m,
+            ))
+        }
+        Err(ChatError::Failed(m)) => {
+            tracing::warn!(coordinator = %id, error = %m, "coordinator not interrupted");
+            return Err(ApiError::new(StatusCode::BAD_GATEWAY, "delivery_failed", m));
+        }
+    }
+    if let Some(coordinator) = &state.coordinator {
+        let project = quark_core::ProjectId::new(id.as_str());
+        if let Err(e) = coordinator.turn_stopped(&project).await {
+            tracing::warn!(coordinator = %id, error = %e, "could not close the stopped turn");
+        }
+    }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CoordinatorMessageAccepted {
+            coordinator_id: id,
+            confirmed: true,
+            accepted_at: crate::now_rfc3339(),
+            command: None,
+        }),
+    ))
+}
+
 async fn run_command(
     state: &AppState,
     id: &str,
@@ -1431,6 +1504,7 @@ async fn run_command(
         run_coordinator_command,
         coordinator_context,
         compact_coordinator,
+        interrupt_coordinator,
         switch_coordinator_agent
     ),
     components(schemas(

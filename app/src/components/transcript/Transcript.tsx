@@ -29,14 +29,16 @@ export interface TranscriptProps {
   className?: string;
   /** A command's name in the Project's persona, for command cards. */
   commandLabel?: (c: CoordinatorCommand) => string;
+  /** The last entry when the user pressed Stop; see `groupTurns`. */
+  stoppedThrough?: number;
 }
 
 /**
  * Give it a `key` per source (task or coordinator), so paging and the entries that
  * count as new start over when the source changes.
  */
-export function Transcript({ items, agent, actions = false, project, children, empty, testId, className, commandLabel = neutralCommandLabel }: TranscriptProps) {
-  const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id)), [items]);
+export function Transcript({ items, agent, actions = false, project, children, empty, testId, className, commandLabel = neutralCommandLabel, stoppedThrough }: TranscriptProps) {
+  const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id), stoppedThrough), [items, stoppedThrough]);
   const { ref, onScroll, unseen, jump, holdPosition } = useScrollAnchor<HTMLDivElement>(items.length);
 
   // The first turn shown is fixed at the first load, so turns arriving later are

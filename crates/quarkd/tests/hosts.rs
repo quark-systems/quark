@@ -91,6 +91,7 @@ fn fixture() -> Fixture {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     Fixture {
         _home: home,

@@ -8,6 +8,17 @@ const item = (role: TranscriptRole, extra: Partial<TranscriptItem> = {}): Transc
 const tool = (kind: ToolInfo["kind"], title: string): ToolInfo => ({ kind, title });
 
 describe("groupTurns", () => {
+  it("ends a turn left working when Stop was pressed, until a new entry arrives", () => {
+    const items = [
+      { id: 1, role: "user", text: "go", ts: null, truncated: false },
+      { id: 2, role: "tool_call", text: "Bash", ts: null, truncated: false },
+    ] as TranscriptItem[];
+    expect(groupTurns(items)[0].live).toBe(true);
+    expect(groupTurns(items, 2)[0].live).toBe(false);
+    const more = [...items, { id: 3, role: "thinking", text: "hm", ts: null, truncated: false }] as TranscriptItem[];
+    expect(groupTurns(more, 2)[0].live).toBe(true);
+  });
+
   it("makes a compaction its own marker and starts over after it", () => {
     const g = groupTurns([
       item("user"),

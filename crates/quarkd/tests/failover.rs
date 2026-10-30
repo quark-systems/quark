@@ -85,6 +85,7 @@ fn setup() -> Setup {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     let failover = Failover::new(store.clone(), engine.clone(), accounts, harnesses);
     // Default accounts keep their logs under the fake home; added accounts
