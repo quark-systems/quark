@@ -16,9 +16,16 @@
 //! (mode `0600`), so only the coordinator quarkd configured can reach its
 //! tools. A wrong token is `404`, the same as an unknown Project.
 //!
-//! [`install_claude`] writes those URLs into a Claude Code coordinator's
-//! workspace: the MCP server in `.mcp.json` and the `Stop` hook in
-//! `.claude/settings.local.json`.
+//! [`install`] points a coordinator's harness at those URLs:
+//! - Claude Code ([`install_claude`]): the MCP server in `.mcp.json` and the
+//!   `Stop` hook in `.claude/settings.local.json`.
+//! - Codex ([`codex_overrides`]): `-c` overrides on its command line, the
+//!   MCP server under `mcp_servers` and a `notify` program POSTing each
+//!   `agent-turn-complete` to `turn_end`. Nothing is written to `~/.codex`
+//!   or the workspace, and no Codex hook is used (they ask for trust first).
+//! - Pi ([`install_pi`]): Pi has no MCP client, so an extension in
+//!   [`PI_EXTENSION`] registers each MCP tool as a Pi tool, forwards its
+//!   calls, and POSTs `turn_end` on every `agent_end`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -500,6 +507,82 @@ pub fn install_claude(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bo
     Ok(changed)
 }
 
+/// How quarkd wires a coordinator harness to its tools and turn end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wiring {
+    Claude,
+    Codex,
+    Pi,
+}
+
+impl Wiring {
+    /// The wiring for a harness manifest id; `None` for a harness that
+    /// cannot be a coordinator yet.
+    pub fn for_harness(id: &str) -> Option<Wiring> {
+        match id {
+            "claude-code" | "claude" => Some(Wiring::Claude),
+            "codex" => Some(Wiring::Codex),
+            "pi" | "pi-signed" => Some(Wiring::Pi),
+            _ => None,
+        }
+    }
+}
+
+/// The harnesses a native coordinator runs on, by manifest id.
+pub const COORDINATOR_HARNESSES: &[&str] = &["claude-code", "codex", "pi", "pi-signed"];
+
+/// Point the coordinator running `harness` in `root` at quarkd. Codex takes
+/// its wiring on the command line ([`codex_overrides`]), so nothing is
+/// written for it. Returns whether a file changed.
+pub fn install(harness: &str, root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bool> {
+    match Wiring::for_harness(harness) {
+        Some(Wiring::Claude) => install_claude(root, urls),
+        Some(Wiring::Pi) => install_pi(root, urls),
+        Some(Wiring::Codex) | None => Ok(false),
+    }
+}
+
+/// The Pi coordinator's extension, relative to the workspace root.
+pub const PI_EXTENSION: &str = ".quark/pi/quark-coordinator.ts";
+const PI_TEMPLATE: &str = include_str!("coordinator_pi.ts");
+
+/// Write the Pi extension bridging the coordinator's MCP tools and turn-end
+/// hook into `root`, at [`PI_EXTENSION`]. Returns whether it changed.
+pub fn install_pi(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bool> {
+    let text = PI_TEMPLATE
+        .replace("__QUARK_MCP_URL__", &json!(urls.mcp).to_string())
+        .replace("__QUARK_HOOKS_URL__", &json!(urls.hooks).to_string());
+    let path = root.join(PI_EXTENSION);
+    if std::fs::read_to_string(&path).is_ok_and(|old| old == text) {
+        return Ok(false);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("quark-tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(true)
+}
+
+/// Codex's `-c` overrides wiring a coordinator to quarkd: [`SERVER_NAME`]
+/// as a streamable HTTP MCP server, and a `notify` program that POSTs the
+/// JSON Codex appends to it (`agent-turn-complete`) to `turn_end`. Each
+/// value is TOML; a JSON string or array of strings is one.
+pub fn codex_overrides(urls: &CoordinatorUrls) -> Vec<String> {
+    let post = format!(
+        "curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary \"$1\" '{}/turn_end' >/dev/null 2>&1 || true",
+        urls.hooks
+    );
+    let notify = json!(["/bin/sh", "-c", post, "quark-notify"]);
+    vec![
+        "-c".into(),
+        format!("mcp_servers.{SERVER_NAME}.url={}", json!(urls.mcp)),
+        "-c".into(),
+        format!("notify={notify}"),
+    ]
+}
+
 /// Apply `edit` to the JSON object at `path` (an empty object when the file
 /// is missing), writing it back only when it changed.
 fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) -> std::io::Result<bool> {
@@ -757,6 +840,34 @@ mod tests {
         assert_eq!(b, json!({}));
         let (_, b) = send(&app, stop(json!({"last_assistant_message": asking}))).await;
         assert_eq!(b["decision"], "block");
+    }
+
+    #[test]
+    fn installs_the_pi_bridge_and_leaves_codex_to_its_command_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok");
+        assert!(install("pi", root, &urls).unwrap());
+        assert!(!install("pi-signed", root, &urls).unwrap(), "idempotent");
+        let ext = std::fs::read_to_string(root.join(PI_EXTENSION)).unwrap();
+        assert!(ext.contains(
+            r#"const MCP_URL: string = "http://127.0.0.1:7777/v1/coordinator/p1/tok/mcp";"#
+        ));
+        assert!(ext.contains(
+            r#"const HOOKS_URL: string = "http://127.0.0.1:7777/v1/coordinator/p1/tok/hooks";"#
+        ));
+        assert!(!ext.contains("__QUARK_"));
+        let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok2");
+        assert!(install("pi", root, &urls).unwrap());
+
+        let other = tempfile::tempdir().unwrap();
+        assert!(!install("codex", other.path(), &urls).unwrap());
+        assert!(!install("kiro", other.path(), &urls).unwrap());
+        assert_eq!(std::fs::read_dir(other.path()).unwrap().count(), 0);
+        assert_eq!(Wiring::for_harness("claude"), Some(Wiring::Claude));
+        for h in COORDINATOR_HARNESSES {
+            assert!(Wiring::for_harness(h).is_some(), "{h}");
+        }
     }
 
     #[test]

@@ -30,7 +30,7 @@ Quark builds itself: its own development runs as a Quark Project.
 
 There is no official release yet, so you build it. macOS is the main target; Linux works for the daemon and the web build.
 
-**You need:** Rust (stable), Node 22, git, tmux 3.2+, the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`), and [Claude Code](https://docs.claude.com/en/docs/claude-code) signed in (the coordinator runs on it today; workers can use any supported harness).
+**You need:** Rust (stable), Node 22, git, tmux 3.2+, the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`), and a coordinator harness signed in: [Claude Code](https://docs.claude.com/en/docs/claude-code) (the default), Codex or Pi. Workers can use any supported harness.
 
 ```sh
 git clone git@github.com:quark-systems/quark.git

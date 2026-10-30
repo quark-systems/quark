@@ -8,8 +8,8 @@ import { switching, switchLine } from "../coordinatorContext";
 import { Button, ControlRow, Field, Form, FormActions, FormError, Select, TextInput } from "../ui";
 import { errText } from "../util";
 
-/** Harnesses the native coordinator runs on so far; the daemon refuses the others. */
-const NATIVE_COORDINATOR = ["claude-code"];
+/** Harnesses the native coordinator runs on; the daemon refuses the others. */
+const NATIVE_COORDINATOR = ["claude-code", "codex", "pi", "pi-signed"];
 /** How often a switch under way is read. */
 const POLL_MS = 2_000;
 

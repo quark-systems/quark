@@ -86,7 +86,7 @@ A harness compacts its conversation on its own only when the context window is n
 
 Each Project sets it in Settings (`compaction` in `GET`/`PATCH /v1/projects/{id}/settings`): `auto` on or off and `at_percent`, the share of the model's context window to compact at, 10 to 95. The threshold in tokens follows the model the coordinator runs, and a window Quark does not know counts as 200k. A Project that never set it uses `QUARK_COORDINATOR_COMPACT_AT_PERCENT`, else 70; `0` turns it off by default. With it off, the harness's own compaction still applies.
 `POST /v1/coordinators/{id}:compact` compacts now, with no wrap up.
-Only harnesses with a turn-end hook (Claude Code) set the automatic steps off; the context itself is read from any coordinator's session log.
+Each coordinator harness's turn end (Claude Code's `Stop` hook, Codex's `notify`, the Pi extension's `agent_end`) sets the automatic steps off; the context itself is read from the coordinator's session log.
 
 Every compaction, whoever started it, is one `compaction` entry in the conversation (Claude Code's `compact_boundary` line, Codex's `compacted`, Pi's `compaction`), and the `/compact` command line is left out.
 `GET /v1/coordinators/{id}/context` returns the coordinator's agent config, the model its log names, the context its last turn ended on, the model's window when known, from the providers' published windows (1M for current Claude models: Opus and Sonnet from 4.6, Haiku from 5, Fable, and Claude Code's aliases; 200k for older ones unless asked for with `[1m]` or seen past it; 272k of input for GPT-5 models), the model the session log names winning over a configured alias, the compaction settings and the threshold in tokens (`compact_at_tokens`), where a compaction is, the last compaction, and the latest change of agent (`switch`). The coordinator's header shows it as a meter.
@@ -136,9 +136,24 @@ With `--engine native`, quarkd runs the coordinator for every Project on a timer
 | `InputBrain` | `coordinator_hands.rs` | Types each turn's briefing into the coordinator's session, the way the coordinator chat does. A typed but unconfirmed wake is not typed again; the turn timeout redelivers it. |
 | `EngineHands` | `coordinator_hands.rs` | `fleet`, `task`, `steer`, `answer`, `relaunch` and `cancel` go to the engine adapter. `ask_user` opens a decision in the store, `tell_user` puts a message in the coordinator chat (`coordinator.message`) and `remember` proposes a memory entry. `start_task` and `choose_profile` go to the engine's dispatch, and `ack_message` to the triggers engine's channels (`with_channels`); without them it is refused. |
 | Routes | `coordinator_http.rs` | `POST /v1/coordinator/{project}/{token}/mcp` serves the tools over MCP; `POST /v1/coordinator/{project}/{token}/hooks/turn_end` (or `Stop`) closes the turn. On `Stop`, a reply that asks the user something (`questions::questions`) with no successful `ask_user` since the last turn end is sent back once with `{"decision": "block", "reason": questions::NUDGE}`, so the coordinator files each question as a decision; the stop that follows (`stop_hook_active`) closes the turn. `tell_user` refuses text with a question for the same reason. |
-| Hook install | `coordinator_http::install_claude` | Native only: writes the MCP server into the workspace's `.mcp.json` (approved in `.claude/settings.local.json`) a `Stop` hook that POSTs the turn end and prints the answer as the hook's decision, and a `SessionStart` hook that runs `bd prime --memories-only` so the Project's Beads memories (standing rules among them) are injected when the session starts, resumes or is compacted. Everything else in both files is kept. How a coordinator uses Beads (issues, the decision log, memory) is in the built-in prompt's Beads section; it reads through the `bd` CLI and `BEADS_DIR`. |
+| Harness wiring | `coordinator_http::install`, `codex_overrides` | How each coordinator harness reaches its tools and turn end, below. |
+| Claude Code | `coordinator_http::install_claude` | Native only: writes the MCP server into the workspace's `.mcp.json` (approved in `.claude/settings.local.json`) a `Stop` hook that POSTs the turn end and prints the answer as the hook's decision, and a `SessionStart` hook that runs `bd prime --memories-only` so the Project's Beads memories (standing rules among them) are injected when the session starts, resumes or is compacted. Everything else in both files is kept. How a coordinator uses Beads (issues, the decision log, memory) is in the built-in prompt's Beads section; it reads through the `bd` CLI and `BEADS_DIR`. |
 
 Each Project's token is minted once into `<home>/coordinators/<project>.token` (mode 0600); a wrong token is `404`.
+### Coordinator harnesses
+
+The coordinator runs on Claude Code, Codex or Pi (and Pi's signed build), the Project's agent in Settings. Each gets the same tools and turn end, wired its own way (`coordinator_http::Wiring`), and the same layered prompt from `.quark/coordinator.md` beside the harness's own system prompt:
+
+| Harness | Prompt | Tools | Turn end | Resume |
+| :--- | :--- | :--- | :--- | :--- |
+| Claude Code | `--append-system-prompt` | `.mcp.json`, approved in `.claude/settings.local.json` | `Stop` hook (`hooks/Stop`), which can send a reply back | `--continue` |
+| Codex | `-c developer_instructions=…`, read from `.quark/coordinator.codex` | `-c mcp_servers.quark-coordinator.url=…` (streamable HTTP) | `-c notify=…`: a program POSTing Codex's `agent-turn-complete` JSON to `hooks/turn_end` | `codex resume --last` |
+| Pi | `--append-system-prompt` | `-e .quark/pi/quark-coordinator.ts`: Pi has no MCP client, so this extension lists the MCP tools at start, registers each as a Pi tool and forwards its calls | the same extension POSTs `hooks/turn_end` on `agent_end` | `--continue` |
+
+Codex is wired on its command line only, so nothing is written to `~/.codex` or the workspace, and its hooks are not used: Codex asks before running new hooks, which would park the coordinator. The command line also marks the workspace trusted (`-c projects={…}`), since Codex asks about a new folder even with approvals bypassed. Both resumes continue the newest conversation in the workspace.
+
+Gaps against Claude Code: the "asked in text" nudge needs a turn end that can send a reply back, which only Claude Code's `Stop` hook can, so Codex and Pi coordinators are held to `ask_user` by the prompt and by `tell_user` refusing questions. Beads memories reach Claude Code at session start through `bd prime`; Codex and Pi get them only through the prompt's memory layer.
+
 The turn-end hook takes the turn's `usage` from its body when it sends one, else reads it from the coordinator's newest session log; an `Idempotency-Key` header makes a retried hook count once.
 
 The coordinator's decisions have the engine id `quarkd/coordinator/<key>`, so no engine refresh closes them. Asking again under the same key while one is open updates it in place.
@@ -147,4 +162,3 @@ Answering one through `POST /v1/decisions/{id}:answer` (from the app, the phone,
 
 ## Not yet
 
-- Hooks and MCP config for Codex and Pi coordinators; only Claude Code is configured.

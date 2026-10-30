@@ -37,4 +37,4 @@ Each step is written to `coordinator_switches` before its effect happens, so a c
 
 ## Harnesses
 
-Today the native coordinator runs on Claude Code only, because its MCP route and turn-end hook are wired for Claude Code alone. A switch to another harness is refused up front with that reason, rather than failing at the start step. Once Codex and Pi coordinators are wired, a switch to them is a `handoff`, with no other change to this protocol.
+The native coordinator runs on Claude Code, Codex and Pi ([coordinator.md](coordinator.md#coordinator-harnesses)). A switch to any other harness is refused up front, rather than failing at the start step. A switch between two of them is a `handoff`.

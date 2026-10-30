@@ -15,7 +15,7 @@ macOS is the main target. Linux runs the daemon and the app's web build; the des
 | tmux 3.2 or newer | coordinator terminals | `--tmux` or `QUARKD_TMUX` picks the binary |
 | treehouse 3.1.2 | the worktree pool workers run in | `selfhost/treehouse.sh` installs it |
 | GitHub CLI (`gh`) | cloning, the PR center, merges | run `gh auth login` first |
-| Claude Code | the coordinator, and workers by default | signed in; other harnesses are optional for workers |
+| Claude Code, Codex or Pi | the coordinator, and workers | signed in; Claude Code is the default; other harnesses are optional for workers |
 
 Optional:
 
