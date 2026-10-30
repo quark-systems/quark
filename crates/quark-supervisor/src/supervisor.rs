@@ -966,7 +966,7 @@ impl Supervisor {
             .manifests
             .resolve(&harness)
             .ok_or_else(|| CoreError::NotFound(format!("harness {harness}")))?;
-        launch::check_agent(&manifest, model.as_deref(), effort.as_deref())?;
+        launch::check_agent(manifest, model.as_deref(), effort.as_deref())?;
         if let Some(g) = w.current.filter(|g| g.exited.is_none()) {
             self.stop(project, task, &g).await?;
         }
