@@ -2,7 +2,8 @@
 //!
 //! A merge goes through every rule in `docs/engine/verify.md`, in order:
 //!
-//! 1. The pull request is rebased onto its base branch's current tip and
+//! 1. The pull request is rebased onto its base branch's current tip, read
+//!    from the forge and fetched from the clone's remote for that repo, and
 //!    the gates run on the rebased head ([`NativePipeline`]). A head that
 //!    did not contain the tip is pushed rebased and the merge is refused
 //!    until the forge's checks have run on it: a stale head never merges.
@@ -32,7 +33,7 @@ use crate::forge::{parse_pull_url, Forge, MergeMethod, PullState};
 use crate::guard::{NativeGuard, Target};
 use crate::health::{classify, HealthState};
 use crate::kinds;
-use crate::pipeline::{NativePipeline, PipelineTarget, RepoGates};
+use crate::pipeline::{forge_remote, NativePipeline, PipelineTarget, RepoGates};
 
 /// One merge to attempt.
 #[derive(Debug, Clone)]
@@ -42,7 +43,7 @@ pub struct LandRequest {
     /// The GitHub pull request URL.
     pub pull_request: String,
     pub method: MergeMethod,
-    /// A clone of the repo with an `origin` remote; never changed.
+    /// A clone of the repo; never changed.
     pub checkout: PathBuf,
     /// The repo name the gates config is keyed by.
     pub repo_name: String,
@@ -205,13 +206,16 @@ impl GuardedMerge {
         };
 
         // Rules 1 and 2: rebase onto the current tip and verify that head.
+        let tip = self.forge.branch_tip(&repo, &pull.base).await?;
         let pipeline = NativePipeline::new(&req.scratch);
         pipeline.set_target(
             req.project.clone(),
             PipelineTarget {
                 checkout: req.checkout.clone(),
+                remote: forge_remote(&req.checkout, &repo).await,
                 repo_name: req.repo_name.clone(),
                 base: pull.base.clone(),
+                tip: Some(tip),
                 gates: req.gates.clone(),
                 push_rebased: true,
             },
@@ -679,6 +683,55 @@ mod tests {
         main_moves_on_without_ci(&r);
         let l = r.land("true").await;
         assert!(refusal(&l).contains("rebased and pushed"), "{l:?}");
+        assert!(r.forge.merges().is_empty());
+    }
+
+    /// Main moves on past `b` on the forge's copy of the repo, which the
+    /// clone's `origin` never hears of. Returns that copy.
+    fn main_moves_on_only_on_the_forge(r: &Repo) -> PathBuf {
+        let root = r.dir.path();
+        git(root, &["clone", "-q", "--bare", "origin.git", "forge.git"]);
+        git(root, &["clone", "-q", "forge.git", "elsewhere"]);
+        commit(&root.join("elsewhere"), "other");
+        git(&root.join("elsewhere"), &["push", "-q", "origin", "main"]);
+        let forge_git = root.join("forge.git");
+        let main = git(&forge_git, &["rev-parse", "main"]);
+        r.forge.set_tip("acme/app", "main", &main);
+        r.forge.set_checks(&main, vec![ci("success")], vec![]);
+        r.forge.set_behind(&main, &r.origin_sha("b"), 1);
+        forge_git
+    }
+
+    #[tokio::test]
+    async fn a_clone_of_a_local_checkout_rebases_on_the_forges_remote() {
+        let r = Repo::new();
+        let old = r.origin_sha("b");
+        let forge_git = main_moves_on_only_on_the_forge(&r);
+        let url = "https://github.com/acme/app.git";
+        git(&r.checkout, &["remote", "add", "github", url]);
+        let rewrite = format!("url.{}.insteadOf", forge_git.display());
+        git(&r.checkout, &["config", &rewrite, url]);
+
+        let l = r.land("test -f other").await;
+        assert!(refusal(&l).contains("rebased and pushed"), "{l:?}");
+        let rebased = git(&forge_git, &["rev-parse", "b"]);
+        assert_ne!(rebased, old);
+        let main = git(&forge_git, &["rev-parse", "main"]);
+        assert_eq!(git(&forge_git, &["merge-base", &main, &rebased]), main);
+        assert_eq!(r.origin_sha("b"), old, "the local origin is left alone");
+    }
+
+    #[tokio::test]
+    async fn a_clone_without_the_forges_tip_is_refused_with_that_reason() {
+        let r = Repo::new();
+        let old = r.origin_sha("b");
+        main_moves_on_only_on_the_forge(&r);
+        let l = r.land("true").await;
+        assert!(
+            refusal(&l).contains("does not have the forge's tip"),
+            "{l:?}"
+        );
+        assert_eq!(r.origin_sha("b"), old);
         assert!(r.forge.merges().is_empty());
     }
 
