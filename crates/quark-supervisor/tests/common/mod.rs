@@ -63,12 +63,13 @@ impl Env {
         git(&repo, &["commit", "-qm", "init"]);
         let agent = dir.path().join("agent.sh");
         std::fs::write(&agent, AGENT).unwrap();
-        let manifest = quark_harness::parse(&format!(
-            r#"
+        let manifest = |id: &str, efforts: &str| {
+            quark_harness::parse(&format!(
+                r#"
 schema = 1
-id = "fake"
+id = "{id}"
 name = "Fake agent"
-efforts = ["low", "high"]
+efforts = {efforts}
 [detect]
 bins = ["sh"]
 [launch]
@@ -83,12 +84,17 @@ idle_patterns = ["fake agent ready"]
 interrupt = ["C-c"]
 exit = "/exit"
 "#,
-            agent = agent.display()
-        ))
-        .unwrap();
+                agent = agent.display()
+            ))
+            .unwrap()
+        };
         let worktrees = Arc::new(GitWorktrees::new(dir.path().join("pool")));
         Self {
-            manifests: Arc::new(ManifestRegistry::with([manifest])),
+            manifests: Arc::new(ManifestRegistry::with([
+                manifest("fake", r#"["low", "high"]"#),
+                // Like Bob: no model or effort to choose.
+                manifest("plain", "[]"),
+            ])),
             dir,
             repo,
             agent,

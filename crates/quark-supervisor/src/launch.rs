@@ -89,10 +89,9 @@ pub struct Inputs<'a> {
     pub resume: bool,
 }
 
-/// The launch plan for one generation.
-pub fn plan(i: &Inputs<'_>) -> Result<Plan> {
-    let m = i.manifest;
-    if let Some(model) = i.model {
+/// Refuse a model or effort that `m` cannot run.
+pub fn check_agent(m: &HarnessManifest, model: Option<&str>, effort: Option<&str>) -> Result<()> {
+    if let Some(model) = model {
         if m.models.selection == "listed" && !m.models.known.iter().any(|k| k == model) {
             return Err(CoreError::Invalid(format!(
                 "harness {} does not list model {model}",
@@ -100,7 +99,7 @@ pub fn plan(i: &Inputs<'_>) -> Result<Plan> {
             )));
         }
     }
-    if let Some(effort) = i.effort {
+    if let Some(effort) = effort {
         if !m.efforts.iter().any(|e| e == effort) {
             return Err(CoreError::Invalid(format!(
                 "harness {} has no effort {effort}",
@@ -108,6 +107,13 @@ pub fn plan(i: &Inputs<'_>) -> Result<Plan> {
             )));
         }
     }
+    Ok(())
+}
+
+/// The launch plan for one generation.
+pub fn plan(i: &Inputs<'_>) -> Result<Plan> {
+    let m = i.manifest;
+    check_agent(m, i.model, i.effort)?;
     let status = i.dir.join(STATUS_FILE);
     let brief = compose_brief(i, &status);
     let brief_path = i.dir.join(BRIEF_FILE);

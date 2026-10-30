@@ -432,6 +432,54 @@ async fn relaunch_switches_effort_and_tells_the_new_worker() {
 }
 
 #[tokio::test]
+async fn relaunch_on_another_harness_drops_the_old_model_and_effort() {
+    let env = Env::new();
+    let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+    let (p, t) = ids("t1");
+    let mut req = env.request("t1");
+    req.assignment.model = Some("sonnet".into());
+    sup.spawn(req).await.unwrap();
+
+    let new = sup
+        .relaunch(
+            &p,
+            &t,
+            Relaunch {
+                harness: Some("plain".into()),
+                note: "Take over.".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(new.harness, "plain");
+    assert_eq!(new.model, None);
+    assert_eq!(new.effort, None);
+}
+
+#[tokio::test]
+async fn a_refused_relaunch_leaves_the_worker_running() {
+    let env = Env::new();
+    let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+    let (p, t) = ids("t1");
+    let old = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+
+    let bad = Relaunch {
+        harness: Some("plain".into()),
+        effort: Some("low".into()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        sup.relaunch(&p, &t, bad).await,
+        Err(CoreError::Invalid(_))
+    ));
+    let current = sup.task(&p, &t).unwrap().1.current.unwrap();
+    assert_eq!(current.id, old.id);
+    assert!(current.exited.is_none());
+    assert!(!received(&env, "t1", &old.id).iter().any(|l| l == "/exit"));
+}
+
+#[tokio::test]
 async fn interrupted_spawn_is_finished_and_orphans_are_killed() {
     let env = Env::new();
     let pty = Arc::new(PtySupervisor::new());
