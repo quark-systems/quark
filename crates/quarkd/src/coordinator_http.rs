@@ -831,6 +831,13 @@ mod tests {
             self.0.lock().unwrap().push(text.to_string());
             Ok(crate::chat::Delivery::Confirmed)
         }
+
+        async fn interrupt(
+            &self,
+            _ws: &crate::engine::WorkspaceRef,
+        ) -> Result<(), crate::chat::ChatError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
