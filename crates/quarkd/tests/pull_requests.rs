@@ -577,6 +577,55 @@ async fn merge_goes_through_the_engine_and_reads_back() {
 }
 
 #[tokio::test]
+async fn workers_hear_of_conflicts_and_failed_checks_once_per_head() {
+    let h = harness().await;
+    let told = |h: &Harness| -> Vec<String> {
+        h.engine
+            .writes()
+            .into_iter()
+            .filter_map(|w| match w {
+                StubWrite::Message { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let mut conflict = forge_pr(PullRequestState::Open, CheckStatus::Success);
+    conflict.mergeable = Mergeability::Conflicting;
+    h.forge.set(URL, conflict.clone());
+    h.center.refresh().await;
+    h.center.refresh().await;
+    let texts = told(&h);
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(texts[0].contains("merge conflicts with main"), "{texts:?}");
+
+    // A send that fails is tried again; a new head is a new problem.
+    let mut red = forge_pr(PullRequestState::Open, CheckStatus::Failure);
+    red.head_sha = Some("def456".into());
+    h.forge.set(URL, red.clone());
+    h.engine.fail_writes(Some("worker is busy"));
+    h.center.refresh().await;
+    h.engine.fail_writes(None);
+    h.center.refresh().await;
+    h.center.refresh().await;
+    let texts = told(&h);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts[1].starts_with("Checks failed"), "{texts:?}");
+
+    // A draft is still being worked on.
+    red.head_sha = Some("0ff".into());
+    h.forge.set(
+        URL,
+        ForgePr {
+            state: PullRequestState::Draft,
+            ..red
+        },
+    );
+    h.center.refresh().await;
+    assert_eq!(told(&h).len(), 2);
+}
+
+#[tokio::test]
 async fn standing_approval_merges_green_pull_requests_once_per_head() {
     let h = harness().await;
     h.forge
@@ -621,12 +670,24 @@ async fn standing_approval_merges_green_pull_requests_once_per_head() {
         StubWrite::MergePullRequest { method: None, .. }
     ));
 
-    // A red pull request is never merged.
+    // A stale head is tried again: main moved during the merge.
+    let mut stale = forge_pr(PullRequestState::Open, CheckStatus::Success);
+    stale.head_sha = Some("5a1e".into());
+    h.forge.set(URL, stale);
+    h.engine.fail_writes(Some("merge refused: stale head 5a1e"));
+    h.center.refresh().await;
+    h.engine.fail_writes(None);
+    h.center.refresh().await;
+    assert_eq!(h.engine.writes().len(), 3);
+
+    // A red pull request is never merged, and its worker hears of it.
     let mut red = forge_pr(PullRequestState::Open, CheckStatus::Failure);
     red.head_sha = Some("0ff".into());
     h.forge.set(URL, red);
     h.center.refresh().await;
-    assert_eq!(h.engine.writes().len(), 2);
+    let writes = h.engine.writes();
+    assert_eq!(writes.len(), 4);
+    assert!(matches!(&writes[3], StubWrite::Message { .. }));
 
     // Turning it off reaches the engine too.
     let (status, _) = call(
@@ -638,7 +699,7 @@ async fn standing_approval_merges_green_pull_requests_once_per_head() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        h.engine.writes()[2],
+        h.engine.writes()[4],
         StubWrite::StandingApproval {
             repos: vec!["quark".into()],
             on: false,

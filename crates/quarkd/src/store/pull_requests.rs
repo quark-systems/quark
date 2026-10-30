@@ -408,6 +408,22 @@ impl Store {
         ids.iter().map(|id| self.pull_request_owner(id)).collect()
     }
 
+    /// Open pull requests a task owns that cannot merge until its worker
+    /// acts: conflicting with their base, or with a failed check.
+    pub fn needing_worker(&self) -> Result<Vec<PrOwner>> {
+        let ids: Vec<String> = self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id FROM pull_requests
+                 WHERE state = 'open' AND task_id IS NOT NULL AND sync_error IS NULL
+                   AND (mergeable = 'conflicting' OR checks_state = 'failing')
+                 ORDER BY created_at, id",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })?;
+        ids.iter().map(|id| self.pull_request_owner(id)).collect()
+    }
+
     /// Open pull requests of Projects with standing approval that are ready
     /// to merge: not a draft, mergeable, every check passed and no review
     /// holding them.

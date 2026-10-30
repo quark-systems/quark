@@ -15,13 +15,17 @@
 //! Standing approval: for each Project that has it on, every open pull
 //! request that is mergeable, green and not held by a review is merged
 //! through the engine's guarded merge. Each head commit is tried once, so a
-//! refusal is not repeated until the pull request moves.
+//! refusal is not repeated until the pull request moves. A stale head is the
+//! exception: main moved during the merge, so the next pass rebases again.
+//!
+//! An open pull request that conflicts with its base or has a failed check
+//! cannot merge until someone acts, so its worker is told, once per head.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use quark_systems::PullRequest;
+use quark_systems::{ChecksState, Mergeability, PullRequest};
 
 use crate::engine::{EngineAdapter, WorkspaceRef};
 use crate::forge::Forge;
@@ -33,6 +37,8 @@ pub struct PrCenter {
     forge: Arc<dyn Forge>,
     /// `(pull request id, head sha)` pairs standing approval already tried.
     attempted: Mutex<HashSet<(String, String)>>,
+    /// `(pull request id, head sha, problem)` its worker was told of.
+    flagged: Mutex<HashSet<(String, String, &'static str)>>,
     /// Merged pull requests the engine has been told of.
     told: Mutex<HashSet<String>>,
 }
@@ -44,6 +50,7 @@ impl PrCenter {
             engine,
             forge,
             attempted: Mutex::default(),
+            flagged: Mutex::default(),
             told: Mutex::default(),
         }
     }
@@ -73,6 +80,7 @@ impl PrCenter {
             }
         }
         self.merged_outside().await;
+        self.tell_workers().await;
         self.standing_approval().await;
     }
 
@@ -131,6 +139,47 @@ impl PrCenter {
         Ok(())
     }
 
+    /// Sends each pull request's worker what stands in its way. A failed
+    /// send is retried next pass.
+    async fn tell_workers(&self) {
+        let store = self.store.clone();
+        let stuck = match tokio::task::spawn_blocking(move || store.needing_worker()).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "listing stuck pull requests failed");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "stuck pull request listing panicked");
+                return;
+            }
+        };
+        for owner in stuck {
+            let pr = &owner.pull_request;
+            let Some((problem, message)) = worker_problem(pr) else {
+                continue;
+            };
+            let key = (
+                pr.id.clone(),
+                pr.head_sha.clone().unwrap_or_default(),
+                problem,
+            );
+            if self.flagged.lock().unwrap().contains(&key) {
+                continue;
+            }
+            let Ok((ws, task)) = owner_target(&owner) else {
+                continue;
+            };
+            match self.engine.send_message(&ws, &task, &message).await {
+                Ok(()) => {
+                    tracing::info!(pr = %pr.url, problem, "told the worker");
+                    self.flagged.lock().unwrap().insert(key);
+                }
+                Err(e) => tracing::warn!(pr = %pr.url, error = %e, "worker not told"),
+            }
+        }
+    }
+
     async fn standing_approval(&self) {
         let store = self.store.clone();
         let ready = match tokio::task::spawn_blocking(move || store.standing_approval_ready()).await
@@ -148,7 +197,7 @@ impl PrCenter {
         for owner in ready {
             let pr = &owner.pull_request;
             let key = (pr.id.clone(), pr.head_sha.clone().unwrap_or_default());
-            if !self.attempted.lock().unwrap().insert(key) {
+            if !self.attempted.lock().unwrap().insert(key.clone()) {
                 continue;
             }
             tracing::info!(pr = %pr.url, "merging under standing approval");
@@ -163,7 +212,10 @@ impl PrCenter {
             {
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(pr = %pr.url, error = %e, "standing approval merge refused")
+                    tracing::warn!(pr = %pr.url, error = %e, "standing approval merge refused");
+                    if e.to_string().contains("stale head") {
+                        self.attempted.lock().unwrap().remove(&key);
+                    }
                 }
             }
         }
@@ -191,6 +243,32 @@ pub enum PrError {
     /// The pull request has no task, or the task's Project no workspace.
     #[error("{0}")]
     NoOwner(&'static str),
+}
+
+/// What stands in `pr`'s way, and the steering message that says so. A
+/// conflict comes first: checks do not run on a conflicted head.
+fn worker_problem(pr: &PullRequest) -> Option<(&'static str, String)> {
+    let url = &pr.url;
+    let base = pr.base_ref.as_deref().unwrap_or("its base branch");
+    if pr.mergeable == Mergeability::Conflicting {
+        return Some((
+            "conflict",
+            format!(
+                "Your pull request {url} has merge conflicts with {base}. Fetch the latest \
+                 {base} from the remote that hosts the pull request, rebase onto it, resolve \
+                 the conflicts, and force-push the same branch with a lease."
+            ),
+        ));
+    }
+    (pr.checks_state == ChecksState::Failing).then(|| {
+        (
+            "checks",
+            format!(
+                "Checks failed on your pull request {url}. Read the failures, fix them on the \
+                 same branch and push."
+            ),
+        )
+    })
 }
 
 /// Reads one pull request from its forge and projects it. A failed read is
