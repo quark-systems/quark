@@ -13,7 +13,7 @@
 //!   prompt, the Project's persona, the Project and code repo instructions,
 //!   memory) into `.quark/coordinator.md`, points the harness at the
 //!   coordinator's MCP route and turn-end hook
-//!   ([`crate::coordinator_http::install_claude`]), and starts the harness in
+//!   ([`crate::coordinator_http::install`]), and starts the harness in
 //!   a window of quarkd's tmux server, named `coordinator-<Project id>` and
 //!   run in the workspace. The prompt reaches the agent as its system prompt.
 //!   With `resume`, the agent continues its latest conversation in the
@@ -26,8 +26,9 @@
 //! Every step is safe to run again: a clone already there is checked, not
 //! repeated, and a coordinator whose window is up is not started twice.
 //!
-//! Only Claude Code coordinators are started so far, since its MCP server
-//! and turn-end hook are the ones wired; another harness is refused.
+//! Claude Code, Codex and Pi coordinators are started (see
+//! [`crate::coordinator_http::Wiring`] for how each is wired); another
+//! harness is refused.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
@@ -41,7 +42,9 @@ use quark_transcript::{locate, SessionFormat, SessionRoots};
 use serde::{Deserialize, Serialize};
 
 use super::{EngineError, SourceRepo, WorkspacePlan, WorkspaceRef};
-use crate::coordinator_http::{install_claude, CoordinatorUrls, Tokens};
+use crate::coordinator_http::{
+    codex_overrides, install, CoordinatorUrls, Tokens, Wiring, COORDINATOR_HARNESSES, PI_EXTENSION,
+};
 use crate::provision::Layout;
 use crate::sessions::{SessionError, Sessions, WindowSpec};
 
@@ -58,14 +61,17 @@ pub const PROMPT_FILE: &str = "coordinator.md";
 const RECORDS_DIR: &str = "coordinators";
 /// A coordinator's window is this prefix and its Project id.
 pub const WINDOW_PREFIX: &str = "coordinator-";
-/// The only harness the native coordinator runs on so far.
+/// The coordinator's prompt as Codex takes it, a `-c` override, inside
+/// [`STATE_DIR`].
+const CODEX_PROMPT_FILE: &str = "coordinator.codex";
+/// The default coordinator harness.
 pub const COORDINATOR_HARNESS: &str = "claude-code";
 /// Most bytes of prompt passed as the system prompt: one argument must stay
 /// under the kernel's 128 KiB limit.
 const MAX_SYSTEM_PROMPT: usize = 100 * 1024;
-/// Account variables carried into the coordinator's window: Claude Code's,
-/// the one harness it runs on.
-pub const ACCOUNT_ENVS: &[&str] = &["CLAUDE_CONFIG_DIR"];
+/// Account variables carried into the coordinator's window: those of the
+/// harnesses it runs on.
+pub const ACCOUNT_ENVS: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR"];
 /// The variable naming the Project to the coordinator.
 const PROJECT_ENV: &str = "QUARK_PROJECT";
 
@@ -184,7 +190,7 @@ impl ProjectSetup {
         resume: bool,
     ) -> Result<(), EngineError> {
         check_id(&ws.project_id)?;
-        let manifest = self.manifest(agent)?;
+        let (manifest, wiring) = self.manifest(agent)?;
         if !ws.root.is_dir() {
             return Err(EngineError::WorkspaceNotFound(ws.root.clone()));
         }
@@ -201,7 +207,8 @@ impl ProjectSetup {
             return write_record(command, &record(target));
         }
         let roots = roots_for(&self.roots, account_env);
-        if resume && locate(SessionFormat::Claude, &ws.root, &roots).is_none() {
+        let format = SessionFormat::for_harness(&manifest.id).unwrap_or(SessionFormat::Claude);
+        if resume && locate(format, &ws.root, &roots).is_none() {
             return Err(EngineError::Invalid(format!(
                 "the coordinator of {} has no earlier conversation to resume",
                 ws.project_id
@@ -218,15 +225,21 @@ impl ProjectSetup {
         ) {
             tracing::warn!(project = %ws.project_id, error = %e, "could not pre-trust the coordinator's workspace");
         }
-        let prompt_file = self.write_prompt(ws).await?;
+        let prompt_file = self.write_prompt(ws, wiring).await?;
         let token = self.tokens.get_or_create(&ws.project_id)?;
-        install_claude(
-            &ws.root,
-            &CoordinatorUrls::new(&self.base_url, &ws.project_id, &token),
-        )?;
+        let urls = CoordinatorUrls::new(&self.base_url, &ws.project_id, &token);
+        install(&manifest.id, &ws.root, &urls)?;
         let spec = WindowSpec {
             name: window,
-            argv: launch_argv(manifest, agent, &ws.root, &prompt_file, resume)?,
+            argv: launch_argv(
+                manifest,
+                wiring,
+                agent,
+                &ws.root,
+                &prompt_file,
+                &urls,
+                resume,
+            )?,
             cwd: Some(ws.root.clone()),
             env,
         };
@@ -259,18 +272,19 @@ impl ProjectSetup {
         }
     }
 
-    fn manifest(&self, agent: &AgentConfig) -> Result<&HarnessManifest, EngineError> {
+    fn manifest(&self, agent: &AgentConfig) -> Result<(&HarnessManifest, Wiring), EngineError> {
         let m = self.manifests.resolve(&agent.harness).ok_or_else(|| {
             EngineError::Invalid(format!("no harness {} is known", agent.harness))
         })?;
-        if m.id != COORDINATOR_HARNESS {
-            return Err(EngineError::Invalid(format!(
-                "the native coordinator runs on {COORDINATOR_HARNESS} only so far \
-                 (its tools and turn-end hook are wired for it alone), not {}",
+        match Wiring::for_harness(&m.id) {
+            Some(w) => Ok((m, w)),
+            None => Err(EngineError::Invalid(format!(
+                "the native coordinator runs on {} only so far \
+                 (its tools and turn-end hook are wired for them alone), not {}",
+                COORDINATOR_HARNESSES.join(", "),
                 m.id
-            )));
+            ))),
         }
-        Ok(m)
     }
 
     /// The target of `window` when the server has it.
@@ -287,7 +301,11 @@ impl ProjectSetup {
     }
 
     /// Render the coordinator's layered prompt into the workspace.
-    async fn write_prompt(&self, ws: &WorkspaceRef) -> Result<PathBuf, EngineError> {
+    async fn write_prompt(
+        &self,
+        ws: &WorkspaceRef,
+        wiring: Wiring,
+    ) -> Result<PathBuf, EngineError> {
         let (layout, pid, root) = (self.layout.clone(), ws.project_id.clone(), ws.root.clone());
         tokio::task::spawn_blocking(move || {
             let (prompt, _) = crate::native_coordinator::build_prompt(&layout, &pid, &root)
@@ -300,7 +318,16 @@ impl ProjectSetup {
             }
             let path = root.join(STATE_DIR).join(PROMPT_FILE);
             write_atomic(&path, text.as_bytes())?;
-            Ok(path)
+            if wiring != Wiring::Codex {
+                return Ok(path);
+            }
+            // Codex's `developer_instructions` is added beside its own
+            // instructions, as Claude Code's appended system prompt is. A
+            // JSON string is a TOML basic string.
+            let codex = root.join(STATE_DIR).join(CODEX_PROMPT_FILE);
+            let arg = format!("developer_instructions={}", serde_json::Value::from(text));
+            write_atomic(&codex, arg.as_bytes())?;
+            Ok(codex)
         })
         .await
         .map_err(|e| EngineError::Command(e.to_string()))?
@@ -309,12 +336,16 @@ impl ProjectSetup {
 
 /// The harness's own command for `agent`, run through `sh` so the prompt
 /// is read from `prompt_file` as the system prompt: a tmux command is too
-/// small to carry it.
+/// small to carry it. Claude Code and Pi append it to their system prompt
+/// (`--append-system-prompt`); Codex reads a `-c developer_instructions`
+/// override from it. Codex and Pi also get their wiring to `urls` here.
 fn launch_argv(
     m: &HarnessManifest,
+    wiring: Wiring,
     agent: &AgentConfig,
     root: &Path,
     prompt_file: &Path,
+    urls: &CoordinatorUrls,
     resume: bool,
 ) -> Result<Vec<String>, EngineError> {
     if let Some(effort) = &agent.effort {
@@ -337,17 +368,62 @@ fn launch_argv(
         cwd: Some(root.to_string_lossy().into_owned()),
         ..Default::default()
     };
+    let flag = match wiring {
+        Wiring::Claude | Wiring::Pi => "--append-system-prompt",
+        Wiring::Codex => "-c",
+    };
     let mut argv = vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
-        r#"p=$1; shift; exec "$@" --append-system-prompt "$(cat "$p")""#.to_string(),
+        format!(r#"p=$1; shift; exec "$@" {flag} "$(cat "$p")""#),
         "quark-coordinator".to_string(),
         prompt_file.to_string_lossy().into_owned(),
     ];
-    argv.extend(quark_harness::argv(m, &vars));
-    if resume {
-        argv.extend(m.launch.resume.iter().cloned());
+    let mut harness = quark_harness::argv(m, &vars);
+    match wiring {
+        Wiring::Claude => {
+            if resume {
+                harness.extend(m.launch.resume.iter().cloned());
+            }
+        }
+        // `codex resume --last` continues the newest conversation in the
+        // working directory, and takes the same options as `codex`.
+        Wiring::Codex => {
+            if resume {
+                harness.splice(1..1, ["resume".to_string(), "--last".to_string()]);
+            }
+            harness.extend(codex_overrides(urls));
+            // Codex asks whether to trust a folder it has not seen, even
+            // with approvals bypassed; the coordinator's workspace is
+            // Quark's own. An override, so `~/.codex` is left alone.
+            let mut trusted = vec![root.to_path_buf()];
+            if let Ok(real) = root.canonicalize() {
+                if real != root {
+                    trusted.push(real);
+                }
+            }
+            let table: Vec<String> = trusted
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{} = {{ trust_level = \"trusted\" }}",
+                        serde_json::Value::from(p.to_string_lossy().into_owned())
+                    )
+                })
+                .collect();
+            harness.push("-c".into());
+            harness.push(format!("projects={{ {} }}", table.join(", ")));
+        }
+        // `--continue` continues the newest session for the directory.
+        Wiring::Pi => {
+            harness.push("-e".into());
+            harness.push(root.join(PI_EXTENSION).to_string_lossy().into_owned());
+            if resume {
+                harness.push("--continue".into());
+            }
+        }
     }
+    argv.extend(harness);
     Ok(argv)
 }
 
@@ -362,12 +438,18 @@ fn launch_env(
     env.into_iter().collect()
 }
 
-/// `roots`, with the account's Claude config directory first when the
-/// account names one.
+/// `roots`, with the account's config directory first when the account
+/// names one.
 fn roots_for(roots: &SessionRoots, account_env: &[(String, String)]) -> SessionRoots {
     let mut roots = roots.clone();
-    if let Some((_, dir)) = account_env.iter().find(|(k, _)| k == "CLAUDE_CONFIG_DIR") {
-        roots.claude.insert(0, PathBuf::from(dir));
+    for (key, dir) in account_env {
+        let list = match key.as_str() {
+            "CLAUDE_CONFIG_DIR" => &mut roots.claude,
+            "CODEX_HOME" => &mut roots.codex,
+            "PI_CODING_AGENT_DIR" => &mut roots.pi,
+            _ => continue,
+        };
+        list.insert(0, PathBuf::from(dir));
     }
     roots
 }
@@ -753,7 +835,7 @@ mod tests {
             root: dir.path().join("ws"),
         };
         std::fs::create_dir_all(&ws.root).unwrap();
-        for harness in ["codex", "nope"] {
+        for harness in ["kiro", "nope"] {
             let err = setup
                 .start_coordinator(&command, &ws, &agent(harness), &[], false)
                 .await
@@ -772,18 +854,25 @@ mod tests {
         assert!(setup.coordinator_terminals(&command).unwrap().is_empty());
     }
 
+    fn urls() -> CoordinatorUrls {
+        CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok")
+    }
+
     #[test]
     fn launches_through_sh_with_the_prompt_file() {
         let reg = ManifestRegistry::builtin();
         let m = reg.get(COORDINATOR_HARNESS).unwrap();
         let argv = launch_argv(
             m,
+            Wiring::Claude,
             &agent("claude-code"),
             Path::new("/w"),
             Path::new("/w/.quark/coordinator.md"),
+            &urls(),
             true,
         )
         .unwrap();
+        assert!(argv[2].ends_with(r#""$@" --append-system-prompt "$(cat "$p")""#));
         assert_eq!(&argv[..2], ["/bin/sh", "-c"]);
         assert_eq!(argv[4], "/w/.quark/coordinator.md");
         assert_eq!(
@@ -800,7 +889,16 @@ mod tests {
         );
         let mut bad = agent("claude-code");
         bad.effort = Some("ultra".into());
-        assert!(launch_argv(m, &bad, Path::new("/w"), Path::new("/p"), false).is_err());
+        assert!(launch_argv(
+            m,
+            Wiring::Claude,
+            &bad,
+            Path::new("/w"),
+            Path::new("/p"),
+            &urls(),
+            false
+        )
+        .is_err());
 
         let env = launch_env(m, &[("CLAUDE_CONFIG_DIR".into(), "/a".into())], "p1");
         assert!(env.contains(&("CLAUDE_CONFIG_DIR".into(), "/a".into())));
@@ -808,6 +906,100 @@ mod tests {
 
         let cut = fit("é".repeat(100), 60);
         assert!(cut.len() <= 60 && cut.ends_with("fit.)\n"));
+    }
+
+    #[test]
+    fn launches_codex_with_its_wiring_on_the_command_line() {
+        let reg = ManifestRegistry::builtin();
+        let m = reg.get("codex").unwrap();
+        let mut a = agent("codex");
+        a.model = Some("gpt-5.5".into());
+        let p = Path::new("/w/.quark/coordinator.codex");
+        let argv = launch_argv(m, Wiring::Codex, &a, Path::new("/w"), p, &urls(), false).unwrap();
+        assert!(argv[2].ends_with(r#""$@" -c "$(cat "$p")""#));
+        assert_eq!(argv[4], "/w/.quark/coordinator.codex");
+        assert_eq!(
+            &argv[5..9],
+            [
+                "codex",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--model",
+                "gpt-5.5"
+            ]
+        );
+        let rest = argv[9..].join(" ");
+        assert!(rest.contains(r#"model_reasoning_effort="high""#), "{rest}");
+        assert!(
+            rest.contains(r#"mcp_servers.quark-coordinator.url="http://127.0.0.1:7777/v1/coordinator/p1/tok/mcp""#),
+            "{rest}"
+        );
+        let notify = argv.iter().find(|a| a.starts_with("notify=")).unwrap();
+        let program: Vec<String> = serde_json::from_str(&notify["notify=".len()..]).unwrap();
+        assert_eq!(&program[..2], ["/bin/sh", "-c"]);
+        assert!(program[2].contains("/v1/coordinator/p1/tok/hooks/turn_end"));
+        assert!(
+            rest.contains(r#"projects={ "/w" = { trust_level = "trusted" } }"#),
+            "{rest}"
+        );
+        // The prompt never holds a placeholder Codex would read as one.
+        assert!(!argv.iter().any(|a| a.contains("{prompt}")));
+
+        let resumed = launch_argv(m, Wiring::Codex, &a, Path::new("/w"), p, &urls(), true).unwrap();
+        assert_eq!(&resumed[5..8], ["codex", "resume", "--last"]);
+    }
+
+    #[test]
+    fn launches_pi_with_its_extension() {
+        let reg = ManifestRegistry::builtin();
+        let m = reg.get("pi").unwrap();
+        let mut a = agent("pi");
+        a.model = Some("anthropic/claude-opus-5-5".into());
+        let p = Path::new("/w/.quark/coordinator.md");
+        let argv = launch_argv(m, Wiring::Pi, &a, Path::new("/w"), p, &urls(), false).unwrap();
+        assert!(argv[2].ends_with(r#""$@" --append-system-prompt "$(cat "$p")""#));
+        assert_eq!(
+            &argv[5..],
+            [
+                "pi",
+                "--model",
+                "anthropic/claude-opus-5-5",
+                "--thinking",
+                "high",
+                "-e",
+                "/w/.quark/pi/quark-coordinator.ts"
+            ]
+        );
+        let resumed = launch_argv(m, Wiring::Pi, &a, Path::new("/w"), p, &urls(), true).unwrap();
+        assert_eq!(resumed.last().unwrap(), "--continue");
+    }
+
+    #[test]
+    fn writes_the_codex_prompt_as_a_toml_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(ws.join("project")).unwrap();
+        std::fs::write(
+            ws.join("project/instructions.md"),
+            "Say \"hi\"\\ then\nstop.\n",
+        )
+        .unwrap();
+        let setup = setup(dir.path(), Sessions::disabled("no tmux in this test"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let wref = WorkspaceRef {
+            project_id: "p1".into(),
+            root: ws.clone(),
+        };
+        let path = rt
+            .block_on(setup.write_prompt(&wref, Wiring::Codex))
+            .unwrap();
+        assert_eq!(path, ws.join(".quark/coordinator.codex"));
+        let arg = std::fs::read_to_string(&path).unwrap();
+        let value: toml::Value = toml::from_str(&arg).unwrap();
+        let text = value["developer_instructions"].as_str().unwrap();
+        let md = std::fs::read_to_string(ws.join(".quark/coordinator.md")).unwrap();
+        assert_eq!(text, md);
+        assert!(text.contains("Say \"hi\"\\ then\nstop."));
     }
 
     /// A Claude Code stand-in that records its arguments, then waits.

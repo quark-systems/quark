@@ -7,7 +7,7 @@
 //!   instructions and memory, code repo instructions, skills) and records it
 //!   when it changes;
 //! - points a Claude Code coordinator at its tools and turn-end hook
-//!   ([`crate::coordinator_http::install_claude`]), wakes it through the
+//!   ([`crate::coordinator_http::install`]), wakes it through the
 //!   [`Brain`] and runs its calls through the [`Hands`]
 //!   ([`crate::coordinator_hands`]);
 //! - closes the window of a coordinator that was launched with an older
@@ -27,7 +27,7 @@ use quark_core::{EventLog, ProjectId};
 use quark_persona::FilePersonas;
 use quark_transcript::{locate, SessionFormat, SessionRoots};
 
-use crate::coordinator_http::{install_claude, CoordinatorUrls, Tokens};
+use crate::coordinator_http::{install, CoordinatorUrls, Tokens};
 use crate::engine::native_project::{prompt_text, PROMPT_FILE, STATE_DIR, WINDOW_PREFIX};
 use crate::provision::Layout;
 use crate::sessions::Sessions;
@@ -194,19 +194,20 @@ impl NativeCoordinator {
         }
     }
 
-    /// Point the Project's coordinator at its tools and turn-end hook. Only
-    /// Claude Code coordinators are configured so far.
+    /// Point the Project's coordinator at its tools and turn-end hook.
     fn install(
         &self,
         project: &str,
         workspace: &Path,
         harness: Option<&str>,
     ) -> std::io::Result<bool> {
-        if harness.is_some_and(|h| !h.starts_with("claude")) {
+        let harness = harness.unwrap_or(crate::engine::native_project::COORDINATOR_HARNESS);
+        if crate::coordinator_http::Wiring::for_harness(harness).is_none() {
             return Ok(false);
         }
         let token = self.tokens.get_or_create(project)?;
-        install_claude(
+        install(
+            harness,
             workspace,
             &CoordinatorUrls::new(&self.base_url, project, &token),
         )

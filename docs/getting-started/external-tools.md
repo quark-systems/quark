@@ -29,7 +29,7 @@ IBM Bob and Kiro CLI quota is read by quarkd itself (`crates/quark-dispatch/src/
 
 ## Agent harnesses
 
-The coordinator and workers are CLI agents. Each has a manifest in `crates/quark-harness/manifests/`, which names the binary quarkd detects on `PATH` and the install hint the app shows. Only Claude Code is required (it is the coordinator, and the default worker).
+The coordinator and workers are CLI agents. Each has a manifest in `crates/quark-harness/manifests/`, which names the binary quarkd detects on `PATH` and the install hint the app shows. You need at least one coordinator harness: Claude Code (the default, and the default worker), Codex or Pi.
 
 | Harness | Binary | Install |
 | :--- | :--- | :--- |

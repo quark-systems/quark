@@ -334,10 +334,9 @@ async fn the_coordinators_agent_is_changed_through_a_switch() {
             None,
         )
         .unwrap();
-    // Another harness cannot run the native coordinator yet.
-    let (status, e) = call(&app, "PUT", &agent, Some(json!({"harness": "codex"}))).await;
+    // A worker-only harness cannot run the coordinator.
+    let (status, e) = call(&app, "PUT", &agent, Some(json!({"harness": "kiro"}))).await;
     assert_eq!(status, 400, "{e}");
-    assert!(e.to_string().contains("claude-code only"), "{e}");
     // The agent it already runs.
     let (status, e) = call(
         &app,

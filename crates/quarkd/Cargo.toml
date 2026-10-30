@@ -22,6 +22,7 @@ quark-persona.workspace = true
 quark-coordinator.workspace = true
 quark-eventlog.workspace = true
 quark-transcript.workspace = true
+toml = "0.9"
 quark-triggers.workspace = true
 quark-verify.workspace = true
 anyhow.workspace = true
@@ -52,3 +53,4 @@ http-body-util = "0.1.5"
 tokio-tungstenite.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
 quark-transcript.workspace = true
+toml = "0.9"

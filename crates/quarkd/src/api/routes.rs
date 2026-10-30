@@ -1250,7 +1250,7 @@ pub async fn switch_coordinator_agent(
     Path(id): Path<String>,
     Json(mut to): Json<quark_systems::AgentConfig>,
 ) -> Result<(StatusCode, Json<quark_systems::CoordinatorSwitch>), ApiError> {
-    use crate::engine::native_project::COORDINATOR_HARNESS;
+    use crate::coordinator_http::{Wiring, COORDINATOR_HARNESSES};
     if !state.engine.switches_coordinators() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -1265,10 +1265,15 @@ pub async fn switch_coordinator_agent(
     check_coordinator_agent(&state, &to).await?;
     let harness = |name: &str| state.harnesses.resolve(name).map(|h| h.id().to_string());
     let to_harness = harness(&to.harness);
-    if to_harness.as_deref() != Some(COORDINATOR_HARNESS) {
+    if to_harness
+        .as_deref()
+        .and_then(Wiring::for_harness)
+        .is_none()
+    {
         return Err(ApiError::invalid(format!(
-            "the native coordinator runs on {COORDINATOR_HARNESS} only so far \
-             (its tools and turn-end hook are wired for it alone), not {}",
+            "the native coordinator runs on {} only so far \
+             (its tools and turn-end hook are wired for them alone), not {}",
+            COORDINATOR_HARNESSES.join(", "),
             to.harness
         )));
     }
