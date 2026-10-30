@@ -26,3 +26,6 @@ target
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# quarkd copied in by the release workflow (packaging/release-config.mjs)
+app/src-tauri/binaries/

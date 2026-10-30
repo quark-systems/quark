@@ -8910,10 +8910,17 @@
         "required": [
           "status",
           "version",
+          "api_version",
           "engine",
           "last_seq"
         ],
         "properties": {
+          "api_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The `/v1` contract version, [`API_CONTRACT`].",
+            "minimum": 0
+          },
           "engine": {
             "type": "string",
             "description": "Name of the engine adapter in use."

@@ -14,6 +14,17 @@ export class ApiError extends Error {
 }
 
 export const DEFAULT_DAEMON = "http://127.0.0.1:7380";
+/** The `/v1` contract this app is built for (quark_systems::API_CONTRACT in quarkd). */
+export const API_VERSION = 1;
+
+/** Why this app can't use a daemon that reports `apiVersion`, or null when it can. */
+export function apiMismatch(apiVersion: number | undefined, daemonVersion: string): string | null {
+  const theirs = apiVersion ?? 1;
+  if (theirs === API_VERSION) return null;
+  return theirs > API_VERSION
+    ? `The daemon (Quark ${daemonVersion}) is newer than this app. Update the app.`
+    : `The daemon (Quark ${daemonVersion}) is older than this app. Update or restart quarkd.`;
+}
 const STORAGE_KEY = "quark.daemon";
 
 function initialDaemon(): string {

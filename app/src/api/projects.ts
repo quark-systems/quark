@@ -28,7 +28,11 @@ export interface CreateProject {
   name: string; goal?: string | null; workspace_path?: string | null;
   repos?: RepoSource[]; agent_config?: AgentConfig; dispatch_preset?: DispatchPreset; delivery?: DeliveryPolicy;
 }
-export interface Health { status: string; version: string; engine: string; last_seq: number }
+export interface Health {
+  status: string; version: string; engine: string; last_seq: number;
+  /** The `/v1` contract version; daemons from before it existed speak 1. */
+  api_version?: number;
+}
 
 export const projectsApi = {
   /** Saves a file pasted or dropped into a prompt box where the Project's agents can read it. */
