@@ -113,10 +113,34 @@ pub struct SpawnRequest {
     pub assignment: Assignment,
 }
 
+/// The harness, model and effort of a worker's next generation. `over` wins;
+/// the rest comes from the current generation, then the assignment, but only
+/// from one on the same harness: another harness's model or effort means
+/// nothing on this one.
+fn next_agent(w: &Worker, over: Option<&Relaunch>) -> (String, Option<String>, Option<String>) {
+    let a = &w.assignment;
+    let harness = over
+        .and_then(|o| o.harness.clone())
+        .or_else(|| w.current.as_ref().map(|g| g.harness.clone()))
+        .unwrap_or_else(|| a.harness.clone());
+    let current = w.current.as_ref().filter(|g| g.harness == harness);
+    let assigned = Some(a).filter(|a| a.harness == harness);
+    let model = over
+        .and_then(|o| o.model.clone())
+        .or_else(|| current.and_then(|g| g.model.clone()))
+        .or_else(|| assigned.and_then(|a| a.model.clone()));
+    let effort = over
+        .and_then(|o| o.effort.clone())
+        .or_else(|| current.and_then(|g| g.effort.clone()))
+        .or_else(|| assigned.and_then(|a| a.effort.clone()));
+    (harness, model, effort)
+}
+
 /// A caller-requested replacement of a task's worker.
 #[derive(Debug, Clone, Default)]
 pub struct Relaunch {
-    /// Another harness, model or effort; `None` keeps the current one.
+    /// Another harness, model or effort; `None` keeps the current one. On
+    /// another harness, `None` leaves the model and effort to that harness.
     pub harness: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -416,18 +440,7 @@ impl Supervisor {
     ) -> Result<Generation> {
         let w = self.worker(project, task)?;
         let a = &w.assignment;
-        let harness = over
-            .and_then(|o| o.harness.clone())
-            .or_else(|| w.current.as_ref().map(|g| g.harness.clone()))
-            .unwrap_or_else(|| a.harness.clone());
-        let model = over
-            .and_then(|o| o.model.clone())
-            .or_else(|| w.current.as_ref().and_then(|g| g.model.clone()))
-            .or_else(|| a.model.clone());
-        let effort = over
-            .and_then(|o| o.effort.clone())
-            .or_else(|| w.current.as_ref().and_then(|g| g.effort.clone()))
-            .or_else(|| a.effort.clone());
+        let (harness, model, effort) = next_agent(&w, over);
         let env = over
             .and_then(|o| o.env.clone())
             .unwrap_or_else(|| a.env.clone());
@@ -946,11 +959,14 @@ impl Supervisor {
         if self.state(project, task) == TaskState::Done {
             return Err(CoreError::Refused(format!("task {task} is done")));
         }
-        if let Some(h) = &relaunch.harness {
-            if self.manifests.resolve(h).is_none() {
-                return Err(CoreError::NotFound(format!("harness {h}")));
-            }
-        }
+        // Refused here, not in the launch: by then the worker is stopped and
+        // recovery brings it back on its old harness.
+        let (harness, model, effort) = next_agent(&w, Some(&relaunch));
+        let manifest = self
+            .manifests
+            .resolve(&harness)
+            .ok_or_else(|| CoreError::NotFound(format!("harness {harness}")))?;
+        launch::check_agent(&manifest, model.as_deref(), effort.as_deref())?;
         if let Some(g) = w.current.filter(|g| g.exited.is_none()) {
             self.stop(project, task, &g).await?;
         }
