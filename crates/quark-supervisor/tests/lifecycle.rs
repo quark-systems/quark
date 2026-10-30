@@ -10,7 +10,7 @@ use quark_core::session::{SessionBackend, SessionSpec};
 use quark_core::worktree::ReturnOutcome;
 use quark_core::{CoreError, NewEvent, ProjectId, TaskEvent, TaskId, WorkerProtocol};
 use quark_sessions::pty::PtySupervisor;
-use quark_supervisor::{Cause, Conversations, Relaunch, SupervisorEvent};
+use quark_supervisor::{Cause, Conversations, Nudge, Relaunch, SupervisorEvent};
 use quark_systems::TaskState;
 
 fn ids(task: &str) -> (ProjectId, TaskId) {
@@ -793,4 +793,52 @@ async fn a_brief_with_no_busy_signal_is_typed_again() {
             .any(|l| l == "Fix the parser.")
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_quiet_worker_is_nudged_unless_a_menu_is_up() {
+    let env = Env::new();
+    let pty = Arc::new(PtySupervisor::new());
+    let sup = env.supervisor(pty.clone()).await;
+    let (p, t) = ids("t1");
+    let w = sup.spawn(env.request("t1")).await.unwrap();
+    let g = w.current.clone().unwrap();
+    eventually("the brief", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Fix the parser.")
+    })
+    .await;
+
+    sup.tick().await.unwrap();
+    let quiet = sup.quiet_workers();
+    assert_eq!(quiet.len(), 1);
+    assert_eq!((&quiet[0].task, &quiet[0].generation), (&t, &g.id));
+
+    let n = sup.nudge(&p, &t, "are you stuck?").await.unwrap();
+    assert!(matches!(n, Nudge::Sent(_)), "{n:?}");
+    eventually("the nudge", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "are you stuck?")
+    })
+    .await;
+
+    // A menu on screen (here the terminal's echo of one): typed text and
+    // Enter could choose for the worker, so nothing is typed.
+    pty.input(&g.session, " ❯ 1. Yes\r".as_bytes())
+        .await
+        .unwrap();
+    eventually("the menu", async || {
+        sup.screen(&p, &t).await.unwrap().contains("❯ 1. Yes")
+    })
+    .await;
+    let n = sup.nudge(&p, &t, "still stuck?").await.unwrap();
+    assert!(
+        matches!(&n, Nudge::Dialog(s) if s.contains("❯ 1. Yes")),
+        "{n:?}"
+    );
+    assert!(!received(&env, "t1", &g.id)
+        .iter()
+        .any(|l| l == "still stuck?"));
 }

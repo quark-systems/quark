@@ -73,7 +73,7 @@ Every occasion gets a `Route`: whether the coordinator is woken for judgment, an
 | trigger fired | no | digest | digest | digest |
 | trigger failed or ambiguous | yes | notify | digest | notify |
 
-The coordinator column is firstmate's away classifier: only done, decision, blocked and failed escalate, and a stale worker is the supervisor's to check first.
+The coordinator column is firstmate's away classifier: only done, decision, blocked and failed escalate, and a stale worker is the engine's to check first: the fleet check nudges it, then wakes the coordinator if it stays stuck (see [supervision](supervision.md#fleet-check)).
 The engine does not wake the coordinator for an occasion itself: the coordinator (slice 6, `quark_coordinator::wake`) applies the same policy to the same event and wakes itself, so the engine only reaches the user.
 A Project overrides any cell with `away.policy`; a policy where a decision or failure would reach no one is refused.
 Digests go out every `digest_secs` (an hour by default) after the first waiting item; held items go out as the return brief when the user is present again.

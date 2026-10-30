@@ -75,6 +75,22 @@ pub(crate) fn judge(m: &HarnessManifest, snap: &Snapshot, raw: &str) -> Screen {
     Screen::Unknown
 }
 
+/// Whether `screen` shows a numbered selection menu (`❯ 1. Yes`), the
+/// shape agents draw for a question or a permission prompt.
+pub(crate) fn shows_menu(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        let Some(rest) = ["❯", "›", ">"]
+            .iter()
+            .find_map(|c| line.trim_start().strip_prefix(c))
+        else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        digits > 0 && rest[digits..].starts_with('.')
+    })
+}
+
 /// The key that moves `d`'s selector one step toward its choice, or Enter
 /// once it is there. `None` when no selector row can be read.
 fn answer(d: &Dialog, screen: &str) -> Option<&'static [u8]> {
@@ -201,5 +217,15 @@ mod tests {
     #[test]
     fn bare_line_feeds_render_as_new_lines() {
         assert!(viewport(&snap("one\ntwo")).starts_with("one\ntwo"));
+    }
+
+    #[test]
+    fn numbered_menus_are_seen() {
+        assert!(shows_menu(
+            " Do you want to proceed?\n ❯ 1. Yes\n   2. No, and tell Claude what to do"
+        ));
+        assert!(shows_menu("  › 2. Skip"));
+        assert!(!shows_menu("> Fix the parser.\n❯ \n1. first step"));
+        assert!(!shows_menu("❯ 12 tests passed"));
     }
 }
