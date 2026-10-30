@@ -148,7 +148,7 @@ impl ProjectSetup {
         if dest.join(".git").exists() {
             return check_origin(&dest, source).await;
         }
-        clone(&source.url, &dest, None).await
+        clone(&source.url, &dest, upstream(&source.url).await.as_deref()).await
     }
 
     /// Claim `plan.root` for the Project and clone every source into it.
@@ -169,10 +169,12 @@ impl ProjectSetup {
                 continue;
             }
             let local = command.join(REPOS_DIR).join(&source.name);
+            let upstream = upstream(&source.url).await;
             if local.join(".git").exists() {
-                clone(local.as_os_str(), &dest, Some(&source.url)).await?;
+                let origin = upstream.as_deref().unwrap_or(&source.url);
+                clone(local.as_os_str(), &dest, Some(origin)).await?;
             } else {
-                clone(&source.url, &dest, None).await?;
+                clone(&source.url, &dest, upstream.as_deref()).await?;
             }
         }
         Ok(plan.root.clone())
@@ -664,10 +666,20 @@ async fn clone(
     Ok(())
 }
 
+/// The `origin` of a source that is a local checkout: what merges land on,
+/// where the checkout's own branches only move when someone pulls.
+async fn upstream(url: &str) -> Option<String> {
+    let dir = Path::new(url);
+    if !dir.is_dir() {
+        return None;
+    }
+    git(Some(dir), &["remote", "get-url", "origin"]).await.ok()
+}
+
 /// A clone already at `dest` must be of `source`.
 async fn check_origin(dest: &Path, source: &SourceRepo) -> Result<(), EngineError> {
     let origin = git(Some(dest), &["remote", "get-url", "origin"]).await?;
-    if origin == source.url {
+    if origin == source.url || upstream(&source.url).await.as_deref() == Some(origin.as_str()) {
         Ok(())
     } else {
         Err(EngineError::Invalid(format!(
@@ -719,6 +731,29 @@ mod tests {
             ],
         );
         repo.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn a_local_checkout_clones_with_its_own_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let quark = upstream(dir.path(), "quark");
+        let checkout = dir.path().join("checkout");
+        run(
+            dir.path(),
+            &["clone", "--quiet", &quark, checkout.to_str().unwrap()],
+        );
+        let url = "git@github.com:acme/quark.git";
+        run(&checkout, &["remote", "set-url", "origin", url]);
+
+        let setup = setup(dir.path(), Sessions::disabled("no tmux in this test"));
+        let command = dir.path().join("command");
+        let source = source("quark", checkout.to_str().unwrap());
+        setup.add_source(&command, &source).await.unwrap();
+        let cloned = command.join("repos/quark");
+        let origin = git(Some(&cloned), &["remote", "get-url", "origin"]);
+        assert_eq!(origin.await.unwrap(), url);
+        // Adding it again finds the same clone.
+        setup.add_source(&command, &source).await.unwrap();
     }
 
     fn source(name: &str, url: &str) -> SourceRepo {

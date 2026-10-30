@@ -98,8 +98,10 @@ fn fixture() -> Fixture {
 fn target(f: &Fixture, gates: RepoGates) -> PipelineTarget {
     PipelineTarget {
         checkout: f.checkout.clone(),
+        remote: "origin".into(),
         repo_name: "app".into(),
         base: "main".into(),
+        tip: None,
         gates,
         push_rebased: false,
     }

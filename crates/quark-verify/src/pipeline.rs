@@ -119,13 +119,18 @@ pub struct HoldoutGate {
 /// Where a Project's changes are verified.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelineTarget {
-    /// A clone of the Project's repo with an `origin` remote. Never changed:
-    /// work happens in scratch worktrees made from it.
+    /// A clone of the Project's repo. Never changed: work happens in scratch
+    /// worktrees made from it.
     pub checkout: PathBuf,
+    /// The clone's remote that changes are fetched from and pushed to.
+    pub remote: String,
     /// The repo name the gates config is keyed by.
     pub repo_name: String,
     /// The branch changes merge into.
     pub base: String,
+    /// The forge's tip of `base`, when known. A remote that does not have it
+    /// is not where the change merges, so nothing is rebased onto it.
+    pub tip: Option<String>,
     pub gates: RepoGates,
     /// Push a rebased head to its branch (with a lease on the old head)
     /// before verifying it. Off in shadow mode, where native never writes.
@@ -177,7 +182,7 @@ impl NativePipeline {
         // Best effort: the objects may already be local.
         let _ = git(
             &t.checkout,
-            &["fetch", "--quiet", "origin", &t.base, &change.branch],
+            &["fetch", "--quiet", &t.remote, &t.base, &change.branch],
         )
         .await;
         git(
@@ -248,7 +253,23 @@ async fn rebase_and_run(
     dir: &Path,
     scratch: &Path,
 ) -> Result<Verdict> {
-    let onto = format!("origin/{}", t.base);
+    let onto = format!("{}/{}", t.remote, t.base);
+    if let Some(tip) = &t.tip {
+        if git(dir, &["merge-base", "--is-ancestor", tip, &onto])
+            .await
+            .is_err()
+        {
+            return Ok(Verdict {
+                head: change.head.clone(),
+                stages: Vec::new(),
+                conflict: Some(format!(
+                    "{onto} in {} does not have the forge's tip {}",
+                    t.checkout.display(),
+                    short(tip)
+                )),
+            });
+        }
+    }
     if let Err(e) = git(dir, &["rebase", "--quiet", &onto]).await {
         let _ = git(dir, &["rebase", "--abort"]).await;
         return Ok(Verdict {
@@ -264,12 +285,37 @@ async fn rebase_and_run(
             change.branch, change.head
         );
         let refspec = format!("HEAD:refs/heads/{}", change.branch);
-        git(dir, &["push", "--quiet", &lease, "origin", &refspec]).await?;
+        git(dir, &["push", "--quiet", &lease, &t.remote, &refspec]).await?;
     }
     Ok(Verdict {
         stages: run_gates(t, dir, &head, scratch).await,
         head,
         conflict: None,
+    })
+}
+
+/// The remote of `checkout` that is `repo` on the forge, else `origin`. A
+/// clone of a local checkout has that checkout as `origin`, and only the
+/// forge's copy has what merged there.
+pub async fn forge_remote(checkout: &Path, repo: &str) -> String {
+    let urls = git(checkout, &["config", "--get-regexp", r"^remote\..*\.url$"])
+        .await
+        .unwrap_or_default();
+    urls.lines()
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(_, url)| names_repo(url, repo))
+        .find_map(|(key, _)| key.strip_prefix("remote.")?.strip_suffix(".url"))
+        .unwrap_or("origin")
+        .to_string()
+}
+
+/// Whether `url` is a network URL, https or scp-style, of `owner/name`.
+fn names_repo(url: &str, repo: &str) -> bool {
+    let (url, repo) = (url.to_lowercase(), repo.to_lowercase());
+    let path = url.trim_end_matches('/').trim_end_matches(".git");
+    path.strip_suffix(&repo).is_some_and(|host| {
+        (host.ends_with(':') && !host.contains('/'))
+            || (host.ends_with('/') && host.contains("://") && !host.starts_with("file:"))
     })
 }
 
