@@ -184,7 +184,10 @@ test("settings: change the coordinator's agent, by handoff to another harness", 
   await expect(section).toContainText("codex");
   await section.getByTestId("change-agent").click();
   const form = section.getByTestId("change-agent-form");
-  // Only Claude Code coordinates natively so far; another harness means a handoff.
+  // The form starts on the coordinator's own harness; another one means a handoff.
+  await expect(form).toContainText("keeps its conversation");
+  await form.getByLabel("Harness").click();
+  await page.getByRole("option", { name: "Claude Code" }).click();
   await expect(form).toContainText("writes a handoff");
   await form.getByLabel("Model", { exact: true }).fill("opus");
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/04-change-agent.png` });
