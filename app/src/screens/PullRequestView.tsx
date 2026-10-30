@@ -1,7 +1,7 @@
 // One pull request: its description and conversation (quark-atn), the diff with line comments
 // for the owning worker, and the verification evidence (ADR-15), on the left; gates, checks, reviews and the Project's standing approval on
 // the right; approve and merge in the header.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, Evidence, NotAvailable, PullRequest } from "../api";
 import { href } from "../nav";
 import { externalLink } from "../links";
@@ -14,6 +14,7 @@ import { FileSource } from "../components/diff/ImageDiff";
 import { StandingApproval } from "../components/StandingApproval";
 import { EvidencePanel, EvidenceSummary } from "../components/Evidence";
 import { Unavailable } from "../components/Unavailable";
+import { useAutoGrow } from "../components/Composer";
 import { evidenceOutcome, checkOutcome, checksMeta, mergeBlocker, prStateMeta, prTitle, reviewLabel, reviewMeta, sortChecks } from "../prs";
 import { useDraft } from "../drafts";
 
@@ -210,6 +211,8 @@ function PrCommentBox({ prId, onSend }: { prId: string; onSend: (body: string) =
   const [text, setText] = useDraft(`pr-comment:${prId}`);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  useAutoGrow(box, text);
   const send = async () => {
     const t = text.trim();
     if (!t || busy) return;
@@ -220,7 +223,7 @@ function PrCommentBox({ prId, onSend }: { prId: string; onSend: (body: string) =
   };
   return (
     <div className="composer steer">
-      <textarea rows={2} value={text} aria-label="Comment on the pull request"
+      <textarea ref={box} rows={1} value={text} aria-label="Comment on the pull request"
         placeholder="Comment on the whole PR for the worker (Enter to send, Shift+Enter for a newline)"
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {

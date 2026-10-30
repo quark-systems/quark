@@ -1,6 +1,6 @@
 // Message box: grows with its text up to a limit; Enter sends, Shift+Enter adds a line.
 // With `attachments`, images can be pasted and files picked or dropped onto it.
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import type { Attachments } from "../attachments";
 import { AttachButton, AttachmentList, cx } from "../ui";
 
@@ -9,12 +9,7 @@ export function Composer({ value, onChange, onSend, sending, label, placeholder,
   attachments?: Attachments;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [value]);
+  useAutoGrow(ref, value);
   const a = attachments;
   const ready = !!value.trim() || !!a?.items.length;
   return (
@@ -33,4 +28,14 @@ export function Composer({ value, onChange, onSend, sending, label, placeholder,
       </button>
     </div>
   );
+}
+
+/** Grows a one-line textarea with its text, up to 200px, so it lines up with the buttons beside it. */
+export function useAutoGrow(ref: RefObject<HTMLTextAreaElement | null>, value: string) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [ref, value]);
 }

@@ -11,6 +11,7 @@ import { ago, errText, isActive, stateMeta } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
 import { FileDiff } from "../components/diff/DiffView";
 import { Unavailable } from "../components/Unavailable";
+import { useAutoGrow } from "../components/Composer";
 import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
 import { WorkerBrief } from "../components/WorkerBrief";
@@ -289,6 +290,8 @@ function SteerBox({ taskId }: { taskId: string }) {
   const attach = useAttachments(pid, `worker:${taskId}`);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  useAutoGrow(box, text);
   const ready = !!text.trim() || attach.items.length > 0;
 
   const send = async () => {
@@ -308,7 +311,7 @@ function SteerBox({ taskId }: { taskId: string }) {
     <div className={cx("composer steer", attach.dragging && "dropping")} {...attach.dropProps}>
       <AttachmentList items={attach.items} uploading={attach.uploading} error={attach.error} onRemove={attach.remove} />
       <AttachButton onFiles={(f) => void attach.add(f)} />
-      <textarea rows={2} value={text} aria-label={`Message the ${worker}`}
+      <textarea ref={box} rows={1} value={text} aria-label={`Message the ${worker}`}
         placeholder={`Message the ${worker} (Enter to send, Shift+Enter for a newline)`}
         onChange={(e) => setText(e.target.value)} onPaste={attach.onPaste}
         onKeyDown={(e) => {
