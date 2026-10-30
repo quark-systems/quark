@@ -610,6 +610,8 @@ details.why-record > summary.why-head { cursor: pointer; }
 .dx-cand-row { display: grid; grid-template-columns: 14px minmax(110px, 1.1fr) minmax(110px, 1.3fr) minmax(96px, .8fr) minmax(110px, .9fr) auto auto auto; gap: 6px; align-items: center; }
 .dx-cand-row input { font-family: var(--mono); font-size: 12px; }
 .dx-issue { padding: 0 0 0 20px; }
+.dx-floor { display: flex; align-items: center; gap: 6px; }
+.dx-floor input { width: 64px; font-family: var(--mono); font-size: 12px; }
 .dx-result { max-width: 900px; }
 .dx-checks { flex-basis: 100%; list-style: none; margin: 2px 0 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 1px; font-size: 12px; overflow-wrap: anywhere; }
 .dx-row .meta > span { white-space: nowrap; }
