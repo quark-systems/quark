@@ -449,6 +449,32 @@ async fn with_no_classifier_the_coordinator_matches_a_rule() {
 }
 
 #[tokio::test]
+async fn a_configured_classifier_decides_over_the_coordinators_rule() {
+    let rig = Rig::new().await;
+    let d = rig
+        .dispatcher_with(
+            r#"{"classifier":{"provider":"ollama","model":"d1"},
+              "rules":[{"name":"docs","when":"Documentation only.","use":{"harness":"codex"}},
+                       {"when":"anything","use":{"harness":"claude"}}],
+              "default":{"harness":"claude"}}"#,
+            answer("rule_1", 0.9),
+            Duration::from_secs(600),
+        )
+        .await;
+    let stage = d
+        .submit_rule("p".into(), "t1".into(), request("one"), "rule_2")
+        .await
+        .unwrap();
+    let Stage::Chosen { choice } = stage else {
+        panic!("{stage:?}");
+    };
+    assert_eq!(choice.profile.harness, "codex");
+    let r = resolutions(&rig.log).pop().unwrap();
+    assert_eq!(r.rule.as_deref(), Some("rule_1"));
+    assert!(r.answer.is_some(), "the classifier was asked");
+}
+
+#[tokio::test]
 async fn with_no_classifier_and_no_rules_the_default_applies() {
     let rig = Rig::new().await;
     let d = rig
