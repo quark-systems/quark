@@ -1559,3 +1559,13 @@ test("prompt boxes take pasted images and picked or dropped files, and send thei
   await expect(page.getByRole("status")).toHaveText("Delivered to the worker's inbox");
   await expect(page.getByTestId("transcript")).toContainText(/Attached file:\s*- \S+\/numbers\.csv/);
 });
+
+test("Stop interrupts the coordinator from its header", async ({ page }) => {
+  await open(page, "#/p/website");
+  const stop = page.getByTestId("coordinator-chat").getByTestId("coordinator-stop");
+  const asked = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith(":interrupt"));
+  await stop.click();
+  await asked;
+  await expect(stop).toBeDisabled();
+  await expect(stop).toHaveText("Stopped");
+});

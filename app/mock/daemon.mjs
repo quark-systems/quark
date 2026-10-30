@@ -2072,6 +2072,10 @@ const server = http.createServer(async (req, res) => {
     if (sameAgent(proj.agent_config, to)) return invalid(res, "the coordinator already runs this agent");
     return send(res, 202, startSwitch(proj, to));
   }
+  if ((r = m(/^\/v1\/coordinators\/([^/:]+):interrupt$/)) && req.method === "POST") {
+    if (!chats.has(decodeURIComponent(r[1]))) return notFound(res);
+    return send(res, 202, { coordinator_id: decodeURIComponent(r[1]), confirmed: true, accepted_at: now() });
+  }
   if ((r = m(/^\/v1\/coordinators\/([^/:]+):compact$/)) && req.method === "POST") {
     const cid = decodeURIComponent(r[1]);
     if (!chats.has(cid)) return notFound(res);

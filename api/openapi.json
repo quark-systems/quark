@@ -603,6 +603,77 @@
         }
       }
     },
+    "/v1/coordinators/{id}:interrupt": {
+      "post": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Stop what a Project coordinator is doing.",
+        "description": "Served as `POST /v1/coordinators/{id}:interrupt`, with no body. Presses\nthe harness's interrupt key in the coordinator's session and closes its\nopen turn, so what woke it is not delivered again. The session keeps\nrunning and reads the next message.",
+        "operationId": "interrupt_coordinator",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorMessageAccepted"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Project has no workspace yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Pressing the key failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No live coordinator session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/coordinators/{id}:run": {
       "post": {
         "tags": [

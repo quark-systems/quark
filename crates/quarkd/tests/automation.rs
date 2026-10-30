@@ -81,6 +81,7 @@ async fn rig(with_triggers: bool) -> Rig {
         triggers: with_triggers.then(|| triggers.engine()),
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     let project = store
         .create_project(CreateProject {

@@ -569,6 +569,30 @@ impl Coordinator {
         Ok(turn)
     }
 
+    /// The user stopped `project`'s coordinator: close its open turn, if
+    /// any, so the next items can wake it. An interrupted harness reports
+    /// no end of its own.
+    pub async fn turn_stopped(&self, project: &ProjectId) -> Result<Option<String>> {
+        let mut st = self.state.lock().await;
+        self.refresh_locked(&mut st).await?;
+        let Some(turn) = st
+            .projects
+            .get(project)
+            .and_then(|p| p.open.as_ref())
+            .map(|o| o.id.clone())
+        else {
+            return Ok(None);
+        };
+        let ev = CoordinatorEvent::TurnEnded {
+            turn: Some(turn.clone()),
+            end: TurnEnd::Stopped,
+            usage: Usage::default(),
+        };
+        self.append(project, &ev, None).await?;
+        self.refresh_locked(&mut st).await?;
+        Ok(Some(turn))
+    }
+
     /// The turn `project`'s coordinator is in, if any.
     pub async fn open_turn(&self, project: &ProjectId) -> Option<Turn> {
         let st = self.state.lock().await;

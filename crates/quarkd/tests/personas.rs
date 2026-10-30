@@ -39,6 +39,7 @@ fn app(home: &std::path::Path) -> Router {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     })
 }
 

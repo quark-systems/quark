@@ -13,7 +13,7 @@ import { CoordinatorContext } from "../components/CoordinatorContext";
 import { useLabels } from "../persona";
 import { useDraft } from "../drafts";
 import { readAttached, useAttachments, withAttachments } from "../attachments";
-import { CommandButton, usePendingCommands, useRunCommand } from "../components/CoordinatorCommand";
+import { CommandButton, StopButton, usePendingCommands, useRunCommand, useStoppedThrough } from "../components/CoordinatorCommand";
 import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
@@ -177,6 +177,7 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   const l = useLabels(cid);
   const coordinator = l.role("coordinator");
   const commands = useRunCommand(cid);
+  const stoppedThrough = useStoppedThrough(cid);
   const matches = slashMatches(text);
   const label = useCallback((c: CoordinatorCommand) => commandLabel(l, c), [l]);
 
@@ -228,12 +229,12 @@ export function CoordinatorChat({ cid }: { cid: string }) {
 
   return (
     <aside className="side-chat" data-testid="coordinator-chat">
-      <div className="panel-head">{l.Role("coordinator")}<CoordinatorContext cid={cid} changed={items.length} /><span className="spacer" /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} /></div>
+      <div className="panel-head">{l.Role("coordinator")}<CoordinatorContext cid={cid} changed={items.length} /><span className="spacer" /><StopButton cid={cid} /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} /></div>
       {status === "unavailable" ? (
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
-          <Transcript key={cid} items={items} agent="coordinator" actions project={cid} className="chat-log" commandLabel={label}
+          <Transcript key={cid} items={items} agent="coordinator" actions project={cid} className="chat-log" commandLabel={label} stoppedThrough={stoppedThrough}
             empty={status === "ok" ? <div className="empty">Ask the {coordinator} to plan or delegate work.</div>
               : status === "loading" ? <div className="empty">Loading…</div> : null}>
             {pending.map((p) => (

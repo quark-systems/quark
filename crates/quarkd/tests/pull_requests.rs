@@ -63,6 +63,7 @@ async fn harness() -> Harness {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     let project = store
         .create_project(CreateProject {

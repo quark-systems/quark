@@ -43,7 +43,12 @@ const ms = (ts?: string | null) => {
   return Number.isNaN(t) ? undefined : t;
 };
 
-export function groupTurns(items: TranscriptItem[]): Turn[] {
+/**
+ * `stoppedThrough`, the last entry when the user pressed Stop, ends the last turn while no
+ * entry came after it: a harness that died mid-turn writes no answer, so the transcript alone
+ * would read as working.
+ */
+export function groupTurns(items: TranscriptItem[], stoppedThrough?: number): Turn[] {
   const turns: Turn[] = [];
   let cur: Turn | undefined;
   const open = (prompt?: TranscriptItem, key = prompt?.id ?? 0) => {
@@ -79,7 +84,8 @@ export function groupTurns(items: TranscriptItem[]): Turn[] {
   const last = turns[turns.length - 1];
   if (last && !last.compaction) {
     const end = last.parts[last.parts.length - 1];
-    last.live = end?.kind === "work" || (end === undefined && !!last.prompt);
+    const stopped = stoppedThrough !== undefined && items[items.length - 1]?.id === stoppedThrough;
+    last.live = !stopped && (end?.kind === "work" || (end === undefined && !!last.prompt));
   }
   return turns;
 }

@@ -60,6 +60,7 @@ async fn overview_reports_live_status_and_what_changed_since() {
         triggers: None,
         compaction: Default::default(),
         beads: Default::default(),
+        coordinator: None,
     });
     // t1 is a task the daemon knows, so the Overview names and links it.
     store

@@ -75,6 +75,7 @@ export const transcriptsApi = {
   runCommand: (cid: string, command: CoordinatorCommand) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:run`, { command }),
   coordinatorContext: (cid: string) => req<CoordinatorContext>("GET", `/v1/coordinators/${enc(cid)}/context`),
   compactCoordinator: (cid: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:compact`),
+  interruptCoordinator: (cid: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:interrupt`),
   switchCoordinatorAgent: (cid: string, agent: AgentConfig) => req<CoordinatorSwitch | undefined>("PUT", `/v1/coordinators/${enc(cid)}/agent`, agent),
   transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
 };

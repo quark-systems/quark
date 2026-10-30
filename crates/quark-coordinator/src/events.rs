@@ -54,6 +54,9 @@ pub enum TurnEnd {
     /// No end was reported within the turn timeout; its items wake the
     /// coordinator again.
     TimedOut,
+    /// The user stopped the turn. Its items do not wake the coordinator
+    /// again, so what it stalled on does not simply start over.
+    Stopped,
 }
 
 /// Payload of every `coordinator.*` event; the kind is `coordinator.<type>`.

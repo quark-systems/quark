@@ -82,6 +82,7 @@ fn harness() -> Harness {
         events: quark_eventlog::SqliteEventLog::open(":memory:").unwrap(),
         triggers: None,
         compaction: Default::default(),
+        coordinator: None,
         beads: Arc::new(
             Beads::new(Some(bd().into()), "http://127.0.0.1:7380".into()).with_auto_setup(),
         ),

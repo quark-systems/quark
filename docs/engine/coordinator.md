@@ -86,6 +86,7 @@ A harness compacts its conversation on its own only when the context window is n
 
 Each Project sets it in Settings (`compaction` in `GET`/`PATCH /v1/projects/{id}/settings`): `auto` on or off and `at_percent`, the share of the model's context window to compact at, 10 to 95. The threshold in tokens follows the model the coordinator runs, and a window Quark does not know counts as 200k. A Project that never set it uses `QUARK_COORDINATOR_COMPACT_AT_PERCENT`, else 70; `0` turns it off by default. With it off, the harness's own compaction still applies.
 `POST /v1/coordinators/{id}:compact` compacts now, with no wrap up.
+`POST /v1/coordinators/{id}:interrupt` presses the harness's interrupt key once and closes the open turn as `stopped`, because an interrupted harness reports no turn end. Its items do not wake the coordinator again. The session keeps running.
 Each coordinator harness's turn end (Claude Code's `Stop` hook, Codex's `notify`, the Pi extension's `agent_end`) sets the automatic steps off; the context itself is read from the coordinator's session log.
 
 Every compaction, whoever started it, is one `compaction` entry in the conversation (Claude Code's `compact_boundary` line, Codex's `compacted`, Pi's `compaction`), and the `/compact` command line is left out.

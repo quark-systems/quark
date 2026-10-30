@@ -1,4 +1,5 @@
-// A button that asks a project's coordinator to catch up, write a status report or wrap up.
+// A button that asks a project's coordinator to catch up, write a status report or wrap up,
+// and the Stop button that interrupts whatever it is doing.
 // Every way of asking (button, slash command, palette) goes through `useRunCommand`, which
 // shows the request in the conversation at once, as a command card, until the coordinator's
 // session records it.
@@ -73,6 +74,45 @@ export function CommandButton({ cid, command, kind = "quiet", onRan }: {
       <Button kind={kind} disabled={busy !== null} title={HINTS[command]} data-testid={`command-${command}`}
         onClick={async () => { if (await run(command)) onRan?.(); }}>
         {busy ? "Asking…" : commandLabel(l, command)}
+      </Button>
+      {err && <span className="command-error" role="alert">{err}</span>}
+    </span>
+  );
+}
+
+// The last conversation entry when Stop was pressed, per project.
+const stoppedByProject = new Map<string, number | undefined>();
+
+/** Where the user last stopped the project's coordinator, for `groupTurns`. */
+export function useStoppedThrough(cid: string): number | undefined {
+  return useSyncExternalStore(
+    (l) => { listeners.add(l); return () => listeners.delete(l); },
+    () => stoppedByProject.get(cid),
+  );
+}
+
+/** How long Stop stays off after a press: a second Escape soon after opens the harness's rewind menu. */
+const STOP_REST_MS = 3_000;
+
+/** Stops the coordinator's current turn. Always shown: a stuck coordinator reports nothing to show it by. */
+export function StopButton({ cid }: { cid: string }) {
+  const l = useLabels(cid);
+  const [resting, setResting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const stop = async () => {
+    setResting(true); setErr(null);
+    try {
+      await api.interruptCoordinator(cid);
+      stoppedByProject.set(cid, lastId(getState().chat[cid] ?? []));
+      listeners.forEach((n) => n());
+    } catch (e) { setErr(errText(e)); }
+    finally { setTimeout(() => setResting(false), STOP_REST_MS); }
+  };
+  return (
+    <span className="command-run">
+      <Button kind="quiet" disabled={resting} data-testid="coordinator-stop" onClick={() => void stop()}
+        title={`Stop what the ${l.role("coordinator")} is doing. It stays running and reads your next message.`}>
+        {resting ? "Stopped" : "Stop"}
       </Button>
       {err && <span className="command-error" role="alert">{err}</span>}
     </span>

@@ -467,3 +467,30 @@ async fn prompts_are_recorded_on_change_and_serve_skills() {
         .await
         .is_none());
 }
+
+#[tokio::test]
+async fn a_stopped_turn_closes_and_its_items_do_not_wake_it_again() {
+    let rig = Rig::new();
+    let c = rig.open().await;
+    rig.ask("t1", "k", "q?").await;
+    c.tick(now()).await.unwrap();
+    assert_eq!(rig.rec.turns.lock().unwrap().len(), 1);
+
+    let project = ProjectId::new("p");
+    assert!(c.turn_stopped(&project).await.unwrap().is_some());
+    assert!(c.open_turn(&project).await.is_none());
+    assert!(c.pending(&project).await.is_empty());
+    let ends = rig.decoded("coordinator.turn_ended").await;
+    assert!(matches!(
+        ends[0],
+        CoordinatorEvent::TurnEnded {
+            end: TurnEnd::Stopped,
+            ..
+        }
+    ));
+
+    // Past the timeout nothing is delivered again, and a second stop is a no-op.
+    c.tick(now() + Duration::minutes(31)).await.unwrap();
+    assert_eq!(rig.rec.turns.lock().unwrap().len(), 1);
+    assert!(c.turn_stopped(&project).await.unwrap().is_none());
+}
