@@ -22,7 +22,10 @@
 //! account with the account variable naming its directory (unset for the
 //! default account), and changes stream as `account.quota_changed`. Not
 //! `--profile-only`: it reads only a credential file, and Claude Code on
-//! macOS keeps its credentials in the Keychain. Providers quota-axi does
+//! macOS keeps its credentials in the Keychain. quota-axi reads a login's
+//! Keychain item only once it has been allowed for that item, and Claude
+//! Code names one item per directory, so each added account needs its own
+//! grant ([`Accounts::grant_keychain`]). Providers quota-axi does
 //! not report, IBM Bob and Kiro CLI, are read by quarkd itself
 //! ([`quark_dispatch::local`]).
 
@@ -119,6 +122,19 @@ pub trait QuotaReader: Send + Sync {
         default: bool,
     ) -> std::result::Result<String, String>;
 
+    /// [`Self::read`], letting quota-axi read the login's macOS Keychain item
+    /// even when that shows a prompt. Once allowed ("Always Allow"), later
+    /// reads of that item need no prompt.
+    async fn grant(
+        &self,
+        provider: &str,
+        env_var: &str,
+        config_dir: &Path,
+        default: bool,
+    ) -> std::result::Result<String, String> {
+        self.read(provider, env_var, config_dir, default).await
+    }
+
     /// The report for an account that signs in with `key`.
     async fn read_key(&self, provider: &str, _key: &str) -> std::result::Result<String, String> {
         Err(format!("no per-key quota reading for {provider}"))
@@ -153,22 +169,37 @@ impl Default for QuotaAxi {
     }
 }
 
-#[async_trait]
-impl QuotaReader for QuotaAxi {
-    async fn read(
+/// Variables that would point quota-axi at another Claude login than the
+/// account's directory: extra profile lanes, a live session's token, and
+/// the Keychain item selector.
+const OTHER_LOGIN_VARS: &[&str] = &[
+    "QUOTA_AXI_CLAUDE_PROFILES",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+];
+
+impl QuotaAxi {
+    async fn run(
         &self,
         provider: &str,
         env_var: &str,
         config_dir: &Path,
         default: bool,
+        grant: bool,
     ) -> std::result::Result<String, String> {
         if let Some(r) = self.local.iter().find(|r| r.provider() == provider) {
             return Ok(r.read().await.to_string());
         }
         let mut cmd = tokio::process::Command::new(&self.bin);
         cmd.args(["--provider", provider, "--json"]);
+        if grant {
+            cmd.arg("--allow-keychain-prompt");
+        }
         if !default {
             cmd.env(env_var, config_dir);
+            for v in OTHER_LOGIN_VARS {
+                cmd.env_remove(v);
+            }
         }
         let run = cmd
             .stdin(std::process::Stdio::null())
@@ -190,6 +221,30 @@ impl QuotaReader for QuotaAxi {
             stdout.as_str()
         };
         Err(failure_detail(text))
+    }
+}
+
+#[async_trait]
+impl QuotaReader for QuotaAxi {
+    async fn read(
+        &self,
+        provider: &str,
+        env_var: &str,
+        config_dir: &Path,
+        default: bool,
+    ) -> std::result::Result<String, String> {
+        self.run(provider, env_var, config_dir, default, false)
+            .await
+    }
+
+    async fn grant(
+        &self,
+        provider: &str,
+        env_var: &str,
+        config_dir: &Path,
+        default: bool,
+    ) -> std::result::Result<String, String> {
+        self.run(provider, env_var, config_dir, default, true).await
     }
 
     async fn read_key(&self, provider: &str, key: &str) -> std::result::Result<String, String> {
@@ -725,6 +780,23 @@ impl Accounts {
     /// Reads quota for every account of a harness with a quota provider, or
     /// only `only`, one read per account, and stores each reading. Changed readings stream as `account.quota_changed`.
     pub async fn refresh_quota(&self, only: Option<&str>) -> Result<()> {
+        self.read_quota(only, false).await
+    }
+
+    /// Reads `id`'s quota letting quota-axi prompt for its Keychain item, so
+    /// later reads can use it, and returns the account with that reading.
+    pub async fn grant_keychain(&self, id: &str) -> Result<Account> {
+        let account = self.get(id).await?;
+        if account.api_key {
+            return Err(AccountError::Invalid(
+                "a key account's quota needs no Keychain grant".into(),
+            ));
+        }
+        self.read_quota(Some(id), true).await?;
+        self.get(id).await
+    }
+
+    async fn read_quota(&self, only: Option<&str>, grant: bool) -> Result<()> {
         for account in self.list().await? {
             if only.is_some_and(|id| id != account.id) {
                 continue;
@@ -756,14 +828,22 @@ impl Accounts {
                         QuotaState::Error,
                         Some("the account has no config directory".into()),
                     ),
-                    Some(dir) => match self
-                        .quota
-                        .read(provider, var, Path::new(dir), account.default)
-                        .await
-                    {
-                        Ok(json) => parse_quota(provider, &json),
-                        Err(detail) => AccountQuota::empty(QuotaState::Error, Some(detail)),
-                    },
+                    Some(dir) => {
+                        let path = Path::new(dir);
+                        let read = if grant {
+                            self.quota.grant(provider, var, path, account.default).await
+                        } else {
+                            self.quota.read(provider, var, path, account.default).await
+                        };
+                        // A fix quota-axi names runs against this account's
+                        // directory, not the default login.
+                        let select = (!account.default && !var.is_empty() && !dir.is_empty())
+                            .then(|| format!("{var}={}", shell_quote(dir)));
+                        match read {
+                            Ok(json) => parse_quota_for(provider, &json, select.as_deref()),
+                            Err(detail) => AccountQuota::empty(QuotaState::Error, Some(detail)),
+                        }
+                    }
                 }
             };
             let quota = AccountQuota {
@@ -994,6 +1074,8 @@ struct WindowReport {
 struct StateReport {
     status: Option<String>,
     error: Option<String>,
+    /// Why, e.g. `keychain_access_required`.
+    reason: Option<String>,
     /// The command that fixes it, such as a one-time Keychain grant.
     remedy_command: Option<String>,
 }
@@ -1017,6 +1099,13 @@ struct Availability {
 /// account is the effective availability across all models, else the
 /// tightest session or weekly window.
 pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
+    parse_quota_for(provider, json, None)
+}
+
+/// [`parse_quota`] for an added account: `select` (`VAR='dir'`) prefixes a
+/// fix quota-axi names that does not already select the account, since
+/// quota-axi names it bare for the login it was pointed at.
+fn parse_quota_for(provider: &str, json: &str, select: Option<&str>) -> AccountQuota {
     let report: QuotaReport = match serde_json::from_str(json) {
         Ok(r) => r,
         Err(e) => {
@@ -1097,9 +1186,24 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
             .allowance_coins
             .map(|c| format!("{} Bobcoins a month", c.round()))
     });
+    let keychain_grant = p
+        .state
+        .as_ref()
+        .is_some_and(|s| s.reason.as_deref() == Some("keychain_access_required"));
     let error = p.state.as_ref().and_then(|s| {
         let error = s.error.clone()?;
-        Some(match &s.remedy_command {
+        let fix = s.remedy_command.as_deref().map(|fix| match select {
+            Some(sel) if !fix.contains(sel.split('=').next().unwrap_or_default()) => {
+                // A bare grant would prompt for every provider's item.
+                if fix == "quota-axi --allow-keychain-prompt" {
+                    format!("{sel} quota-axi --provider {provider} --allow-keychain-prompt")
+                } else {
+                    format!("{sel} {fix}")
+                }
+            }
+            _ => fix.to_string(),
+        });
+        Some(match fix {
             Some(fix) => format!("{error}; run `{fix}` once"),
             None => error,
         })
@@ -1125,7 +1229,13 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
         windows,
         detail,
         checked_at: None,
+        keychain_grant: keychain_grant && remaining.is_none(),
     }
+}
+
+/// `s` in POSIX single quotes.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 #[cfg(test)]
@@ -1209,6 +1319,73 @@ mod tests {
         assert_eq!(
             q.detail.as_deref(),
             Some("Keychain access required; run `quota-axi --allow-keychain-prompt` once")
+        );
+        assert!(q.keychain_grant);
+    }
+
+    #[test]
+    fn an_added_accounts_fix_selects_its_directory() {
+        let report = |fix: &str| {
+            format!(
+                r#"{{"schemaVersion":5,"providers":[{{"provider":"claude","windows":[],
+                "state":{{"status":"unavailable","error":"Keychain access required",
+                  "reason":"keychain_access_required","remedyCommand":"{fix}"}}}}]}}"#
+            )
+        };
+        let select = format!("CLAUDE_CONFIG_DIR={}", shell_quote("/Users/m/.claude-it's"));
+        let q = parse_quota_for(
+            "claude",
+            &report("quota-axi --allow-keychain-prompt"),
+            Some(&select),
+        );
+        assert_eq!(
+            q.detail.as_deref(),
+            Some(
+                "Keychain access required; run `CLAUDE_CONFIG_DIR='/Users/m/.claude-it'\\''s' \
+                 quota-axi --provider claude --allow-keychain-prompt` once"
+            )
+        );
+        assert!(q.keychain_grant);
+        // A fix that already selects a profile is left alone.
+        let sibling = "env -u QUOTA_AXI_CLAUDE_PROFILES CLAUDE_CONFIG_DIR='/x' quota-axi --provider claude --allow-keychain-prompt";
+        let q = parse_quota_for("claude", &report(sibling), Some(&select));
+        assert_eq!(
+            q.detail.as_deref(),
+            Some(format!("Keychain access required; run `{sibling}` once").as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_added_account_is_read_from_its_own_login_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("quota-axi");
+        // Echoes its arguments and the login variables it was given.
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nprintf '%s|%s|%s|%s' \"$*\" \"$CLAUDE_CONFIG_DIR\" \
+             \"${CLAUDE_CODE_OAUTH_TOKEN-unset}\" \"${QUOTA_AXI_CLAUDE_PROFILES-unset}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let q = QuotaAxi {
+            bin,
+            local: Vec::new(),
+        };
+        std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "the-default-session");
+        std::env::set_var("QUOTA_AXI_CLAUDE_PROFILES", "/a:/b");
+        let work = Path::new("/Users/m/.claude-work");
+        let read = q.read("claude", "CLAUDE_CONFIG_DIR", work, false).await;
+        let grant = q.grant("claude", "CLAUDE_CONFIG_DIR", work, false).await;
+        std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+        std::env::remove_var("QUOTA_AXI_CLAUDE_PROFILES");
+        assert_eq!(
+            read.unwrap(),
+            "--provider claude --json|/Users/m/.claude-work|unset|unset"
+        );
+        assert_eq!(
+            grant.unwrap(),
+            "--provider claude --json --allow-keychain-prompt|/Users/m/.claude-work|unset|unset"
         );
     }
 

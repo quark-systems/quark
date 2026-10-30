@@ -159,6 +159,10 @@ pub struct AccountQuota {
     pub detail: Option<String>,
     /// When the reading was taken (RFC 3339 UTC).
     pub checked_at: Option<String>,
+    /// The reading needs a one-time macOS Keychain grant for this account's
+    /// login, given with `POST /v1/accounts/{id}/keychain-grant`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keychain_grant: bool,
 }
 
 impl AccountQuota {
@@ -171,6 +175,7 @@ impl AccountQuota {
             windows: Vec::new(),
             detail,
             checked_at: None,
+            keychain_grant: false,
         }
     }
 

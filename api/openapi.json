@@ -238,6 +238,56 @@
         }
       }
     },
+    "/v1/accounts/{id}/keychain-grant": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Read an account's quota letting quota-axi prompt on the Mac for its\nlogin's Keychain item (choose \"Always Allow\"), for a reading with\n`keychain_grant`. Later reads use the grant. Answers with the account and\nthe new reading once the prompt is answered.",
+        "operationId": "keychain_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A key account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/coordinators/{id}/agent": {
       "put": {
         "tags": [
@@ -5768,6 +5818,10 @@
               "null"
             ],
             "description": "Why there are no numbers."
+          },
+          "keychain_grant": {
+            "type": "boolean",
+            "description": "The reading needs a one-time macOS Keychain grant for this account's\nlogin, given with `POST /v1/accounts/{id}/keychain-grant`."
           },
           "plan": {
             "type": [
