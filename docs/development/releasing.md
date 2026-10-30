@@ -9,9 +9,12 @@ release plan; what is not here yet is listed at the end.
    (`crates/quarkd/tests/version.rs` fails if they drift). Commit it to `main`.
 2. Tag the commit `v0.1.0-beta.1` and push the tag.
 3. `.github/workflows/release.yml` builds and attaches to a **draft** GitHub Release:
-   - `Quark_<version>_aarch64.dmg`: Quark.app for Apple silicon, with quarkd inside.
-     The app starts it (`--engine native`, log in `~/Library/Logs/systems.quark.desktop/`)
-     when no daemon is running.
+   - `Quark_<version>_aarch64.dmg`: Quark.app for Apple silicon. It carries QuarkBar.app
+     (the menubar app and widgets, from `mac/scripts/package.sh`) in
+     `Contents/Library/LoginItems`, and QuarkBar carries quarkd. Opening Quark opens
+     QuarkBar, which on its first run registers quarkd as a LaunchAgent and itself as a
+     login item, so opening Quark once starts all three and they come back after a
+     restart (quarkd's log: `~/Library/Logs/Quark/quarkd.log`).
    - `Quark_<version>_x64-setup.exe`: the Windows app. quarkd runs in WSL.
    - `quarkd-x86_64-unknown-linux-gnu.tar.gz` and `install-wsl.sh`: quarkd for WSL and Linux.
    - `latest.json` (the updater manifest) and `SHA256SUMS`.
@@ -47,7 +50,6 @@ the app has no updater.
 
 ## Not yet
 
-- QuarkBar inside Quark.app (it still ships as its own `mac/scripts/package.sh` bundle).
 - First-run setup screen and WSL setup from the Windows app.
 - Windows code signing; Homebrew cask and winget.
 - A beta update channel.

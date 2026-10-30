@@ -49,8 +49,15 @@ final class Daemon: ObservableObject {
     }
 
     /// The first time QuarkBar.app runs, it starts quarkd unless one is
-    /// already answering (started some other way).
+    /// already answering (started some other way), and opens itself at login.
+    /// Quark.app opens the QuarkBar inside it on every launch, so installing
+    /// Quark and opening it once sets up all three.
     func startIfFirstRun() {
+        let loginKey = "loginItemSetUp"
+        if state != .notBundled, !UserDefaults.standard.bool(forKey: loginKey) {
+            UserDefaults.standard.set(true, forKey: loginKey)
+            if !launchesAtLogin { setLaunchesAtLogin(true) }
+        }
         let key = "quarkdSetUp"
         guard state == .off, !UserDefaults.standard.bool(forKey: key) else { return }
         Task {

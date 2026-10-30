@@ -11,6 +11,7 @@
 	<key>AssociatedBundleIdentifiers</key>
 	<array>
 		<string>systems.quark.bar</string>
+		<string>systems.quark.desktop</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
