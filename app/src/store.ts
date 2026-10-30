@@ -2,7 +2,7 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  Account, AccountQuotaChanged, api, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Notice, Project, PullRequest,
+  Account, AccountQuotaChanged, api, apiMismatch, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Notice, Project, PullRequest,
   ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
 } from "./api";
 
@@ -501,6 +501,8 @@ export async function start() {
     const health = await api.health();
     set({ health });
     cursor = health.last_seq;
+    const mismatch = apiMismatch(health.api_version, health.version);
+    if (mismatch) set({ error: mismatch });
   } catch (e) {
     set({ error: `Cannot reach the daemon: ${String((e as Error).message ?? e)}` });
   }

@@ -38,6 +38,7 @@ pub async fn health(State(state): State<AppState>) -> Result<Json<Health>, ApiEr
     Ok(Json(Health {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
+        api_version: quark_systems::API_CONTRACT,
         engine: state.engine.name().into(),
         last_seq,
     }))

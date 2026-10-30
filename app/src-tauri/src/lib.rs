@@ -3,6 +3,7 @@
 // - QUARK_DAEMON points the app at a daemon other than http://127.0.0.1:7380.
 // - QUARK_QUERY is appended to the page URL as-is (e.g. "renderer=webgl").
 // - QUARK_GLASS=0 keeps the macOS window opaque.
+// An installed app also starts its bundled quarkd and offers updates (src/release.rs).
 //
 // `quark://open/<route>` links (from QuarkBar, notifications and widgets) bring the window
 // forward on that route: <route> is the page's own hash route (src/nav.ts), e.g.
@@ -15,6 +16,8 @@
 // from `glass=1&platform=macos` and paints its panels partly transparent. The approach is
 // adapted from MonoCode (https://github.com/hardbeat920/monocode), MIT, Copyright (c) 2026 Nick.
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+
+mod release;
 
 /// Query flags describing the window to the page.
 fn shell_flags() -> Vec<String> {
@@ -129,6 +132,8 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             use tauri_plugin_deep_link::DeepLinkExt;
+            release::start_bundled_daemon(app.handle());
+            release::offer_update(app.handle())?;
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {

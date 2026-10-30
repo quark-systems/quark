@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, NotAvailable } from "./api";
+import { api, ApiError, apiMismatch, API_VERSION, NotAvailable } from "./api";
 
 const respond = (status: number, body?: unknown, type = "application/json") =>
   vi.stubGlobal("fetch", vi.fn(async () => new Response(body === undefined ? null : typeof body === "string" ? body : JSON.stringify(body),
@@ -93,5 +93,16 @@ describe("dispatch test", () => {
     expect(String(url)).toMatch(/\/v1\/projects\/p%201\/dispatch$/);
     expect(init?.method).toBe("PUT");
     expect(JSON.parse(String(init?.body))).toEqual({ revision: "abc", default_select, rules: list, default: fallback });
+  });
+});
+
+describe("api version", () => {
+  it("accepts a daemon on the same contract, and one from before api_version existed", () => {
+    expect(apiMismatch(API_VERSION, "0.1.0")).toBeNull();
+    expect(apiMismatch(undefined, "0.0.1")).toBeNull();
+  });
+  it("says which side to update", () => {
+    expect(apiMismatch(API_VERSION + 1, "0.3.0")).toMatch(/newer than this app/);
+    expect(apiMismatch(0, "0.0.1")).toMatch(/older than this app/);
   });
 });
