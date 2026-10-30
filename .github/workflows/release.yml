@@ -14,7 +14,7 @@ on:
   push:
     tags: ["v*"]
   pull_request:
-    paths: [".github/workflows/release.yml", "packaging/**"]
+    paths: [".github/workflows/release.yml", "packaging/**", "mac/scripts/**"]
   workflow_dispatch:
 
 concurrency:
@@ -61,7 +61,7 @@ jobs:
 
   mac:
     needs: version
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -75,11 +75,6 @@ jobs:
           workspaces: |
             .
             app/src-tauri
-      - name: Build quarkd
-        run: |
-          cargo build --release --locked -p quarkd
-          mkdir -p app/src-tauri/binaries
-          cp -f target/release/quarkd app/src-tauri/binaries/quarkd-aarch64-apple-darwin
       - name: Signing environment
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -109,6 +104,26 @@ jobs:
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ -n "$TAURI_UPDATER_PUBKEY" ]; then
             pass TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD TAURI_UPDATER_PUBKEY
           fi
+      - name: Build QuarkBar.app (menubar, widgets and quarkd)
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          # QuarkBar is signed by its own script before Tauri seals Quark.app around it,
+          # so the certificate goes into a keychain of our own first.
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            keychain="$RUNNER_TEMP/quarkbar.keychain-db"
+            security create-keychain -p ci "$keychain"
+            security set-keychain-settings -lut 3600 "$keychain"
+            security unlock-keychain -p ci "$keychain"
+            printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k ci "$keychain" >/dev/null
+            security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+            export SIGN_ID="$APPLE_SIGNING_IDENTITY"
+          fi
+          mac/scripts/package.sh
       - name: Build Quark.app
         working-directory: app
         run: |
@@ -118,8 +133,12 @@ jobs:
       - name: Check the bundle
         run: |
           app="$(ls -d app/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app)"
-          test -x "$app/Contents/MacOS/quarkd"
-          "$app/Contents/MacOS/quarkd" --version
+          bar="$app/Contents/Library/LoginItems/QuarkBar.app"
+          test -x "$bar/Contents/MacOS/QuarkBar"
+          test -d "$bar/Contents/PlugIns/QuarkWidgets.appex"
+          test -f "$bar/Contents/Library/LaunchAgents/systems.quark.quarkd.plist"
+          "$bar/Contents/MacOS/quarkd" --version
+          codesign --verify --deep --strict "$app"
           codesign -dv "$app" 2>&1 || true
       - name: Collect
         run: |

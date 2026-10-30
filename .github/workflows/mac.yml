@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   quarkbar:
-    runs-on: macos-14
+    runs-on: macos-15
     defaults:
       run:
         working-directory: mac

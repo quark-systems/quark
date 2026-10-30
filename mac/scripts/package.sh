@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds dist/QuarkBar.app: the menubar app with its widgets and quarkd inside,
-# quarkd run as a LaunchAgent. Run on a Mac from anywhere in the repo:
+# quarkd run as a LaunchAgent. The release workflow puts it inside Quark.app
+# (packaging/release-config.mjs). Run on a Mac from anywhere in the repo:
 #   mac/scripts/package.sh            # release build, ad-hoc signed
 #   SIGN_ID="Developer ID Application: …" mac/scripts/package.sh
 # Needs Xcode or the Command Line Tools (Swift 5.9+) and a Rust toolchain.
@@ -44,9 +45,12 @@ fi
 
 # Inside out: the helpers first, then the app.
 sign="${SIGN_ID:--}"
-codesign --force --options runtime --timestamp=none --sign "$sign" "$app/Contents/MacOS/quarkd"
-codesign --force --options runtime --timestamp=none --sign "$sign" \
+# Notarization needs a secure timestamp; an ad-hoc signature can't have one.
+stamp=--timestamp
+[ "$sign" = - ] && stamp=--timestamp=none
+codesign --force --options runtime "$stamp" --sign "$sign" "$app/Contents/MacOS/quarkd"
+codesign --force --options runtime "$stamp" --sign "$sign" \
   --entitlements "$mac/Resources/Widgets.entitlements" "$widgets"
-codesign --force --options runtime --timestamp=none --sign "$sign" "$app"
+codesign --force --options runtime "$stamp" --sign "$sign" "$app"
 codesign --verify --deep --strict "$app"
 echo "built $app"

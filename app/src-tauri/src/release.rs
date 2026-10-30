@@ -1,88 +1,42 @@
-// What only an installed (bundled) app does: start the quarkd shipped inside it, and
-// update itself. `npm run tauri dev` does neither: no quarkd sits beside its binary and the
-// updater is configured only by the release workflow (.github/workflows/release.yml), so
-// development keeps running a daemon by hand.
+// What only an installed (bundled) app does: start QuarkBar and quarkd, and update itself.
+// `npm run tauri dev` does neither: no QuarkBar sits inside its bundle and the updater is
+// configured only by the release workflow (.github/workflows/release.yml), so development
+// keeps running a daemon by hand.
 //
-// On Windows the app ships without quarkd: quarkd runs in WSL (packaging/wsl/install.sh)
-// and serves the same loopback port.
-use std::net::{SocketAddr, TcpStream};
+// On macOS, Quark.app carries QuarkBar.app (the menubar app, built by
+// mac/scripts/package.sh) in Contents/Library/LoginItems, and QuarkBar carries quarkd.
+// Opening Quark opens QuarkBar, which on its first run registers quarkd as a LaunchAgent
+// and itself as a login item, so all three come back after a restart. On Windows the app
+// ships without either: quarkd runs in WSL (packaging/wsl/install.sh) on the same port.
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
-const DAEMON_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 7380);
-
-/// Whether something already listens on quarkd's port.
-fn daemon_listening() -> bool {
-    let addr = SocketAddr::from(DAEMON_ADDR);
-    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+/// QuarkBar.app inside the Quark.app whose binary is `exe` (Contents/MacOS/<exe>).
+fn embedded_quarkbar(exe: &Path) -> Option<PathBuf> {
+    let contents = exe.parent()?.parent()?;
+    let app = contents.join("Library/LoginItems/QuarkBar.app");
+    app.is_dir().then_some(app)
 }
 
-/// The quarkd bundled next to the app's own binary, if this is an installed app.
-fn bundled_quarkd(exe: &Path) -> Option<PathBuf> {
-    let name = if cfg!(windows) {
-        "quarkd.exe"
-    } else {
-        "quarkd"
-    };
-    let path = exe.parent()?.join(name);
-    path.is_file().then_some(path)
-}
-
-/// The PATH a login shell sees, so quarkd finds tmux, git, gh and the harness CLIs even
-/// though an app started from Finder gets launchd's bare PATH (as mac/Resources/quarkd-launch).
-#[cfg(target_os = "macos")]
-fn login_path() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let out = std::process::Command::new(shell)
-        .args(["-lc", "printf %s \"$PATH\""])
-        .output()
-        .ok()?;
-    let path = String::from_utf8(out.stdout).ok()?;
-    (!path.is_empty()).then_some(path)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn login_path() -> Option<String> {
-    None
-}
-
-/// Starts the bundled quarkd when no daemon is running and the app was not pointed at
-/// another one. It keeps running after the app quits, like the LaunchAgent QuarkBar
-/// installs; whichever starts first wins the port.
-pub fn start_bundled_daemon(app: &AppHandle) {
-    if std::env::var_os("QUARK_DAEMON").is_some() || daemon_listening() {
+/// Opens the embedded QuarkBar in the background, unless the app was pointed at another
+/// daemon. Opening a running QuarkBar does nothing, so this runs on every launch.
+pub fn start_quarkbar(_app: &AppHandle) {
+    if !cfg!(target_os = "macos") || std::env::var_os("QUARK_DAEMON").is_some() {
         return;
     }
-    let Some(quarkd) = std::env::current_exe()
+    let Some(bar) = std::env::current_exe()
         .ok()
-        .and_then(|e| bundled_quarkd(&e))
+        .and_then(|e| embedded_quarkbar(&e))
     else {
         return;
     };
-    let log = app.path().app_log_dir().ok().and_then(|dir| {
-        std::fs::create_dir_all(&dir).ok()?;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("quarkd.log"))
-            .ok()
-    });
-    let mut cmd = std::process::Command::new(quarkd);
-    cmd.args(["--engine", "native"])
-        .stdin(std::process::Stdio::null());
-    if let Some(path) = login_path() {
-        cmd.env("PATH", path);
-    }
-    if let Some(log) = log {
-        if let Ok(err) = log.try_clone() {
-            cmd.stderr(err);
-        }
-        cmd.stdout(log);
-    }
-    if let Err(e) = cmd.spawn() {
-        eprintln!("could not start the bundled quarkd: {e}");
+    if let Err(e) = std::process::Command::new("/usr/bin/open")
+        .arg("-g")
+        .arg(&bar)
+        .spawn()
+    {
+        eprintln!("could not open QuarkBar: {e}");
     }
 }
 
@@ -137,21 +91,17 @@ pub fn offer_update(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::bundled_quarkd;
+    use super::embedded_quarkbar;
 
     #[test]
-    fn finds_quarkd_only_beside_the_app() {
+    fn finds_quarkbar_only_inside_the_bundle() {
         let dir = std::env::temp_dir().join(format!("quark-bundle-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let exe = dir.join("quark-desktop");
-        assert_eq!(bundled_quarkd(&exe), None);
-        let name = if cfg!(windows) {
-            "quarkd.exe"
-        } else {
-            "quarkd"
-        };
-        std::fs::write(dir.join(name), b"").unwrap();
-        assert_eq!(bundled_quarkd(&exe), Some(dir.join(name)));
+        let exe = dir.join("Contents/MacOS/quark-desktop");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        assert_eq!(embedded_quarkbar(&exe), None);
+        let bar = dir.join("Contents/Library/LoginItems/QuarkBar.app");
+        std::fs::create_dir_all(&bar).unwrap();
+        assert_eq!(embedded_quarkbar(&exe), Some(bar));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
