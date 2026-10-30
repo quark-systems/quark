@@ -18,6 +18,9 @@ if (target === "macos") {
   config.bundle.macOS = {
     files: { "Library/LoginItems/QuarkBar.app": "../../mac/dist/QuarkBar.app" },
   };
+  // Without a Developer ID, sign ad hoc so the bundle's seal covers QuarkBar inside it
+  // (Apple silicon won't run an app whose signature doesn't match its contents).
+  if (!process.env.APPLE_SIGNING_IDENTITY) config.bundle.macOS.signingIdentity = "-";
 }
 const pubkey = process.env.TAURI_UPDATER_PUBKEY?.trim();
 if (pubkey) {
