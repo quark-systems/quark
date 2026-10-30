@@ -73,17 +73,41 @@ export default async function (pi: ExtensionAPI) {
   });
 
   // One finished prompt is one coordinator turn. quarkd reads its token use
-  // from Pi's own session log.
-  pi.on("agent_end", async () => {
+  // from Pi's own session log. When the reply asked the user something
+  // without ask_user, quarkd answers with a nudge, sent back as a follow-up.
+  pi.on("agent_end", async (event: any) => {
+    const said = lastReply(event?.messages ?? []);
     try {
-      await fetch(`${HOOKS_URL}/turn_end`, {
+      const res = await fetch(`${HOOKS_URL}/turn_end`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify(said ? { last_assistant_message: said } : {}),
         signal: AbortSignal.timeout(10_000),
       });
+      const answer = res.ok ? await res.json() : {};
+      if (answer?.decision === "block" && typeof answer.reason === "string") {
+        pi.sendUserMessage(answer.reason, { deliverAs: "followUp" });
+      }
     } catch {
       // Not retried: quarkd's wake timeout covers a lost turn end.
     }
   });
+}
+
+/// The text of the last assistant message among `messages`.
+function lastReply(messages: any[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== "assistant") continue;
+    const content = m.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : (content ?? [])
+            .filter((c: any) => c?.type === "text")
+            .map((c: any) => c.text)
+            .join("\n");
+    if (text.trim()) return text;
+  }
+  return "";
 }

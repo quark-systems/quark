@@ -155,6 +155,9 @@ struct Routes {
     roots: SessionRoots,
     /// Where each coordinator session log was last read for turn usage.
     cursors: Mutex<HashMap<PathBuf, UsageCursor>>,
+    /// Projects whose open turn was sent back with [`questions::NUDGE`]
+    /// from a `turn_end`, which has no `stop_hook_active` of its own.
+    nudged: Mutex<std::collections::HashSet<String>>,
     wrap_up: Option<WrapUp>,
 }
 
@@ -200,6 +203,7 @@ fn routes(
         store,
         roots,
         cursors: Mutex::new(HashMap::new()),
+        nudged: Mutex::new(Default::default()),
         wrap_up,
     };
     Router::new()
@@ -268,13 +272,20 @@ async fn hook(
             _ => return bad("Idempotency-Key must be text".into()),
         },
     };
-    // Claude Code's `Stop`: a reply that asks the user something without
-    // `ask_user` is sent back once, so the coordinator files the questions
-    // as decisions. The turn stays open until it stops again.
+    // A reply that asks the user something without `ask_user` is sent back
+    // once, so the coordinator files the questions as decisions. The turn
+    // stays open until it ends again. Claude Code's `Stop` takes the answer
+    // as its decision; the Pi extension sends `reason` as a follow-up;
+    // Codex's `notify` reads no answer, so the nudge is typed in.
     let claude_stop = event == "Stop";
     if claude_stop && r.unfiled_questions(&project, &body).await {
         tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
         return Json(json!({ "decision": "block", "reason": questions::NUDGE })).into_response();
+    }
+    if !claude_stop && !r.nudged.lock().unwrap().remove(&project) {
+        if let Some(response) = r.nudge_turn_end(&project, &body).await {
+            return response;
+        }
     }
     let (usage, context) = match body.get("usage") {
         Some(u) => match serde_json::from_value::<Usage>(u.clone()) {
@@ -323,14 +334,60 @@ async fn hook(
 }
 
 impl Routes {
-    /// Whether the turn a Claude Code `Stop` hook ends asked the user
-    /// something in text with no `ask_user` call since the last turn end.
+    /// Send a `turn_end` that asked in text back, as [`hook`] describes.
+    /// `None` when the turn should close: no unfiled question, or no way to
+    /// reach the coordinator's harness.
+    async fn nudge_turn_end(&self, project: &str, body: &Value) -> Option<Response> {
+        if !self.unfiled_questions(project, body).await {
+            return None;
+        }
+        let store = self.store.clone();
+        let id = project.to_string();
+        let p = tokio::task::spawn_blocking(move || store.get_project(&id))
+            .await
+            .ok()?
+            .ok()?;
+        let harness = p
+            .agent_config
+            .as_ref()
+            .map(|a| a.harness.as_str())
+            .unwrap_or(crate::engine::native_project::COORDINATOR_HARNESS);
+        match Wiring::for_harness(harness)? {
+            Wiring::Pi => {}
+            Wiring::Codex => {
+                let chat = self.wrap_up.as_ref()?.chat.clone();
+                let ws = crate::engine::WorkspaceRef {
+                    project_id: p.id.clone(),
+                    root: PathBuf::from(p.workspace_path?),
+                };
+                let pid = project.to_string();
+                tokio::spawn(async move {
+                    if let Err(e) = chat.send(&ws, questions::NUDGE).await {
+                        tracing::warn!(project = %pid, error = %e, "could not nudge the coordinator to ask_user");
+                    }
+                });
+            }
+            Wiring::Claude => return None,
+        }
+        self.nudged.lock().unwrap().insert(project.to_string());
+        tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
+        Some(Json(json!({ "decision": "block", "reason": questions::NUDGE })).into_response())
+    }
+
+    /// Whether the turn a hook ends asked the user something in text with
+    /// no `ask_user` call since the last turn end.
     /// Never on a stop that a nudge already caused (`stop_hook_active`).
     async fn unfiled_questions(&self, project: &str, body: &Value) -> bool {
         if body.get("stop_hook_active").and_then(Value::as_bool) == Some(true) {
             return false;
         }
-        let text = match body.get("last_assistant_message").and_then(Value::as_str) {
+        // Claude Code and the Pi extension send `last_assistant_message`;
+        // Codex's notify, `last-assistant-message`.
+        let said = body
+            .get("last_assistant_message")
+            .or_else(|| body.get("last-assistant-message"))
+            .and_then(Value::as_str);
+        let text = match said {
             Some(t) => t.to_string(),
             None => match body.get("transcript_path").and_then(Value::as_str) {
                 Some(path) => {
@@ -758,6 +815,126 @@ mod tests {
         ) -> quark_core::Result<String> {
             Ok("done".into())
         }
+    }
+
+    /// Records what the engine types to a coordinator.
+    #[derive(Default)]
+    struct Typed(Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl CoordinatorInput for Typed {
+        async fn send(
+            &self,
+            _ws: &crate::engine::WorkspaceRef,
+            text: &str,
+        ) -> Result<crate::chat::Delivery, crate::chat::ChatError> {
+            self.0.lock().unwrap().push(text.to_string());
+            Ok(crate::chat::Delivery::Confirmed)
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_and_pi_turns_that_ask_in_text_are_sent_back_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let mut ids = HashMap::new();
+        for harness in ["codex", "pi"] {
+            let p = store
+                .create_project(CreateProject {
+                    name: harness.into(),
+                    goal: None,
+                    workspace_path: Some(dir.path().join(harness).display().to_string()),
+                    repos: vec![],
+                    agent_config: Some(quark_systems::AgentConfig {
+                        harness: harness.into(),
+                        model: None,
+                        effort: None,
+                        pool: None,
+                    }),
+                    dispatch_preset: None,
+                    delivery: None,
+                })
+                .unwrap();
+            ids.insert(harness, p.id);
+        }
+        let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let coordinator = Arc::new(
+            Coordinator::open(
+                Arc::new(log.clone()),
+                quark_core::HostId::from("h"),
+                Config::default(),
+                Arc::new(NoBrain),
+                Arc::new(YesHands),
+            )
+            .await
+            .unwrap(),
+        );
+        let tokens = Tokens::new(dir.path());
+        let typed = Arc::new(Typed::default());
+        let off = quark_systems::CompactionSettings {
+            auto: false,
+            at_percent: 70,
+        };
+        let app = router_wrapping_up(
+            coordinator,
+            tokens.clone(),
+            store,
+            SessionRoots::default(),
+            WrapUp {
+                chat: typed.clone(),
+                events: log.clone(),
+                compactor: Arc::new(Compactor::new(off, SessionRoots::default())),
+            },
+        );
+        let ended = || async {
+            log.read(Seq::ZERO, 100)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind.as_str() == "coordinator.turn_ended")
+                .count()
+        };
+        let asking = "Plan is ready. Should I use Redis or keep it in memory?";
+
+        // Pi: the extension sends the reply back as a follow-up.
+        let pi = &ids["pi"];
+        let url = format!("/{pi}/{}/hooks/turn_end", tokens.get_or_create(pi).unwrap());
+        let body = json!({"last_assistant_message": asking}).to_string();
+        let (_, b) = send(&app, post(&url, &body)).await;
+        assert_eq!(b["decision"], "block");
+        assert_eq!(b["reason"], questions::NUDGE);
+        assert_eq!(ended().await, 0, "the turn stays open");
+        // The next turn end closes it, whatever it said.
+        let (_, b) = send(&app, post(&url, &body)).await;
+        assert!(b.get("turn").is_some(), "{b}");
+        assert_eq!(ended().await, 1);
+
+        // Codex: its notify reads no answer, so the nudge is typed in.
+        let codex = &ids["codex"];
+        let url = format!(
+            "/{codex}/{}/hooks/turn_end",
+            tokens.get_or_create(codex).unwrap()
+        );
+        let body =
+            json!({"type": "agent-turn-complete", "last-assistant-message": asking}).to_string();
+        let (_, b) = send(&app, post(&url, &body)).await;
+        assert_eq!(b["decision"], "block");
+        for _ in 0..50 {
+            if !typed.0.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(*typed.0.lock().unwrap(), [questions::NUDGE.to_string()]);
+        assert_eq!(ended().await, 1);
+        let (_, b) = send(&app, post(&url, &body)).await;
+        assert!(b.get("turn").is_some(), "{b}");
+        assert_eq!(ended().await, 2);
+        // A reply without a question just closes the turn.
+        let done = json!({"last-assistant-message": "Started t1."}).to_string();
+        let (_, b) = send(&app, post(&url, &done)).await;
+        assert!(b.get("turn").is_some(), "{b}");
+        assert_eq!(typed.0.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

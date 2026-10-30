@@ -152,7 +152,7 @@ The coordinator runs on Claude Code, Codex or Pi (and Pi's signed build), the Pr
 
 Codex is wired on its command line only, so nothing is written to `~/.codex` or the workspace, and its hooks are not used: Codex asks before running new hooks, which would park the coordinator. The command line also marks the workspace trusted (`-c projects={…}`), since Codex asks about a new folder even with approvals bypassed. Both resumes continue the newest conversation in the workspace.
 
-Gaps against Claude Code: the "asked in text" nudge needs a turn end that can send a reply back, which only Claude Code's `Stop` hook can, so Codex and Pi coordinators are held to `ask_user` by the prompt and by `tell_user` refusing questions. Beads memories reach Claude Code at session start through `bd prime`; Codex and Pi get them only through the prompt's memory layer.
+When a reply asks the user something in text instead of through `ask_user`, quarkd sends the "Quark decision check" nudge back once per turn on every harness: as Claude Code's `Stop` hook block reply, as a Pi follow-up message from the bridge's `agent_end` report, and for Codex by typing it into the coordinator's terminal after `notify` reports the turn end (a Codex `Stop` hook would need the user to approve it in Codex first). Gap against Claude Code: Beads memories reach Claude Code at session start through `bd prime`; Codex and Pi get them only through the prompt's memory layer.
 
 The turn-end hook takes the turn's `usage` from its body when it sends one, else reads it from the coordinator's newest session log; an `Idempotency-Key` header makes a retried hook count once.
 
