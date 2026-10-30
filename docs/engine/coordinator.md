@@ -52,7 +52,7 @@ Each call is recorded as `coordinator.tool` before it runs and `coordinator.tool
 
 | Tool | Does |
 |---|---|
-| `start_task` | start a task with a title and self-contained instructions, and the dispatch rule it fits when known; dispatch picks the agent (an `agent` is refused, since naming one skipped the rules) |
+| `start_task` | start a task with a title and self-contained instructions, and the dispatch rule it fits when known (used only when no classifier is configured; a classifier always decides); dispatch picks the agent (an `agent` is refused, since naming one skipped the rules) |
 | `steer`, `answer` | message a worker; answer its question by key |
 | `choose_profile` | pick the agent when dispatch escalated |
 | `relaunch`, `cancel` | replace a worker in the same worktree; stop a task (its worktree and unlanded work are kept) |
