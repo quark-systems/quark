@@ -86,6 +86,13 @@ function AccountRow({ account: a, onError }: { account: Account; onError: (e: st
       setEditing(false);
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
+  const grant = async () => {
+    setBusy(true); onError(null);
+    try {
+      await api.keychainGrant(a.id);
+      setAccounts(await api.accounts());
+    } catch (e) { onError(errText(e)); } finally { setBusy(false); }
+  };
   const remove = async () => {
     if (!confirm) { setConfirm(true); return; }
     setBusy(true); onError(null);
@@ -124,6 +131,12 @@ function AccountRow({ account: a, onError }: { account: Account; onError: (e: st
           </div>
         )}
         {q.state !== "known" && q.detail && <div className="faint ellipsis">{q.detail}</div>}
+        {q.keychain_grant && (
+          <button className="btn small" onClick={grant} disabled={busy} data-testid="keychain-grant"
+            title="macOS asks once for this login's Keychain item; choose Always Allow">
+            {busy ? "Waiting for macOS…" : "Allow Keychain access"}
+          </button>
+        )}
         {q.checked_at && <div className="faint">read {ago(q.checked_at)}</div>}
       </div>
       <div className="account-pools">

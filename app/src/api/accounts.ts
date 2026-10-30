@@ -15,6 +15,8 @@ export interface AccountQuota {
   /** What limits the account now, 0 to 100. */
   remaining_percent?: number | null;
   plan?: string | null; windows: QuotaWindow[]; detail?: string | null; checked_at?: string | null;
+  /** The reading needs a one-time macOS Keychain grant for this login; see `keychainGrant`. */
+  keychain_grant?: boolean;
 }
 export interface Account {
   /** `acc_...`, or `default-<harness>` for a harness's default account. */
@@ -50,4 +52,6 @@ export const accountsApi = {
   updateAccount: (id: string, u: UpdateAccount) => req<Account>("PATCH", `/v1/accounts/${enc(id)}`, u),
   /** 409 for a default account or one a running task uses. */
   removeAccount: (id: string) => req<void>("DELETE", `/v1/accounts/${enc(id)}`),
+  /** Reads quota letting macOS prompt for the login's Keychain item; answers once the prompt is. */
+  keychainGrant: (id: string) => req<Account>("POST", `/v1/accounts/${enc(id)}/keychain-grant`),
 };

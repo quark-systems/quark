@@ -126,12 +126,34 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Read an account's quota letting quota-axi prompt on the Mac for its
+/// login's Keychain item (choose "Always Allow"), for a reading with
+/// `keychain_grant`. Later reads use the grant. Answers with the account and
+/// the new reading once the prompt is answered.
+#[utoipa::path(
+    post,
+    path = "/v1/accounts/{id}/keychain-grant",
+    tag = "accounts",
+    params(("id" = String, Path, description = "Account id")),
+    responses(
+        (status = 200, body = Account),
+        (status = 400, body = ErrorBody, description = "A key account"),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn keychain_grant(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Account>, ApiError> {
+    Ok(Json(state.accounts.grant_keychain(&id).await?))
+}
+
 /// This module's endpoints, plus schemas the generator does not reach from
 /// them (event payloads), merged into the served document by
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
 #[openapi(
-    paths(list, get, create, update, delete),
+    paths(list, get, create, update, delete, keychain_grant),
     components(schemas(
         quark_systems::QuotaState,
         quark_systems::AccountQuotaChanged,
@@ -143,11 +165,12 @@ pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.
 pub(super) fn router() -> axum::Router<AppState> {
-    use axum::routing::get;
+    use axum::routing::{get, post};
     axum::Router::new()
         .route("/v1/accounts", get(list).post(create))
         .route(
             "/v1/accounts/{id}",
             get(self::get).patch(update).delete(self::delete),
         )
+        .route("/v1/accounts/{id}/keychain-grant", post(keychain_grant))
 }

@@ -290,6 +290,28 @@ async fn lists_adds_updates_and_removes_accounts() {
 }
 
 #[tokio::test]
+async fn a_keychain_grant_reads_the_account_again() {
+    let s = setup();
+    let work = s.claude_dir("claude-work");
+    let added = add(&s, json!({"harness": "claude-code", "config_dir": work})).await;
+    let id = added["id"].as_str().unwrap().to_string();
+    s.quota.set(&work, reading("claude", 70.0));
+
+    let path = format!("/v1/accounts/{id}/keychain-grant");
+    let (status, account) = call(&s.app, "POST", &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{account}");
+    assert_eq!(account["quota"]["remaining_percent"], 70.0);
+    assert!(s
+        .quota
+        .calls()
+        .iter()
+        .any(|(_, v, d, def)| v == "CLAUDE_CONFIG_DIR" && d.as_path() == Path::new(&work) && !def));
+
+    let (status, _) = call(&s.app, "POST", "/v1/accounts/acc_nope/keychain-grant", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn quota_is_read_once_per_account_and_changes_stream() {
     let s = setup();
     let work = s.claude_dir("claude-work");
