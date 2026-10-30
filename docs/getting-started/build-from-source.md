@@ -5,6 +5,8 @@ macOS is the main target. Linux runs the daemon and the app's web build; the des
 
 ## Prerequisites
 
+[External tools](external-tools.md) lists every program Quark runs and where.
+
 | Tool | Why | Notes |
 | :--- | :--- | :--- |
 | Rust (stable) | builds `quarkd` | [rustup](https://rustup.rs) |

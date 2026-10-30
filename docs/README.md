@@ -6,6 +6,7 @@ Each section below is a folder; add new pages to the folder they belong in and l
 ## Getting started
 
 - [Build from source](getting-started/build-from-source.md): prerequisites, building and running quarkd and the app, your first Project, where data lives.
+- [External tools](getting-started/external-tools.md): every program Quark runs (quota-axi, treehouse, tmux, gh, bd and more), what for, and how to install it.
 - [Releasing](development/releasing.md): cutting a release, the Mac and Windows builds, signing, quarkd in WSL.
 - [Self-hosting](../selfhost/README.md): run Quark's own development as a Quark Project, and set up any Project from a directory.
 
