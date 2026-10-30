@@ -891,6 +891,11 @@ test("dispatch: edit rules, test them, save them as a commit and test again", as
   await expect(detail.getByLabel("Candidate 1 harness")).toHaveValue("claude-code");
   await detail.getByLabel("Candidate 1 effort").selectOption("max");
   await expect(rows.nth(1)).not.toContainText("fix");
+  // A candidate's quota floor is shown and edited with it.
+  await detail.getByLabel("Add candidate 1 quota floor").click();
+  await expect(detail.getByLabel("Candidate 1 floor scope")).toHaveValue("all_models");
+  await detail.getByLabel("Candidate 1 floor percent").fill("20");
+  await expect(detail.getByLabel("Candidate 1 floor percent")).toHaveValue("20");
 
   // K moves the rule ahead of the other; j reaches the default, where default_select is.
   await detail.getByLabel("Candidate 1 effort").press("Escape");

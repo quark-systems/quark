@@ -7,7 +7,7 @@
 // x twice deletes it, Esc leaves a field.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Account, api, ApiError, DispatchProfile, DispatchRules, DispatchRulesDraft, DispatchRuleSpec, DispatchSelect, DispatchTest,
+  Account, api, ApiError, DispatchFloor, DispatchProfile, DispatchRules, DispatchRulesDraft, DispatchRuleSpec, DispatchSelect, DispatchTest,
   HarnessInfo, HarnessValidation, NotAvailable,
 } from "../api";
 import { poolsFor } from "../accounts";
@@ -351,7 +351,40 @@ function selectWords(s: DispatchSelect | null | undefined) { return s === "quota
 
 /** The engine's own fields a rule sets, which the editor keeps and does not edit. */
 function kept(r: DispatchRuleSpec): string[] {
-  return [r.why ? "why" : "", r.approval ? "approval" : "", r.floor ? "floor" : ""].filter(Boolean);
+  return [r.why ? "why" : "", r.approval ? "approval" : "", r.floor ? `floor (${floorWords(r.floor)})` : ""].filter(Boolean);
+}
+
+function floorWords(f: DispatchFloor) {
+  return `${f.provider ? f.provider + " " : ""}${f.scope} below ${f.min_percent}%`;
+}
+
+const FLOOR_SCOPES = ["all_models", "all_products"];
+
+/** A candidate's quota floor: below `min_percent` left at `scope`, dispatch skips the candidate. */
+function QuotaFloor({ label, floor, onChange }: {
+  label: string; floor: DispatchFloor | null; onChange: (f: DispatchFloor | null) => void;
+}) {
+  if (!floor) {
+    return (
+      <div className="dx-issue dx-floor">
+        <button type="button" className="btn" aria-label={`Add ${label.toLowerCase()} quota floor`}
+          onClick={() => onChange({ scope: "all_models", min_percent: 15 })}>Add quota floor</button>
+      </div>
+    );
+  }
+  return (
+    <div className="dx-issue dx-floor small-text" data-testid="dispatch-floor">
+      <span className="faint">Skip when quota left at</span>
+      <select value={floor.scope} aria-label={`${label} floor scope`} onChange={(e) => onChange({ ...floor, scope: e.target.value })}>
+        {[...new Set([...FLOOR_SCOPES, floor.scope])].map((x) => <option key={x} value={x}>{x}</option>)}
+      </select>
+      <span className="faint">is below</span>
+      <input type="number" min={0} max={100} step={1} value={floor.min_percent} aria-label={`${label} floor percent`}
+        onChange={(e) => onChange({ ...floor, min_percent: Math.min(100, Math.max(0, Number(e.target.value) || 0)) })} />
+      <span className="faint">%</span>
+      <button type="button" className="btn" aria-label={`Remove ${label.toLowerCase()} quota floor`} onClick={() => onChange(null)}>×</button>
+    </div>
+  );
 }
 
 /** An ordered candidate list: harness, model, effort and account pool each, checked with the harness as it is edited. */
@@ -394,6 +427,7 @@ function Candidates({ label, list, workers, accounts, checks, onChange }: {
               <button type="button" className="btn" aria-label={`Move ${n.toLowerCase()} down`} disabled={i === list.length - 1} onClick={() => onChange(move(list, i, 1))}>↓</button>
               <button type="button" className="btn" aria-label={`Remove ${n.toLowerCase()}`} onClick={() => onChange(list.filter((_, j) => j !== i))}>×</button>
             </div>
+            <QuotaFloor label={n} floor={c.floor ?? null} onChange={(floor) => set(i, { ...c, floor })} />
             {check?.errors.map((x) => <div className="field-error dx-issue" key={x.field + x.code} data-testid="dispatch-issue">{x.message}</div>)}
             {check?.warnings.map((x) => <div className="hint-line dx-issue" key={x.field + x.code}>{x.message}</div>)}
             {h && !h.install.installed && <div className="hint-line dx-issue">{h.name} is not installed: <span className="mono">{h.install.install_hint}</span></div>}
