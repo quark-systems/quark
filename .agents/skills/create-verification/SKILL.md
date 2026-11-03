@@ -5,8 +5,7 @@ description: Generate a project-local verify-<app> skill that launches the repo'
 
 # Create a verification skill
 
-Adapted from Cursor's `create-verification-skill` in [cursor/plugins](https://github.com/cursor/plugins/tree/main/pstack/skills/create-verification-skill) (MIT, Copyright (c) 2026 Lauren Tan; see [`LICENSE-pstack`](LICENSE-pstack)).
-This version is harness-neutral and ties the feature map to Quark's verification gates (ADR-15).
+Adapted from Cursor's `create-verification-skill` in [cursor/plugins](https://github.com/cursor/plugins/tree/main/pstack/skills/create-verification-skill) (MIT, Copyright (c) 2026 Lauren Tan; see [`LICENSE-pstack`](LICENSE-pstack)). This version is harness-neutral.
 
 Every serious project needs a scripted way to drive the real app and prove behavior: launch it, exercise a feature the way a user would, and capture evidence.
 This skill generates that as a project-local skill, `verify-<app>`, tailored to the repo.

@@ -26,3 +26,5 @@ target
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+.DS_Store
