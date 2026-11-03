@@ -36,5 +36,5 @@ pub use fleet::{Fleet, Generation, Steer, Worker};
 pub use launch::WorkerUrls;
 pub use secrets::Secrets;
 pub use supervisor::{
-    assert_isolated, Config, Conversations, Relaunch, SpawnRequest, Supervisor, Tick,
+    assert_isolated, Config, Conversations, Nudge, Quiet, Relaunch, SpawnRequest, Supervisor, Tick,
 };

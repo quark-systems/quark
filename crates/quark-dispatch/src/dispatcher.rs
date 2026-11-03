@@ -407,7 +407,8 @@ impl Dispatcher {
 
     /// Like [`Dispatcher::submit`], with the dispatch rule the coordinator
     /// matched the task to instead of a classifier's answer (see
-    /// [`Dispatcher::choose_rule`]).
+    /// [`Dispatcher::choose_rule`]). A configured classifier still decides:
+    /// the coordinator's rule is used only when no classifier is on.
     pub async fn submit_rule(
         &self,
         project: ProjectId,
@@ -421,6 +422,9 @@ impl Dispatcher {
             .config(&project)
             .await
             .map_err(|e| CoreError::Invalid(format!("dispatch rules: {e}")))?;
+        if ClassifierSettings::from_config(&config, self.settings.key_present).on {
+            return self.submit(project, task, request).await;
+        }
         if config.find_rule(rule).is_none() {
             return Err(unknown_rule(rule, &config));
         }

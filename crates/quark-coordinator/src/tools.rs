@@ -321,7 +321,7 @@ pub fn catalog() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "start_task",
-            description: "Start a task. Write self-contained instructions: the user's ask in their words, scope, and what done looks like. Dispatch picks the agent from the Project's dispatch rules; give `rule` when you already know which rule the task fits.",
+            description: "Start a task. Write self-contained instructions: the user's ask in their words, scope, and what done looks like. Dispatch picks the agent from the Project's dispatch rules; give `rule` when you already know which rule the task fits (a configured classifier still decides).",
             input_schema: object(
                 json!({
                     "title": text("A few words naming the task."),

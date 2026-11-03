@@ -22,6 +22,7 @@ pub mod dispatch_test;
 pub mod engine;
 pub mod failover;
 pub mod firstmate;
+pub mod fleet_check;
 pub mod forge;
 pub mod gates;
 pub mod harness;
@@ -333,6 +334,13 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         (None, None, None)
     };
 
+    // A timed sweep for stuck workers: nudge them, then wake the coordinator.
+    let fleet_check_task = native.as_ref().and_then(|n| {
+        let every = fleet_check::interval_from_env()?;
+        let check = fleet_check::FleetCheck::new(n.supervisor.clone(), native_turns.clone());
+        Some(tokio::spawn(check.run(every)))
+    });
+
     let beads = Arc::new(
         beads::Beads::new(
             std::env::var_os("QUARK_BD").map(Into::into),
@@ -389,6 +397,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         t.abort();
     }
     if let Some(t) = coordinator_task {
+        t.abort();
+    }
+    if let Some(t) = fleet_check_task {
         t.abort();
     }
     pr_task.abort();

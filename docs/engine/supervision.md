@@ -39,6 +39,15 @@ It composes the other native crates through their `quark-core` contracts and kee
 5. delivers steering still waiting;
 6. records `supervisor.stale` once per episode when a running worker's screen and messages have not changed for `stale_after` (15 minutes by default).
 
+## Fleet check
+
+The supervision pass only reports a quiet worker. quarkd's fleet check (`crates/quarkd/src/fleet_check.rs`, firstmate's watcher heartbeat in the native engine) acts on it. Every 5 minutes (`QUARK_FLEET_CHECK_SECS`; 0 turns it off) it reads `Supervisor::quiet_workers`, and for a running worker quiet for `stale_after`:
+
+1. nudges it once in 6 hours (`Supervisor::nudge`): a steering message that says how long it has been quiet and asks it to report what it waits on, report done, or carry on. A screen showing a manifest dialog or a numbered menu (`❯ 1. Yes`) is never typed into, since text and Enter could pick an option for the worker;
+2. when it is quiet that long again after its nudge, or a dialog stopped the nudge, wakes the coordinator (`coordinator.requested` by "the fleet check", with the last lines of the worker's screen) to steer, answer, relaunch or cancel it, or ask the user. At most once in 2 hours per worker.
+
+A new generation starts over. The check's memory is in-process, so after a restart quiet time counts from zero again.
+
 ## Durability
 
 The supervisor holds no state the log does not have; its in-memory watch data (status-file cursors, screen hashes) is rebuilt from scratch.

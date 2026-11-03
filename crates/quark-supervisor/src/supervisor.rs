@@ -165,6 +165,26 @@ pub struct Tick {
     pub released: usize,
 }
 
+/// A running worker and how long it has shown no screen change or worker
+/// message, as of the last [`Supervisor::tick`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Quiet {
+    pub project: ProjectId,
+    pub task: TaskId,
+    pub generation: String,
+    pub idle: Duration,
+}
+
+/// What [`Supervisor::nudge`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Nudge {
+    /// The message was sent; the steering message's id.
+    Sent(String),
+    /// A dialog or menu is on screen, where typed text could pick an
+    /// option, so nothing was typed. The visible screen.
+    Dialog(String),
+}
+
 /// What the supervisor watches about one generation in memory. Lost on a
 /// crash and rebuilt from scratch, which is safe: the status file is
 /// re-read from the start (its events are idempotent) and staleness starts
@@ -1163,6 +1183,64 @@ impl Supervisor {
                 Err(e) => tracing::warn!(error = %e, "supervision pass failed"),
             }
         }
+    }
+
+    /// Every running worker of a current generation with how long it has
+    /// been quiet. A worker the supervisor has not watched yet (a daemon
+    /// that just started) counts from when it first was.
+    pub fn quiet_workers(&self) -> Vec<Quiet> {
+        let states = self.ledger.states();
+        let watches = self.watches.lock().unwrap();
+        let mut out: Vec<Quiet> = self
+            .fleet
+            .all()
+            .into_iter()
+            .filter_map(|w| {
+                let g = w.current.as_ref().filter(|g| g.exited.is_none())?;
+                let record = states.get(&w.project, &w.task)?;
+                if record.state != TaskState::Running {
+                    return None;
+                }
+                let watch = watches
+                    .get(&(w.project.clone(), w.task.clone()))
+                    .filter(|x| x.generation == g.id)?;
+                Some(Quiet {
+                    project: w.project.clone(),
+                    task: w.task.clone(),
+                    generation: g.id.clone(),
+                    idle: watch.active_at.elapsed(),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| (&a.project, &a.task).cmp(&(&b.project, &b.task)));
+        out
+    }
+
+    /// The worker's visible screen as plain text.
+    pub async fn screen(&self, project: &ProjectId, task: &TaskId) -> Result<String> {
+        let g = self.live(project, task)?;
+        let snap = self.sessions.snapshot(&g.session).await?;
+        Ok(ready::viewport(&snap))
+    }
+
+    /// Steer a quiet worker with `text`, unless its screen shows a dialog
+    /// or a numbered menu: there typed text and Enter could pick an option
+    /// for it, so the caller gets the screen instead.
+    pub async fn nudge(&self, project: &ProjectId, task: &TaskId, text: &str) -> Result<Nudge> {
+        let g = self.live(project, task)?;
+        let snap = self.sessions.snapshot(&g.session).await?;
+        let screen = ready::viewport(&snap);
+        let dialog = self.manifests.resolve(&g.harness).is_some_and(|m| {
+            let raw = String::from_utf8_lossy(&snap.bytes);
+            matches!(
+                ready::judge(m, &snap, &raw),
+                ready::Screen::Answer(_) | ready::Screen::Busy
+            )
+        });
+        if dialog || ready::shows_menu(&screen) {
+            return Ok(Nudge::Dialog(screen));
+        }
+        self.steer(project, task, text).await.map(Nudge::Sent)
     }
 
     async fn poll_status_files(&self) {
