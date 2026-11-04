@@ -324,7 +324,7 @@ pub fn catalog() -> Vec<ToolSpec> {
             description: "Start a task. Write self-contained instructions: the user's ask in their words, scope, and what done looks like. Dispatch picks the agent from the Project's dispatch rules; give `rule` when you already know which rule the task fits (a configured classifier still decides).",
             input_schema: object(
                 json!({
-                    "title": text("A few words naming the task."),
+                    "title": text("A few words naming the task; for an issue, its id and a short title (`quark-e1c: detect secrets`)."),
                     "brief": text("The worker's instructions."),
                     "repo": text("The Project repo to work in, when there is more than one."),
                     "rule": rule_schema()
@@ -391,13 +391,13 @@ pub fn catalog() -> Vec<ToolSpec> {
                 json!({
                     "key": text("Stable key; asking again with it updates the same decision."),
                     "question": text("The question, standing alone."),
-                    "context": text("What the user needs to know to answer, in a few sentences."),
+                    "context": text("What the user needs to know to answer, in a few sentences. Name each issue by its full id with a short title, never a bare or shortened id."),
                     "options": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "label": text("The option, in one or two words."),
+                                "label": text("The option, in a few words that say what it does; never a list of issue ids."),
                                 "consequence": text("What happens when it is picked.")
                             },
                             "required": ["label"]

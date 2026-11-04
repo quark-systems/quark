@@ -21,6 +21,7 @@ import { ago, errText, savedUser, saveUser } from "../util";
 import { DiffView } from "../components/diff/DiffView";
 import { Unavailable } from "../components/Unavailable";
 import "./issues.css";
+import { BeadText } from "../ui/BeadText";
 
 type Tab = "proposed" | "project" | "user" | "decisions";
 /** What the keyboard can do to the selected row. */
@@ -179,7 +180,7 @@ export function Memory({ project: pid, id }: { project: string; id?: string }) {
           )))}
           {tab === "project" && beadsReady && (memories ?? []).map((m) => row(m.key, (
             <>
-              <span className="q">{m.value}</span>
+              <span className="q"><BeadText text={m.value} project={pid} /></span>
               <span className="meta">
                 <span className="mono ellipsis">{m.key}</span>
                 {m.accepted_by && <span className="ellipsis">· accepted by {m.accepted_by}</span>}
@@ -211,7 +212,7 @@ export function Memory({ project: pid, id }: { project: string; id?: string }) {
           )))}
           {tab === "decisions" && decisions.map((d) => row(d.id, (
             <>
-              <span className="q">{d.title}</span>
+              <span className="q"><BeadText text={d.title} project={pid} /></span>
               <span className="meta"><span className="mono">{d.id}</span><span>· {d.status === "closed" ? "decided" : "waiting on you"}</span></span>
             </>
           )))}
@@ -383,7 +384,7 @@ function BeadsMemoryDetail({ pid, m, actions, armed, onForget, onForgotten }: {
     <div className="issue" data-testid="memory-detail">
       <div className="issue-head">
         <div className="issue-facts"><span className="mono">{m.key}</span><span>Beads memory</span></div>
-        <div className="mem-value">{m.value}</div>
+        <div className="mem-value"><BeadText text={m.value} project={pid} link /></div>
         <div className="faint small-text">
           {m.accepted_at ? <>accepted{m.accepted_by ? <> by <b>{m.accepted_by}</b></> : ""}{m.source ? ` from the ${m.source}` : ""} · {ago(m.accepted_at)}</> : "remembered by hand"}
         </div>
@@ -505,8 +506,8 @@ function DecisionDetail({ pid, d }: { pid: string; d: Issue }) {
     <div className="issue" data-testid="memory-detail">
       <div className="issue-head">
         <div className="issue-facts"><span className="mono">{d.id}</span><span>decision · {d.status === "closed" ? "decided" : statusLabel(d.status)}</span></div>
-        <h2>{d.title}</h2>
-        {d.description && <div className="issue-desc">{d.description}</div>}
+        <h2><BeadText text={d.title} project={pid} /></h2>
+        {d.description && <div className="issue-desc"><BeadText text={d.description} project={pid} link /></div>}
       </div>
       <div><a className="btn big" href={href({ name: "issues", project: pid, id: d.id })}>Open in Issues</a></div>
     </div>

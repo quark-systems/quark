@@ -14,6 +14,7 @@ import { ProjectHostSlice } from "../../components/hosts/ProjectHostSlice";
 import { lastSeen, PULSE, saveSeen, summarize } from "./summary";
 import "./settings.css";
 import "./overview.css";
+import { BeadText } from "../../ui/BeadText";
 
 /** How often the tab re-reads while open; the daemon folds new log entries on each read. */
 const REFRESH_MS = 5000;
@@ -90,7 +91,7 @@ export function Overview({ project: pid }: { project: string }) {
             {d && <p className="ov-summary" data-testid="overview-summary">{summarize(d)}</p>}
             {d && d.highlights.length > 0 && (
               <ul className="ov-list" data-testid="overview-highlights">
-                {d.highlights.map((h) => <Highlight key={h.seq} h={h} />)}
+                {d.highlights.map((h) => <Highlight key={h.seq} h={h} pid={pid} />)}
               </ul>
             )}
             {d?.truncated && <p className="faint">Showing the newest {d.highlights.length}.</p>}
@@ -112,7 +113,7 @@ export function Overview({ project: pid }: { project: string }) {
             {o && o.live.tasks.length === 0 && <p className="faint">No task has reported anything yet.</p>}
             {o && o.live.tasks.length > 0 && (
               <ul className="ov-list" data-testid="overview-tasks">
-                {o.live.tasks.map((t) => <Pulse key={t.engine_task} t={t} />)}
+                {o.live.tasks.map((t) => <Pulse key={t.engine_task} t={t} pid={pid} />)}
               </ul>
             )}
           </section>
@@ -179,24 +180,24 @@ function Card({ testid, label, value, sub }: { testid: string; label: string; va
   );
 }
 
-function TaskName({ taskId, title, engineTask }: { taskId?: string | null; title?: string | null; engineTask?: string | null }) {
-  const name = title ?? engineTask ?? "Project";
+function TaskName({ taskId, title, engineTask, pid }: { taskId?: string | null; title?: string | null; engineTask?: string | null; pid: string }) {
+  const name = title ? <BeadText text={title} project={pid} /> : engineTask ?? "Project";
   const cls = "ov-task" + (title ? "" : " mono");
   return taskId ? <a className={cls} href={href({ name: "task", id: taskId })}>{name}</a> : <span className={cls}>{name}</span>;
 }
 
-function Pulse({ t }: { t: TaskPulse }) {
+function Pulse({ t, pid }: { t: TaskPulse; pid: string }) {
   const p = PULSE[t.state];
   return (
     <li className="ov-row" data-testid="overview-task" data-state={t.state}>
       <span className="ov-dot" style={{ background: p.color }} title={p.label.replace(" today", "")} />
       <div className="ov-main">
         <div className="ov-line">
-          <TaskName taskId={t.task_id} title={t.title} engineTask={t.engine_task} />
+          <TaskName taskId={t.task_id} title={t.title} engineTask={t.engine_task} pid={pid} />
           {t.open_decisions.length > 0 && <span className="pill ov-decision" title="Open decisions">{t.open_decisions.join(", ")}</span>}
           {t.pull_request && <a className="ov-link mono" href={t.pull_request} target="_blank" rel="noreferrer">{prLabel(t.pull_request)}</a>}
         </div>
-        <div className="ov-note dim" title={t.note}><span className="mono faint">{t.verb}</span> {t.note}</div>
+        <div className="ov-note dim" title={t.note}><span className="mono faint">{t.verb}</span> <BeadText text={t.note} project={pid} /></div>
       </div>
       {t.harness && <span className="ov-agent faint" title={t.model ? `${t.harness} · ${t.model}` : t.harness}><HarnessLogo harness={t.harness} size={14} />{t.model && <span className="mono">{t.model}</span>}</span>}
       <span className="ov-when faint">{ago(t.at)}</span>
@@ -204,17 +205,17 @@ function Pulse({ t }: { t: TaskPulse }) {
   );
 }
 
-function Highlight({ h }: { h: DigestItem }) {
+function Highlight({ h, pid }: { h: DigestItem; pid: string }) {
   const k = KIND[h.kind];
   return (
     <li className="ov-row" data-testid="overview-highlight" data-kind={h.kind}>
       <span className="ov-kind" style={{ color: k.color }}>{k.label}</span>
       <div className="ov-main">
         <div className="ov-line">
-          <TaskName taskId={h.task_id} title={h.title} engineTask={h.engine_task} />
+          <TaskName taskId={h.task_id} title={h.title} engineTask={h.engine_task} pid={pid} />
           {h.url && <a className="ov-link mono" {...externalLink(h.url)}>{prLabel(h.url)}</a>}
         </div>
-        {h.text && <div className="ov-note dim" title={h.text}>{h.text}</div>}
+        {h.text && <div className="ov-note dim" title={h.text}><BeadText text={h.text} project={pid} /></div>}
       </div>
       <span className="ov-when faint">{ago(h.at)}</span>
     </li>

@@ -8,6 +8,7 @@ import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup } from "./groups";
 import { NextAttention } from "./NextAttention";
 import "./shell.css";
+import { BeadText } from "../ui/BeadText";
 
 export function LeftList({ mod }: { mod: string }) {
   const route = useRoute();
@@ -59,7 +60,7 @@ function ProjectSection({ g, route }: { g: ProjectGroup; route: Route }) {
       {g.workers.map((w) => (
         <Row key={w.id} indent dim={w.tone === "parked"} href={href({ name: "task", id: w.id })} testid="ll-worker"
           current={route.name === "task" && route.id === w.id}
-          lead={<StatusDot tone={w.tone} />} title={w.title} sub={w.sub}
+          lead={<StatusDot tone={w.tone} />} title={<BeadText text={w.title} project={g.project.id} />} sub={<BeadText text={w.sub} project={g.project.id} />}
           trail={w.needsYou ? <span className="ll-needs-you" role="img" aria-label="Needs you" /> : undefined} />
       ))}
     </section>

@@ -1217,7 +1217,7 @@ test("issues: filter, see what an issue waits for, and start a worker once nothi
   await chips.getByRole("button", { name: "Blocked 2" }).click();
   await expect(chips.getByRole("button", { name: "Blocked 2" })).toHaveAttribute("aria-pressed", "true");
   await expect(rows).toHaveCount(2);
-  await expect(rows.first()).toContainText("blocked by qk-d14, qk-43 · GitHub #61");
+  await expect(rows.first()).toContainText("blocked by qk-d14: Switch slice 2 to native?, qk-43: Slice 2 switch PR · GitHub #61");
   await rows.first().click();
   await expect(page).toHaveURL(/#\/p\/quark\/issues\/qk-44$/);
   const detail = page.getByTestId("issue-detail");
@@ -1231,7 +1231,7 @@ test("issues: filter, see what an issue waits for, and start a worker once nothi
   await expect(blockers.nth(1)).toContainText("in progress");
   await expect(detail).toContainText("Unblocks qk-45 (Start the slice 4 shadow window).");
   await expect(detail.getByTestId("start-worker")).toBeDisabled();
-  await expect(detail.getByTestId("start-worker")).toHaveText("Start a worker · waits for qk-d14, qk-43");
+  await expect(detail.getByTestId("start-worker")).toHaveText("Start a worker · waits for qk-d14: Switch slice 2 to native?, qk-43: Slice 2 switch PR");
 
   // A blocker opens in place, even a decision, which is under no filter.
   await blockers.first().click();
@@ -1273,7 +1273,7 @@ test("issues: draft new issues with the coordinator, refine them, and create the
   await expect(drafts.first()).toContainText("syncs to quark-systems/quark");
   await expect(drawer.getByLabel("Priority of new 1")).toHaveValue("1");
   await expect(drafts.nth(1)).toContainText("blocked by new · 1");
-  await expect(drawer).toContainText("Related, not merged in: qk-41 Next-attention shortcut in the app.");
+  await expect(drawer).toContainText("Related, not merged in: qk-41: Next-attention shortcut in the app.");
 
   // Later messages refine the drafts in place.
   await input.fill("Make the first one P0 and label both attention.");

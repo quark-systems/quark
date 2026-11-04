@@ -10,6 +10,7 @@ import { fromSlash } from "../commands";
 import { runCommand } from "../components/CoordinatorCommand";
 import { AttachButton, AttachmentList, Button, CoordinatorMark, Kbd } from "../ui";
 import { useAttachments, withAttachments } from "../attachments";
+import { BeadText } from "../ui/BeadText";
 
 export interface DockContext {
   projectId: string | null;
@@ -92,7 +93,7 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
       <AttachmentList className="dock-attachments" items={attach.items} uploading={attach.uploading} error={attach.error} onRemove={attach.remove} />
       <div className={"dock-box" + (attach.dragging ? " dropping" : "")} {...attach.dropProps}>
         <CoordinatorMark size={24} />
-        {ctx.about ? <span className="dock-about" data-testid="dock-about" title={ctx.about}>about {ctx.about}</span>
+        {ctx.about ? <span className="dock-about" data-testid="dock-about" title={ctx.about}>about <BeadText text={ctx.about} project={ctx.projectId} /></span>
           : scope ? <span className="dock-about" title={scope}>about {scope}</span>
           : !ctx.pinned && sorted.length > 1 && projectId ? (
             <select className="dock-project" aria-label="Project" value={projectId} onChange={(e) => setPicked(e.target.value)}>

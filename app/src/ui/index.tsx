@@ -6,6 +6,7 @@ import "./ui.css";
 
 export { taskTone, TONE_LABEL } from "./tone";
 export { DecisionCard, DecisionEvidence } from "./DecisionCard";
+export { BeadMarkdown, BeadText } from "./BeadText";
 export type { DecisionCardSize } from "./DecisionCard";
 export type { Tone } from "./tone";
 export { ControlRow, Disclosure, Field, FieldError, FieldHint, Form, FormActions, FormError, OptionCards, Select, TextArea, TextInput } from "./form";

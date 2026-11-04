@@ -9,6 +9,7 @@ import { errText } from "../util";
 import { useDraft } from "../drafts";
 import { useAttachments, withAttachments } from "../attachments";
 import { AttachButton, AttachmentList, cx } from "../ui";
+import { beadLabel, type BeadNames } from "../beadRefs";
 
 export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated }: {
   pid: string; beads: BeadsStatus; issues: Issue[]; seed: string | null;
@@ -81,13 +82,13 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
     return () => window.removeEventListener("keydown", k);
   }, [onClose]);
 
-  const titles = useMemo(() => Object.fromEntries(issues.map((i) => [i.id, i.title])), [issues]);
+  const names = useMemo(() => Object.fromEntries(issues.map((i) => [i.id, i])), [issues]);
   const messages = draft?.messages ?? [];
   // The drafts sit inside the coordinator's latest turn, which they belong to.
   let latest = -1;
   messages.forEach((m, n) => { if (m.role === "coordinator") latest = n; });
   const group = shown.length > 0 && (
-    <DraftGroup key="drafts" drafts={shown} beads={beads} related={draft?.related ?? []} titles={titles} onEdit={edit} />
+    <DraftGroup key="drafts" drafts={shown} beads={beads} related={draft?.related ?? []} names={names} onEdit={edit} />
   );
   const n = shown.length;
   const waiting = !!draft?.waiting || (busy && !draft);
@@ -147,15 +148,15 @@ export function IssueDraftDrawer({ pid, beads, issues, seed, onClose, onCreated 
 }
 
 /** The drafts as one bordered group, each editable in place, with what was judged related but kept apart. */
-function DraftGroup({ drafts, beads, related, titles, onEdit }: {
-  drafts: DraftIssue[]; beads: BeadsStatus; related: string[]; titles: Record<string, string>;
+function DraftGroup({ drafts, beads, related, names, onEdit }: {
+  drafts: DraftIssue[]; beads: BeadsStatus; related: string[]; names: BeadNames;
   onEdit: (key: string, patch: Partial<DraftIssue>) => void;
 }) {
   return (
     <>
       <div className="draft-group">
         {drafts.map((d) => {
-          const blockers = draftBlockers(d, drafts);
+          const blockers = draftBlockers(d, drafts, names);
           const pushed = pushedTo(beads, d.labels);
           return (
             <div key={d.key} className="draft-card" data-testid="draft-issue">
@@ -181,7 +182,7 @@ function DraftGroup({ drafts, beads, related, titles, onEdit }: {
         })}
       </div>
       {related.length > 0 && (
-        <div className="faint small-text">Related, not merged in: {related.map((id) => (titles[id] ? `${id} ${titles[id]}` : id)).join(", ")}.</div>
+        <div className="faint small-text">Related, not merged in: {related.map((id) => beadLabel(id, names)).join(", ")}.</div>
       )}
     </>
   );

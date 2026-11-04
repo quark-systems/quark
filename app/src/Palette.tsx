@@ -7,6 +7,7 @@ import { useLabels } from "./persona";
 import { useStore } from "./store";
 import { stateMeta } from "./util";
 import { setThemePreference, themePreference, ThemePreference } from "./theme";
+import { BeadText } from "./ui/BeadText";
 
 export function Palette({ onClose }: { onClose: () => void }) {
   const projects = useStore((s) => s.projects);
@@ -73,7 +74,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
               <Command.Group heading="Open decisions">
                 {open.map((d) => (
                   <Command.Item key={d.id} value={`decision ${d.question} ${pname(d.project_id)} ${d.id}`} onSelect={() => pick(() => go({ name: "inbox", id: d.id }))}>
-                    <span className="ellipsis">{d.question}</span>
+                    <span className="ellipsis"><BeadText text={d.question} project={d.project_id} /></span>
                     <span className="sub">{pname(d.project_id)}</span>
                   </Command.Item>
                 ))}
@@ -121,7 +122,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
             <Command.Group heading="Tasks">
               {sortedTasks.map((t) => (
                 <Command.Item key={t.id} value={`task ${t.title} ${pname(t.project_id)} ${t.id}`} onSelect={() => pick(() => go({ name: "task", id: t.id }))}>
-                  <span className="ellipsis">{t.title}</span>
+                  <span className="ellipsis"><BeadText text={t.title} project={t.project_id} /></span>
                   <span className="sub">{pname(t.project_id)} · {stateMeta(t.state).label}</span>
                 </Command.Item>
               ))}

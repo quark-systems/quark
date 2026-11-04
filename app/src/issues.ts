@@ -1,5 +1,6 @@
 // Filtering and labels for the Issues tab and the New issue side chat, kept pure so they are easy to test.
 import type { BeadsStatus, DraftIssue, Issue, IssueDraft, IssueRef, MemoryScope, SyncRule } from "./api";
+import { beadLabel, type BeadNames } from "./beadRefs";
 
 /** The Issues tab's filter chips, in order. */
 export type IssueChip = "ready" | "in_progress" | "blocked" | "closed";
@@ -51,7 +52,7 @@ export function statusLabel(s: string): string {
 /** The row's second line: type, where it stands, who works on it, the GitHub issue it mirrors. */
 export function issueMeta(i: Issue, known: Record<string, Issue>): string {
   const waiting = i.blocked_by.filter((b) => known[b]?.status !== "closed");
-  const where = i.status === "closed" ? "closed" : i.blocked ? `blocked by ${waiting.join(", ")}`
+  const where = i.status === "closed" ? "closed" : i.blocked ? `blocked by ${waiting.map((b) => beadLabel(b, known)).join(", ")}`
     : i.ready && i.status === "open" ? (isDecision(i) ? "waiting on you" : "ready") : statusLabel(i.status);
   const gh = githubNumber(i.external_ref);
   return [i.issue_type, where, i.assignee, gh && `GitHub ${gh}`].filter(Boolean).join(" · ");
@@ -77,9 +78,9 @@ export function openDraft(drafts: IssueDraft[], projectId: string): IssueDraft |
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
 }
 
-/** A draft's own blockers: another draft's key reads `new · 1`, an existing issue its id. */
-export function draftBlockers(d: DraftIssue, drafts: DraftIssue[]): string[] {
-  return d.blocked_by.map((b) => (drafts.some((x) => x.key === b) ? `new · ${b}` : b));
+/** A draft's own blockers: another draft's key reads `new · 1`, an existing issue its id and title. */
+export function draftBlockers(d: DraftIssue, drafts: DraftIssue[], names: BeadNames = {}): string[] {
+  return d.blocked_by.map((b) => (drafts.some((x) => x.key === b) ? `new · ${b}` : beadLabel(b, names)));
 }
 
 /** Labels as typed, comma or space separated. */

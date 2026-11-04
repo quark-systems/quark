@@ -10,6 +10,7 @@ import { useAttention } from "../shell/NextAttention";
 import { AttentionKind } from "../shell/attention";
 import { archivedIds, swatchFor } from "../shell/groups";
 import { UnarchiveButton } from "../components/ProjectLifecycle";
+import { BeadText } from "../ui/BeadText";
 
 const KIND: Record<AttentionKind, { label: string; tone: "needs-you" | "failed" }> = {
   decision: { label: "Decision", tone: "needs-you" },
@@ -76,7 +77,7 @@ export function Projects() {
                       <a key={i.key} className="home-row" href={href(i.route)} data-testid="home-needs">
                         <StatusDot tone={KIND[i.kind].tone} />
                         <span className={"home-kind " + KIND[i.kind].tone}>{KIND[i.kind].label}</span>
-                        <span className="home-title">{i.title}</span>
+                        <span className="home-title"><BeadText text={i.title} project={i.projectId} /></span>
                         <span className="home-meta">{pname(i.projectId)} · {ago(i.since)}</span>
                       </a>
                     ))}

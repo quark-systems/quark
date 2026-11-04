@@ -2,7 +2,6 @@
 // open PRs and recent decisions in this project. It only reads: the Overview tab marks things read.
 import React, { useEffect, useMemo, useState } from "react";
 import { api, Notice, OverviewDigest } from "../api";
-import { renderMarkdownInline } from "../markdown";
 import { href } from "../nav";
 import { useStore } from "../store";
 import { ago, workerNamed } from "../util";
@@ -11,6 +10,7 @@ import { lastSeen, summarize } from "../screens/dashboard/summary";
 import { useAttention } from "./NextAttention";
 import { describeUpdate } from "./updates";
 import { CommandButton } from "../components/CoordinatorCommand";
+import { BeadMarkdown, BeadText } from "../ui/BeadText";
 
 type Posted = Notice & { seq: number; ts: string };
 
@@ -19,7 +19,7 @@ function Update({ notice: n }: { notice: Posted }) {
   const tasks = useStore((s) => s.tasks);
   const [open, setOpen] = useState(false);
   const task = n.task_id ? workerNamed(tasks, n.task_id) : undefined;
-  const text = <span className="since-title md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(n.text) }} />;
+  const text = <BeadMarkdown inline link={false} className="since-title md" text={n.text} project={n.project_id} />;
   const when = <span className="since-kind" title={n.ts}>{ago(n.ts)}</span>;
   if (n.items?.length) {
     return (
@@ -31,7 +31,7 @@ function Update({ notice: n }: { notice: Posted }) {
           <ul className="since-digest">
             {n.items.map((i, k) => {
               const t = i.task_id ? workerNamed(tasks, i.task_id) : undefined;
-              const line = <span className="md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(i.summary) }} />;
+              const line = <BeadMarkdown inline link={false} className="md" text={i.summary} project={n.project_id} />;
               return <li key={k}>{t ? <a href={href({ name: "task", id: t.id })}>{line}</a> : line}</li>;
             })}
           </ul>
@@ -45,7 +45,7 @@ function Update({ notice: n }: { notice: Posted }) {
       <StatusDot tone={v.tone} label={v.label} />
       <span className="since-body">
         <span className="since-head"><b>{v.label}</b>{v.who && <> · {v.who}</>}</span>
-        {v.detail && <span className="since-detail md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(v.detail) }} />}
+        {v.detail && <BeadMarkdown inline link={false} className="since-detail md" text={v.detail} project={n.project_id} />}
       </span>
       {when}
     </>
@@ -92,7 +92,7 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
         {mine.length ? mine.map((i) => (
           <a key={i.key} className="since-item needs" href={href(i.route)} data-testid="since-needs">
             <StatusDot tone={i.kind === "decision" ? "needs-you" : "failed"} />
-            <span className="since-title">{i.title}</span><span className="since-kind">{KIND[i.kind]}</span>
+            <span className="since-title"><BeadText text={i.title} project={i.projectId} /></span><span className="since-kind">{KIND[i.kind]}</span>
           </a>
         )) : <p className="since-none">Nothing needs you here.</p>}
       </section>
@@ -116,7 +116,7 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
           <SectionLabel right={<a href={href({ name: "decisions", project: pid })}>All</a>}>Recent decisions</SectionLabel>
           {recent.map((d) => (
             <a key={d.id} className="since-item" href={href({ name: "decisions", project: pid, id: d.id })}>
-              <span className="since-title">{d.question}</span><span className="since-kind">{d.answer}</span>
+              <span className="since-title"><BeadText text={d.question} project={d.project_id} /></span><span className="since-kind"><BeadText text={d.answer} project={d.project_id} /></span>
             </a>
           ))}
         </section>

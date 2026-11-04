@@ -34,7 +34,7 @@ describe("chipList", () => {
 
 describe("issueMeta", () => {
   it("names only the blockers still open, and the GitHub issue", () => {
-    expect(issueMeta(byId["qk-44"], byId)).toBe("feature · blocked by qk-d14 · GitHub #61");
+    expect(issueMeta(byId["qk-44"], byId)).toBe("feature · blocked by qk-d14: Title qk-d14 · GitHub #61");
     expect(issueMeta(byId["qk-39"], byId)).toBe("feature · in progress · transcript-search");
     expect(issueMeta(byId["qk-41"], byId)).toBe("feature · ready");
     expect(issueMeta(byId["qk-d14"], byId)).toBe("decision · waiting on you");

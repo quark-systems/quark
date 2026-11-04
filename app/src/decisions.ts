@@ -1,6 +1,7 @@
 // The decision log's words and lists, kept pure so they are easy to test. The card
 // (`ui/DecisionCard.tsx`) and the Decisions tab (`screens/Decisions.tsx`) read them.
 import type { Decision, StandingRule, Task } from "./api";
+import { beadLabel, beadPlain, type BeadNames } from "./beadRefs";
 
 /** `D-14`, or the id's tail for a decision recorded before numbering. */
 export function decisionLabel(d: Pick<Decision, "id" | "number">): string {
@@ -15,12 +16,13 @@ export function askedBy(d: Decision, tasks: Record<string, Task>): string {
   return tasks[who]?.title ?? who;
 }
 
-/** What waits on the answer, shortened: `PR #95`, worker titles, other ids as given. */
-export function blockLabels(d: Decision, tasks: Record<string, Task>): string[] {
+/** What waits on the answer, shortened: `PR #95`, worker titles, issues with their titles, other ids as given. */
+export function blockLabels(d: Decision, tasks: Record<string, Task>, names: BeadNames = {}): string[] {
   return (d.brief?.blocks ?? []).map((b) => {
     const pr = b.match(/\/pull\/(\d+)/);
     if (pr) return `PR #${pr[1]}`;
-    return tasks[b]?.title ?? b;
+    if (tasks[b]) return beadPlain(tasks[b].title, names);
+    return names[b] ? beadLabel(b, names) : b;
   });
 }
 
