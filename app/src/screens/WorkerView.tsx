@@ -21,6 +21,7 @@ import { Dock } from "../shell/Dock";
 import { AttachButton, AttachmentList, cx, StatusDot, taskTone, TONE_LABEL } from "../ui";
 import { useDraft } from "../drafts";
 import { useAttachments, withAttachments } from "../attachments";
+import { BeadText } from "../ui/BeadText";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
@@ -49,7 +50,7 @@ export function WorkerView({ id }: { id: string }) {
         <div className="header worker-head">
           <StatusDot tone={taskTone(task.state)} label={TONE_LABEL[taskTone(task.state)]} />
           <div className="wh-text">
-            <h1 className="ellipsis" title={task.title}>{task.title}</h1>
+            <h1 className="ellipsis" title={task.title}><BeadText text={task.title} project={task.project_id} link /></h1>
             <span className="wh-sub ellipsis">
               <a href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
               {task.branch && <> · branch <span className="mono">{task.branch}</span></>}
@@ -331,6 +332,7 @@ const NO_ENTRIES: TranscriptItem[] = [];
 
 function TranscriptPanel({ taskId }: { taskId: string }) {
   const entries = useStore((s) => s.transcripts[taskId]) ?? NO_ENTRIES;
+  const project = useStore((s) => s.tasks[taskId]?.project_id);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
 
@@ -340,7 +342,7 @@ function TranscriptPanel({ taskId }: { taskId: string }) {
 
   if (status === "unavailable") return <Unavailable what="The transcript" endpoint={`GET /v1/tasks/${taskId}/transcript`} />;
   return (
-    <Transcript key={taskId} items={entries} agent="worker" testId="transcript" className="transcript"
+    <Transcript key={taskId} items={entries} agent="worker" project={project} testId="transcript" className="transcript"
       empty={status === "ok" ? <div className="empty">No transcript yet.</div> : status === "loading" ? <div className="empty">Loading…</div> : null}>
       {status === "error" && <div className="form-error">{err}</div>}
     </Transcript>

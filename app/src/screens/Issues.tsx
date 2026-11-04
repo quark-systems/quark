@@ -17,6 +17,8 @@ import { Unavailable } from "../components/Unavailable";
 import { CoordinatorChat } from "./ProjectBoard";
 import { IssueDraftDrawer } from "./IssueDraftDrawer";
 import "./issues.css";
+import { BeadText } from "../ui/BeadText";
+import { rememberBeadNames } from "../beadNames";
 
 export function Issues({ project: pid, id }: { project: string; id?: string }) {
   const project = useStore((s) => s.projects[pid]);
@@ -43,7 +45,7 @@ export function Issues({ project: pid, id }: { project: string; id?: string }) {
   useEffect(() => {
     if (!ready) return;
     let live = true;
-    api.issues(pid, "all").then((list) => { if (live) { setIssues(list); setLoadErr(null); } })
+    api.issues(pid, "all").then((list) => { if (live) { setIssues(list); rememberBeadNames(pid, list); setLoadErr(null); } })
       .catch((e) => { if (live) setLoadErr(errText(e)); });
     return () => { live = false; };
   }, [pid, ready, settled, reloads]);
@@ -267,7 +269,7 @@ function IssueView({ pid, i, asking, onAsk }: { pid: string; i: IssueDetail; ask
           {i.labels.map((l) => <span key={l} className="pill">{l}</span>)}
         </div>
         <h2>{i.title}</h2>
-        {i.description && <div className="issue-desc">{i.description}</div>}
+        {i.description && <div className="issue-desc"><BeadText text={i.description} project={pid} link /></div>}
       </div>
       {i.blocked_by_issues.length > 0 && (
         <section className="issue-section" aria-label="Blocked by">
@@ -286,19 +288,19 @@ function IssueView({ pid, i, asking, onAsk }: { pid: string; i: IssueDetail; ask
       {i.acceptance_criteria && (
         <section className="issue-section">
           <div className="issue-label">Done when</div>
-          <div className="issue-desc">{i.acceptance_criteria}</div>
+          <div className="issue-desc"><BeadText text={i.acceptance_criteria} project={pid} link /></div>
         </section>
       )}
       <section className="issue-section" aria-label="History">
         <div className="issue-label">History</div>
         <div>Filed{i.created_by ? ` by ${i.created_by}` : ""} · {ago(i.created_at)}</div>
-        {i.comments.map((c, n) => <div key={n}><span className="faint">{c.author}:</span> {c.text} <span className="faint">· {ago(c.created_at)}</span></div>)}
+        {i.comments.map((c, n) => <div key={n}><span className="faint">{c.author}:</span> <BeadText text={c.text} project={pid} link /> <span className="faint">· {ago(c.created_at)}</span></div>)}
         {i.closed_at && <div>Closed · {ago(i.closed_at)}</div>}
       </section>
       {!closed && (
         <div className="issue-actions">
           <button type="button" className="btn big" disabled={busy || sent || waits.length > 0} onClick={() => void start()} data-testid="start-worker">
-            {waits.length ? `Start a worker · waits for ${waits.map((r) => r.id).join(", ")}` : sent ? "Sent to the coordinator" : "Start a worker"}
+            {waits.length ? `Start a worker · waits for ${waits.map((r) => `${r.id}: ${r.title}`).join(", ")}` : sent ? "Sent to the coordinator" : "Start a worker"}
           </button>
           <button type="button" className={"btn big" + (asking ? " on" : "")} aria-pressed={asking} onClick={onAsk}>Ask the coordinator</button>
           {err && <span className="bad small-text">{err}</span>}

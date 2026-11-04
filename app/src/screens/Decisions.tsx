@@ -10,6 +10,7 @@ import { step } from "../inbox";
 import { decidedByAgent, decisionLabel, logList, LogFilter, rowSummary, rowTone } from "../decisions";
 import { ago } from "../util";
 import { DecisionCard, DecisionEvidence } from "../ui";
+import { BeadText } from "../ui/BeadText";
 
 const FILTERS: { id: LogFilter; label: string }[] = [
   { id: "open", label: "Open" },
@@ -91,9 +92,9 @@ export function Decisions({ project: pid, id }: { project?: string; id?: string 
                 data-testid="decision-log-row" aria-current={d.id === selected ? "true" : undefined}>
                 <span className="dl-num">{decisionLabel(d)}</span>
                 <span className="dl-text">
-                  <span className="dl-q">{d.question}</span>
+                  <span className="dl-q"><BeadText text={d.question} project={d.project_id} /></span>
                   {!pid && <span className="dl-project">{projects[d.project_id]?.name ?? d.project_id}</span>}
-                  <span className={"dl-sub " + rowTone(d)}>{rowSummary(d, tasks, rules, byId)}</span>
+                  <span className={"dl-sub " + rowTone(d)}><BeadText text={rowSummary(d, tasks, rules, byId)} project={d.project_id} /></span>
                 </span>
                 <span className="dl-when">
                   {ago(d.state === "open" ? d.opened_at : d.answered_at ?? d.opened_at)}

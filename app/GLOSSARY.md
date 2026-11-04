@@ -90,5 +90,6 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
 - Lead with the outcome and its consequence: "Merged. The worker's copy was cleaned up." not "Merge operation succeeded".
 - One title per dialog; each element has one job; buttons say what they do ("Switch now", not "OK").
 - Never put implementation in copy: no status-file names, event types, endpoint paths or engine terms outside developer tools.
+- Never show an issue by its id alone: show its title beside the id (`gluon-e1c Detect secrets integration`), or only the title. Render agent and daemon text with `BeadText` or `BeadMarkdown`, which add the titles.
 - Times are relative ("4 min ago") with the exact time on hover.
 - A panel whose endpoint is missing says what is unavailable, never an error trace.

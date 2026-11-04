@@ -2,7 +2,7 @@
 // previews and coordinator actions kept in view. While the agent works, the
 // latest step stays visible with a running state. Layout follows MonoCode's
 // WorkFoldLine and ActivityToolRow (https://github.com/hardbeat920/monocode, MIT).
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Decision } from "../../api";
 import { href } from "../../nav";
 import { useStore } from "../../store";
@@ -12,6 +12,9 @@ import { rise, useTranscript } from "./context";
 import { DiffCard } from "./DiffCard";
 import { Icon } from "./Icon";
 import { Activity, Step, stepKind, stepTitle, summarize, TurnPart } from "./turns";
+import { BeadText } from "../../ui/BeadText";
+import { useBeadNames } from "../../beadNames";
+import { shortIdsIn } from "../../beadRefs";
 
 type WorkPart = Extract<TurnPart, { kind: "work" }>;
 
@@ -105,9 +108,9 @@ function ActionCard({ id, action }: { id: number; action: CoordinatorAction }) {
       <div className="tx-action-body">
         <div className="tx-action-head">
           <span>{actionTitle(action)}</span>
-          <span className="mono ellipsis">{action.task}</span>
+          <span className="ellipsis"><BeadText text={action.task} project={project} /></span>
         </div>
-        {decision && action.reason && <div className="tx-action-reason">{action.reason}</div>}
+        {decision && action.reason && <div className="tx-action-reason"><BeadText text={action.reason} project={project} /></div>}
         {decision && project && <a className="tx-action-link" href={href({ name: "decisions", project, id: held })}>Open decision</a>}
       </div>
     </div>
@@ -132,19 +135,21 @@ export function findAsked(decisions: Record<string, Decision>, project: string |
 function AskCard({ id, action }: { id: number; action: AskAction }) {
   const { freshAfter, project } = useTranscript();
   const decision = useStore((s) => findAsked(s.decisions, project, action));
+  const names = useBeadNames(project);
+  const short = useMemo(() => shortIdsIn([action.question, action.context, ...action.options.map((o) => o.label)], names), [action, names]);
   return (
     <div className={"tx-ask" + rise(id, freshAfter)} data-testid="coordinator-ask">
       <div className="tx-ask-head"><Icon kind="decision" /><span>{actionTitle(action)}</span></div>
       {decision ? <DecisionCard d={decision} size="inline" /> : (
         <article className="dc dc-inline" data-testid="decision-card">
           <span className="dc-meta">{action.number ? `D-${action.number}` : "Decision"} · asked by the coordinator</span>
-          <div className="dc-q">{action.question}</div>
-          {action.context && <p className="dc-context clamp">{action.context}</p>}
+          <div className="dc-q"><BeadText text={action.question} project={project} link /></div>
+          {action.context && <p className="dc-context clamp"><BeadText text={action.context} project={project} link /></p>}
           {action.options.length > 0 && (
             <ul className="tx-ask-options">
               {action.options.map((o) => (
                 <li key={o.label} title={o.consequence ?? undefined}>
-                  {o.label}{o.label === action.recommended && <span className="faint"> · recommended</span>}
+                  <BeadText text={o.label} project={project} short={short} />{o.label === action.recommended && <span className="faint"> · recommended</span>}
                 </li>
               ))}
             </ul>

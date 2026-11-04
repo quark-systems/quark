@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import { Kbd } from "../ui";
 import { attentionQueue, AttentionItem, nextAttention } from "./attention";
 import { archivedIds } from "./groups";
+import { BeadText } from "../ui/BeadText";
 
 export function useAttention(): AttentionItem[] {
   const decisions = useStore((s) => s.decisions);
@@ -32,7 +33,7 @@ export function NextAttention({ mod }: { mod: string }) {
     <button type="button" className="na-btn" data-testid="next-attention" onClick={() => goNextAttention(queue, parseRoute(location.hash))}
       title={`${next.title} (${KIND[next.kind]})`}>
       <span className="ui-dot needs-you" aria-hidden="true" />
-      <span className="na-text">Next: {next.title}</span>
+      <span className="na-text">Next: <BeadText text={next.title} project={next.projectId} /></span>
       <span className="na-count" aria-label={`${queue.length} waiting`}>{queue.length}</span>
       <Kbd keys={`${mod}J`} />
     </button>

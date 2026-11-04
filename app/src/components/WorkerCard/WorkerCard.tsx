@@ -9,6 +9,7 @@ import { harnessMark } from "./harnessMarks";
 import { shortModel } from "./agentLine";
 import { useDiffStat } from "./diffStat";
 import "./WorkerCard.css";
+import { BeadText } from "../../ui/BeadText";
 
 export function WorkerCard({ task, flash }: { task: Task; flash?: boolean }) {
   const stat = useDiffStat(task);
@@ -19,9 +20,9 @@ export function WorkerCard({ task, flash }: { task: Task; flash?: boolean }) {
         {task.harness
           ? <HarnessLogo harness={task.harness} size={16} />
           : <span className="harness-logo harness-none" aria-hidden />}
-        <div className="title">{task.title}</div>
+        <div className="title"><BeadText text={task.title} project={task.project_id} /></div>
       </div>
-      {task.state_note && <div className="note" title={task.state_note}>{task.state_note}</div>}
+      {task.state_note && <div className="note" title={task.state_note}><BeadText text={task.state_note} project={task.project_id} /></div>}
       {(task.model || task.branch) && (
         <div className="wcard-agent" data-testid="card-agent">
           {task.model && <span className="wcard-model" title={`Model: ${task.model}`} data-testid="card-model">{shortModel(task.model)}</span>}

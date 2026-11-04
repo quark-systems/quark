@@ -1,8 +1,10 @@
 // One decision card in three sizes: `inline` in a conversation (one tap answers), `full`
 // in the Decisions tab (options with consequences, a reason, a standing rule), and `phone`
 // (a compact card with the first two options). See GLOSSARY.md, "Asking and answering".
-import { renderMarkdown, renderMarkdownInline } from "../markdown";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { beadLabel, BeadNames, shortIdsIn, ShortIds } from "../beadRefs";
+import { useBeadNames } from "../beadNames";
+import { BeadMarkdown, BeadText } from "./BeadText";
 import { api, Decision, DecisionOption, NotAvailable } from "../api";
 import { href } from "../nav";
 import { upsertDecision, upsertRule, useStore } from "../store";
@@ -18,10 +20,24 @@ export type DecisionCardSize = "inline" | "full" | "phone";
 
 const OTHER = "\u0000other";
 
+/**
+ * The decision's issues by id, and the shortened ids its asker used for issues it also names in
+ * full ("e1c" for `gluon-e1c`), so options like "e1c + 6kq" read as the work they stand for.
+ */
+function useDecisionBeads(d: Decision): { names: BeadNames; short: ShortIds } {
+  const names = useBeadNames(d.project_id);
+  const short = useMemo(() => shortIdsIn([
+    d.question, d.brief?.context, d.brief?.recommended_why, d.answer, d.outcome,
+    ...(d.brief?.options ?? []).flatMap((o) => [o.label, o.consequence]), ...(d.brief?.blocks ?? []),
+  ], names), [d, names]);
+  return { names, short };
+}
+
 /** The line over a question: its number, who asked and when, and what it blocks. */
 function DecisionMeta({ d }: { d: Decision }) {
   const tasks = useStore((s) => s.tasks);
-  const blocks = blockLabels(d, tasks);
+  const { names } = useDecisionBeads(d);
+  const blocks = blockLabels(d, tasks, names);
   return (
     <span className="dc-meta" data-testid="decision-meta">
       {decisionLabel(d)} · asked by {askedBy(d, tasks)}{" "}
@@ -99,17 +115,19 @@ function Problem({ err, unavailable }: Status) {
 
 function InlineCard({ d, send, ...status }: { d: Decision; send: Send } & Status) {
   const project = useStore((s) => s.projects[d.project_id]);
+  const { short } = useDecisionBeads(d);
+  const pid = d.project_id;
   const open = d.state === "open";
   return (
     <article className="dc dc-inline" data-testid="decision-card" aria-label={`Decision ${decisionLabel(d)}`}>
       <DecisionMeta d={d} />
-      <div className="dc-q">{d.question}</div>
-      {d.brief?.context && <p className="dc-context clamp">{d.brief.context}</p>}
+      <div className="dc-q"><BeadText text={d.question} project={pid} short={short} link /></div>
+      {d.brief?.context && <p className="dc-context clamp"><BeadText text={d.brief.context} project={pid} short={short} link /></p>}
       {open ? (
         <div className="dc-buttons">
           {sortedOptions(d).map((o) => (
             <Button key={o.label} kind={isRecommended(d, o) ? "primary" : "secondary"} disabled={status.busy}
-              title={o.consequence ?? undefined} onClick={() => void send(o.label)}>{o.label}</Button>
+              title={o.consequence ?? undefined} onClick={() => void send(o.label)}><BeadText text={o.label} project={pid} short={short} /></Button>
           ))}
           <ButtonLink kind="quiet" href={href({ name: "decisions", project: d.project_id, id: d.id })}>
             {options(d).length ? "Open with evidence" : "Answer"}
@@ -127,17 +145,19 @@ function InlineCard({ d, send, ...status }: { d: Decision; send: Send } & Status
 function PhoneCard({ d, send, ...status }: { d: Decision; send: Send } & Status) {
   const project = useStore((s) => s.projects[d.project_id]);
   const tasks = useStore((s) => s.tasks);
+  const { short } = useDecisionBeads(d);
+  const pid = d.project_id;
   const first = d.brief?.context?.split(/(?<=\.)\s/)[0];
   return (
     <article className="dc dc-phone" data-testid="decision-card">
       <span className="dc-kicker">{project?.name ?? d.project_id} · {askedBy(d, tasks)} · decision</span>
-      <span className="dc-q">{d.question}</span>
-      {first && <span className="dc-context">{first}</span>}
+      <span className="dc-q"><BeadText text={d.question} project={pid} short={short} /></span>
+      {first && <span className="dc-context"><BeadText text={first} project={pid} short={short} /></span>}
       {d.state === "open" ? (
         <span className="dc-buttons">
           {sortedOptions(d).slice(0, 2).map((o) => (
             <Button key={o.label} kind={isRecommended(d, o) ? "primary" : "secondary"} disabled={status.busy}
-              onClick={() => void send(o.label)}>{o.label}</Button>
+              onClick={() => void send(o.label)}><BeadText text={o.label} project={pid} short={short} /></Button>
           ))}
           {!options(d).length && (
             <ButtonLink href={href({ name: "decisions", project: d.project_id, id: d.id })}>Answer</ButtonLink>
@@ -150,11 +170,12 @@ function PhoneCard({ d, send, ...status }: { d: Decision; send: Send } & Status)
 }
 
 function AnswerLine({ d }: { d: Decision }) {
+  const { short } = useDecisionBeads(d);
   return (
     <div className="dc-answered" data-testid="decision-answer">
-      <b>{d.answer ?? "Closed with no answer in Quark"}</b>
+      <b>{d.answer ? <BeadText text={d.answer} project={d.project_id} short={short} /> : "Closed with no answer in Quark"}</b>
       {d.answered_by && <span className="faint"> · {d.answered_by}</span>}
-      {d.outcome && <div className="faint">{d.outcome}</div>}
+      {d.outcome && <div className="faint"><BeadText text={d.outcome} project={d.project_id} short={short} link /></div>}
     </div>
   );
 }
@@ -162,13 +183,14 @@ function AnswerLine({ d }: { d: Decision }) {
 function FullCard({ d, send, answerBox, ...status }: {
   d: Decision; send: Send; answerBox?: React.RefObject<HTMLTextAreaElement>;
 } & Status) {
+  const { short } = useDecisionBeads(d);
   return (
     <article className="dc dc-full" data-testid="decision-detail" aria-label={`Decision ${decisionLabel(d)}`}>
       {d.state === "acted" ? null : <DecisionProgress d={d} />}
       <div className="dc-head">
         {d.state === "open" ? <DecisionMeta d={d} /> : <LogTags d={d} />}
-        <h2 className="dc-q md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(d.question) }} />
-        {d.brief?.context && <div className="dc-context md" data-testid="decision-context" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.brief.context) }} />}
+        <BeadMarkdown as="h2" inline className="dc-q md" text={d.question} project={d.project_id} short={short} />
+        {d.brief?.context && <BeadMarkdown className="dc-context md" data-testid="decision-context" text={d.brief.context} project={d.project_id} short={short} />}
       </div>
       {d.state === "open"
         ? <AnswerForm d={d} send={send} answerBox={answerBox} {...status} />
@@ -181,6 +203,8 @@ function AnswerForm({ d, send, answerBox, ...status }: {
   d: Decision; send: Send; answerBox?: React.RefObject<HTMLTextAreaElement>;
 } & Status) {
   const opts = options(d);
+  const { short } = useDecisionBeads(d);
+  const pid = d.project_id;
   const [pick, setPick] = useState<string>(d.brief?.recommended && opts.some((o) => o.label === d.brief?.recommended)
     ? d.brief.recommended : opts[0]?.label ?? OTHER);
   const [other, setOther] = useDraft(`decision:${d.id}`);
@@ -198,7 +222,7 @@ function AnswerForm({ d, send, answerBox, ...status }: {
         <div className="dc-buttons" role="group" aria-label="Answer with one tap">
           {sortedOptions(d).map((o) => (
             <Button key={o.label} kind={isRecommended(d, o) ? "primary" : "secondary"} disabled={status.busy}
-              title={o.consequence ?? undefined} onClick={() => void send(o.label, { why })}>{o.label}</Button>
+              title={o.consequence ?? undefined} onClick={() => void send(o.label, { why })}><BeadText text={o.label} project={pid} short={short} /></Button>
           ))}
         </div>
       )}
@@ -209,9 +233,9 @@ function AnswerForm({ d, send, answerBox, ...status }: {
             <label key={o.label} className={"dc-option" + (pick === o.label ? " on" : "")}>
               <input type="radio" name={`opt-${d.id}`} checked={pick === o.label} onChange={() => setPick(o.label)} />
               <span className="dc-option-text">
-                <span className="dc-option-label">{o.label}{isRecommended(d, o) && <span className="dc-badge">Recommended</span>}</span>
-                {o.consequence && <span className="dc-consequence md" dangerouslySetInnerHTML={{ __html: renderMarkdownInline(o.consequence) }} />}
-                {isRecommended(d, o) && d.brief?.recommended_why && <span className="dc-why">Why: {d.brief.recommended_why}</span>}
+                <span className="dc-option-label"><BeadText text={o.label} project={pid} short={short} />{isRecommended(d, o) && <span className="dc-badge">Recommended</span>}</span>
+                {o.consequence && <BeadMarkdown inline className="dc-consequence md" text={o.consequence} project={pid} short={short} />}
+                {isRecommended(d, o) && d.brief?.recommended_why && <span className="dc-why">Why: <BeadText text={d.brief.recommended_why} project={pid} short={short} /></span>}
               </span>
             </label>
           ))}
@@ -286,6 +310,8 @@ function LogEntry({ d }: { d: Decision }) {
   const under = d.rule_id ? rules[d.rule_id] : undefined;
   const underFrom = under?.decision_id ? all[under.decision_id] : undefined;
   const uses = usesOf(d, Object.values(all));
+  const { short } = useDecisionBeads(d);
+  const pid = d.project_id;
   const [err, setErr] = useState<string | null>(null);
   // The rule's new words while it is being changed.
   const [draft, setDraft] = useState<string | null>(null);
@@ -307,14 +333,14 @@ function LogEntry({ d }: { d: Decision }) {
     <div className="dc-log" data-testid="decision-answer">
       <dl className="dc-dl">
         <dt>Asked</dt><dd>by {askedBy(d, tasks)}, {ago(d.opened_at)}</dd>
-        <dt>Answer</dt><dd>{d.answer ? <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.answer) }} /> : <span className="faint">Answered outside Quark</span>}</dd>
+        <dt>Answer</dt><dd>{d.answer ? <BeadMarkdown className="md" text={d.answer} project={pid} short={short} /> : <span className="faint">Answered outside Quark</span>}</dd>
         {d.answered_by && <><dt>By</dt><dd>Answered by {d.answered_by}{via && <>, {via}</>}{d.answered_at && <> · {ago(d.answered_at)}</>}</dd></>}
-        {d.answer_why && <><dt>Why</dt><dd><div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(d.answer_why) }} /></dd></>}
-        <dt>What happened</dt><dd>{d.outcome ?? <span className="faint">{d.state === "answered" ? "Waiting for the asker to act on it." : "Not recorded."}</span>}</dd>
+        {d.answer_why && <><dt>Why</dt><dd><BeadMarkdown className="md" text={d.answer_why} project={pid} short={short} /></dd></>}
+        <dt>What happened</dt><dd>{d.outcome ? <BeadText text={d.outcome} project={pid} short={short} link /> : <span className="faint">{d.state === "answered" ? "Waiting for the asker to act on it." : "Not recorded."}</span>}</dd>
         {under && <><dt>Under rule</dt><dd>{underFrom
           ? <a href={href({ name: "decisions", project: underFrom.project_id, id: underFrom.id })}>{decisionLabel(underFrom)}</a>
-          : under.text}</dd></>}
-        {rule && <><dt>The rule</dt><dd>{rule.text}{rule.changed_at && <span className="faint">{" "}· changed{rule.changed_by && <> by {rule.changed_by}</>} {ago(rule.changed_at)}</span>}</dd></>}
+          : <BeadText text={under.text} project={pid} link />}</dd></>}
+        {rule && <><dt>The rule</dt><dd><BeadText text={rule.text} project={pid} link />{rule.changed_at && <span className="faint">{" "}· changed{rule.changed_by && <> by {rule.changed_by}</>} {ago(rule.changed_at)}</span>}</dd></>}
         {d.bead_id && <><dt>Where it lives</dt><dd>
           Beads record <a href={href({ name: "issues", project: d.project_id, id: d.bead_id })}>{d.bead_id}</a> in the Project's database,
           so every agent sees it with the Project's issues{rule && !rule.revoked_at && ", and the rule as a memory"}.
@@ -325,7 +351,7 @@ function LogEntry({ d }: { d: Decision }) {
           <span className="ui-section-label"><span>Recent uses</span></span>
           {uses.slice(0, 5).map((u) => (
             <a key={u.id} href={href({ name: "decisions", project: u.project_id, id: u.id })}>
-              {decisionLabel(u)} · {u.question} · {ago(u.answered_at ?? u.opened_at)}
+              {decisionLabel(u)} · <BeadText text={u.question} project={u.project_id} /> · {ago(u.answered_at ?? u.opened_at)}
             </a>
           ))}
         </div>
@@ -357,6 +383,7 @@ function LogEntry({ d }: { d: Decision }) {
 export function DecisionEvidence({ d }: { d: Decision }) {
   const tasks = useStore((s) => s.tasks);
   const all = useStore((s) => s.decisions);
+  const { names } = useDecisionBeads(d);
   const links = d.brief?.evidence ?? [];
   const blocks = d.brief?.blocks ?? [];
   const related = Object.values(all).filter((x) => x.id !== d.id && x.project_id === d.project_id && x.state !== "open"
@@ -376,7 +403,8 @@ export function DecisionEvidence({ d }: { d: Decision }) {
         {blocks.map((b) => (
           <div key={b} className="dc-evidence-row">
             {/^https?:/.test(b) ? <a href={b} target="_blank" rel="noreferrer">{blockLabels({ ...d, brief: { blocks: [b] } }, tasks)[0]}</a>
-              : tasks[b] ? <a href={href({ name: "task", id: b })}>{tasks[b].title}</a> : <span>{b}</span>}
+              : tasks[b] ? <a href={href({ name: "task", id: b })}><BeadText text={tasks[b].title} project={d.project_id} /></a>
+              : names[b] ? <a href={href({ name: "issues", project: d.project_id, id: b })}>{beadLabel(b, names)}</a> : <span>{b}</span>}
           </div>
         ))}
       </>}
@@ -384,7 +412,7 @@ export function DecisionEvidence({ d }: { d: Decision }) {
         <span className="ui-section-label"><span>Earlier calls like this</span></span>
         {related.map((x) => (
           <a key={x.id} href={href({ name: "decisions", project: x.project_id, id: x.id })}>
-            {decisionLabel(x)} · {x.question} <span className="faint">· {x.answer ?? "answered"}</span>
+            {decisionLabel(x)} · <BeadText text={x.question} project={x.project_id} /> <span className="faint">· <BeadText text={x.answer ?? "answered"} project={x.project_id} /></span>
           </a>
         ))}
       </>}

@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, UsageMeter, CountBadge, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, UsageMeter, CountBadge, BeadMarkdown, BeadText, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -78,6 +78,18 @@ function OptionCardsExample() {
 const TONES: Tone[] = ["busy", "needs-you", "ready", "failed", "parked", "idle"];
 
 export const CATALOGUE: CatalogueEntry[] = [
+  {
+    name: "BeadText",
+    when: "Show daemon or agent text that may name the project's issues by id: worker titles, decision options, questions, notes.",
+    contract: "text; project whose issues to look up; link makes each issue a link (never inside a button or another link); short maps shortened ids (e1c) to full ones. An id the text names gets its title beside it, unless the text already says the title.",
+    example: () => <span>Next up: <BeadText project="catalogue" text="quark-e1c, after quark-6kq" /> (titles show once the project's issues load)</span>,
+  },
+  {
+    name: "BeadMarkdown",
+    when: "Render markdown from an agent (a coordinator message, a decision's context) that may name issues by id.",
+    contract: "text; project; inline for one line with no paragraph; as picks the element; short as for BeadText. Each issue named outside code and links becomes a link to it with its title.",
+    example: () => <BeadMarkdown project="catalogue" text="Start **quark-e1c** once `quark-6kq` merges." />,
+  },
   {
     name: "StatusDot",
     when: "Mark the state of a worker, project or item with one of the glossary's state words.",

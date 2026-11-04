@@ -1,9 +1,8 @@
 // One turn: the person's prompt as a bubble, the agent's work, its answer as
 // unboxed prose, and a footer with how long it worked. Follows MonoCode's
 // UserMessageBlock, TurnDuration and CopyTurnButton (https://github.com/hardbeat920/monocode, MIT).
-import { memo, useMemo, useState } from "react";
+import { memo, useState } from "react";
 import type { TranscriptItem } from "../../api";
-import { renderMarkdown, renderMarkdownInline } from "../../markdown";
 import { href } from "../../nav";
 import { useStore } from "../../store";
 import { StatusDot } from "../../ui";
@@ -15,6 +14,7 @@ import { Icon } from "./Icon";
 import { CommandCard } from "./CommandCard";
 import { activity, Activity, duration, Turn, turnMarkdown } from "./turns";
 import { Work } from "./Work";
+import { BeadMarkdown, BeadText } from "../../ui/BeadText";
 
 export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
   const { freshAfter } = useTranscript();
@@ -38,7 +38,7 @@ const EVENT_ICON: Record<EngineEvent["kind"], string> = { wake: "event", backgro
 
 /** A message from the engine, not a person: one quiet line, with what the session recorded behind it. */
 function EventRow({ event, id }: { event: EngineEvent; id: number }) {
-  const { freshAfter } = useTranscript();
+  const { freshAfter, project } = useTranscript();
   const [open, setOpen] = useState(false);
   if (event.items) return <WakeCard event={event} id={id} />;
   if (event.command) return <CommandCard note={event.command} id={id} raw={event.raw} />;
@@ -46,7 +46,7 @@ function EventRow({ event, id }: { event: EngineEvent; id: number }) {
     <div className={"tx-event tx-event-" + event.kind + rise(id, freshAfter)} data-testid="engine-event">
       <button className="tx-event-row" aria-expanded={open} onClick={() => setOpen(!open)} title="What the engine sent">
         <Icon kind={EVENT_ICON[event.kind]} />
-        <span className="tx-event-title">{event.title}</span>
+        <span className="tx-event-title"><BeadText text={event.title} project={project} /></span>
         <Icon kind={open ? "chevron-down" : "chevron-right"} />
       </button>
       {open && <pre className="tx-detail">{event.raw.trim()}</pre>}
@@ -58,6 +58,7 @@ function EventRow({ event, id }: { event: EngineEvent; id: number }) {
 function WakeCard({ event, id }: { event: EngineEvent; id: number }) {
   const { freshAfter } = useTranscript();
   const tasks = useStore((s) => s.tasks);
+  const { project } = useTranscript();
   const [open, setOpen] = useState(false);
   const items = event.items ?? [];
   return (
@@ -70,16 +71,15 @@ function WakeCard({ event, id }: { event: EngineEvent; id: number }) {
       <ul className="tx-wake-items">
         {items.map((item, i) => {
           const task = item.worker ? workerNamed(tasks, item.worker) : undefined;
-          const html = renderMarkdownInline(item.text);
           return (
             <li key={i} className="tx-wake-item">
               <StatusDot tone={item.tone} label={item.label} />
               <span className="tx-wake-need">{item.label}</span>
               <span className="tx-wake-text">
                 {item.worker && (task
-                  ? <a className="tx-wake-worker" href={href({ name: "task", id: task.id })}>{task.title}</a>
+                  ? <a className="tx-wake-worker" href={href({ name: "task", id: task.id })}><BeadText text={task.title} project={task.project_id} /></a>
                   : <span className="tx-wake-worker">{item.worker}</span>)}
-                {item.text && <span className="md" dangerouslySetInnerHTML={{ __html: html }} />}
+                {item.text && <BeadMarkdown inline className="md" text={item.text} project={project} />}
               </span>
             </li>
           );
@@ -102,11 +102,10 @@ export function UserMessage({ item, pending, note, fresh }: {
 }
 
 const AgentText = memo(function AgentText({ item }: { item: TranscriptItem }) {
-  const { freshAfter } = useTranscript();
-  const html = useMemo(() => renderMarkdown(item.text), [item.text]);
+  const { freshAfter, project } = useTranscript();
   return (
     <div className={"tx-text" + rise(item.id, freshAfter)}>
-      <div className="md" dangerouslySetInnerHTML={{ __html: html }} />
+      <BeadMarkdown className="md" text={item.text} project={project} />
       {item.truncated && <div className="tx-meta">Truncated by the daemon.</div>}
     </div>
   );
