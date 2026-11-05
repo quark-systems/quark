@@ -84,6 +84,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         menu.addItem(.separator())
         addActions()
+        fitHostedRows(menu)
     }
 
     private func addAttention(_ status: StatusView) {
