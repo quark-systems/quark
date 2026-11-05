@@ -3,8 +3,26 @@ import QuarkKit
 import QuarkUI
 import SwiftUI
 
-/// Width of the rich rows hosted in the menu.
+/// The narrowest a rich row hosted in the menu may be. `fitHostedRows` widens rows
+/// to the menu's width once every item is in.
 let rowWidth: CGFloat = 320
+
+/// Where text sits in a menu item, so hosted rows line up with plain ones: the
+/// leading inset is past the menu's checkmark column, the trailing one ends where
+/// submenu arrows and shortcuts do.
+enum MenuInset {
+    static let leading: CGFloat = 27
+    static let trailing: CGFloat = 18
+}
+
+extension View {
+    /// Lays out a hosted row with plain items' insets.
+    func menuRow(vertical: CGFloat = 4) -> some View {
+        padding(.leading, MenuInset.leading)
+            .padding(.trailing, MenuInset.trailing)
+            .padding(.vertical, vertical)
+    }
+}
 
 /// The top of the menu: is Quark running, and how is everything doing.
 struct HeaderView: View {
@@ -21,9 +39,7 @@ struct HeaderView: View {
                 Text("v\(h.version)").font(.caption).foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .frame(width: rowWidth, alignment: .leading)
+        .menuRow(vertical: 6)
     }
 
     private var line: String {
@@ -70,9 +86,7 @@ struct QuotaRow: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 4)
-        .frame(width: rowWidth, alignment: .leading)
+        .menuRow()
     }
 }
 
@@ -126,9 +140,7 @@ struct HostRow: View {
                 Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 4)
-        .frame(width: rowWidth, alignment: .leading)
+        .menuRow()
     }
 
     private var healthColor: NSColor {
@@ -156,10 +168,40 @@ struct LabeledMeter: View {
 /// A menu item holding a SwiftUI view, sized to fit it.
 func hostedItem<V: View>(_ view: V) -> NSMenuItem {
     let item = NSMenuItem()
-    let host = NSHostingView(rootView: view)
-    host.frame = NSRect(origin: .zero, size: host.fittingSize)
-    item.view = host
+    item.view = RowHost(view)
     return item
+}
+
+/// A SwiftUI row in the menu, laid out at a fixed width (a menu does not lay out
+/// its views itself).
+final class RowHost: NSHostingView<AnyView> {
+    private let content: AnyView
+
+    init<V: View>(_ view: V) {
+        content = AnyView(view)
+        super.init(rootView: content)
+        fit(width: rowWidth)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    @available(*, unavailable)
+    required init(rootView: AnyView) { fatalError("not used") }
+
+    func fit(width: CGFloat) {
+        rootView = AnyView(content.frame(width: width, alignment: .leading))
+        frame = NSRect(origin: .zero, size: fittingSize)
+    }
+}
+
+/// Widens every hosted row of `menu` to the menu's width, so bars and right-hand
+/// labels end where submenu arrows and shortcuts do.
+func fitHostedRows(_ menu: NSMenu) {
+    let width = max(rowWidth, menu.size.width)
+    for item in menu.items {
+        (item.view as? RowHost)?.fit(width: width)
+    }
 }
 
 /// A two-line menu item title: the main text, and a smaller secondary line,
