@@ -527,3 +527,98 @@ async fn coordinator_commands_carry_what_the_coordinator_needs() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_bob_workers_conversation_comes_from_bobs_database() {
+    let h = harness();
+    let workspace = h.dir.path().join("workspace");
+    let worktree = h.dir.path().join("worktrees/bob-1");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let (_, _project) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Quark", "workspace_path": workspace})),
+    )
+    .await;
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![EngineTask {
+            id: "bob-1".into(),
+            title: "Bob task".into(),
+            kind: Some(TaskKind::Ship),
+            state: TaskState::Running,
+            state_note: None,
+            state_source: None,
+            harness: Some("bob".into()),
+            pull_request_url: None,
+            worktree: Some(worktree.clone()),
+            worktree_at: None,
+            terminal: None,
+        }],
+    });
+    // Bob 2.x's schema: the workspace is named in `project_id`.
+    let db = h.dir.path().join("bob.db");
+    let con = rusqlite::Connection::open(&db).unwrap();
+    con.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+            directory TEXT NOT NULL, created_at INTEGER NOT NULL,
+            task_type TEXT NOT NULL DEFAULT 'normal');
+         CREATE TABLE messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
+            data TEXT NOT NULL, created_at INTEGER NOT NULL);",
+    )
+    .unwrap();
+    con.execute(
+        "INSERT INTO tasks VALUES ('t', ?1, NULL, '', 1793991191309, 'normal')",
+        [format!("file:{}", worktree.display())],
+    )
+    .unwrap();
+    let message = |id: &str, data: Value| {
+        con.execute(
+            "INSERT INTO messages VALUES (?1, 't', ?2, ?3, 1793991197009)",
+            rusqlite::params![id, data["role"].as_str().unwrap(), data.to_string()],
+        )
+        .unwrap();
+    };
+    message(
+        "u",
+        json!({"role": "user", "content": "Fix the bulk accept"}),
+    );
+    message("s", json!({"role": "system", "content": "You are Bob"}));
+    message(
+        "a",
+        json!({"role": "assistant", "content": "Reading the code.", "toolCalls": [
+            {"id": "c1", "name": "execute_command", "arguments": {"command": "ls"}}]}),
+    );
+
+    let projector = h.projector().with_bob_db(db.clone());
+    projector.refresh_all().await.unwrap();
+    let worker: Vec<_> = h
+        .events(0)
+        .into_iter()
+        .filter(|e| e.event_type == EventType::WorkerTranscript)
+        .collect();
+    let roles: Vec<_> = worker
+        .iter()
+        .map(|e| e.payload["entry"]["role"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(roles, ["user", "assistant", "tool_call"]);
+    assert_eq!(worker[0].payload["entry"]["text"], "Fix the bulk accept");
+    assert_eq!(worker[0].payload["entry"]["ts"], "2026-11-06T18:53:17.009Z");
+    let last = worker.last().unwrap().seq;
+
+    // Only rows Bob writes later are emitted, across a daemon restart.
+    projector.refresh_all().await.unwrap();
+    assert!(h.events(last).is_empty());
+    message(
+        "r",
+        json!({"role": "tool", "content": "src", "toolUsage": {"signature":
+            {"id": "c1", "name": "execute_command", "isError": false}}}),
+    );
+    h.projector().with_bob_db(db).refresh_all().await.unwrap();
+    let new = h.events(last);
+    assert_eq!(new.len(), 1);
+    assert_eq!(new[0].payload["entry"]["role"], "tool_result");
+    assert_eq!(new[0].payload["entry"]["tool_call_id"], "c1");
+}
