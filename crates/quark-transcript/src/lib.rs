@@ -17,7 +17,11 @@
 //! - [`SessionFormat::Kiro`]: Kiro CLI's V3 engine,
 //!   `<kiro home>/sessions/<workspace hash>/sess_<id>/messages.jsonl`, beside a
 //!   `session.json` naming its working directories.
+//!
+//! IBM Bob keeps no log file: its conversation is rows of its database,
+//! read by the daemon and parsed one row at a time ([`parse_bob_message`]).
 
+mod bob;
 mod claude;
 mod codex;
 mod kiro;
@@ -28,6 +32,7 @@ mod reader;
 mod tool;
 mod usage;
 
+pub use bob::parse_bob_message;
 pub use locate::{locate, locate_since, SessionRoots};
 pub use quark_systems::{
     ToolDiffLine, ToolDiffLineKind, ToolInfo, ToolKind, TranscriptEntry, TranscriptRole,

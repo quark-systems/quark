@@ -716,6 +716,108 @@ pub fn has_task(db: &Path, dir: &Path, since: Option<std::time::SystemTime>) -> 
     read_only(db, query).unwrap_or(false)
 }
 
+/// One row of Bob's `messages` table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskMessage {
+    /// The row's `rowid`: grows with every message Bob writes, so the
+    /// largest one read is where the next read starts.
+    pub seq: i64,
+    /// When Bob wrote it, epoch milliseconds.
+    pub created_ms: Option<i64>,
+    /// The message, a JSON object.
+    pub data: String,
+}
+
+/// The messages of Bob's top-level tasks in `dir` written after row `after`,
+/// oldest first, at most `limit`. With `since`, only tasks created at or
+/// after it count, so a reused worktree slot does not show an earlier
+/// occupant's conversation. Read from Bob's database at `db`; an absent
+/// database, or one without a `messages` table, reads as none.
+pub fn task_messages(
+    db: &Path,
+    dir: &Path,
+    since: Option<std::time::SystemTime>,
+    after: i64,
+    limit: usize,
+) -> Result<Vec<TaskMessage>, String> {
+    if db.as_os_str().is_empty() || !db.is_file() {
+        return Ok(Vec::new());
+    }
+    let mut dirs = vec![dir.to_string_lossy().into_owned()];
+    if let Ok(real) = std::fs::canonicalize(dir) {
+        let real = real.to_string_lossy().into_owned();
+        if real != dirs[0] {
+            dirs.push(real);
+        }
+    }
+    let since_ms = since.map(|t| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64)
+    });
+    let query = |con: &rusqlite::Connection| -> Result<Vec<TaskMessage>, rusqlite::Error> {
+        let has_messages = con
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'")?
+            .exists([])?;
+        let cols = columns(con)?;
+        let has = |c: &str| cols.iter().any(|x| x == c);
+        let Some(in_dir) = in_dir(&has).filter(|_| has_messages && has("id")) else {
+            return Ok(Vec::new());
+        };
+        let mut tasks = format!("SELECT id FROM tasks WHERE {in_dir}");
+        if has("task_type") {
+            tasks.push_str(" AND (task_type IS NULL OR task_type = 'normal')");
+        }
+        if has("parent_id") {
+            tasks.push_str(" AND parent_id IS NULL");
+        }
+        if has("created_at") {
+            tasks.push_str(" AND (?2 IS NULL OR created_at >= ?2)");
+        } else {
+            tasks.push_str(" AND (?2 IS NULL OR 1)");
+        }
+        let sql = format!(
+            "SELECT rowid, created_at, data FROM messages \
+             WHERE task_id IN ({tasks}) AND rowid > ?3 ORDER BY rowid LIMIT ?4"
+        );
+        let mut stmt = con.prepare(&sql)?;
+        let mut out: Vec<TaskMessage> = Vec::new();
+        for d in &dirs {
+            let rows =
+                stmt.query_map(rusqlite::params![d, since_ms, after, limit as i64], |r| {
+                    let created_ms = match r.get_ref(1)? {
+                        rusqlite::types::ValueRef::Integer(i) => Some(i),
+                        rusqlite::types::ValueRef::Real(f) => Some(f as i64),
+                        _ => None,
+                    };
+                    let data = match r.get_ref(2)? {
+                        rusqlite::types::ValueRef::Text(t) => {
+                            String::from_utf8_lossy(t).into_owned()
+                        }
+                        _ => String::new(),
+                    };
+                    Ok(TaskMessage {
+                        seq: r.get(0)?,
+                        created_ms,
+                        data,
+                    })
+                })?;
+            for row in rows {
+                let row = row?;
+                if !out.iter().any(|m| m.seq == row.seq) {
+                    out.push(row);
+                }
+            }
+        }
+        out.sort_by_key(|m| m.seq);
+        out.truncate(limit);
+        Ok(out)
+    };
+    read_only(db, query).map_err(|e| match e {
+        Ok(e) => format!("bob database not readable read-only: {e}"),
+        Err(e) => e,
+    })
+}
+
 /// One Bob task's spend so far, from its `costs`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskCost {
@@ -1297,5 +1399,72 @@ esac
         assert_eq!(costs[0].model.as_deref(), Some("granite"));
         assert_eq!(costs[0].created_ms, Some(1000.0));
         assert_eq!((costs[1].input, costs[1].output), (10, 4));
+    }
+
+    #[test]
+    fn task_messages_reads_the_worktrees_conversation_after_a_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let db = dir.path().join("bob.db");
+        assert_eq!(task_messages(&db, &wt, None, 0, 10).unwrap(), Vec::new());
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+                directory TEXT NOT NULL, created_at INTEGER NOT NULL, task_type TEXT NOT NULL DEFAULT 'normal');
+             CREATE TABLE messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
+                data TEXT NOT NULL, created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let w = wt.to_string_lossy().into_owned();
+        let task = |id: &str, project: &str, parent: Option<&str>, created: i64, kind: &str| {
+            con.execute(
+                "INSERT INTO tasks VALUES (?1, ?2, ?3, '', ?4, ?5)",
+                rusqlite::params![id, project, parent, created, kind],
+            )
+            .unwrap();
+        };
+        task("old", &format!("file:{w}"), None, 1_000, "normal");
+        task("new", &format!("file:{w}"), None, 5_000, "normal");
+        task("sub", &format!("file:{w}"), Some("new"), 6_000, "subagent");
+        task("other", "file:/elsewhere", None, 5_000, "normal");
+        for (id, t, at) in [
+            ("m1", "old", 1_001),
+            ("m2", "new", 5_001),
+            ("m3", "other", 5_002),
+            ("m4", "sub", 6_001),
+            ("m5", "new", 7_000),
+        ] {
+            con.execute(
+                "INSERT INTO messages VALUES (?1, ?2, 'user', ?3, ?4)",
+                rusqlite::params![id, t, format!("{{\"content\":\"{id}\"}}"), at],
+            )
+            .unwrap();
+        }
+        let all = task_messages(&db, &wt, None, 0, 10).unwrap();
+        let ids: Vec<_> = all.iter().map(|m| m.data.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                r#"{"content":"m1"}"#,
+                r#"{"content":"m2"}"#,
+                r#"{"content":"m5"}"#
+            ]
+        );
+        assert_eq!(all[1].created_ms, Some(5_001));
+
+        // A reused slot shows only its own task's messages.
+        let took = std::time::UNIX_EPOCH + Duration::from_millis(4_000);
+        let mine = task_messages(&db, &wt, Some(took), 0, 10).unwrap();
+        assert_eq!(mine.len(), 2);
+        // Reads continue after the last row seen, and stop at `limit`.
+        let first = task_messages(&db, &wt, Some(took), 0, 1).unwrap();
+        assert_eq!(first.len(), 1);
+        let rest = task_messages(&db, &wt, Some(took), first[0].seq, 10).unwrap();
+        assert_eq!(rest.len(), 1);
+        assert!(rest[0].data.contains("m5"));
+        assert!(task_messages(&db, &wt, Some(took), rest[0].seq, 10)
+            .unwrap()
+            .is_empty());
     }
 }

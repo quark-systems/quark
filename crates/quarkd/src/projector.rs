@@ -89,7 +89,17 @@ impl Projector {
     /// Reads harness session logs from `roots` instead of the current user's
     /// default harness directories.
     pub fn with_session_roots(mut self, roots: SessionRoots) -> Self {
-        self.transcripts = Arc::new(TranscriptTap::new(self.store.clone(), roots));
+        let bob_db = self.transcripts.bob_db().to_path_buf();
+        self.transcripts =
+            Arc::new(TranscriptTap::new(self.store.clone(), roots).with_bob_db(bob_db));
+        self
+    }
+
+    /// Reads Bob workers' conversations from `db` instead of
+    /// `~/.bob/db/bob.db`.
+    pub fn with_bob_db(mut self, db: PathBuf) -> Self {
+        let roots = self.transcripts.roots().clone();
+        self.transcripts = Arc::new(TranscriptTap::new(self.store.clone(), roots).with_bob_db(db));
         self
     }
 
@@ -465,12 +475,15 @@ impl Projector {
                 tracing::warn!(project = %project_id, error = %e, "coordinator transcript");
             }
             for t in tasks {
-                let (Some(worktree), Some(format)) = (
-                    t.worktree.as_deref(),
-                    t.harness.as_deref().and_then(SessionFormat::for_harness),
-                ) else {
+                let Some(worktree) = t.worktree.as_deref() else {
                     continue;
                 };
+                let harness = t.harness.as_deref().map(crate::engine::engine_harness);
+                let bob = harness == Some("bob");
+                let format = harness.and_then(SessionFormat::for_harness);
+                if format.is_none() && !bob {
+                    continue;
+                }
                 let task_id = match store.task_id_for_engine(project_id, &t.id) {
                     Ok(Some(id)) => id,
                     Ok(None) => continue,
@@ -482,7 +495,13 @@ impl Projector {
                 let source = TranscriptSource::Task {
                     task_id: task_id.clone(),
                 };
-                match tap.poll(project_id, source, worktree, &[format], t.worktree_at) {
+                let polled = match format {
+                    Some(format) => {
+                        tap.poll(project_id, source, worktree, &[format], t.worktree_at)
+                    }
+                    None => tap.poll_bob(project_id, source, worktree, t.worktree_at),
+                };
+                match polled {
                     Ok(polled) => {
                         if let Some(error) = polled.api_error {
                             nudges.stopped(

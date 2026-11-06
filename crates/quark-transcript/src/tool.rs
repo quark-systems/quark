@@ -7,7 +7,7 @@
 //! (<https://github.com/hardbeat920/monocode>, MIT, Copyright (c) 2026 Nick).
 //! This is a smaller reimplementation, not a copy.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{str_at, ToolDiffLine, ToolDiffLineKind, ToolInfo, ToolKind};
 
@@ -61,7 +61,7 @@ pub(crate) fn describe(name: &str, input: &Value, cwd: Option<&str>) -> ToolInfo
                 ..info(ToolKind::Read, title)
             }
         }
-        "write" | "write_file" | "create_file" => {
+        "write" | "write_file" | "create_file" | "write_to_file" => {
             let p = path(&["file_path", "path"]);
             let content = str_at(input, "content").unwrap_or("");
             let mut d = Diff::default();
@@ -90,6 +90,35 @@ pub(crate) fn describe(name: &str, input: &Value, cwd: Option<&str>) -> ToolInfo
                 ..info(ToolKind::Edit, title)
             })
         }
+        // Bob: SEARCH/REPLACE blocks in `diff`, or one `search`/`replace`.
+        "apply_diff" | "search_and_replace" => {
+            let p = path(&["path", "file_path"]);
+            let mut d = Diff::default();
+            match str_at(input, "diff") {
+                Some(diff) => search_replace_blocks(diff).iter().for_each(|(old, new)| {
+                    d.replace(&json!({"old_string": old, "new_string": new}))
+                }),
+                None => d.replace(input),
+            }
+            let title = p.as_deref().map_or("Edit".into(), |p| format!("Edit {p}"));
+            d.into_info(ToolInfo {
+                path: p,
+                ..info(ToolKind::Edit, title)
+            })
+        }
+        "insert_content" => {
+            let p = path(&["path", "file_path"]);
+            let mut d = Diff::default();
+            d.lines(
+                str_at(input, "content").unwrap_or(""),
+                ToolDiffLineKind::Add,
+            );
+            let title = p.as_deref().map_or("Edit".into(), |p| format!("Edit {p}"));
+            d.into_info(ToolInfo {
+                path: p,
+                ..info(ToolKind::Edit, title)
+            })
+        }
         "apply_patch" => {
             let text = match input {
                 Value::String(s) => s.as_str(),
@@ -99,7 +128,7 @@ pub(crate) fn describe(name: &str, input: &Value, cwd: Option<&str>) -> ToolInfo
             };
             patch(text, cwd)
         }
-        "bash" | "shell" | "exec_command" | "local_shell" | "shell_command" => {
+        "bash" | "shell" | "exec_command" | "local_shell" | "shell_command" | "execute_command" => {
             let command = match input {
                 Value::String(s) => s.clone(),
                 other => match other.get("command").or_else(|| other.get("cmd")) {
@@ -136,7 +165,7 @@ pub(crate) fn describe(name: &str, input: &Value, cwd: Option<&str>) -> ToolInfo
                 )
             }
         }
-        "ls" | "list" | "list_dir" | "list_directory" => {
+        "ls" | "list" | "list_dir" | "list_directory" | "list_files" => {
             let p = path(&["path", "dir"]);
             let title = p.as_deref().map_or("List".into(), |p| format!("List {p}"));
             ToolInfo {
@@ -171,7 +200,9 @@ pub(crate) fn describe(name: &str, input: &Value, cwd: Option<&str>) -> ToolInfo
             });
             info(ToolKind::Agent, title)
         }
-        "todowrite" | "update_plan" | "todo" => info(ToolKind::Plan, "Update the plan".into()),
+        "todowrite" | "update_plan" | "todo" | "update_todo_list" => {
+            info(ToolKind::Plan, "Update the plan".into())
+        }
         _ => info(ToolKind::Other, name.to_string()),
     }
 }
@@ -208,6 +239,39 @@ fn relative(path: &str, cwd: Option<&str>) -> String {
         }
     }
     path.to_string()
+}
+
+/// The (search, replace) pairs of a Bob `apply_diff` diff: blocks of
+/// `<<<<<<< SEARCH`, optional `:start_line:` and `-------` lines, the old
+/// text, `=======`, the new text, `>>>>>>> REPLACE`.
+fn search_replace_blocks(diff: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut lines = diff.lines();
+    while let Some(l) = lines.next() {
+        if !l.trim_end().ends_with("SEARCH") || !l.starts_with("<<<<<<<") {
+            continue;
+        }
+        let (mut old, mut new) = (Vec::new(), Vec::new());
+        let mut in_new = false;
+        for l in lines.by_ref() {
+            if l.starts_with(">>>>>>>") {
+                break;
+            }
+            if !in_new && l.trim_end() == "=======" {
+                in_new = true;
+            } else if in_new {
+                new.push(l);
+            } else if !(old.is_empty()
+                && (l.starts_with(":start_line:")
+                    || l.starts_with(":end_line:")
+                    || l.trim_end() == "-------"))
+            {
+                old.push(l);
+            }
+        }
+        out.push((old.join("\n"), new.join("\n")));
+    }
+    out
 }
 
 fn first_line(s: &str) -> &str {
@@ -284,8 +348,12 @@ impl Diff {
     /// dropped, keeping one line of context before the change.
     fn replace(&mut self, edit: &Value) {
         let get = |keys: &[&str]| keys.iter().find_map(|k| str_at(edit, k)).unwrap_or("");
-        let old: Vec<&str> = get(&["old_string", "oldText", "old_str"]).lines().collect();
-        let new: Vec<&str> = get(&["new_string", "newText", "new_str"]).lines().collect();
+        let old: Vec<&str> = get(&["old_string", "oldText", "old_str", "search"])
+            .lines()
+            .collect();
+        let new: Vec<&str> = get(&["new_string", "newText", "new_str", "replace"])
+            .lines()
+            .collect();
         let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
         let max_suffix = old.len().min(new.len()) - prefix;
         let suffix = old
