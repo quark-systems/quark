@@ -477,7 +477,14 @@ impl Dispatcher {
         if matches!(p.stage, Stage::Placed { .. }) {
             return Err(CoreError::Invalid(format!("task {task} is already placed")));
         }
-        let resolution = self.resolve_rule(&config, rule).await;
+        let escalated = p.resolution.clone().filter(|r| r.status != Status::Off);
+        let mut resolution = self.resolve_rule(&config, rule).await;
+        // A classifier that was asked and did not decide stays on the
+        // record: its answer, and why the coordinator was asked instead.
+        if let Some(prior) = escalated {
+            resolution.notes.insert(1, resolve::escalated_note(&prior));
+            resolution.answer = prior.answer;
+        }
         self.apply(&mut s, &key, resolution).await
     }
 

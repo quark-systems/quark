@@ -25,7 +25,7 @@ Its block takes:
 | `credential` | | a keychain reference, `keychain:<service>`, never a key; `ollama` needs none for local models |
 | `url` | `https://api.typesafe.ai` (`system1`), `http://localhost:11434` (`ollama`) | the server; `/v1/systemone` is added |
 | `confidence_floor` | `0.6` | below it the classifier's pick is not used |
-| `timeout_ms` | `5000` | |
+| `timeout_ms` | `5000` (`system1`), `15000` (`ollama`) | an Ollama model can take seconds to load after it idles |
 | `on_failure` | `coordinator` | `coordinator` or `default` |
 
 Any other field is refused, and so is an inline key. Store a key with `security add-generic-password -U -s <service> -a "$USER" -w`.

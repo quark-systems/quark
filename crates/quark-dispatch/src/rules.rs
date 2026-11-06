@@ -22,6 +22,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub const DEFAULT_CONFIDENCE_FLOOR: f64 = 0.6;
 /// The default classifier timeout.
 pub const DEFAULT_TIMEOUT_MS: u64 = 5000;
+/// The default timeout for an Ollama classifier, which loads its model on
+/// the first call after it idles and can take longer than the hosted API.
+pub const OLLAMA_TIMEOUT_MS: u64 = 15_000;
 /// The default System One model.
 pub const DEFAULT_CLASSIFIER_MODEL: &str = "jev-latest";
 /// The provider for the hosted System One API.
@@ -323,7 +326,11 @@ impl ClassifierSettings {
                 .unwrap_or_else(|| DEFAULT_CLASSIFIER_MODEL.to_string()),
             credential: block.credential,
             confidence_floor: block.confidence_floor.unwrap_or(DEFAULT_CONFIDENCE_FLOOR),
-            timeout_ms: block.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
+            timeout_ms: block.timeout_ms.unwrap_or(if provider == OLLAMA {
+                OLLAMA_TIMEOUT_MS
+            } else {
+                DEFAULT_TIMEOUT_MS
+            }),
             on_failure: block.on_failure.unwrap_or_default(),
         }
     }
