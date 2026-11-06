@@ -9,7 +9,7 @@
 //!   credential: keychain:quark/classifier   # a keychain reference, never an inline key
 //!   url: http://mac.lan:11434    # the server; the provider's own when absent
 //!   confidence_floor: 0.6        # below this, on_failure decides
-//!   timeout_ms: 5000
+//!   timeout_ms: 5000             # 15000 for ollama
 //!   on_failure: coordinator      # coordinator | default (fall back to the default rule)
 //! ```
 //!
@@ -36,6 +36,9 @@ pub const USER_FILE: &str = "config.yaml";
 
 pub const DEFAULT_CONFIDENCE_FLOOR: f64 = 0.6;
 pub const DEFAULT_TIMEOUT_MS: u64 = 5000;
+/// An Ollama server loads its model on the first call after it idles, which
+/// can take longer than the hosted API's default allows.
+pub const OLLAMA_TIMEOUT_MS: u64 = 15_000;
 /// The longest a classifier may be given to answer.
 pub const MAX_TIMEOUT_MS: u64 = 60_000;
 
@@ -226,7 +229,10 @@ pub fn effective(project: Option<&Block>, user: Option<&Block>) -> Result<Classi
             .confidence_floor
             .or(u.confidence_floor)
             .unwrap_or(DEFAULT_CONFIDENCE_FLOOR),
-        timeout_ms: p.timeout_ms.or(u.timeout_ms).unwrap_or(DEFAULT_TIMEOUT_MS),
+        timeout_ms: p.timeout_ms.or(u.timeout_ms).unwrap_or(match provider {
+            Provider::Ollama => OLLAMA_TIMEOUT_MS,
+            _ => DEFAULT_TIMEOUT_MS,
+        }),
         on_failure: p.on_failure.or(u.on_failure).unwrap_or_default(),
     };
     Ok(match provider {
@@ -363,7 +369,7 @@ mod tests {
                 "provider": "ollama",
                 "model": "d1",
                 "confidence_floor": 0.6,
-                "timeout_ms": 5000,
+                "timeout_ms": 15000,
                 "on_failure": "coordinator"
             })
         );

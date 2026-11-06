@@ -475,6 +475,45 @@ async fn a_configured_classifier_decides_over_the_coordinators_rule() {
 }
 
 #[tokio::test]
+async fn the_coordinators_match_keeps_the_classifier_that_did_not_decide() {
+    let rig = Rig::new().await;
+    let d = rig
+        .dispatcher_with(
+            r#"{"classifier":{"provider":"ollama","model":"d1"},
+              "rules":[{"name":"docs","when":"Documentation only.","use":{"harness":"codex"}},
+                       {"when":"anything","use":{"harness":"claude"}}],
+              "default":{"harness":"claude"}}"#,
+            answer("rule_1", 0.3),
+            Duration::from_secs(600),
+        )
+        .await;
+    // Below the floor: the coordinator is asked.
+    let stage = d
+        .submit_rule("p".into(), "t1".into(), request("one"), "rule_2")
+        .await
+        .unwrap();
+    assert!(matches!(stage, Stage::Escalated { .. }), "{stage:?}");
+    let stage = d
+        .choose_rule(&"p".into(), &"t1".into(), "rule_2")
+        .await
+        .unwrap();
+    let Stage::Chosen { choice } = stage else {
+        panic!("{stage:?}");
+    };
+    assert_eq!(choice.profile.harness, "claude");
+    let r = resolutions(&rig.log).pop().unwrap();
+    assert_eq!(r.rule.as_deref(), Some("rule_2"));
+    assert_eq!(r.notes[0], "the coordinator matched rule_2");
+    assert!(
+        r.notes[1].starts_with(quark_dispatch::CLASSIFIER_ESCALATED)
+            && r.notes[1].contains("below floor 0.6"),
+        "{:?}",
+        r.notes
+    );
+    assert_eq!(r.answer.map(|a| a.choice).as_deref(), Some("rule_1"));
+}
+
+#[tokio::test]
 async fn with_no_classifier_and_no_rules_the_default_applies() {
     let rig = Rig::new().await;
     let d = rig

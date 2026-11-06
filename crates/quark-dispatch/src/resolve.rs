@@ -556,6 +556,21 @@ pub fn resolve_rule(
 /// How a [`resolve_rule`] resolution's first note begins.
 pub const COORDINATOR_MATCHED: &str = "the coordinator matched";
 
+/// How the note begins, after [`COORDINATOR_MATCHED`], that says why the
+/// classifier's resolution escalated before the coordinator matched a rule.
+pub const CLASSIFIER_ESCALATED: &str = "the classifier's resolution escalated:";
+
+/// The [`CLASSIFIER_ESCALATED`] note for the resolution that escalated.
+pub fn escalated_note(prior: &Resolution) -> String {
+    let why = prior
+        .reason
+        .as_deref()
+        .map(|r| r.trim_end_matches([':', ' ']))
+        .filter(|r| !r.is_empty())
+        .unwrap_or("no reason given");
+    format!("{CLASSIFIER_ESCALATED} {why}")
+}
+
 /// The first note of the resolution with no classifier and no rules, where
 /// the default profiles apply with nothing to judge.
 pub const ONLY_DEFAULT: &str =

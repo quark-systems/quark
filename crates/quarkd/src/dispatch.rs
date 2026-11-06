@@ -188,14 +188,27 @@ pub fn decider(r: &EngineResolution) -> DispatchDecider {
 /// matched its rule (`true`) or the default rule applied with no rules to
 /// match (`false`). `None` when a classifier was consulted.
 fn by_coordinator(r: &EngineResolution) -> Option<bool> {
+    let first = r.notes.first().map(String::as_str);
+    // The coordinator's match can follow a classifier that did not decide.
+    if first.is_some_and(|n| n.starts_with(quark_dispatch::COORDINATOR_MATCHED)) {
+        return Some(true);
+    }
     if r.classifier_consulted || r.fallback.is_some() {
         return None;
     }
-    match r.notes.first().map(String::as_str) {
-        Some(n) if n.starts_with(quark_dispatch::COORDINATOR_MATCHED) => Some(true),
+    match first {
         Some(n) if n == quark_dispatch::ONLY_DEFAULT => Some(false),
         _ => None,
     }
+}
+
+/// Why the classifier's resolution escalated, when the coordinator then
+/// matched the rule.
+fn escalated(r: &EngineResolution) -> Option<&str> {
+    r.notes
+        .iter()
+        .find_map(|n| n.strip_prefix(quark_dispatch::CLASSIFIER_ESCALATED))
+        .map(str::trim)
 }
 
 /// The rule the resolution applied: the default rule after a fallback,
@@ -267,9 +280,16 @@ pub fn matched(r: &EngineResolution) -> String {
         None => "a rule".into(),
     };
     match (by_coordinator(r), r.confidence) {
-        (Some(true), _) => {
-            format!("No classifier is configured, so the coordinator matched {rule}.")
-        }
+        (Some(true), _) => match escalated(r) {
+            Some(why) => {
+                let who = match &r.classifier_model {
+                    Some(m) => format!("The classifier ({m})"),
+                    None => "The classifier".into(),
+                };
+                format!("{who} did not decide ({why}), so the coordinator matched {rule}.")
+            }
+            None => format!("No classifier is configured, so the coordinator matched {rule}."),
+        },
         (Some(false), _) => {
             "No classifier or rules are configured, so the default rule applied.".into()
         }
@@ -478,6 +498,61 @@ mod tests {
         assert!(r
             .summary
             .starts_with("No classifier or rules are configured"));
+    }
+
+    #[test]
+    fn the_coordinators_match_after_the_classifier_did_not_decide() {
+        let mut matched = clear(("claude", Some("sonnet")));
+        matched.classifier_model = Some("d1".into());
+        matched.confidence = Some(0.33);
+        matched.notes = vec![
+            format!("{} rule_2", quark_dispatch::COORDINATOR_MATCHED),
+            format!(
+                "{} confidence 0.33 below floor 0.6",
+                quark_dispatch::CLASSIFIER_ESCALATED
+            ),
+            "rule matched".into(),
+        ];
+        let r = build(
+            "tsk_1",
+            "prj_1",
+            &spawn("claude", Some("sonnet")),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(matched.clone())),
+        );
+        assert_eq!(r.decided_by, DispatchDecider::Coordinator);
+        assert_eq!(r.classifier.provider, SYSTEM1);
+        assert_eq!(r.classifier.model.as_deref(), Some("d1"));
+        assert_eq!(r.classifier.confidence, Some(0.33));
+        assert_eq!(
+            r.summary,
+            "The classifier (d1) did not decide (confidence 0.33 below floor 0.6), so the \
+             coordinator matched rule rule_2 (A trivial mechanical edit.). The resolution \
+             selected claude-code:sonnet."
+        );
+
+        // A classifier that failed gave no answer, so no model either.
+        matched.classifier_consulted = false;
+        matched.classifier_model = None;
+        matched.confidence = None;
+        matched.notes[1] = format!(
+            "{} http 000 after 5021 ms",
+            quark_dispatch::CLASSIFIER_ESCALATED
+        );
+        let r = build(
+            "tsk_1",
+            "prj_1",
+            &spawn("claude", Some("sonnet")),
+            DispatchTrigger::Spawn,
+            Resolved::Ran(Box::new(matched)),
+        );
+        assert_eq!(r.decided_by, DispatchDecider::Coordinator);
+        assert!(
+            r.summary
+                .starts_with("The classifier did not decide (http 000 after 5021 ms), so"),
+            "{}",
+            r.summary
+        );
     }
 
     #[test]
