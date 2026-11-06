@@ -32,7 +32,7 @@ pub mod secrets;
 mod supervisor;
 
 pub use events::{Assignment, Cause, SupervisorEvent};
-pub use fleet::{Fleet, Generation, Steer, Worker};
+pub use fleet::{Fleet, Generation, Steer, SteerStatus, Unhealthy, Worker};
 pub use launch::WorkerUrls;
 pub use secrets::Secrets;
 pub use supervisor::{

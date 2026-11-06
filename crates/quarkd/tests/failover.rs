@@ -154,6 +154,8 @@ impl Setup {
                 terminal: None,
                 worktree: Some(self.worktree.clone()),
                 worktree_at: None,
+                unhealthy: None,
+                unanswered_since: None,
             }],
         });
     }
@@ -626,6 +628,8 @@ async fn a_limit_the_worker_passed_and_a_finished_task_are_left_alone() {
             terminal: None,
             worktree: Some(s.worktree.clone()),
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
         }],
     });
     s.claude_session(&s.home().join(".claude"), "s1", &[claude_rate_limit()]);

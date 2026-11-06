@@ -401,6 +401,8 @@ fn engine_task(id: &str, harness: &str, state: TaskState) -> EngineTask {
         terminal: None,
         worktree: None,
         worktree_at: None,
+        unhealthy: None,
+        unanswered_since: None,
     }
 }
 

@@ -1185,3 +1185,49 @@ async fn workers_have_terminals_that_follow_relaunches() {
     assert!(sessions.list(&project.id).is_empty());
     sessions.detach_all();
 }
+
+#[tokio::test]
+async fn reports_unhealthy_workers_and_unanswered_steers() {
+    use quark_systems::TaskMessageStatus;
+    let env = Env::new();
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    let engine = NativeEngine::new(env.log(), sup.clone());
+    let ws = ws(&env);
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+
+    engine
+        .send_message(&ws, "t1", "still there?")
+        .await
+        .unwrap();
+    eventually("the steer", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "still there?")
+    })
+    .await;
+    let messages = engine.messages(&ws, "t1").await.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].status, TaskMessageStatus::Delivered);
+    assert!(messages[0].delivered_at.is_some());
+    let t = engine.snapshot(&ws).await.unwrap().tasks.remove(0);
+    assert!(t.unanswered_since.is_some());
+
+    assert!(engine
+        .worker_unhealthy(&ws, "t1", "sign in again", None)
+        .await
+        .unwrap());
+    let t = engine.snapshot(&ws).await.unwrap().tasks.remove(0);
+    assert_eq!(t.state, TaskState::Blocked);
+    assert_eq!(t.unhealthy.as_deref(), Some("sign in again"));
+    assert_eq!(t.state_note.as_deref(), Some("sign in again"));
+
+    assert!(engine.worker_healthy(&ws, "t1").await.unwrap());
+    let t = engine.snapshot(&ws).await.unwrap().tasks.remove(0);
+    assert_eq!(t.state, TaskState::Running);
+    assert_eq!(t.unhealthy, None);
+
+    assert!(matches!(
+        engine.messages(&ws, "nope").await,
+        Err(EngineError::TaskNotFound(_))
+    ));
+}

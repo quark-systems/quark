@@ -499,6 +499,8 @@ mod tests {
                         terminal: None,
                         worktree: Some(wt.clone()),
                         worktree_at: None,
+                        unhealthy: None,
+                        unanswered_since: None,
                     }],
                 },
             )
@@ -597,6 +599,8 @@ mod tests {
             terminal: None,
             worktree: Some(wt.clone()),
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
         };
         store
             .apply_snapshot(

@@ -6,7 +6,7 @@ use quark_systems::{
     ActOnDecision, AgentRole, AnswerDecision, CoordinatorCommand, CoordinatorCommandRequest,
     CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
     DispatchRecord, ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task,
-    TaskBrief, TaskChanges, TaskDiff, TaskEvent, TranscriptItem, UpdateProject,
+    TaskBrief, TaskChanges, TaskDiff, TaskEvent, TaskMessage, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -364,6 +364,30 @@ pub async fn send_task_message(
     let (ws, task) = engine_target(&state, id).await?;
     state.engine.send_message(&ws, &task, &input.text).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The steering messages sent to a task's worker, oldest first, and whether
+/// the worker acknowledged each: `delivered` means it was typed into the
+/// worker's session and the worker has not reacted since, so one that stays
+/// `delivered` points at a stuck worker. Empty when the engine does not
+/// track messages.
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/messages",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 200, body = [TaskMessage]),
+        (status = 404, body = ErrorBody),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn list_task_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<TaskMessage>>, ApiError> {
+    let (ws, task) = engine_target(&state, id).await?;
+    Ok(Json(state.engine.messages(&ws, &task).await?))
 }
 
 /// Dispatches `POST /v1/tasks/{id}:<action>`.
@@ -1488,6 +1512,7 @@ async fn run_command(
         list_tasks,
         get_task,
         send_task_message,
+        list_task_messages,
         cancel_task,
         relaunch_task,
         list_task_events,
@@ -1548,7 +1573,10 @@ pub(super) fn router() -> axum::Router<AppState> {
         // `:relaunch` and `:clear`; the router allows one parameter per
         // segment.
         .route("/v1/tasks/{id}", get(get_task).post(task_action))
-        .route("/v1/tasks/{id}/messages", post(send_task_message))
+        .route(
+            "/v1/tasks/{id}/messages",
+            get(list_task_messages).post(send_task_message),
+        )
         .route("/v1/tasks/{id}/transcript", get(task_transcript))
         .route("/v1/tasks/{id}/events", get(list_task_events))
         .route("/v1/tasks/{id}/dispatch", get(list_task_dispatch))

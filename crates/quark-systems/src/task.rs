@@ -121,6 +121,38 @@ pub struct SendTaskMessage {
     pub text: String,
 }
 
+/// Where a steering message is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskMessageStatus {
+    /// Recorded, waiting for a live worker to type it into.
+    Queued,
+    /// Typed into the worker's session; the worker has not reacted since.
+    /// One that stays here is a worker that may be stuck.
+    Delivered,
+    /// The worker started a turn after it but has not finished one.
+    Read,
+    /// The worker finished a turn or reported after it.
+    Answered,
+}
+
+/// A steering message sent to a task's worker, and whether the worker
+/// acknowledged it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TaskMessage {
+    pub id: String,
+    pub text: String,
+    pub status: TaskMessageStatus,
+    /// When it was recorded (RFC 3339 UTC).
+    pub sent_at: Option<String>,
+    /// When it was typed into the worker's session.
+    pub delivered_at: Option<String>,
+    /// When the worker started a turn after it.
+    pub read_at: Option<String>,
+    /// When the worker finished a turn or reported after it.
+    pub answered_at: Option<String>,
+}
+
 /// Replace a task's worker in the same worktree. Absent fields keep the
 /// worker's current harness, model and effort.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]

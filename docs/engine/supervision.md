@@ -24,6 +24,7 @@ It composes the other native crates through their `quark-core` contracts and kee
   Every worker gets `QUARK_PROJECT`, `QUARK_TASK`, `QUARK_GENERATION`, `QUARK_STATUS_FILE` and, when quarkd serves the worker routes, `QUARK_MCP_URL` and `QUARK_HOOK_URL`.
 - **Steer** records `supervisor.steer` first, then pastes it into the live session and records `supervisor.delivered`; with `launch.enter_again_ms` set, Enter is pressed once more that long later without holding up the call.
   A message the worker could not receive (no session, or the session just died) goes into the next generation's brief, so steering is never lost; delivery is at least once.
+  Each message then shows whether the worker reacted (`Steer::status`, `GET /v1/tasks/{id}/messages`, and the coordinator's `task` and `fleet` tools): `queued` until it is typed in, `delivered` until a worker message from the generation that got it follows its `supervisor.delivered`, `read` once that is the harness's `busy` hook (a turn started), and `answered` once the worker finished a turn or reported. A steer that stays `delivered` is a worker that may be stuck; the coordinator can look at its screen or relaunch it.
 - **Answer** records `DecisionAnswered` and steers the answer in.
 - **Interrupt** sends the manifest's interrupt keys. **Cancel** records `Cancelled` first (so the task is not recovered), types the manifest's exit command, and kills the session after a grace period. **Relaunch** stops the current generation and launches a new one in the same worktree, optionally on another harness, model, effort or account, with a note for the new worker.
 - **Complete** records that the work landed and stops the worker. **Teardown** is refused until the task is done or failed, then returns the worktree; a worktree with uncommitted or unpushed work is reported `Kept` and never discarded.
@@ -47,6 +48,12 @@ The supervision pass only reports a quiet worker. quarkd's fleet check (`crates/
 2. when it is quiet that long again after its nudge, or a dialog stopped the nudge, wakes the coordinator (`coordinator.requested` by "the fleet check", with the last lines of the worker's screen) to steer, answer, relaunch or cancel it, or ask the user. At most once in 2 hours per worker.
 
 A new generation starts over. The check's memory is in-process, so after a restart quiet time counts from zero again.
+
+## Worker health
+
+A worker whose agent's sign-in is refused (an expired login, a revoked key) sits at its prompt, and steering it only fails again. The transcript tap reads that from the agent's session log: Claude Code's `{"isApiErrorMessage":true,"error":"authentication_failed"}` turn and Codex's `error` event with `codex_error_info` `unauthorized`, when the log ends there. quarkd then calls `Supervisor::mark_unhealthy`, which records `supervisor.unhealthy` for the current generation and blocks a running, paused or asking task with the reason (which wakes the coordinator). The task's note says the agent needs signing in again. An error written before the current generation started belongs to an earlier worker and is ignored.
+
+When the log shows the agent writing again (someone signed it in and it carried on), `Supervisor::mark_healthy` records `supervisor.healthy` and resumes the blocked task. A relaunch starts a healthy generation.
 
 ## Durability
 

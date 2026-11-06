@@ -79,6 +79,8 @@ async fn overview_reports_live_status_and_what_changed_since() {
                     terminal: None,
                     worktree: None,
                     worktree_at: None,
+                    unhealthy: None,
+                    unanswered_since: None,
                 }],
             },
         )

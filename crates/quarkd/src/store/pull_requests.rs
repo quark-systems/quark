@@ -824,6 +824,8 @@ mod tests {
                         terminal: None,
                         worktree: None,
                         worktree_at: None,
+                        unhealthy: None,
+                        unanswered_since: None,
                     }],
                 },
             )
@@ -1066,6 +1068,8 @@ mod tests {
             terminal: None,
             worktree: None,
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
         };
         FleetSnapshot { tasks: vec![et] }
     }

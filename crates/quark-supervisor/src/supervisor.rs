@@ -1243,6 +1243,100 @@ impl Supervisor {
         self.steer(project, task, text).await.map(Nudge::Sent)
     }
 
+    // ---- health --------------------------------------------------------
+
+    /// The task's worker cannot work until a person acts: its agent's
+    /// sign-in was refused (`reason` says how). The worker is marked
+    /// unhealthy, and a running or paused task is blocked with the reason,
+    /// which wakes the coordinator. An error the agent wrote (`written_at`) before the
+    /// current worker started belongs to an earlier one and is ignored.
+    /// Returns whether anything was recorded.
+    pub async fn mark_unhealthy(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+        reason: &str,
+        written_at: Option<SystemTime>,
+    ) -> Result<bool> {
+        let key = (project.clone(), task.clone());
+        let _guard = self.lock(&key).await;
+        self.refresh().await?;
+        let w = self.worker(project, task)?;
+        let Some(g) = w.current.clone().filter(|g| g.exited.is_none()) else {
+            return Ok(false);
+        };
+        if let (Some(written), Some(started)) = (written_at, g.started_at) {
+            if written < started {
+                return Ok(false);
+            }
+        }
+        if w.health().is_some_and(|u| u.reason == reason) {
+            return Ok(false);
+        }
+        self.record(
+            project,
+            task,
+            SupervisorEvent::Unhealthy {
+                generation: g.id.clone(),
+                reason: reason.to_string(),
+            },
+        )
+        .await?;
+        let state = self.state(project, task);
+        if state == TaskState::Paused {
+            // A paused worker waits for something to clear by itself; this
+            // will not, so it is blocked instead.
+            self.transition(project, task, TaskEvent::Resumed).await?;
+        }
+        if matches!(
+            state,
+            TaskState::Running | TaskState::NeedsDecision | TaskState::Paused
+        ) {
+            self.transition(
+                project,
+                task,
+                TaskEvent::Blocked {
+                    reason: reason.to_string(),
+                },
+            )
+            .await?;
+        }
+        Ok(true)
+    }
+
+    /// The task's unhealthy worker is working again (someone signed its
+    /// agent in and it carried on): it is marked healthy, and a task its
+    /// ill health blocked resumes. Returns whether anything was recorded.
+    pub async fn mark_healthy(&self, project: &ProjectId, task: &TaskId) -> Result<bool> {
+        // Most calls find nothing to do; skip the lock for those.
+        if !self
+            .fleet
+            .get(project, task)
+            .is_some_and(|w| w.health().is_some())
+        {
+            return Ok(false);
+        }
+        let key = (project.clone(), task.clone());
+        let _guard = self.lock(&key).await;
+        self.refresh().await?;
+        let w = self.worker(project, task)?;
+        let Some(u) = w.health().cloned() else {
+            return Ok(false);
+        };
+        self.record(
+            project,
+            task,
+            SupervisorEvent::Healthy {
+                generation: u.generation.clone(),
+            },
+        )
+        .await?;
+        if self.state(project, task) == TaskState::Blocked {
+            self.transition(project, task, TaskEvent::Resumed).await?;
+        }
+        Ok(true)
+    }
+
     async fn poll_status_files(&self) {
         let workers: Vec<(Key, Generation)> = self
             .fleet

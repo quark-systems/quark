@@ -113,6 +113,62 @@ pub(crate) fn claude_api_error(v: &Value) -> Option<ApiError> {
     })
 }
 
+/// Claude Code `error` values that mean the agent's sign-in no longer works.
+const AUTH_ERRORS: &[&str] = &["authentication_failed"];
+
+/// A turn the harness gave up on because its sign-in was refused: an
+/// expired or revoked login, or a bad API key. Nothing the agent does fixes
+/// it; a person must sign the account in again.
+///
+/// Claude Code writes such a turn as
+/// `{"type":"assistant","isApiErrorMessage":true,"error":"authentication_failed",...}`
+/// (for example "OAuth token has expired" or "Invalid API key · Please run
+/// /login"). Codex writes an `error` event whose `codex_error_info` is
+/// `unauthorized`.
+pub(crate) fn claude_auth_error(v: &Value) -> Option<ApiError> {
+    let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+    if str_at(v, "type") != Some("assistant")
+        || !flag("isApiErrorMessage")
+        || flag("isSidechain")
+        || !str_at(v, "error").is_some_and(|e| AUTH_ERRORS.contains(&e))
+    {
+        return None;
+    }
+    let text = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .map(text_of)
+        .unwrap_or_default();
+    let l = limit(CLAUDE_API_ERROR, &text, str_at(v, "timestamp"));
+    Some(ApiError {
+        message: l.message,
+        ts: l.ts,
+    })
+}
+
+pub(crate) fn codex_auth_error(v: &Value) -> Option<ApiError> {
+    if str_at(v, "type") != Some("event_msg") {
+        return None;
+    }
+    let p = v.get("payload")?;
+    if str_at(p, "type") != Some("error") {
+        return None;
+    }
+    let info = p.get("codex_error_info")?;
+    let unauthorized = info.as_str() == Some("unauthorized") || info.get("unauthorized").is_some();
+    unauthorized.then(|| {
+        let l = limit(
+            CODEX_ERROR_EVENT,
+            str_at(p, "message").unwrap_or(""),
+            str_at(v, "timestamp"),
+        );
+        ApiError {
+            message: l.message,
+            ts: l.ts,
+        }
+    })
+}
+
 pub(crate) fn codex(v: &Value) -> Option<RateLimit> {
     if str_at(v, "type") != Some("event_msg") {
         return None;
@@ -217,6 +273,26 @@ mod tests {
         ] {
             assert_eq!(of(SessionFormat::Codex, line), None, "{line}");
         }
+    }
+
+    #[test]
+    fn reports_a_refused_sign_in() {
+        let v = |line: &str| serde_json::from_str::<Value>(line).unwrap();
+        let expired = r#"{"type":"assistant","timestamp":"2026-11-01T09:00:00Z","isApiErrorMessage":true,"error":"authentication_failed","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token."}]}}"#;
+        let e = SessionFormat::Claude.auth_error(&v(expired)).unwrap();
+        assert!(e.message.unwrap().contains("OAuth token has expired"));
+        assert_eq!(e.ts.as_deref(), Some("2026-11-01T09:00:00Z"));
+        for other in [
+            r#"{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"content":"limit"}}"#,
+            r#"{"type":"assistant","isApiErrorMessage":true,"error":"authentication_failed","isSidechain":true,"message":{"content":"x"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"authentication_failed"}]}}"#,
+        ] {
+            assert_eq!(SessionFormat::Claude.auth_error(&v(other)), None, "{other}");
+        }
+        let codex = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"error","message":"Your access token could not be refreshed. Please log in again.","codex_error_info":"unauthorized"}}"#;
+        assert!(SessionFormat::Codex.auth_error(&v(codex)).is_some());
+        let other = r#"{"type":"event_msg","payload":{"type":"error","message":"x","codex_error_info":"other"}}"#;
+        assert_eq!(SessionFormat::Codex.auth_error(&v(other)), None);
     }
 
     #[test]

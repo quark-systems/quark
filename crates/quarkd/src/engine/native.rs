@@ -28,7 +28,9 @@ use quark_core::worktree::ReturnOutcome;
 use quark_core::{replay, CoreError, Event, EventLog, ProjectId, ReadModel, Seq, TaskId};
 use quark_eventlog::TaskRecord;
 use quark_supervisor::{Relaunch, Supervisor, Worker};
-use quark_systems::{AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind};
+use quark_systems::{
+    AgentConfig, DeliveryPolicy, Evidence, MergeMethod, TaskKind, TaskMessage, TaskMessageStatus,
+};
 
 use super::native_dispatch_engine::{self, NativeDispatch};
 use super::native_project::ProjectSetup;
@@ -178,7 +180,12 @@ fn engine_task(record: &TaskRecord, worker: &Worker, last: Option<&StatusEntry>)
         // Native tasks have no scout kind yet: every one delivers a change.
         kind: Some(TaskKind::Ship),
         state: record.state,
-        state_note: last.map(|e| e.note.clone()).filter(|n| !n.is_empty()),
+        // An unhealthy worker's reason says more than its last message,
+        // which it wrote before it stopped.
+        state_note: worker
+            .health()
+            .map(|u| u.reason.clone())
+            .or_else(|| last.map(|e| e.note.clone()).filter(|n| !n.is_empty())),
         state_source: Some(SOURCE.to_string()),
         harness: Some(
             current
@@ -197,6 +204,32 @@ fn engine_task(record: &TaskRecord, worker: &Worker, last: Option<&StatusEntry>)
             .filter(|_| !worker.is_released())
             .map(|w| w.path.clone()),
         worktree_at: worker.worktree_at,
+        unhealthy: worker.health().map(|u| u.reason.clone()),
+        unanswered_since: worker.unanswered().and_then(|s| s.delivered_at),
+    }
+}
+
+fn rfc3339(t: Option<std::time::SystemTime>) -> Option<String> {
+    let t = time::OffsetDateTime::from(t?);
+    t.format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
+fn task_message(s: &quark_supervisor::Steer) -> TaskMessage {
+    use quark_supervisor::SteerStatus;
+    TaskMessage {
+        id: s.id.clone(),
+        text: s.text.clone(),
+        status: match s.status() {
+            SteerStatus::Queued => TaskMessageStatus::Queued,
+            SteerStatus::Delivered => TaskMessageStatus::Delivered,
+            SteerStatus::Read => TaskMessageStatus::Read,
+            SteerStatus::Answered => TaskMessageStatus::Answered,
+        },
+        sent_at: rfc3339(s.sent_at),
+        delivered_at: rfc3339(s.delivered_at),
+        read_at: rfc3339(s.read_at),
+        answered_at: rfc3339(s.answered_at),
     }
 }
 
@@ -289,6 +322,38 @@ impl EngineAdapter for NativeEngine {
             .steer(&project(ws), &task_id(task)?, text)
             .await
             .map(drop)
+            .map_err(engine_error)
+    }
+
+    async fn messages(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+    ) -> Result<Vec<TaskMessage>, EngineError> {
+        self.catch_up().await?;
+        let Some(w) = self.supervisor.fleet().get(&project(ws), &task_id(task)?) else {
+            return Err(EngineError::TaskNotFound(task.to_string()));
+        };
+        Ok(w.steers.iter().map(task_message).collect())
+    }
+
+    async fn worker_unhealthy(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        reason: &str,
+        written_at: Option<std::time::SystemTime>,
+    ) -> Result<bool, EngineError> {
+        self.supervisor
+            .mark_unhealthy(&project(ws), &task_id(task)?, reason, written_at)
+            .await
+            .map_err(engine_error)
+    }
+
+    async fn worker_healthy(&self, ws: &WorkspaceRef, task: &str) -> Result<bool, EngineError> {
+        self.supervisor
+            .mark_healthy(&project(ws), &task_id(task)?)
+            .await
             .map_err(engine_error)
     }
 

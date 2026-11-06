@@ -450,6 +450,8 @@ fn queued_task(p: &Pending) -> EngineTask {
         terminal: None,
         worktree: None,
         worktree_at: None,
+        unhealthy: None,
+        unanswered_since: None,
     }
 }
 

@@ -141,7 +141,53 @@ fn task_line(t: &EngineTask) -> String {
     if let Some(pr) = &t.pull_request_url {
         line.push_str(&format!(" ({pr})"));
     }
+    if t.unhealthy.is_some() {
+        line.push_str(" [unhealthy]");
+    }
+    if let Some(since) = t.unanswered_since {
+        let quiet = since.elapsed().unwrap_or_default();
+        line.push_str(&format!(
+            " [last steer unanswered for {}]",
+            duration_words(quiet)
+        ));
+    }
     line
+}
+
+/// `d` in the largest whole unit: `45s`, `12m`, `3h`, `2d`.
+fn duration_words(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..=59 => format!("{s}s"),
+        60..=3599 => format!("{}m", s / 60),
+        3600..=86_399 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86_400),
+    }
+}
+
+fn steer_status(m: &quark_systems::TaskMessage) -> String {
+    use quark_systems::TaskMessageStatus as S;
+    let (word, at) = match m.status {
+        S::Queued => ("queued", &m.sent_at),
+        S::Delivered => ("delivered", &m.delivered_at),
+        S::Read => ("read", &m.read_at),
+        S::Answered => ("answered", &m.answered_at),
+    };
+    match at {
+        Some(at) => format!("{word} {at}"),
+        None => word.to_string(),
+    }
+}
+
+/// `text` on one line, cut to a readable length.
+fn one_line(text: &str) -> String {
+    const MAX: usize = 120;
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > MAX {
+        format!("{}…", flat.chars().take(MAX).collect::<String>())
+    } else {
+        flat
+    }
 }
 
 fn relaunch(agent: Option<&Agent>, note: &str) -> TaskControl {
@@ -245,6 +291,18 @@ impl Hands for EngineHands {
                     out.push_str("\nRecent messages:");
                     for e in &tail.entries[skip..] {
                         out.push_str(&format!("\n- {}", e.raw));
+                    }
+                }
+                let steers = self
+                    .engine
+                    .messages(&ws, task.as_str())
+                    .await
+                    .map_err(core)?;
+                let skip = steers.len().saturating_sub(TASK_LINES);
+                if steers.len() > skip {
+                    out.push_str("\nYour steers (delivered = the worker has not reacted since):");
+                    for m in &steers[skip..] {
+                        out.push_str(&format!("\n- [{}] {}", steer_status(m), one_line(&m.text)));
                     }
                 }
                 Ok(out)
@@ -427,6 +485,8 @@ mod tests {
             terminal: None,
             worktree: None,
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
         }
     }
 

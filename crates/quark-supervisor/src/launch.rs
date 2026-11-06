@@ -279,11 +279,7 @@ mod tests {
         let urls = WorkerUrls {
             base: "http://127.0.0.1:7777/v1/worker/".into(),
         };
-        let steers = [Steer {
-            id: "s1".into(),
-            text: "use the new API".into(),
-            delivered_to: None,
-        }];
+        let steers = [Steer::new("s1", "use the new API")];
         let mut i = inputs(&ids, m, &steers, &env, Some(&urls));
         i.note = Some("You were restarted.");
         let p = plan(&i).unwrap();
@@ -305,11 +301,7 @@ mod tests {
         let ids = (ProjectId::from("p"), TaskId::from("t1"));
         let m = reg.get("claude-code").unwrap();
         let env = BTreeMap::new();
-        let steers = [Steer {
-            id: "s1".into(),
-            text: "use the new API".into(),
-            delivered_to: None,
-        }];
+        let steers = [Steer::new("s1", "use the new API")];
         let mut i = inputs(&ids, m, &steers, &env, None);
         i.note = Some("Your session ended.");
         i.resume = true;

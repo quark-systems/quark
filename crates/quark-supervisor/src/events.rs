@@ -87,6 +87,12 @@ pub enum SupervisorEvent {
         generation: String,
         code: Option<i32>,
     },
+    /// The worker of `generation` cannot work until a person acts: its
+    /// agent's sign-in was refused. Cleared by [`SupervisorEvent::Healthy`]
+    /// or by the next generation.
+    Unhealthy { generation: String, reason: String },
+    /// The worker of `generation` is working again.
+    Healthy { generation: String },
     /// The worker of `generation` has shown no activity for `idle_secs`.
     Stale { generation: String, idle_secs: u64 },
     /// Worker messages up to and including `through` have been turned into
@@ -106,6 +112,8 @@ impl SupervisorEvent {
             SupervisorEvent::Steer { .. } => "steer",
             SupervisorEvent::Delivered { .. } => "delivered",
             SupervisorEvent::Exited { .. } => "exited",
+            SupervisorEvent::Unhealthy { .. } => "unhealthy",
+            SupervisorEvent::Healthy { .. } => "healthy",
             SupervisorEvent::Stale { .. } => "stale",
             SupervisorEvent::Handled { .. } => "handled",
             SupervisorEvent::Released { .. } => "released",
