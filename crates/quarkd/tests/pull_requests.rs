@@ -102,6 +102,8 @@ async fn harness() -> Harness {
                     terminal: None,
                     worktree: None,
                     worktree_at: None,
+                    unhealthy: None,
+                    unanswered_since: None,
                 }],
             },
         )

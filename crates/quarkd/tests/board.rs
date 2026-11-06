@@ -46,6 +46,8 @@ fn engine_task(id: &str, worktree: Option<PathBuf>) -> EngineTask {
         terminal: None,
         worktree,
         worktree_at: None,
+        unhealthy: None,
+        unanswered_since: None,
     }
 }
 

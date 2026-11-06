@@ -5147,6 +5147,57 @@
       }
     },
     "/v1/tasks/{id}/messages": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "The steering messages sent to a task's worker, oldest first, and whether\nthe worker acknowledged each: `delivered` means it was typed into the\nworker's session and the worker has not reacted since, so one that stays\n`delivered` points at a stuck worker. Empty when the engine does not\ntrack messages.",
+        "operationId": "list_task_messages",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskMessage"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "tasks"
@@ -12793,6 +12844,64 @@
         "enum": [
           "ship",
           "scout"
+        ]
+      },
+      "TaskMessage": {
+        "type": "object",
+        "description": "A steering message sent to a task's worker, and whether the worker\nacknowledged it.",
+        "required": [
+          "id",
+          "text",
+          "status"
+        ],
+        "properties": {
+          "answered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the worker finished a turn or reported after it."
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was typed into the worker's session."
+          },
+          "id": {
+            "type": "string"
+          },
+          "read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the worker started a turn after it."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was recorded (RFC 3339 UTC)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskMessageStatus"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskMessageStatus": {
+        "type": "string",
+        "description": "Where a steering message is.",
+        "enum": [
+          "queued",
+          "delivered",
+          "read",
+          "answered"
         ]
       },
       "TaskPulse": {

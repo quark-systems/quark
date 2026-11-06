@@ -43,6 +43,10 @@ pub struct Polled {
     pub rate_limit: Option<RateLimit>,
     /// The passing API error the new lines leave the agent stopped at.
     pub api_error: Option<ApiError>,
+    /// The refused sign-in the new lines leave the agent stopped at.
+    pub auth_error: Option<ApiError>,
+    /// The new lines include something the agent itself wrote.
+    pub agent_wrote: bool,
 }
 
 pub struct TranscriptTap {
@@ -179,6 +183,8 @@ impl TranscriptTap {
             moved: true,
             rate_limit: batch.rate_limit,
             api_error: batch.api_error,
+            auth_error: batch.auth_error,
+            agent_wrote: batch.agent_wrote,
         })
     }
 

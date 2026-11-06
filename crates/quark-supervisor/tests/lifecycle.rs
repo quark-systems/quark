@@ -10,7 +10,7 @@ use quark_core::session::{SessionBackend, SessionSpec};
 use quark_core::worktree::ReturnOutcome;
 use quark_core::{CoreError, NewEvent, ProjectId, TaskEvent, TaskId, WorkerProtocol};
 use quark_sessions::pty::PtySupervisor;
-use quark_supervisor::{Cause, Conversations, Nudge, Relaunch, SupervisorEvent};
+use quark_supervisor::{Cause, Conversations, Nudge, Relaunch, SteerStatus, SupervisorEvent};
 use quark_systems::TaskState;
 
 fn ids(task: &str) -> (ProjectId, TaskId) {
@@ -49,6 +49,11 @@ async fn spawn_steer_decide_and_ship() {
     })
     .await;
     assert!(sup.task(&p, &t).unwrap().0.open_decisions.contains("k1"));
+    // The worker reported after the steer reached it: answered.
+    let ask = sup.task(&p, &t).unwrap().1.steers[0].clone();
+    assert_eq!(ask.text, "ask now");
+    assert_eq!(ask.status(), SteerStatus::Answered);
+    assert!(ask.delivered_at.is_some() && ask.answered_at >= ask.delivered_at);
 
     sup.answer(&p, &t, "k1", "left").await.unwrap();
     assert_eq!(sup.task(&p, &t).unwrap().0.state, TaskState::Running);
@@ -841,4 +846,91 @@ async fn a_quiet_worker_is_nudged_unless_a_menu_is_up() {
     assert!(!received(&env, "t1", &g.id)
         .iter()
         .any(|l| l == "still stuck?"));
+}
+
+#[tokio::test]
+async fn a_steer_the_worker_ignores_stays_delivered() {
+    let env = Env::new();
+    let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+    let (p, t) = ids("t1");
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+
+    sup.steer(&p, &t, "are you there?").await.unwrap();
+    eventually("the steer", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "are you there?")
+    })
+    .await;
+    sup.tick().await.unwrap();
+    let w = sup.task(&p, &t).unwrap().1;
+    assert_eq!(w.steers[0].status(), SteerStatus::Delivered);
+    assert_eq!(
+        w.unanswered().map(|s| s.text.as_str()),
+        Some("are you there?")
+    );
+
+    // A turn starting reads it; only a finished turn answers it.
+    let signal = |s: &str| quark_core::worker::WorkerEnvelope {
+        task: t.clone(),
+        generation: g.id.clone(),
+        via: quark_core::worker::Transport::Hook,
+        message: quark_core::WorkerMessage::Signal { signal: s.into() },
+    };
+    let protocol = sup.recorder();
+    protocol.receive(signal("busy")).await.unwrap();
+    sup.tick().await.unwrap();
+    assert_eq!(
+        sup.task(&p, &t).unwrap().1.steers[0].status(),
+        SteerStatus::Read
+    );
+    protocol.receive(signal("turn_end")).await.unwrap();
+    sup.tick().await.unwrap();
+    let w = sup.task(&p, &t).unwrap().1;
+    assert_eq!(w.steers[0].status(), SteerStatus::Answered);
+    assert!(w.unanswered().is_none());
+}
+
+#[tokio::test]
+async fn a_refused_sign_in_blocks_the_task_until_the_worker_works_again() {
+    let env = Env::new();
+    let sup = env.supervisor(Arc::new(PtySupervisor::new())).await;
+    let (p, t) = ids("t1");
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+
+    // An error written before this worker started is an earlier worker's.
+    let before = g.started_at.unwrap() - std::time::Duration::from_secs(60);
+    assert!(!sup
+        .mark_unhealthy(&p, &t, "signed out", Some(before))
+        .await
+        .unwrap());
+    assert_eq!(sup.task(&p, &t).unwrap().0.state, TaskState::Running);
+
+    assert!(sup
+        .mark_unhealthy(&p, &t, "signed out", None)
+        .await
+        .unwrap());
+    let (record, w) = sup.task(&p, &t).unwrap();
+    assert_eq!(record.state, TaskState::Blocked);
+    assert_eq!(w.health().unwrap().reason, "signed out");
+    // Reported again: nothing new.
+    assert!(!sup
+        .mark_unhealthy(&p, &t, "signed out", None)
+        .await
+        .unwrap());
+
+    assert!(sup.mark_healthy(&p, &t).await.unwrap());
+    let (record, w) = sup.task(&p, &t).unwrap();
+    assert_eq!(record.state, TaskState::Running);
+    assert!(w.health().is_none());
+    assert!(!sup.mark_healthy(&p, &t).await.unwrap());
+
+    // A relaunch is a new worker, healthy until it says otherwise.
+    sup.mark_unhealthy(&p, &t, "signed out", None)
+        .await
+        .unwrap();
+    sup.relaunch(&p, &t, Relaunch::default()).await.unwrap();
+    let (record, w) = sup.task(&p, &t).unwrap();
+    assert_eq!(record.state, TaskState::Running);
+    assert!(w.health().is_none());
 }

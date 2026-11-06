@@ -124,6 +124,16 @@ impl SessionFormat {
         }
     }
 
+    /// The refused sign-in one already-parsed log line reports, if it
+    /// reports one. Claude Code and Codex only.
+    pub fn auth_error(self, v: &Value) -> Option<ApiError> {
+        match self {
+            SessionFormat::Claude => rate_limit::claude_auth_error(v),
+            SessionFormat::Codex => rate_limit::codex_auth_error(v),
+            SessionFormat::Pi | SessionFormat::Kiro => None,
+        }
+    }
+
     /// The passing API error one already-parsed log line reports, if it
     /// reports one. Claude Code only; see [`ApiError`].
     pub fn api_error(self, v: &Value) -> Option<ApiError> {

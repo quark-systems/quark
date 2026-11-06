@@ -144,6 +144,8 @@ fn task(state: TaskState) -> FleetSnapshot {
             pull_request_url: Some("https://github.com/quark-systems/quark/pull/42".into()),
             worktree: None,
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
             terminal: None,
         }],
     }

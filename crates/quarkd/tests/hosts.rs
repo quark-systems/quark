@@ -43,6 +43,8 @@ fn task(id: &str, terminal: Option<&str>, worktree: Option<PathBuf>) -> EngineTa
         terminal: terminal.map(Into::into),
         worktree,
         worktree_at: None,
+        unhealthy: None,
+        unanswered_since: None,
     }
 }
 

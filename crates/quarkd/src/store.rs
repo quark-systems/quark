@@ -2060,6 +2060,8 @@ mod tests {
             pull_request_url: None,
             worktree: None,
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
             terminal: None,
         }
     }

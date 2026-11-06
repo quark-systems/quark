@@ -334,7 +334,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "steer",
-            description: "Send a running worker a message. It is delivered even if the worker is replaced.",
+            description: "Send a running worker a message. It is delivered even if the worker is replaced. `task` shows whether the worker reacted; one that leaves a steer unanswered may be stuck: check its screen or relaunch it.",
             input_schema: object(
                 json!({"task": text("Task id."), "text": text("The message.")}),
                 &["task", "text"],
@@ -443,12 +443,12 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "fleet",
-            description: "Every task with its state.",
+            description: "Every task with its state. [unhealthy] marks a worker that cannot work until a person acts (its agent's sign-in was refused); [last steer unanswered for ...] marks one that has not reacted to your last steer.",
             input_schema: object(json!({}), &[]),
         },
         ToolSpec {
             name: "task",
-            description: "One task: its instructions, state and recent worker messages.",
+            description: "One task: its instructions, state, recent worker messages, and your steers with whether the worker reacted to each.",
             input_schema: object(json!({"task": text("Task id.")}), &["task"]),
         },
     ]

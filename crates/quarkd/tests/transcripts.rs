@@ -157,6 +157,8 @@ async fn session_logs_become_coordinator_and_worker_events() {
             pull_request_url: None,
             worktree: Some(worktree.clone()),
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
             terminal: None,
         }],
     });
@@ -289,6 +291,8 @@ async fn a_reused_worktree_slot_never_shows_the_previous_tasks_log() {
             pull_request_url: None,
             worktree: Some(worktree.clone()),
             worktree_at: Some(took),
+            unhealthy: None,
+            unanswered_since: None,
             terminal: None,
         }],
     });
@@ -554,6 +558,8 @@ async fn a_bob_workers_conversation_comes_from_bobs_database() {
             pull_request_url: None,
             worktree: Some(worktree.clone()),
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
             terminal: None,
         }],
     });
@@ -621,4 +627,82 @@ async fn a_bob_workers_conversation_comes_from_bobs_database() {
     assert_eq!(new.len(), 1);
     assert_eq!(new[0].payload["entry"]["role"], "tool_result");
     assert_eq!(new[0].payload["entry"]["tool_call_id"], "c1");
+}
+
+#[tokio::test]
+async fn a_refused_sign_in_marks_the_worker_unhealthy_until_it_works_again() {
+    use quarkd::engine::StubWrite;
+    let h = harness();
+    let workspace = h.dir.path().join("workspace");
+    let worktree = h.dir.path().join("worktrees/fix-42");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Quark", "workspace_path": workspace})),
+    )
+    .await;
+    h.engine.set_snapshot(FleetSnapshot {
+        tasks: vec![EngineTask {
+            id: "fix-42".into(),
+            title: "Fix #42".into(),
+            kind: Some(TaskKind::Ship),
+            state: TaskState::Running,
+            state_note: None,
+            state_source: None,
+            harness: Some("claude".into()),
+            pull_request_url: None,
+            worktree: Some(worktree.clone()),
+            worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
+            terminal: None,
+        }],
+    });
+    let log = h
+        .dir
+        .path()
+        .join(format!("claude/projects/{}/w.jsonl", slug(&worktree)));
+    let health = |h: &Harness| -> Vec<Option<String>> {
+        h.engine
+            .writes()
+            .into_iter()
+            .filter_map(|w| match w {
+                StubWrite::Health { task_id, unhealthy } if task_id == "fix-42" => Some(unhealthy),
+                _ => None,
+            })
+            .collect()
+    };
+
+    append(&log, &[claude_user("Fix #42"), claude_reply("On it.")]);
+    let projector = h.projector();
+    projector.refresh_all().await.unwrap();
+    assert!(health(&h).is_empty(), "a working agent is left alone");
+
+    append(
+        &log,
+        &[
+            json!({"type": "assistant", "timestamp": "2026-11-01T09:00:00Z", "isApiErrorMessage": true,
+                 "error": "authentication_failed",
+                 "message": {"role": "assistant", "content": [{"type": "text",
+                   "text": "API Error: 401 OAuth token has expired."}]}}),
+        ],
+    );
+    projector.refresh_all().await.unwrap();
+    let got = health(&h);
+    assert_eq!(got.len(), 1);
+    let reason = got[0].clone().unwrap();
+    assert!(reason.contains("OAuth token has expired"), "{reason}");
+    assert!(reason.contains("Sign the account in"), "{reason}");
+
+    // A steer typed at it is not the agent working again.
+    append(&log, &[claude_user("are you there?")]);
+    projector.refresh_all().await.unwrap();
+    assert_eq!(health(&h).len(), 1);
+
+    append(&log, &[claude_reply("Back at it.")]);
+    projector.refresh_all().await.unwrap();
+    assert_eq!(health(&h), vec![Some(reason), None]);
 }

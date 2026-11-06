@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use quark_systems::{DispatchTrigger, MemoryEvidence};
-use quark_transcript::{RateLimit, SessionFormat, SessionRoots};
+use quark_transcript::{ApiError, RateLimit, SessionFormat, SessionRoots};
 use tokio::sync::mpsc;
 
 use crate::sessions::{Sessions, TaskTarget};
@@ -464,6 +464,7 @@ impl Projector {
         let res = tokio::task::spawn_blocking(move || {
             let ws = project;
             let mut limited: Vec<(String, RateLimit)> = Vec::new();
+            let mut health: Vec<(String, Option<ApiError>)> = Vec::new();
             let now = std::time::Instant::now();
             let project_id = &ws.project_id;
             let coordinator = TranscriptSource::Coordinator {
@@ -516,6 +517,11 @@ impl Projector {
                         } else if polled.moved {
                             nudges.progressed(&task_id);
                         }
+                        if let Some(error) = polled.auth_error {
+                            health.push((t.id.clone(), Some(error)));
+                        } else if polled.agent_wrote {
+                            health.push((t.id.clone(), None));
+                        }
                         if let Some(limit) = polled.rate_limit {
                             limited.push((task_id, limit));
                         }
@@ -525,11 +531,11 @@ impl Projector {
                     }
                 }
             }
-            limited
+            (limited, health)
         })
         .await;
-        let limited = match res {
-            Ok(limited) => limited,
+        let (limited, health) = match res {
+            Ok(found) => found,
             Err(e) => {
                 tracing::error!(error = %e, "transcript task panicked");
                 return;
@@ -552,6 +558,9 @@ impl Projector {
                 }
             }
         }
+        for (engine_id, error) in health {
+            self.report_health(ws, &engine_id, error).await;
+        }
         let Some(failover) = &self.failover else {
             return;
         };
@@ -564,6 +573,33 @@ impl Projector {
                 Err(e) => {
                     tracing::error!(task = %task_id, error = %e, "rate-limit failover failed")
                 }
+            }
+        }
+    }
+
+    /// Tells the engine a worker's agent stopped on a refused sign-in
+    /// (`error`), or is working again (`None`).
+    async fn report_health(&self, ws: &WorkspaceRef, engine_id: &str, error: Option<ApiError>) {
+        let res = match &error {
+            Some(e) => {
+                let reason = auth_reason(e.message.as_deref());
+                let written = e.ts.as_deref().and_then(parse_rfc3339);
+                self.engine
+                    .worker_unhealthy(ws, engine_id, &reason, written)
+                    .await
+            }
+            None => self.engine.worker_healthy(ws, engine_id).await,
+        };
+        match res {
+            Ok(true) if error.is_some() => {
+                tracing::warn!(project = %ws.project_id, task = %engine_id, "worker's agent sign-in was refused; marked unhealthy")
+            }
+            Ok(true) => {
+                tracing::info!(project = %ws.project_id, task = %engine_id, "worker is working again; marked healthy")
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(project = %ws.project_id, task = %engine_id, error = %e, "recording worker health failed")
             }
         }
     }
@@ -891,4 +927,19 @@ fn log_apply(
             tracing::error!(project = %ws.project_id, what, error = %e, "projection task panicked")
         }
     }
+}
+
+/// What an unhealthy worker's task says about a refused sign-in.
+pub(crate) fn auth_reason(message: Option<&str>) -> String {
+    let said = message.map(|m| format!(" ({m})")).unwrap_or_default();
+    format!(
+        "The worker's agent needs signing in again: its sign-in was refused{said}. \
+         Sign the account in, then relaunch the worker."
+    )
+}
+
+fn parse_rfc3339(ts: &str) -> Option<std::time::SystemTime> {
+    time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(std::time::SystemTime::from)
 }

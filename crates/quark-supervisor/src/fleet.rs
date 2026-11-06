@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use quark_core::event::kinds;
 use quark_core::session::SessionId;
+use quark_core::worker::{WorkerEnvelope, WorkerMessage};
 use quark_core::worktree::{ReturnOutcome, Worktree};
 use quark_core::{Event, ProjectId, ReadModel, Result, Seq, TaskId};
 use quark_harness::ManifestRegistry;
@@ -30,6 +31,104 @@ pub struct Steer {
     pub text: String,
     /// The generation it reached, once delivered.
     pub delivered_to: Option<String>,
+    /// When it was recorded.
+    #[serde(default)]
+    pub sent_at: Option<SystemTime>,
+    /// When it was typed into the worker's session.
+    #[serde(default)]
+    pub delivered_at: Option<SystemTime>,
+    /// Where its delivery is in the log; only worker messages after it
+    /// acknowledge it.
+    #[serde(default)]
+    pub delivered_seq: Option<Seq>,
+    /// When the worker that got it started a turn (its harness's `busy`
+    /// hook) after delivery.
+    #[serde(default)]
+    pub read_at: Option<SystemTime>,
+    /// When the worker that got it finished a turn or reported after
+    /// delivery.
+    #[serde(default)]
+    pub answered_at: Option<SystemTime>,
+}
+
+/// Where a steering message is, as the coordinator and the app show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SteerStatus {
+    /// Recorded, waiting for a live worker.
+    Queued,
+    /// Typed into the worker's session; the worker has not reacted since.
+    Delivered,
+    /// The worker started a turn after it, but has not finished one.
+    Read,
+    /// The worker finished a turn or reported after it.
+    Answered,
+}
+
+impl SteerStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SteerStatus::Queued => "queued",
+            SteerStatus::Delivered => "delivered",
+            SteerStatus::Read => "read",
+            SteerStatus::Answered => "answered",
+        }
+    }
+}
+
+impl Steer {
+    pub fn new(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            text: text.into(),
+            delivered_to: None,
+            sent_at: None,
+            delivered_at: None,
+            delivered_seq: None,
+            read_at: None,
+            answered_at: None,
+        }
+    }
+
+    pub fn status(&self) -> SteerStatus {
+        if self.answered_at.is_some() {
+            SteerStatus::Answered
+        } else if self.read_at.is_some() {
+            SteerStatus::Read
+        } else if self.delivered_to.is_some() {
+            SteerStatus::Delivered
+        } else {
+            SteerStatus::Queued
+        }
+    }
+
+    /// A worker message from `generation` at `seq`: a turn starting reads
+    /// the message, anything else answers it.
+    fn acknowledge(&mut self, generation: &str, seq: Seq, at: SystemTime, message: &WorkerMessage) {
+        if self.delivered_to.as_deref() != Some(generation)
+            || self.delivered_seq.is_some_and(|d| seq <= d)
+            || self.answered_at.is_some()
+        {
+            return;
+        }
+        match message {
+            WorkerMessage::Signal { signal } if signal == "busy" => {
+                self.read_at.get_or_insert(at);
+            }
+            _ => {
+                self.read_at.get_or_insert(at);
+                self.answered_at = Some(at);
+            }
+        }
+    }
+}
+
+/// Why the worker of a generation cannot work until a person acts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unhealthy {
+    pub generation: String,
+    pub reason: String,
+    pub since: SystemTime,
 }
 
 /// The worker generation currently on a task.
@@ -45,6 +144,9 @@ pub struct Generation {
     pub effort: Option<String>,
     /// Set once its session ended, with the exit code if one is known.
     pub exited: Option<Option<i32>>,
+    /// When it was launched.
+    #[serde(default)]
+    pub started_at: Option<SystemTime>,
 }
 
 impl Generation {
@@ -70,6 +172,9 @@ pub struct Worker {
     /// or relaunch a caller asked for.
     pub recoveries: u32,
     pub steers: Vec<Steer>,
+    /// Set while the current generation cannot work until a person acts.
+    #[serde(default)]
+    pub unhealthy: Option<Unhealthy>,
     /// How the worktree went back, once it has.
     pub released: Option<ReturnOutcome>,
 }
@@ -85,7 +190,28 @@ impl Worker {
         matches!(self.released, Some(ReturnOutcome::Returned))
     }
 
-    fn apply(&mut self, event: SupervisorEvent) {
+    /// The last steering message delivered to the current generation that
+    /// it has not answered, if the newest delivered one is unanswered.
+    pub fn unanswered(&self) -> Option<&Steer> {
+        let current = self.current.as_ref().filter(|g| g.exited.is_none())?;
+        self.steers
+            .iter()
+            .rev()
+            .find(|s| s.delivered_to.is_some())
+            .filter(|s| {
+                s.delivered_to.as_deref() == Some(current.id.as_str()) && s.answered_at.is_none()
+            })
+    }
+
+    /// Why the current generation cannot work, while it cannot.
+    pub fn health(&self) -> Option<&Unhealthy> {
+        let current = self.current.as_ref()?;
+        self.unhealthy
+            .as_ref()
+            .filter(|u| u.generation == current.id)
+    }
+
+    fn apply(&mut self, event: SupervisorEvent, at: SystemTime, seq: Seq) {
         match event {
             SupervisorEvent::Assigned { assignment } => self.assignment = assignment,
             SupervisorEvent::Worktree { worktree } => {
@@ -102,6 +228,7 @@ impl Worker {
                 model,
                 effort,
             } => {
+                self.unhealthy = None;
                 self.recoveries = match cause {
                     Cause::Recover => self.recoveries + 1,
                     Cause::Spawn | Cause::Relaunch => 0,
@@ -116,20 +243,45 @@ impl Worker {
                     model,
                     effort,
                     exited: None,
+                    started_at: Some(at),
                 });
             }
             SupervisorEvent::Steer { id, text } => {
                 if !self.steers.iter().any(|s| s.id == id) {
-                    self.steers.push(Steer {
-                        id,
-                        text,
-                        delivered_to: None,
-                    });
+                    let mut s = Steer::new(id, text);
+                    s.sent_at = Some(at);
+                    self.steers.push(s);
                 }
             }
             SupervisorEvent::Delivered { id, generation } => {
                 if let Some(s) = self.steers.iter_mut().find(|s| s.id == id) {
-                    s.delivered_to.get_or_insert(generation);
+                    if s.delivered_to.is_none() {
+                        s.delivered_to = Some(generation);
+                        s.delivered_at = Some(at);
+                        s.delivered_seq = Some(seq);
+                    }
+                }
+            }
+            SupervisorEvent::Unhealthy { generation, reason } => {
+                if self.current.as_ref().is_some_and(|g| g.id == generation) {
+                    let since = match &self.unhealthy {
+                        Some(u) if u.generation == generation => u.since,
+                        _ => at,
+                    };
+                    self.unhealthy = Some(Unhealthy {
+                        generation,
+                        reason,
+                        since,
+                    });
+                }
+            }
+            SupervisorEvent::Healthy { generation } => {
+                if self
+                    .unhealthy
+                    .as_ref()
+                    .is_some_and(|u| u.generation == generation)
+                {
+                    self.unhealthy = None;
                 }
             }
             SupervisorEvent::Exited { generation, code } => {
@@ -211,6 +363,19 @@ impl ReadModel for Fleet {
             return Ok(());
         }
         inner.applied = event.seq;
+        if is_worker_message(event) {
+            // A worker reacting to its steering messages.
+            if let Ok(env) = event.decode::<WorkerEnvelope>() {
+                let at = SystemTime::from(event.ts);
+                let key = (event.project.clone(), env.task.clone());
+                if let Some(w) = inner.workers.get_mut(&key) {
+                    for s in &mut w.steers {
+                        s.acknowledge(&env.generation, event.seq, at, &env.message);
+                    }
+                }
+            }
+            return Ok(());
+        }
         if event.kind.prefix() != PREFIX {
             return Ok(());
         }
@@ -230,10 +395,11 @@ impl ReadModel for Fleet {
         let key = (event.project.clone(), task.clone());
         match (inner.workers.get_mut(&key), e) {
             (Some(w), e) => {
+                let at = SystemTime::from(event.ts);
                 if matches!(e, SupervisorEvent::Worktree { .. }) {
-                    w.worktree_at = Some(SystemTime::from(event.ts));
+                    w.worktree_at = Some(at);
                 }
-                w.apply(e)
+                w.apply(e, at, event.seq)
             }
             (None, SupervisorEvent::Assigned { assignment }) => {
                 inner.workers.insert(
@@ -247,6 +413,7 @@ impl ReadModel for Fleet {
                         current: None,
                         recoveries: 0,
                         steers: Vec::new(),
+                        unhealthy: None,
                         released: None,
                     },
                 );

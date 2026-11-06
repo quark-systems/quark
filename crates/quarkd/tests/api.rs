@@ -136,6 +136,8 @@ fn task(state: TaskState) -> EngineTask {
         pull_request_url: None,
         worktree: None,
         worktree_at: None,
+        unhealthy: None,
+        unanswered_since: None,
         terminal: None,
     }
 }
@@ -1102,6 +1104,8 @@ async fn creating_a_project_provisions_workspace_repo_and_coordinator() {
             pull_request_url: None,
             worktree: None,
             worktree_at: None,
+            unhealthy: None,
+            unanswered_since: None,
             terminal: None,
         }],
     });

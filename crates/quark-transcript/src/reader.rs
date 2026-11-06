@@ -31,6 +31,12 @@ pub struct ReadBatch {
     /// The passing API error the agent's last turn ended on, by the same
     /// rule as `rate_limit`.
     pub api_error: Option<ApiError>,
+    /// The refused sign-in the agent's last turn ended on, by the same rule
+    /// as `rate_limit`: the agent cannot work until it is signed in again.
+    pub auth_error: Option<ApiError>,
+    /// The read found something the agent itself wrote (a reply, thinking
+    /// or a tool call), so it is working.
+    pub agent_wrote: bool,
 }
 
 /// Parses complete lines appended to `path` since byte `offset`.
@@ -64,9 +70,15 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
                     if let Some(limit) = format.rate_limit(&v) {
                         batch.rate_limit = Some(limit);
                         batch.api_error = None;
+                        batch.auth_error = None;
+                    } else if let Some(error) = format.auth_error(&v) {
+                        batch.auth_error = Some(error);
+                        batch.rate_limit = None;
+                        batch.api_error = None;
                     } else if let Some(error) = format.api_error(&v) {
                         batch.api_error = Some(error);
                         batch.rate_limit = None;
+                        batch.auth_error = None;
                     } else if entries.iter().any(|e| {
                         matches!(
                             e.role,
@@ -77,6 +89,8 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
                     }) {
                         batch.rate_limit = None;
                         batch.api_error = None;
+                        batch.auth_error = None;
+                        batch.agent_wrote = true;
                     }
                     batch.entries.extend(entries.into_iter().map(|e| (pos, e)));
                 }
@@ -88,6 +102,7 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
     if !at_end {
         batch.rate_limit = None;
         batch.api_error = None;
+        batch.auth_error = None;
     }
     batch.next_offset = pos;
     Ok(batch)
@@ -175,6 +190,37 @@ mod tests {
         std::fs::write(&path, format!("{LIMITED}\n{USER}\n{REPLY}\n")).unwrap();
         let batch = read_from(&path, 0, SessionFormat::Claude).unwrap();
         assert_eq!(batch.rate_limit, None);
+    }
+
+    const SIGNED_OUT: &str = r#"{"type":"assistant","isApiErrorMessage":true,"error":"authentication_failed","message":{"role":"assistant","content":[{"type":"text","text":"Invalid API key · Please run /login"}]}}"#;
+
+    #[test]
+    fn reports_a_refused_sign_in_the_agent_is_stopped_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, format!("{USER}\n{REPLY}\n{USER}\n{SIGNED_OUT}\n")).unwrap();
+        let batch = read_from(&path, 0, SessionFormat::Claude).unwrap();
+        let e = batch.auth_error.expect("a refused sign-in");
+        assert_eq!(
+            e.message.as_deref(),
+            Some("Invalid API key · Please run /login")
+        );
+        assert_eq!(batch.api_error, None);
+
+        // A steer typed at the stopped agent is not the agent working.
+        let more = format!("{USER}\n");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| f.write_all(more.as_bytes()))
+            .unwrap();
+        let typed = read_from(&path, batch.next_offset, SessionFormat::Claude).unwrap();
+        assert!(!typed.agent_wrote);
+
+        std::fs::write(&path, format!("{SIGNED_OUT}\n{USER}\n{REPLY}\n")).unwrap();
+        let past = read_from(&path, 0, SessionFormat::Claude).unwrap();
+        assert_eq!(past.auth_error, None);
+        assert!(past.agent_wrote);
     }
 
     const SLEPT: &str = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Your computer went to sleep mid-response."}]}}"#;

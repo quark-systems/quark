@@ -78,6 +78,15 @@ pub struct EngineTask {
     /// is an earlier task's.
     #[serde(skip)]
     pub worktree_at: Option<std::time::SystemTime>,
+    /// Why the task's worker cannot work until a person acts, such as its
+    /// agent's sign-in being refused. `None` while it is healthy, or when
+    /// the engine does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unhealthy: Option<String>,
+    /// When the newest steering message the current worker got was
+    /// delivered, while the worker has not answered it.
+    #[serde(skip)]
+    pub unanswered_since: Option<std::time::SystemTime>,
 }
 
 /// Which agent a task's current worker was started with.
@@ -314,6 +323,41 @@ pub trait EngineAdapter: Send + Sync {
         task_id: &str,
         text: &str,
     ) -> Result<(), EngineError>;
+
+    /// The steering messages sent to a task's worker, oldest first, with
+    /// whether the worker acknowledged each. Empty when the engine does not
+    /// track them.
+    async fn messages(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+    ) -> Result<Vec<quark_systems::TaskMessage>, EngineError> {
+        Ok(Vec::new())
+    }
+
+    /// The task's worker cannot work until a person acts: its agent's
+    /// sign-in was refused. `written_at` is when the agent reported it.
+    /// Returns whether the engine recorded anything new. Engines that do not
+    /// track worker health ignore it.
+    async fn worker_unhealthy(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+        _reason: &str,
+        _written_at: Option<std::time::SystemTime>,
+    ) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
+    /// The task's worker is working again. Returns whether the engine
+    /// recorded anything new.
+    async fn worker_healthy(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: &str,
+    ) -> Result<bool, EngineError> {
+        Ok(false)
+    }
 
     /// Answer the open hold `hold_id` with `answer`, recording `answered_by`
     /// as the person who answered. `Ok` means the engine durably recorded the
@@ -726,6 +770,12 @@ pub enum StubWrite {
     ForgetCoordinator {
         project_id: String,
     },
+    /// The task's worker was marked unhealthy with this reason, or healthy
+    /// again (`None`).
+    Health {
+        task_id: String,
+        unhealthy: Option<String>,
+    },
 }
 
 /// In-memory adapter. Every workspace sees the same configurable state.
@@ -756,6 +806,8 @@ pub struct StubEngine {
     unlanded: Mutex<HashSet<String>>,
     /// The brief per engine task id.
     briefs: Mutex<HashMap<String, EngineBrief>>,
+    /// Why each unhealthy task's worker cannot work, by engine task id.
+    unhealthy: Mutex<HashMap<String, String>>,
 }
 
 impl StubEngine {
@@ -900,6 +952,37 @@ impl EngineAdapter for StubEngine {
 
     async fn holds(&self, _ws: &WorkspaceRef) -> Result<Vec<Hold>, EngineError> {
         Ok(self.holds.lock().unwrap().clone())
+    }
+
+    async fn worker_unhealthy(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: &str,
+        reason: &str,
+        _written_at: Option<std::time::SystemTime>,
+    ) -> Result<bool, EngineError> {
+        let mut unhealthy = self.unhealthy.lock().unwrap();
+        if unhealthy.get(task_id).map(String::as_str) == Some(reason) {
+            return Ok(false);
+        }
+        unhealthy.insert(task_id.into(), reason.into());
+        drop(unhealthy);
+        self.accept(StubWrite::Health {
+            task_id: task_id.into(),
+            unhealthy: Some(reason.into()),
+        })?;
+        Ok(true)
+    }
+
+    async fn worker_healthy(&self, _ws: &WorkspaceRef, task_id: &str) -> Result<bool, EngineError> {
+        if self.unhealthy.lock().unwrap().remove(task_id).is_none() {
+            return Ok(false);
+        }
+        self.accept(StubWrite::Health {
+            task_id: task_id.into(),
+            unhealthy: None,
+        })?;
+        Ok(true)
     }
 
     async fn send_message(
