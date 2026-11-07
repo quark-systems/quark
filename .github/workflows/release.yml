@@ -10,6 +10,9 @@ name: Release
 # - Updates: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) secrets and the TAURI_UPDATER_PUBKEY
 #   variable, from `npx tauri signer generate`.
 # - Windows: not yet; installers are unsigned (SmartScreen warns).
+#
+# 0.1 ships for Mac only: the Windows job runs only when the RELEASE_WINDOWS variable is
+# "true". The release notes are the version's section of CHANGELOG.md.
 on:
   push:
     tags: ["v*"]
@@ -40,6 +43,18 @@ jobs:
             echo "::error::tag ${GITHUB_REF#refs/tags/} does not match Cargo.toml version $version (scripts/bump-version.sh)"
             exit 1
           fi
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${{ steps.v.outputs.version }}"
+          awk -v h="## $version" '$0 == h { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
+          if [[ ! -s notes.md ]]; then
+            echo "::error::CHANGELOG.md has no '## $version' section"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
 
   quarkd-linux:
     needs: version
@@ -153,6 +168,7 @@ jobs:
 
   windows:
     needs: version
+    if: vars.RELEASE_WINDOWS == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -187,7 +203,11 @@ jobs:
           path: dist/*
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Waits for Windows when it runs, but doesn't need it.
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.version.result == 'success' && needs.quarkd-linux.result == 'success' &&
+      needs.mac.result == 'success' && needs.windows.result != 'failure'
     needs: [version, quarkd-linux, mac, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -200,11 +220,13 @@ jobs:
           merge-multiple: true
       - name: Updater manifest and checksums
         run: |
+          mv -f dist/notes.md notes.md
           node packaging/latest-json.mjs "${{ needs.version.outputs.version }}" dist
           (cd dist && sha256sum -- * > SHA256SUMS)
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
           prerelease: ${{ contains(needs.version.outputs.version, '-') }}
+          body_path: notes.md
           generate_release_notes: true
           files: dist/*

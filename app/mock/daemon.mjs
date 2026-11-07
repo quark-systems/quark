@@ -33,7 +33,7 @@ const nextId = (p) => `${p}-${(++idn).toString(36)}${Math.random().toString(36).
 
 // ---------------------------------------------------------------- state
 
-// First-run setup checks. QUARK_MOCK_SETUP=needs starts with tmux, gh sign-in and treehouse
+// First-run setup checks. QUARK_MOCK_SETUP=needs starts with tmux and the gh sign-in
 // missing, so the Setup screen opens on its own; otherwise every check passes.
 const needsSetup = process.env.QUARK_MOCK_SETUP === "needs";
 const setupChecks = [
@@ -46,9 +46,7 @@ const setupChecks = [
     ? { id: "gh_auth", title: "Signed in to GitHub", required: true, why: "Quark reads and merges pull requests as you.", status: "missing", detail: "not signed in", fix: { label: "Sign in", command: "gh auth login", runnable: false } }
     : { id: "gh_auth", title: "Signed in to GitHub", required: true, why: "Quark reads and merges pull requests as you.", status: "ok", detail: "Logged in to github.com account octocat" },
   { id: "coordinator", title: "Coordinator harness, signed in", required: true, why: "The coordinator runs each project's conversation and starts workers.", status: "ok", detail: "Claude Code 2.1.0" },
-  needsSetup
-    ? { id: "treehouse", title: "treehouse 3.1.2 or a later 3.x", required: true, why: "The worktree pool workers run in.", status: "missing", detail: "not installed", fix: { label: "Install treehouse 3.1.2", command: "the pinned treehouse 3.1.2 release, into ~/.local/bin (selfhost/treehouse.sh)", runnable: true } }
-    : { id: "treehouse", title: "treehouse 3.1.2 or a later 3.x", required: true, why: "The worktree pool workers run in.", status: "ok", detail: "treehouse 3.1.2 at ~/.local/bin/treehouse" },
+  { id: "treehouse", title: "treehouse 3.1.2 or a later 3.x", required: false, why: "Only for QUARK_WORKTREE_POOL=treehouse; Quark's own worktree pool is the default.", status: "missing", detail: "not installed", fix: { label: "Install treehouse 3.1.2", command: "the pinned treehouse 3.1.2 release, into ~/.local/bin (selfhost/treehouse.sh)", runnable: true } },
   { id: "bd", title: "Beads (bd)", required: false, why: "The Issues tab, decisions and Beads memory.", status: "ok", detail: "bd version 1.1.0 at /opt/homebrew/bin/bd" },
   { id: "dolt", title: "Dolt", required: false, why: "The database server Beads runs on.", status: "ok", detail: "dolt version 2.4.1 at /opt/homebrew/bin/dolt" },
   { id: "quota_axi", title: "quota-axi", required: false, why: "Claude and Codex quota for dispatch and the Accounts view.", status: "missing", detail: "not installed; quota stays unmeasured without it", fix: { label: "Install with npm", command: "npm install -g quota-axi", runnable: true } },

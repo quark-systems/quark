@@ -33,6 +33,16 @@ node -e '
     if (j.packages && j.packages[""]) j.packages[""].version = v;
     fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
   }' "$version" "$repo/app/package.json" "$repo/app/package-lock.json" "$repo/app/src-tauri/tauri.conf.json"
+# The committed OpenAPI document carries the version in info.version (tests/api.rs compares it
+# with what quarkd serves); edit just that line so the rest stays as quarkd prints it.
+node -e '
+  const fs = require("fs");
+  const [v, f] = process.argv.slice(1);
+  const text = fs.readFileSync(f, "utf8");
+  const i = text.indexOf("\"info\"");
+  const next = text.slice(i).replace(/"version": "[^"]*"/, `"version": "${v}"`);
+  fs.writeFileSync(f, text.slice(0, i) + next);
+' "$version" "$repo/api/openapi.json"
 # Cargo.lock records the version of our own packages.
 cargo update --workspace --offline -q --manifest-path "$repo/Cargo.toml"
 cargo update -p quark-desktop --offline -q --manifest-path "$repo/app/src-tauri/Cargo.toml"
