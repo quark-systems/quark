@@ -1606,7 +1606,7 @@ impl Store {
     }
 
     /// Gives free pages back to the filesystem when at least `min_free`
-    /// bytes and half the file are free, as after the first prune of a
+    /// bytes and a quarter of the file are free, as after the first prune of a
     /// long-running home. Returns the bytes freed.
     pub fn vacuum_if_mostly_free(&self, min_free: u64) -> Result<u64> {
         self.read(|c| {
@@ -1616,7 +1616,7 @@ impl Store {
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
-            if (free as u64) < min_free || free * 2 < total {
+            if (free as u64) < min_free || free * 4 < total {
                 return Ok(0);
             }
             c.execute_batch("VACUUM")?;

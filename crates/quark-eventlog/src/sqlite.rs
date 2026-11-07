@@ -301,7 +301,7 @@ impl SqliteEventLog {
     }
 
     /// Give free pages back to the filesystem when at least `min_free`
-    /// bytes and half the file are free, as after the first prune of a
+    /// bytes and a quarter of the file are free, as after the first prune of a
     /// long-running log. Returns the bytes freed.
     pub async fn vacuum_if_mostly_free(&self, min_free: u64) -> Result<u64> {
         self.with_conn(move |conn| {
@@ -313,7 +313,7 @@ impl SqliteEventLog {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(backend)?;
-            if (free as u64) < min_free || free * 2 < total {
+            if (free as u64) < min_free || free * 4 < total {
                 return Ok(0);
             }
             conn.execute_batch("VACUUM").map_err(backend)?;

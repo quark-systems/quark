@@ -35,9 +35,9 @@ quarkd's hourly housekeeping (`crates/quarkd/src/housekeeping.rs`) deletes what 
 Every kind a read model replays (task transitions, supervisor, dispatch, coordinator, trigger, verify, usage and worker events) is kept.
 `prune` never deletes the head, so `seq` is never reused; it sets the `eventlog.pruned` checkpoint, after which `verify` no longer expects `seq` without gaps.
 Readers that follow `seq` (`read`, subscriptions, replay) skip gaps.
-When most of the file is free afterwards, it is compacted (`VACUUM`).
+When a quarter of the file is free afterwards, it is compacted (`VACUUM`).
 
-The same pass bounds `quark.db`: change notices (every store event but terminal output and transcripts) go after 30 days, a finished task's terminal output 30 days after it ended (trimmed to its last screens after a day), and a worker terminal whose task is gone once it has been quiet a day.
+The same pass bounds `quark.db`: change notices (every store event but terminal output and transcripts) go after 30 days, a finished task's terminal output a week after it ended (its transcript stays) (trimmed to its last screens after a day), and a worker terminal whose task is gone once it has been quiet a day.
 `quarkd diagnose` lists the event types and kinds holding the most payload in each file.
 
 ## Old logs
