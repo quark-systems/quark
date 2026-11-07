@@ -2,8 +2,9 @@
 //! gates on a head in a scratch worktree, and rebases onto main first when
 //! asked to re-verify.
 //!
-//! Gates come from firstmate's `config/gates.json` (schema `fm.gates.v1`),
-//! so both engines run the same gates while slice 2 is in shadow:
+//! Gates come from the Project workspace's `config/gates.json` (schema
+//! [`GATES_SCHEMA`]; the older firstmate-era [`LEGACY_GATES_SCHEMA`] is
+//! still read):
 //!
 //! 1. **checks** ([`GateStage::RepoChecks`]): the repo's own commands, in
 //!    order, stopping at the first failure.
@@ -30,6 +31,12 @@ use quark_core::{CoreError, ProjectId, Result};
 use serde::Deserialize;
 use tokio::process::Command;
 
+/// The gates config schema Quark writes.
+pub const GATES_SCHEMA: &str = "quark.gates.v1";
+
+/// The same format under the name firstmate gave it; still accepted on read.
+pub const LEGACY_GATES_SCHEMA: &str = "fm.gates.v1";
+
 /// `config/gates.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct GatesConfig {
@@ -44,9 +51,9 @@ impl GatesConfig {
     pub fn parse(json: &str) -> Result<Self> {
         let c: GatesConfig = serde_json::from_str(json)
             .map_err(|e| CoreError::Invalid(format!("gates config: {e}")))?;
-        if c.schema != "fm.gates.v1" {
+        if c.schema != GATES_SCHEMA && c.schema != LEGACY_GATES_SCHEMA {
             return Err(CoreError::Invalid(format!(
-                "gates config schema {:?}, expected fm.gates.v1",
+                "gates config schema {:?}, expected {GATES_SCHEMA}",
                 c.schema
             )));
         }
@@ -759,7 +766,7 @@ mod tests {
     #[test]
     fn parses_gates_config() {
         let c = GatesConfig::parse(
-            r#"{"schema":"fm.gates.v1","repos":{"app":{
+            r#"{"schema":"quark.gates.v1","repos":{"app":{
               "checks":[{"name":"test","run":"cargo test","timeout_s":60}],
               "journeys":{"start":"npm run dev","url":"http://127.0.0.1:5173/"},
               "holdout":{"repo":"/h.git","ref":"main"}}}}"#,
@@ -773,6 +780,8 @@ mod tests {
             Some("main")
         );
         assert!(GatesConfig::parse(r#"{"schema":"other","repos":{}}"#).is_err());
+        // Configs written before the rename still load.
+        assert!(GatesConfig::parse(r#"{"schema":"fm.gates.v1","repos":{}}"#).is_ok());
         assert!(!RepoGates::default().declared());
     }
 

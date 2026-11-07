@@ -1,7 +1,7 @@
 # Quark desktop app
 
 The Quark desktop app: Tauri 2 + React + TypeScript + Vite, with xterm.js terminals (ADR-3).
-It grew out of the Phase 0 POC in [`../ui-poc/tauri`](../ui-poc/tauri), which stays as the benchmark record.
+It grew out of the Phase 0 UI proof of concept (quark#4, since removed).
 
 The webview talks to `quarkd` directly over HTTP and the `/v1/events` WebSocket; the Rust side only opens the window.
 The same frontend runs in a plain browser.

@@ -43,4 +43,3 @@ How `quarkd --engine native` works inside. See the [engine index](engine/README.
 - [Working on Quark](development/README.md): repository layout, crates, tests, CI and agent skills.
 - [Desktop app](../app/README.md): screens, keys, running and testing the app.
 - [App glossary](../app/GLOSSARY.md): the words the app uses.
-- [UI proof of concept](../ui-poc/FINDINGS.md): the Phase 0 benchmarks behind the Tauri + xterm.js choice.

@@ -25,7 +25,8 @@
 //! worker's worktree contains; workers learn only category and pass/fail.
 //!
 //! The engine runs the gates and writes the evidence; this module only turns
-//! the declaration into `fm.gates.v1` JSON for `fm-gates.sh config-set`.
+//! the declaration into gates config JSON (schema [`CONFIG_SCHEMA`]) for the
+//! engine's `set_gates`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -33,7 +34,7 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
-pub const CONFIG_SCHEMA: &str = "fm.gates.v1";
+pub const CONFIG_SCHEMA: &str = quark_verify::GATES_SCHEMA;
 
 /// Where holdout tests live in the Project repo.
 pub const HOLDOUT_DIR: &str = "holdout";
@@ -275,7 +276,7 @@ delivery:
         let sources = vec!["app".to_string(), "lib".to_string(), "off".to_string()];
         let c = compile(YAML, Path::new("/q/projects/prj_1.git"), &sources).unwrap();
         let json = serde_json::to_value(&c).unwrap();
-        assert_eq!(json["schema"], "fm.gates.v1");
+        assert_eq!(json["schema"], "quark.gates.v1");
         let app = &json["repos"]["app"];
         assert_eq!(app["checks"][0]["run"], "npm test");
         assert_eq!(app["checks"][0]["timeout_s"], 600);

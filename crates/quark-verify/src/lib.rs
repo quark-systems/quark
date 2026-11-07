@@ -25,7 +25,7 @@ pub use guard::{EpisodeChange, GuardDecision, NativeGuard, Override, Target};
 pub use merge::{GuardedMerge, LandRequest, Landing, Merged, Outcome, StandingApproval};
 pub use pipeline::{
     check_log, journeys_log_prefix, logs_dir, CheckGate, GatesConfig, HoldoutGate, JourneysGate,
-    NativePipeline, PipelineTarget, RepoGates,
+    NativePipeline, PipelineTarget, RepoGates, GATES_SCHEMA, LEGACY_GATES_SCHEMA,
 };
 
 /// Event kinds this crate owns (prefix `verify`).

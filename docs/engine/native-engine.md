@@ -15,7 +15,7 @@ It sits on the native supervisor (`quark-supervisor`, slice 4), native verificat
 | `resolve_dispatch`, `resolve_description`, `set_crew_dispatch` | the same, on the Project's rules |
 | `merge_pull_request` | `quark_verify::GuardedMerge` (below), then `Supervisor::complete` |
 | `set_standing_approval` | `verify.standing_approval` events, one per repo |
-| `set_gates`, `gate_evidence`, `gate_artifact` | `config/gates.json` (schema `fm.gates.v1`) and `verify/<task>/` under the Project workspace root |
+| `set_gates`, `gate_evidence`, `gate_artifact` | `config/gates.json` (schema `quark.gates.v1`; the older `fm.gates.v1` is still read) and `verify/<task>/` under the Project workspace root |
 
 | `add_source`, `seed_workspace`, `start_coordinator`, `coordinator_terminals` | `ProjectSetup` (`engine/native_project.rs`) |
 | a task's `terminal` | the current generation's PTY session, as `pty:<session id>`, while its program runs |
@@ -102,8 +102,8 @@ Creating a Project needs no firstmate home and no `AGENTS.md` persona.
   A coordinator whose window is up is not started a second time.
 - Each start is recorded in `<command>/coordinators/<Project id>.json`; `coordinator_terminals` reads those records, so the app's coordinator terminal and chat, and coordinator recovery (`recovery.rs`), find the window after a daemon restart.
 
-Only Claude Code coordinators start so far: its tools and turn-end hook are the ones wired.
-Another harness is refused with an error that says so.
+Coordinators start on Claude Code, Codex and Pi (`COORDINATOR_HARNESSES` in `coordinator_http.rs`), each with its MCP tools and turn-end hook wired; see [the coordinator](coordinator.md).
+Another harness is refused with an error that lists the ones that work.
 
 With `--engine native`, the coordinator (slice 6) runs with `InputBrain` and `EngineHands`.
 Coordinator recovery starts each Project's coordinator again after a restart.
@@ -119,12 +119,6 @@ Workers run in the PTY supervisor's sessions (`quarkd ptyd`, which quarkd starts
 A worker whose session is lost (a reboot) is relaunched by the supervisor in the same worktree, and continues its conversation when its harness can (`launch.resume` in the manifest) and has logged one there since the task took the worktree (`native::Transcripts`, under the account's config directory when the worker runs on one; a reused slot's earlier conversations do not count); otherwise it starts fresh with its brief.
 A lost coordinator is relaunched by coordinator recovery with `resume`.
 `verify-quark`'s durability journeys (`quark-verify journey durability -- --engine native --harness fake`) and its native journey (`quark-verify journey native`) check this, and the Project, dispatch, steering, decision and lifecycle paths, from outside with no firstmate checkout.
-
-## Still refused
-
-The native engine refuses the operations below, each with an error that names the missing part, until it is wired:
-
-- coordinators on harnesses other than Claude Code
 
 ## Firstmate retired
 
