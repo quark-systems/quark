@@ -58,8 +58,7 @@ Both are additive trait methods whose default refuses, so the stub engine refuse
 
 1. Makes the task id from the title (lowercase letters, digits and dashes, at most 40 characters, `-2`, `-3` and so on when taken), so it passes `quarkd::engine::valid_task_id`.
 2. Finds the repo in the Project workspace: `<root>/repos/<name>` is each source repo's primary checkout.
-   `<root>/projects/<name>`, firstmate's layout, is read too, so a workspace firstmate seeded runs natively.
-   When quarkd starts, it moves firstmate's own files (its engine clone, `data/`, `state/`, `.claude` hooks and skills) out of such a workspace into `~/.quark/backups/firstmate/`, keeping the clones, `project/`, `.quark/`, `config/`, `verify/` and the coordinator's settings (`firstmate/workspace.rs`).
+   A workspace firstmate seeded kept its clones in `<root>/projects/<name>`; the home's format 1 upgrade links each one from `repos/` and moves firstmate's own files out of the workspace into `~/.quark/backups/firstmate/`, once (`home_format.rs`, see [Upgrading](../getting-started/build-from-source.md#upgrading)).
    With no repo named, the workspace's only repo is used; with several, the call names them and refuses.
 3. Records a `dispatch.requested` event and resolves the agent from the Project's rules (classifier, quota, selection), unless the caller named one.
    A clear resolution, or a named agent, chooses an account from the profile's pool (`dispatch.chosen`).
@@ -75,7 +74,7 @@ The rules are `<root>/config/crew-dispatch.json`, the file firstmate reads, writ
 `resolve_dispatch` returns the resolution recorded when the task was dispatched (`dispatch.resolved`, `dispatch.chosen`), so it never asks the classifier twice; a task the agent was named for reports `not_consulted`.
 
 Accounts come from quarkd's accounts and pools (`StoreAccounts`), set once the daemon has built them.
-`quarkd --engine native` also registers and samples this host, which admission control needs.
+quarkd also registers and samples this host, which admission control needs.
 
 Known gaps:
 
@@ -105,13 +104,13 @@ Creating a Project needs no firstmate home and no `AGENTS.md` persona.
 Coordinators start on Claude Code, Codex and Pi (`COORDINATOR_HARNESSES` in `coordinator_http.rs`), each with its MCP tools and turn-end hook wired; see [the coordinator](coordinator.md).
 Another harness is refused with an error that lists the ones that work.
 
-With `--engine native`, the coordinator (slice 6) runs with `InputBrain` and `EngineHands`.
+The coordinator (slice 6) runs with `InputBrain` and `EngineHands`.
 Coordinator recovery starts each Project's coordinator again after a restart.
-It also adopts a ready Project with no coordinator record, such as one firstmate created, and starts its coordinator unless a `coordinator-<Project id>` window is already up.
+On the start that upgrades a home made before 0.1, it also adopts each ready Project with no coordinator record (one firstmate created) and starts its coordinator unless a `coordinator-<Project id>` window is already up.
 
 ## Channels and the inbox
 
-With `--engine native`, the slice 7 engine (`native_triggers.rs`) acts: the user's inbox note and plug-in channel messages land as `channel.received` events, wake the coordinator, and the coordinator's `ack_message` tool marks them handled.
+The slice 7 engine (`native_triggers.rs`) acts: the user's inbox note and plug-in channel messages land as `channel.received` events, wake the coordinator, and the coordinator's `ack_message` tool marks them handled.
 
 ## Durability
 

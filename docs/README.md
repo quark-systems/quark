@@ -1,13 +1,14 @@
 # Quark documentation
 
-Start with the [README](../README.md) for what Quark is and the quickstart.
+Start with the [README](../README.md) for what Quark is and how to install it, and the [CHANGELOG](../CHANGELOG.md) for what each release changed.
 Each section below is a folder; add new pages to the folder they belong in and list them here and in that folder's index.
 
 ## Getting started
 
-- [Build from source](getting-started/build-from-source.md): prerequisites, building and running quarkd and the app, your first Project, where data lives.
-- [External tools](getting-started/external-tools.md): every program Quark runs (quota-axi, treehouse, tmux, gh, bd and more), what for, and how to install it.
-- [Releasing](development/releasing.md): cutting a release, the Mac and Windows builds, signing, quarkd in WSL.
+- [Install](../README.md#install): the Mac app (Apple silicon) and the Setup page that checks this Mac.
+- [Build from source](getting-started/build-from-source.md): prerequisites, `quarkd doctor`, building and running quarkd and the app, your first Project, where data lives, upgrading `~/.quark`.
+- [External tools](getting-started/external-tools.md): every program Quark runs (tmux, gh, bd and Dolt, quota-axi, and treehouse as an optional fallback), what for, and how to install it.
+- [Releasing](development/releasing.md): cutting a release, the Mac build, signing, and the Windows build (off for now).
 - [Self-hosting](../selfhost/README.md): run Quark's own development as a Quark Project, and set up any Project from a directory.
 
 ## Concepts
@@ -36,7 +37,7 @@ The daemon's `/v1` HTTP API and event stream. The [OpenAPI document](../api/open
 
 ## Engine internals
 
-How `quarkd --engine native` works inside. See the [engine index](engine/README.md).
+How quarkd's native engine works inside. See the [engine index](engine/README.md).
 
 ## Development
 

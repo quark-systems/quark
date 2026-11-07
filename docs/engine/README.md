@@ -1,6 +1,6 @@
 # Engine internals
 
-`quarkd --engine native` is the engine: separate crates under `crates/`, one per subsystem, meeting at the contracts in `quark-core`.
+quarkd's native engine, the default, is the engine: separate crates under `crates/`, one per subsystem, meeting at the contracts in `quark-core`.
 It was built slice by slice beside firstmate, the bash engine Quark drove before, which is now retired; the slice numbers in these pages date from that migration.
 
 - [The native engine](native-engine.md): how quarkd serves each engine operation, worker terminals, verification and dispatch glue.

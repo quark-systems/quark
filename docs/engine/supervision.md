@@ -67,7 +67,7 @@ The tests in `crates/quark-supervisor/tests/lifecycle.rs` drive each of these ag
 
 ## In quarkd
 
-With `--engine native`, quarkd starts the PTY supervisor (itself as `quarkd ptyd`, or the `quark-ptyd` binary `QUARK_PTYD` names) on `<home>/run/ptyd.sock`, build the supervisor over `events.db`, the worktree pool ([worktrees.md](worktrees.md)), `<home>/harnesses` and the host sandbox, recover, supervise, and serve the worker protocol under `/v1/worker`.
+quarkd starts the PTY supervisor (itself as `quarkd ptyd`, or the `quark-ptyd` binary `QUARK_PTYD` names) on `<home>/run/ptyd.sock`, build the supervisor over `events.db`, the worktree pool ([worktrees.md](worktrees.md)), `<home>/harnesses` and the host sandbox, recover, supervise, and serve the worker protocol under `/v1/worker`.
 
 ## Not yet
 

@@ -98,7 +98,7 @@ The native resolver was compared with firstmate's on every dispatch while slice 
 
 When a host runs low on disk, dispatch prunes its idle pool worktrees once per episode (`IdlePool`; quarkd's prunes every Project repo's pool with the native pool's `prune`, `crates/quarkd/src/native_worktrees.rs`) and records the outcome as `dispatch.pruned`.
 
-With `--engine native`, quarkd registers this host and records a telemetry sample every minute, and the native engine serves `resolve_dispatch`, `resolve_description` and `set_crew_dispatch` from the dispatcher (`crates/quarkd/src/engine/native_dispatch_engine.rs`), with accounts from quarkd's accounts store.
+quarkd registers this host and records a telemetry sample every minute, and the native engine serves `resolve_dispatch`, `resolve_description` and `set_crew_dispatch` from the dispatcher (`crates/quarkd/src/engine/native_dispatch_engine.rs`), with accounts from quarkd's accounts store.
 
 ## Not yet
 
