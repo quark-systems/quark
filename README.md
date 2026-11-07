@@ -50,7 +50,7 @@ Click **New project**, give it a name, a goal and a repository, and pick the def
 
 `--engine stub` runs an in-memory stub engine meant for tests. To try the app with no agents at all, `npm run mock` in `app/` serves demo data on the same port.
 
-The full walkthrough, with optional pieces (Beads issues, account quota) and where things live on disk, is in [Build from source](docs/getting-started/build-from-source.md).
+The full walkthrough, with Beads (issues and memory), optional pieces such as account quota, and where things live on disk, is in [Build from source](docs/getting-started/build-from-source.md).
 
 ## Documentation
 

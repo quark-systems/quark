@@ -23,7 +23,7 @@ updates.
   `~/Library/Logs/Quark/quarkd.log`.
 - The **Setup** page opens on first run and lists what this Mac still needs: git, tmux
   3.2+, the GitHub CLI signed in, a coordinator harness signed in (Claude Code, Codex or
-  Pi). It installs what it can with one button (Homebrew, npm) and gives the command for
+  Pi), and Beads (bd and Dolt). It installs what it can with one button (Homebrew, npm) and gives the command for
   sign-ins. `quarkd doctor` runs the
   same checks in a terminal.
 
@@ -42,7 +42,7 @@ updates.
   standing rules let the coordinator decide matching cases and log them.
 - **PR center**: checks, reviews and changes for every worker PR; guarded merges rebase
   first, and workers hear about conflicts and failed checks.
-- **Issues and memory** on Beads (optional: needs bd and Dolt), with GitHub sync.
+- **Issues and memory** on Beads (bd and Dolt), with GitHub sync.
 - **Project dashboard**: Overview, Metrics (spend, tokens, outcomes) and Settings,
   including the coordinator's context meter, compaction and agent changes with a handoff.
 - **Automation**: inbox, triggers and an away policy.
