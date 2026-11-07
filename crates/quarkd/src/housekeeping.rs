@@ -20,7 +20,7 @@
 //!   `firstmate.*` and `shadow.*` events nothing reads since the
 //!   firstmate engine was retired.
 //!
-//! When that leaves most of a file free, it compacts the file.
+//! When that leaves a quarter of a file free, it compacts the file.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,8 +44,10 @@ const FAILED_CALLS_KEPT: time::Duration = time::Duration::days(30);
 const FINISHED_AFTER: time::Duration = time::Duration::days(1);
 /// Output a finished task's terminal keeps: its last few screens.
 pub const FINISHED_RETAIN_BYTES: u64 = 256 * 1024;
-/// A finished task's terminal output is dropped this long after it ended.
-const FINISHED_OUTPUT_KEPT: time::Duration = time::Duration::days(30);
+/// A finished task's terminal output is dropped this long after it ended;
+/// its transcript stays. On a five-week-old home finished tasks' output was
+/// a third of quark.db.
+const FINISHED_OUTPUT_KEPT: time::Duration = time::Duration::days(7);
 /// A worker terminal whose task is gone is dropped once quiet this long.
 const ORPHAN_OUTPUT_AFTER: time::Duration = time::Duration::days(1);
 /// Change notices in quark.db: a client offline longer refetches anyway.
@@ -60,7 +62,7 @@ const LEGACY_PREFIXES: &[&str] = &["firstmate.", "shadow."];
 /// Rows deleted per store lock, so a backlog never stalls other writers.
 const BATCH: u32 = 5_000;
 /// The store is compacted once at least this much of it is free.
-const VACUUM_MIN_FREE: u64 = 64 * 1024 * 1024;
+const VACUUM_MIN_FREE: u64 = 32 * 1024 * 1024;
 
 pub struct Housekeeping {
     store: Arc<Store>,
