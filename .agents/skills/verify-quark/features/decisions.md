@@ -6,7 +6,7 @@ A user sees every open decision across Projects, oldest first, answers one from 
 
 - `dec-list` lists open decisions across Projects with a count in the sidebar.
 - `dec-navigate` moves with `j`/`k` and opens a decision from the palette.
-- `dec-answer` answers with `r`, the `Answer` box and `Ctrl+Enter`, recording `Answering as`.
+- `dec-answer` answers with `r`, the `Answer` box and `Ctrl+Enter` (or a one-tap option button), recording who answered (`local` for the desktop app).
 - `dec-answered` switches with `o`/`a` and shows `Answered by <name>` and the answer.
 - `dec-task` jumps to the task that asked (`t`, or the link in the detail).
 
@@ -23,10 +23,10 @@ Preconditions:
 - Mock: `$Q launch --daemon mock`; two open decisions, the older one `Keep the full answer history per decision` on the task `Decision records carry who answered`.
 - Real: `$Q launch --engine native --harness fake` and a ready Project with an open worker decision (a worker sent `QV-STATUS needs-decision [key=k]: ...`, as `bin/journey-native` does); `$Q api GET /v1/decisions` lists it.
 
-- **Open the inbox.** Run `$Q browser open "#/inbox"`. `$Q browser text --testid inbox-count` prints `2` (mock) and `$Q browser count --testid decision-row` matches. Save `decisions/01-open.png`.
-- **Answer from the keyboard.** Run `$Q browser click --testid decision-row --has-text "answer history"`, `$Q browser press r`, `$Q browser fill --label "Answering as" --value verify`, `$Q browser fill --label Answer --exact --value "Only the latest answer."` and `$Q browser press Control+Enter --label Answer --exact`. The count drops by one.
-- **See who answered.** Run `$Q browser press a`, `$Q browser click --testid decision-row --has-text "answer history"` and `$Q browser wait --testid decision-answer --contains "Answered by verify"`. Save `decisions/02-answered.png`.
-- **Side effects.** Run `$Q capture decisions/api -- $Q api GET /v1/decisions`: the decision carries the answer and `answered_by` `verify`; `$Q events --for 1` shows `decision.answered`. With the native engine, the event log records `task.transition` `decision_answered`.
+- **Open the inbox.** Run `$Q browser open "#/inbox"`. `$Q browser text --testid inbox-count` prints `2` (mock) and `$Q browser count --testid decision-log-row` matches. Save `decisions/01-open.png`.
+- **Answer from the keyboard.** Run `$Q browser click --testid decision-log-row --has-text "answer history"`, `$Q browser wait --testid decision-detail --contains "answer history"`, `$Q browser press r` (focuses the `Answer` box when the decision has no options; pick `Something else` first when it has), `$Q browser fill --label Answer --exact --value "Only the latest answer."` and `$Q browser press Control+Enter --label Answer --exact`. The count drops by one.
+- **See who answered.** Run `$Q browser press a`, `$Q browser click --testid decision-log-row --has-text "answer history"` and `$Q browser wait --testid decision-answer --contains "Only the latest answer."`. Save `decisions/02-answered.png`.
+- **Side effects.** Run `$Q capture decisions/api -- $Q api GET /v1/decisions`: the decision carries the answer and `answered_by` (`local` from the app); `$Q events --for 1` shows `decision.answered`. With the native engine, the event log records `task.transition` `decision_answered`.
 
 ## Gotchas
 

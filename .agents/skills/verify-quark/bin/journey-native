@@ -258,10 +258,9 @@ else
 fi
 if [ -n "$decision" ]; then
   "$Q" browser open "#/inbox" >/dev/null 2>&1
-  if browser click --testid decision-row --has-text "REST or gRPC" &&
-    browser wait --text "$question" &&
+  if browser click --testid decision-log-row --has-text "REST or gRPC" &&
+    browser wait --testid decision-detail --contains "$question" &&
     browser press r &&
-    browser fill --label "Answering as" --value verify &&
     browser fill --label Answer --exact --value "REST, keep it simple." &&
     browser press Control+Enter --label Answer --exact &&
     wait_for 15 bash -c "'$Q' api GET /v1/decisions 2>/dev/null | jq -e --arg d '$decision' 'any(.[]; .id == \$d and .state == \"answered\")' >/dev/null"; then
