@@ -485,7 +485,7 @@ pub trait EngineAdapter: Send + Sync {
     }
 
     /// Replace the workspace's verification-gate config with `config`
-    /// (schema `fm.gates.v1`, see [`crate::gates`]). Engines without gates
+    /// (schema `quark.gates.v1`, see [`crate::gates`]). Engines without gates
     /// ignore it.
     async fn set_gates(&self, _ws: &WorkspaceRef, _config: &str) -> Result<(), EngineError> {
         Ok(())

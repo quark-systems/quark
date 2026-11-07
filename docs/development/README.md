@@ -12,7 +12,6 @@ Build and run it as in [Build from source](../getting-started/build-from-source.
 | `app/` | the desktop app: Tauri 2, React, TypeScript, xterm.js ([`app/README.md`](../../app/README.md)) |
 | `selfhost/` | Quark's own Project definition and `project-init.sh` ([`selfhost/README.md`](../../selfhost/README.md)) |
 | `docs/` | this documentation ([index](../README.md)) |
-| `ui-poc/` | the Phase 0 UI proof of concept and benchmarks, kept as a record |
 | `.agents/skills/` | agent skills for this repo, harness neutral (`.claude/skills` links to it) |
 
 ## Crates

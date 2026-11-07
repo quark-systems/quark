@@ -1124,7 +1124,10 @@ async fn creating_a_project_provisions_workspace_repo_and_coordinator() {
             })
             .collect()
     };
-    assert_eq!(gates(&h), [json!({"schema": "fm.gates.v1", "repos": {}})]);
+    assert_eq!(
+        gates(&h),
+        [json!({"schema": "quark.gates.v1", "repos": {}})]
+    );
 
     // Declaring gates and adding holdout tests in the Project repo reaches
     // the engine on the next refresh, once.

@@ -443,9 +443,9 @@ async fn merges_through_the_gates_and_the_guard_then_lands_the_task() {
     let engine = NativeEngine::with_forge(env.log(), sup.clone(), forge.clone());
     let ws = ws(&env);
 
-    // Gates are fm.gates.v1, keyed by the repo's directory name.
+    // Gates are quark.gates.v1, keyed by the repo's directory name.
     assert!(engine.set_gates(&ws, r#"{"schema":"x"}"#).await.is_err());
-    let gates = r#"{"schema":"fm.gates.v1","repos":{"repo":{"checks":[{"name":"test","run":"test -f file.txt"}]}}}"#;
+    let gates = r#"{"schema":"quark.gates.v1","repos":{"repo":{"checks":[{"name":"test","run":"test -f file.txt"}]}}}"#;
     engine.set_gates(&ws, gates).await.unwrap();
     assert!(engine.gate_evidence(&ws, "t1").await.unwrap().is_none());
 

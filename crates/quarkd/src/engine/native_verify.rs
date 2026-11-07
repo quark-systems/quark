@@ -4,8 +4,8 @@
 //! State lives in the event log (merges, red-main episodes, standing
 //! approval) and under the Project workspace root:
 //!
-//! - `config/gates.json`: the gates config (schema `fm.gates.v1`, see
-//!   [`crate::gates`]), the path firstmate's engine reads it from;
+//! - `config/gates.json`: the gates config (schema `quark.gates.v1`, or the
+//!   older `fm.gates.v1`; see [`crate::gates`]);
 //! - `verify/<task>/`: where a task's gates run, with their logs under
 //!   `logs/` and the last run's evidence in `evidence.json`.
 
@@ -246,8 +246,8 @@ impl NativeVerify {
             .collect())
     }
 
-    /// Replace the gates config. A config that is not `fm.gates.v1` is
-    /// refused and the old one stays.
+    /// Replace the gates config. A config that is not `quark.gates.v1` (or
+    /// the older `fm.gates.v1`) is refused and the old one stays.
     pub fn set_gates(&self, ws: &WorkspaceRef, config: &str) -> Result<(), EngineError> {
         GatesConfig::parse(config).map_err(core)?;
         if !ws.root.is_dir() {
