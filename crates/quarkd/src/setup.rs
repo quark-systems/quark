@@ -2,8 +2,8 @@
 //! and the fixes Quark can make for it.
 //!
 //! [`check`] looks at the tools quarkd runs (git, tmux 3.2+, gh signed in, a
-//! coordinator harness signed in) and the optional ones (bd and dolt for
-//! Issues, quota-axi for quota, treehouse unless it is the worktree pool), plus the home itself (writable,
+//! coordinator harness signed in, Beads and Dolt) and the optional ones
+//! (quota-axi for quota, treehouse unless it is the worktree pool), plus the home itself (writable,
 //! format, free disk). `quarkd doctor` prints it; `GET /v1/setup` serves it
 //! to the app's setup screen.
 //!
@@ -244,10 +244,10 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
     checks.push(tool(
         "bd",
         "Beads (bd)",
-        false,
-        "The Issues tab, decisions and Beads memory.",
+        true,
+        "Issues, decisions and memory live in each project's Beads database.",
         bd.as_ref(),
-        Some("Issues and Beads memory stay off without it"),
+        None,
         Some(Fix {
             label: "How to install".into(),
             command: "see https://beads.gascity.com".into(),
@@ -257,10 +257,10 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
     checks.push(tool(
         "dolt",
         "Dolt",
-        false,
+        true,
         "The database server Beads runs on.",
         dolt.as_ref(),
-        Some("needed with Beads"),
+        None,
         Some(brew_fix("dolt")),
     ));
     checks.push(tool(
@@ -683,9 +683,19 @@ mod tests {
         let reg = HarnessRegistry::new(crate::harness::builtin(), env);
         let r = check(home.path(), &reg).await;
         assert!(!r.ready);
-        for id in ["git", "tmux", "gh", "gh_auth", "coordinator", "treehouse"] {
+        for id in [
+            "git",
+            "tmux",
+            "gh",
+            "gh_auth",
+            "coordinator",
+            "bd",
+            "dolt",
+            "treehouse",
+        ] {
             assert_eq!(r.get(id).unwrap().status, CheckStatus::Missing, "{id}");
         }
+        assert!(r.get("bd").unwrap().required && r.get("dolt").unwrap().required);
         // treehouse is optional unless the treehouse pool is asked for.
         assert!(!r.get("treehouse").unwrap().required);
         assert_eq!(r.get("home").unwrap().status, CheckStatus::Ok);
