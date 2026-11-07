@@ -12,7 +12,7 @@ use quark_core::worktree::{
 };
 use quark_core::{CoreError, EventLog, HostId, NewEvent, ProjectId, Result, TaskId};
 
-use crate::treehouse::{LeaseInfo, Pool, PoolEntry, Release, TreehouseCli};
+use crate::treehouse::{Cleanup, Kept, LeaseInfo, Pool, PoolEntry, Release, TreehouseCli};
 use crate::{checks, git};
 
 const TASK_PREFIX: &str = "quark:task:";
@@ -74,6 +74,48 @@ impl<P: Pool> TreehouseProvider<P> {
 
     pub fn pool(&self) -> &P {
         &self.pool
+    }
+
+    /// Free disk: prune each reported repo's pool of its stale slots
+    /// ([`Pool::prune`]). A pool that fails is reported in
+    /// [`Cleanup::kept`] under its repo, and the others still run.
+    pub async fn prune(&self) -> Cleanup {
+        let mut out = Cleanup::default();
+        for repo in self.repos() {
+            match self.pool.prune(&repo).await {
+                Ok(c) => out.extend(c),
+                Err(e) => out.kept.push(Kept {
+                    path: repo,
+                    reason: format!("prune failed: {e}"),
+                }),
+            }
+        }
+        out
+    }
+
+    /// Remove the pool slots that belong to the clone `repo`, before the
+    /// clone itself is deleted, so none is left behind pointing at nothing.
+    /// Each goes only when disposable ([`Pool::destroy`]); the others come
+    /// back in [`Cleanup::kept`]. Slots of other clones sharing the pool are
+    /// not touched.
+    pub async fn retire_clone(&self, repo: &Path) -> Result<Cleanup> {
+        let repo = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+        let mine = common_dir(&repo).await?;
+        let mut out = Cleanup::default();
+        for entry in self.pool.list(&repo).await? {
+            if common_dir(&entry.path).await.ok().as_ref() != Some(&mine) {
+                continue;
+            }
+            match self.pool.destroy(&repo, &entry.path).await {
+                Ok(c) => out.extend(c),
+                Err(e) => out.kept.push(Kept {
+                    path: entry.path,
+                    reason: e.to_string(),
+                }),
+            }
+        }
+        self.repos.lock().unwrap().remove(&repo);
+        Ok(out)
     }
 
     async fn hand_out(&self, request: &WorktreeRequest, holder: Holder) -> Result<Worktree> {
@@ -315,6 +357,17 @@ impl<P: Pool> WorktreeProvider for TreehouseProvider<P> {
         }
         Ok(ProviderStatus { slots })
     }
+}
+
+/// The shared git dir of the clone `dir` belongs to, canonical.
+async fn common_dir(dir: &Path) -> Result<PathBuf> {
+    let out = git::read(
+        dir,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .await?;
+    let p = PathBuf::from(out);
+    Ok(std::fs::canonicalize(&p).unwrap_or(p))
 }
 
 fn task_of(holder: &Holder) -> Option<TaskId> {

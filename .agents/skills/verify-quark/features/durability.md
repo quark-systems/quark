@@ -21,7 +21,7 @@ These journeys check that from outside (the `/v1` API, the event stream, the ter
 
 Preconditions:
 
-- The native engine needs nothing beyond this checkout and treehouse 3.1.2 or later (worker worktrees; `selfhost/treehouse.sh` installs it). The stub engine runs the daemon-only checks.
+- The native engine needs nothing beyond this checkout (worker worktrees come from quarkd's own pool). The stub engine runs the daemon-only checks.
 - No run needs to be up: each journey launches its own run and cleans it up, because a disruption leaves its run unusable for the next one.
 
 - **Run all four.** Run `$Q journey durability -- --engine native --harness fake`. Each journey provisions a Project from a local fixture repo, records its agent terminals, starts a worker through the coordinator's `start_task` tool when the engine serves one and records the pid that answers a steer, records the state and `last_seq`, opens the board in the app, disrupts the run, and checks recovery. Every check prints `PASS`, `FAIL` or `SKIP` with its reason; the command exits non-zero on any `FAIL`.

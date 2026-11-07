@@ -15,8 +15,7 @@
 # prints one line, PASS, FAIL or SKIP (with the unmet prerequisite). The
 # summary lands in $QUARK_VERIFY_HOME/journeys/ and the evidence in the
 # run's evidence/native/. Exits 1 when any check fails. Needs tmux 3.2+, jq,
-# git and treehouse 3.1.2 or later (the native supervisor takes worker
-# worktrees from it; selfhost/treehouse.sh installs it).
+# git and curl (worker worktrees come from quarkd's own pool).
 set -uo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -51,9 +50,9 @@ finish() {
 }
 
 missing=""
-for t in tmux jq git curl treehouse; do command -v "$t" >/dev/null || missing+=" $t"; done
+for t in tmux jq git curl; do command -v "$t" >/dev/null || missing+=" $t"; done
 if [ -n "$missing" ]; then
-  skip "everything: not installed:$missing (treehouse: selfhost/treehouse.sh)"
+  skip "everything: not installed:$missing"
   finish
 fi
 
@@ -173,8 +172,7 @@ else
   fail "coordinator: its MCP route does not list start_task (see $ev/tools.json)"
 fi
 rpc "$(jq -nc --arg t "$title" '{jsonrpc: "2.0", id: 2, method: "tools/call", params: {name: "start_task",
-  arguments: {title: $t, brief: "Add one line greeting the reader to README.md, then report done.",
-              agent: {harness: "claude-code", effort: "low"}}}}')" >"$ev/start_task.json"
+  arguments: {title: $t, brief: "Add one line greeting the reader to README.md, then report done."}}}')" >"$ev/start_task.json"
 if jq -e '.result.isError == false' "$ev/start_task.json" >/dev/null; then
   pass "coordinator: start_task answered: $(jq -r '.result.content[0].text' "$ev/start_task.json")"
 else

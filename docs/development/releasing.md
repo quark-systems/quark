@@ -26,7 +26,7 @@ Pull requests that change the workflow or `packaging/` run the same builds as a 
 ## Windows
 
 The app installs natively. In WSL (Ubuntu 24.04+, systemd on), run `install-wsl.sh` from
-the release; it installs quarkd, tmux, git and treehouse, and runs quarkd as a systemd
+the release; it installs quarkd, tmux and git, and runs quarkd as a systemd
 user service on `127.0.0.1:7380`, which the app reaches through WSL's localhost
 forwarding. Running it again upgrades quarkd.
 

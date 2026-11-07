@@ -14,8 +14,6 @@ repo="quark-systems/quark"
 version="${QUARK_VERSION:-}"
 bin_dir="$HOME/.local/bin"
 unit_dir="$HOME/.config/systemd/user"
-treehouse_version="3.1.2"
-treehouse_sha256="bc059c6dbbcf6b11a741e92aed1d845d5b4a96f1d9c5e6f78c1aa2502669962d"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -63,15 +61,6 @@ say "Downloading quarkd ${version:-(latest)}"
 curl -fsSL -o "$tmp/quarkd.tar.gz" "$url"
 tar -xzf "$tmp/quarkd.tar.gz" -C "$tmp"
 install -m 755 "$tmp/quarkd" "$bin_dir/quarkd"
-
-if ! command -v treehouse >/dev/null && [ ! -x "$bin_dir/treehouse" ]; then
-  say "Installing treehouse $treehouse_version (worktrees for workers)"
-  curl -fsSL -o "$tmp/treehouse.tgz" \
-    "https://github.com/kunchenguid/treehouse/releases/download/v$treehouse_version/treehouse-v$treehouse_version-linux-amd64.tar.gz"
-  echo "$treehouse_sha256  $tmp/treehouse.tgz" | sha256sum -c --quiet -
-  tar -xzf "$tmp/treehouse.tgz" -C "$tmp" treehouse
-  install -m 755 "$tmp/treehouse" "$bin_dir/treehouse"
-fi
 
 # The service gets the PATH your login shell has, so quarkd finds gh, tmux and the agent
 # CLIs. Run this script again after installing a new one.

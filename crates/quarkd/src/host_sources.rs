@@ -214,7 +214,7 @@ pub struct PoolReporter {
     view: EngineView,
     log: Arc<dyn EventLog>,
     host: HostId,
-    /// Treehouse, or treehouse shadowed by the native pool.
+    /// The daemon's worktree pool ([`crate::native_worktrees`]).
     pool: Arc<dyn Pool>,
     last: Option<PoolReport>,
 }
@@ -270,7 +270,7 @@ impl PoolReporter {
 
 /// Repo clones in a workspace: each git checkout under `<root>/repos/`,
 /// with links to firstmate's `projects/` clones followed.
-fn clones(root: &Path) -> Vec<PathBuf> {
+pub(crate) fn clones(root: &Path) -> Vec<PathBuf> {
     crate::engine::native_dispatch_engine::checkouts(
         &root.join(crate::engine::native_project::REPOS_DIR),
     )
@@ -310,7 +310,7 @@ async fn read_pools(
             }
             Err(_) => {
                 errors.insert(format!(
-                    "treehouse status took over {}s",
+                    "worktree pool status took over {}s",
                     POOL_TIMEOUT.as_secs()
                 ));
             }

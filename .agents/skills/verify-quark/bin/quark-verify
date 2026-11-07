@@ -140,8 +140,8 @@ cmd_launch() {
         mkdir -p "$inst/claude-config"
         printf 'export CLAUDE_CONFIG_DIR=%q\n' "$inst/claude-config"
       fi
-      # The native supervisor takes worker worktrees from treehouse; keep the
-      # pool in the run, not in the user's ~/.treehouse.
+      # Keep the worktree pool (native, or treehouse with
+      # QUARK_WORKTREE_POOL=treehouse) in the run, not in ~/.treehouse.
       if [ "$engine" = native ]; then
         printf 'export TREEHOUSE_ROOT=%q\n' "$inst/treehouse"
       fi

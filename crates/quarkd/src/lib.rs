@@ -143,10 +143,17 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     // Native dispatch (slice 5) starts the native engine's tasks.
     let dispatch = match &native {
         Some(n) => {
-            let parts = engine::native_dispatch_engine::DispatchParts::for_daemon(
+            let mut parts = engine::native_dispatch_engine::DispatchParts::for_daemon(
                 &config,
                 Arc::new(events.clone()),
             );
+            parts.pool = native_worktrees::shared().map(|pool| {
+                Arc::new(native_worktrees::IdlePrune::new(
+                    pool,
+                    store.clone(),
+                    host(),
+                )) as Arc<dyn quark_dispatch::IdlePool>
+            });
             let d =
                 engine::native_dispatch_engine::NativeDispatch::open(parts, n.supervisor.clone())
                     .await

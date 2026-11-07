@@ -281,6 +281,7 @@ async fn starts_tasks_through_native_dispatch() {
             quota: Arc::new(FixedQuota(Some(Default::default()))),
             families: ProviderFamilies::builtin(),
             settings: Settings::default(),
+            pool: None,
         },
         sup.clone(),
     )

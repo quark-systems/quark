@@ -5,12 +5,12 @@ Keep this page current: a PR that makes Quark shell out to a new program, or sto
 
 ## Third-party helper tools
 
-Small tools Quark inherited from firstmate. Each one is a candidate to port into Quark, as the native worktree pool is doing for treehouse.
+Small tools Quark inherited from firstmate. Each one is a candidate to port into Quark, as the native worktree pool did for treehouse.
 
 | Tool | What Quark uses it for | Where | How it is installed | Required |
 | :--- | :--- | :--- | :--- | :--- |
 | `quota-axi` ([kunchenguid/quota-axi](https://github.com/kunchenguid/quota-axi)) | Account quota for Claude and Codex: dispatch judges candidates on one `quota-axi --json` snapshot, and the Accounts view runs `quota-axi --provider claude\|codex --json` per account | `crates/quark-dispatch/src/quota.rs`, `crates/quarkd/src/accounts.rs`, `crates/quarkd/src/native_dispatch.rs` | `npm install -g quota-axi`; `--quota-axi` or `QUARKD_QUOTA_AXI` picks the binary | Optional: without it quota is unmeasured, so candidates stay eligible but unranked |
-| `treehouse` 3.1.2+ ([kunchenguid/treehouse](https://github.com/kunchenguid/treehouse)) | The worktree pool workers run in (acquire, return, list) | `crates/quark-worktree/src/treehouse.rs`, `crates/quarkd/src/native_worktrees.rs` | `selfhost/treehouse.sh` (pinned sha256); `packaging/wsl/install.sh` on WSL; CI downloads it. `QUARK_TREEHOUSE_BIN` overrides | Yes, until the native pool (`QUARK_NATIVE_WORKTREES=1`, shadow only today) replaces it |
+| `treehouse` 3.1.2+ ([kunchenguid/treehouse](https://github.com/kunchenguid/treehouse)) | Only as a fallback: quarkd's own native pool serves worktrees by default, on treehouse's pool format. `QUARK_WORKTREE_POOL=treehouse` uses treehouse instead (e.g. for a repo with a setting the native pool refuses: jj, `worktree_path`, `unique_leaf`, APFS sharing, `post_create` hooks, `.worktreeinclude`), and `QUARK_WORKTREE_POOL=shadow` runs it with the native pool compared | `crates/quark-worktree/src/treehouse.rs`, `crates/quarkd/src/native_worktrees.rs` | `selfhost/treehouse.sh` (pinned sha256); CI downloads it for the parity tests (`TREEHOUSE_BIN`) | No: only with `QUARK_WORKTREE_POOL=treehouse` or `shadow` |
 
 IBM Bob and Kiro CLI quota is read by quarkd itself (`crates/quark-dispatch/src/local/`), not by quota-axi. `tasks-axi`, needed in the firstmate era, is no longer used.
 

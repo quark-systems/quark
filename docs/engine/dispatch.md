@@ -96,11 +96,12 @@ The supervisor records `Queued` itself when it takes a task, so a task waiting i
 The native resolver was compared with firstmate's on every dispatch while slice 5 ran in shadow; quarkd no longer runs that comparison.
 `crates/quark-dispatch/tests/parity.rs` still holds the resolver to firstmate's decisions on recorded cases; `tests/parity/record/record.py <firstmate checkout>` re-records them by running `fm-dispatch-resolve.sh` with stub `curl` and `quota-axi`.
 
+When a host runs low on disk, dispatch prunes its idle pool worktrees once per episode (`IdlePool`; quarkd's prunes every Project repo's pool with the native pool's `prune`, `crates/quarkd/src/native_worktrees.rs`) and records the outcome as `dispatch.pruned`.
+
 With `--engine native`, quarkd registers this host and records a telemetry sample every minute, and the native engine serves `resolve_dispatch`, `resolve_description` and `set_crew_dispatch` from the dispatcher (`crates/quarkd/src/engine/native_dispatch_engine.rs`), with accounts from quarkd's accounts store.
 
 ## Not yet
 
-- An `IdlePool` over treehouse's prune, for the native path.
 - Spawners for SSH and hosted runtimes (slice 7).
 - Recording the task as `Queued` in the ledger while it waits in dispatch needs a small `quark-core` amendment so the supervisor accepts a queued task.
 - Anchoring Bob from a throwaway `/status` session, as firstmate's `fm-bob-quota.sh anchor --from-status` did; type the figure in with `--anchor` for now.

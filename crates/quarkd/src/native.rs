@@ -6,8 +6,8 @@
 //!   binary as `quarkd ptyd`) on
 //!   `run/ptyd.sock`, or reuses the one already listening, so worker
 //!   sessions outlive a daemon crash;
-//! - builds a [`Supervisor`] over the event log, treehouse worktrees
-//!   (shadowed by the native pool with `QUARK_NATIVE_WORKTREES=1`), the
+//! - builds a [`Supervisor`] over the event log, the native worktree pool
+//!   (or treehouse, `QUARK_WORKTREE_POOL`; see [`crate::native_worktrees`]), the
 //!   harness manifests in `<home>/harnesses`, and the host's sandbox;
 //! - adopts the sessions that survived the last daemon and supervises on a
 //!   timer, resuming a lost worker's conversation when its harness logged

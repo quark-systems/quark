@@ -16,6 +16,10 @@ use sha2::{Digest, Sha256};
 
 use super::git;
 
+/// Appended to every refusal of a setting the native pool does not support.
+pub const UNSUPPORTED_HINT: &str =
+    "remove it from treehouse.toml (or ~/.config/treehouse/config.toml), or run quarkd with QUARK_WORKTREE_POOL=treehouse to use treehouse 3.1.2+ instead";
+
 /// treehouse's `max_trees` default.
 pub const DEFAULT_MAX_TREES: usize = 16;
 
@@ -123,7 +127,7 @@ impl Config {
             return None;
         };
         Some(format!(
-            "the native worktree pool does not support {reason} yet"
+            "the native worktree pool does not support {reason} yet: {UNSUPPORTED_HINT}"
         ))
     }
 }

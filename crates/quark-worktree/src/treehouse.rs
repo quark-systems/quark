@@ -9,6 +9,8 @@
 //! | [`Pool::acquire`] | `treehouse get --lease --json --lease-holder <h> [-b <branch>] [--base <base>]` |
 //! | [`Pool::release`] | `treehouse return --if-lease-id <id> <path>` (never `--force`) |
 //! | [`Pool::list`] | `treehouse status --json` |
+//! | [`Pool::prune`] | `treehouse prune --yes` |
+//! | [`Pool::destroy`] | `treehouse destroy --yes <path>` (no `--include-*` flag) |
 //!
 //! Every command runs in the repo's primary checkout with stdin closed, so a
 //! prompt can never block it; treehouse's "not returned" exit (3) comes back
@@ -21,7 +23,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use quark_core::{CoreError, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 /// The treehouse release this adapter is written against.
@@ -73,6 +75,74 @@ pub enum Release {
     NotReturned(String),
 }
 
+/// A slot a prune or destroy removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Removed {
+    pub path: PathBuf,
+    /// Bytes freed; 0 when the pool does not say.
+    pub bytes: u64,
+}
+
+/// A slot a prune or destroy left in place, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Kept {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// What a prune or destroy did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Cleanup {
+    pub removed: Vec<Removed>,
+    /// Slots it considered and left (in use, leased, dirty, unmerged, or
+    /// unverifiable). A prune does not list slots that are simply busy.
+    pub kept: Vec<Kept>,
+}
+
+impl Cleanup {
+    pub fn freed_bytes(&self) -> u64 {
+        self.removed.iter().map(|r| r.bytes).sum()
+    }
+
+    pub fn extend(&mut self, other: Cleanup) {
+        self.removed.extend(other.removed);
+        self.kept.extend(other.kept);
+    }
+
+    /// One line for a person, e.g. "removed 3 idle worktrees (1.2 GB); kept 1".
+    pub fn summary(&self) -> String {
+        let n = self.removed.len();
+        let mut s = match n {
+            0 => "removed no worktrees".to_string(),
+            1 => "removed 1 idle worktree".to_string(),
+            n => format!("removed {n} idle worktrees"),
+        };
+        let bytes = self.freed_bytes();
+        if bytes > 0 {
+            s.push_str(&format!(" ({})", human_bytes(bytes)));
+        }
+        if !self.kept.is_empty() {
+            s.push_str(&format!("; kept {}", self.kept.len()));
+        }
+        s
+    }
+}
+
+fn human_bytes(b: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = b as f64;
+    let mut i = 0;
+    while v >= 1000.0 && i + 1 < UNITS.len() {
+        v /= 1000.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{b} B")
+    } else {
+        format!("{v:.1} {}", UNITS[i])
+    }
+}
+
 /// A pool of reusable worktrees with durable leases.
 #[async_trait]
 pub trait Pool: Send + Sync {
@@ -92,6 +162,17 @@ pub trait Pool: Send + Sync {
 
     /// Every slot in `repo`'s pool.
     async fn list(&self, repo: &Path) -> Result<Vec<PoolEntry>>;
+
+    /// Remove the stale slots of `repo`'s pool to free disk: unleased,
+    /// unreserved, nothing running in them, clean, and with HEAD merged into
+    /// the default branch (or the base the slot was parked on). Never
+    /// removes anything else.
+    async fn prune(&self, repo: &Path) -> Result<Cleanup>;
+
+    /// Remove the slot at `path` from `repo`'s pool when it is disposable
+    /// (as [`Pool::prune`] defines it, whether or not anything is busy); a
+    /// slot that is not comes back in [`Cleanup::kept`] with the reason.
+    async fn destroy(&self, repo: &Path, path: &Path) -> Result<Cleanup>;
 }
 
 #[async_trait]
@@ -112,6 +193,14 @@ impl<P: Pool + ?Sized> Pool for Arc<P> {
 
     async fn list(&self, repo: &Path) -> Result<Vec<PoolEntry>> {
         (**self).list(repo).await
+    }
+
+    async fn prune(&self, repo: &Path) -> Result<Cleanup> {
+        (**self).prune(repo).await
+    }
+
+    async fn destroy(&self, repo: &Path, path: &Path) -> Result<Cleanup> {
+        (**self).destroy(repo, path).await
     }
 }
 
@@ -305,6 +394,71 @@ impl Pool for TreehouseCli {
         }
         parse_status(&String::from_utf8_lossy(&out.stdout))
     }
+
+    /// treehouse prints no JSON for prune, so what it removed is read off
+    /// the listing before and after.
+    async fn prune(&self, repo: &Path) -> Result<Cleanup> {
+        let before = self.list(repo).await?;
+        let out = self.run(repo, vec!["prune".into(), "--yes".into()]).await?;
+        if !out.status.success() {
+            return Err(failure("prune", &out));
+        }
+        let after = self.list(repo).await?;
+        Ok(Cleanup {
+            removed: gone(&before, &after),
+            kept: Vec::new(),
+        })
+    }
+
+    async fn destroy(&self, repo: &Path, path: &Path) -> Result<Cleanup> {
+        let before = self.list(repo).await?;
+        let out = self
+            .run(
+                repo,
+                vec![
+                    "destroy".into(),
+                    "--yes".into(),
+                    path.to_string_lossy().into_owned(),
+                ],
+            )
+            .await?;
+        let after = self.list(repo).await?;
+        let removed = gone(&before, &after);
+        let still = after.iter().any(|e| e.path == path);
+        if still {
+            let text = format!(
+                "{} {}",
+                String::from_utf8_lossy(&out.stdout).trim(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            return Ok(Cleanup {
+                removed,
+                kept: vec![Kept {
+                    path: path.to_path_buf(),
+                    reason: text.trim().to_string(),
+                }],
+            });
+        }
+        if !out.status.success() {
+            return Err(failure("destroy", &out));
+        }
+        Ok(Cleanup {
+            removed,
+            kept: Vec::new(),
+        })
+    }
+}
+
+/// Slots listed `before` and not `after`.
+fn gone(before: &[PoolEntry], after: &[PoolEntry]) -> Vec<Removed> {
+    before
+        .iter()
+        .filter(|b| !after.iter().any(|a| a.path == b.path))
+        .map(|b| Removed {
+            path: b.path.clone(),
+            bytes: 0,
+        })
+        .collect()
 }
 
 #[cfg(test)]

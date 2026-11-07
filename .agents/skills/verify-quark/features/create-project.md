@@ -20,7 +20,7 @@ A user creates a Project from the app with a name, a goal, one or more repositor
 
 Preconditions:
 
-- A run launched with `$Q launch` (stub engine) or `$Q launch --engine native` (needs treehouse), and `$Q doctor` passes.
+- A run launched with `$Q launch` (stub engine) or `$Q launch --engine native`, and `$Q doctor` passes.
 - No Project named `Verify demo` (`$Q api GET /v1/projects`).
 - With the native engine, a repository it can clone; a local path to a bare repo with a `main` branch works offline (`/path/demo.git`; the form refuses `file://` URLs).
 
