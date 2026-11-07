@@ -5,7 +5,7 @@ It composes the other native crates through their `quark-core` contracts and kee
 
 | Step | Contract | Crate |
 |---|---|---|
-| isolated worktree per task | `WorktreeProvider` | `quark-worktree` (treehouse 3.1.2) |
+| isolated worktree per task | `WorktreeProvider` | `quark-worktree` (the native pool) |
 | launch command, keys, hooks | `HarnessManifest` | `quark-harness` |
 | native or sandboxed process | `Isolation` | `quark-isolation` |
 | terminal session | `SessionBackend` | `quark-sessions` (`quark-ptyd`, tmux) |
@@ -67,7 +67,7 @@ The tests in `crates/quark-supervisor/tests/lifecycle.rs` drive each of these ag
 
 ## In quarkd
 
-With `--engine native`, quarkd starts the PTY supervisor (itself as `quarkd ptyd`, or the `quark-ptyd` binary `QUARK_PTYD` names) on `<home>/run/ptyd.sock`, build the supervisor over `events.db`, treehouse, `<home>/harnesses` and the host sandbox, recover, supervise, and serve the worker protocol under `/v1/worker`.
+With `--engine native`, quarkd starts the PTY supervisor (itself as `quarkd ptyd`, or the `quark-ptyd` binary `QUARK_PTYD` names) on `<home>/run/ptyd.sock`, build the supervisor over `events.db`, the worktree pool ([worktrees.md](worktrees.md)), `<home>/harnesses` and the host sandbox, recover, supervise, and serve the worker protocol under `/v1/worker`.
 
 ## Not yet
 

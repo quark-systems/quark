@@ -13,7 +13,9 @@ use quark_core::worktree::{
 };
 use quark_core::{CoreError, HostId, Result};
 use quark_worktree::checks;
-use quark_worktree::{LeaseInfo, Pool, PoolEntry, Release, TreehouseCli, TreehouseProvider};
+use quark_worktree::{
+    Cleanup, LeaseInfo, Pool, PoolEntry, Release, TreehouseCli, TreehouseProvider,
+};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -170,6 +172,14 @@ impl Pool for GitPool {
 
     async fn list(&self, _repo: &Path) -> Result<Vec<PoolEntry>> {
         Ok(self.entries.lock().unwrap().clone())
+    }
+
+    async fn prune(&self, _repo: &Path) -> Result<Cleanup> {
+        Ok(Cleanup::default())
+    }
+
+    async fn destroy(&self, _repo: &Path, _path: &Path) -> Result<Cleanup> {
+        Ok(Cleanup::default())
     }
 }
 

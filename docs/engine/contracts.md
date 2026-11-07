@@ -34,7 +34,7 @@ Every state change is appended to the `EventLog` first; everything else is a rea
 | `EventLog`, `Subscription` | `event` | above | `quark-eventlog` |
 | `TaskMachine`, `TaskEvent` | `task` | pure, deterministic `apply(state, event)`; states are `quark_systems::TaskState`. `ReferenceMachine` is the reference table; implementations may be stricter, not looser | `quark-eventlog` |
 | `ReadModel`, `replay` | `read_model` | rebuilt from the log; replay-safe | quarkd's projector, dashboard metrics |
-| `WorktreeProvider` | `worktree` | `get`, `return_worktree`, `lease`, `status`. Never hands out a primary or tangled checkout; never discards uncommitted or unpushed work (returns `Kept`). Every change mirrored as `worktree.change` | `quark-worktree` (treehouse 3.1.2, then native in slice 9) |
+| `WorktreeProvider` | `worktree` | `get`, `return_worktree`, `lease`, `status`. Never hands out a primary or tangled checkout; never discards uncommitted or unpushed work (returns `Kept`). Every change mirrored as `worktree.change` | `quark-worktree` (the native pool; treehouse 3.1.2 as a fallback) |
 | `SessionBackend`, `OutputStream` | `session` | create, attach, input, resize, snapshot, kill, list. Sessions outlive viewers and daemon restarts | `quark-sessions` (tmux control mode, PTY supervisor) |
 | `HarnessManifest`, `HarnessRegistry` | `harness` | the TOML schema (serde types; unknown keys rejected): detect, aliases, models (with an optional catalog command), efforts, launch (with start-up dialogs to answer), account, hooks, turn signals, transcript locator, keys, quota source, plugin escape hatch. `validate()` runs after parsing | `quark-harness` |
 | `WorkerProtocol`, `WorkerMessage` | `worker` | `report`, `ask`, `learned`, `done` (plus hook signals) over MCP, hooks or files; each lands as a `worker.message` event before `receive` returns | `quark-worker` |
@@ -52,4 +52,4 @@ Each slice ran in shadow beside firstmate, its disagreements recorded as `shadow
 Slice 10 removed the firstmate adapter, its ingest bridge and those comparisons; quarkd now runs only the native engine (`--engine native`, or the stub for tests).
 Event logs from before then still hold `firstmate.*` events and those slices' `shadow.divergence` events; nothing reads them any more.
 
-One comparison remains: the native worktree pool against treehouse, with `QUARK_NATIVE_WORKTREES=1` ([worktrees.md](worktrees.md)).
+Slice 9 switched the worktree pool to native too. One comparison remains, on request: the native worktree pool against treehouse, with `QUARK_WORKTREE_POOL=shadow` ([worktrees.md](worktrees.md)).

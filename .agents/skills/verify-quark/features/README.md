@@ -35,12 +35,12 @@ This table links each feature to the journey tests that script it and the modes 
 
 | Feature | Journey | Scripted by (`app/e2e/app.spec.ts`) | Live modes | Prerequisites |
 | :--- | :--- | :--- | :--- | :--- |
-| [Create a Project](create-project.md) | J2 | "creates a project and lands on its board" | real+stub, real+native, mock | native: a cloneable repo and treehouse; `no-mistakes` for gated delivery |
+| [Create a Project](create-project.md) | J2 | "creates a project and lands on its board" | real+stub, real+native, mock | native: a cloneable repo; `no-mistakes` for gated delivery |
 | [Project board and coordinator chat](board-and-chat.md) | J3 | "the board updates live when the coordinator queues a task", "command palette jumps to a task" | mock; real+native | native: a signed-in coordinator harness |
 | [Worker terminal](worker-terminal.md) | J4 | "worker view: terminal, steering, transcript, changes, cancel and relaunch", "worker view: why this agent ...", "a queued task explains ..." | mock; real+native | native: a running worker |
 | [Decisions inbox](decisions.md) | J5 | "decisions inbox: answer from the keyboard, then see who answered" | mock; real+native | native: an open worker decision |
-| [Durability](durability.md) | DUR | none (`quark-verify journey durability` scripts it against the real daemon) | real+native+fake harness; real+stub for daemon checks | treehouse (the fake harness needs no account) |
-| [Native engine](native-engine.md) | NAT | none (`quark-verify journey native` scripts it against the real daemon) | real+native+fake harness | treehouse |
+| [Durability](durability.md) | DUR | none (`quark-verify journey durability` scripts it against the real daemon) | real+native+fake harness; real+stub for daemon checks | nothing extra (the fake harness needs no account) |
+| [Native engine](native-engine.md) | NAT | none (`quark-verify journey native` scripts it against the real daemon) | real+native+fake harness | tmux, jq |
 | [Persona packs](personas.md) | N10 | "switching a project's persona relabels its board, chat and workers", "settings: pick the project's persona" | mock, real+stub | none |
 | [Daemon API and event stream](daemon-api.md) | API | none (the `daemon-api` holdout covers it from outside) | real+stub, real+native | none |
 | PR center (no file yet) | J6 | "PR center: list by state ...", "PR center: verification evidence ..." | mock | real: `gh` signed in and a task PR |

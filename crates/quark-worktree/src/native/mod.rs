@@ -22,17 +22,21 @@
 //! quarantined: treehouse moves those into a backup folder first, which the
 //! native pool does not do yet.
 //!
+//! `prune` and a single-slot `destroy` are ported too ([`cleanup`]): they
+//! remove only slots proven disposable, unless a destroy opts into more.
+//!
 //! Not ported yet; the native pool refuses rather than diverge: jj
 //! workspaces, `worktree_path` templates, `unique_leaf`, APFS sharing,
 //! `post_create` hooks and seeding ignored files from `.worktreeinclude`.
 //! Also not ported: interactive (owner-process) acquisition, which only
-//! firstmate's `treehouse get` subshell uses (its reservations are still
-//! read and respected), `prune` and `destroy`.
+//! firstmate's `treehouse get` subshell used (its reservations are still
+//! read and respected), `prune --prune-orphans` and `destroy --all`.
 //!
 //! [`NativePool::plan_acquire`] and [`NativePool::plan_release`] answer what
 //! the native pool *would* do without doing it; the shadow
 //! ([`crate::shadow`]) compares them with what treehouse did.
 
+mod cleanup;
 pub mod config;
 mod git;
 pub mod procs;
@@ -47,9 +51,10 @@ use async_trait::async_trait;
 use quark_core::{CoreError, Result};
 use serde::Serialize;
 
+pub use self::cleanup::DestroyOptions;
 use self::config::Config;
 use self::state::{Entry, Lock, State, INCOMPLETE_HOLDER, RECOVERED_HOLDER};
-use crate::treehouse::{LeaseInfo, Pool, PoolEntry, Release};
+use crate::treehouse::{Cleanup, LeaseInfo, Pool, PoolEntry, Release};
 
 /// How long lingering processes get between SIGTERM and SIGKILL on release.
 const TERMINATE_GRACE: Duration = Duration::from_secs(2);
@@ -175,7 +180,7 @@ impl NativePool {
         };
         if git::has_worktree_include(&ctx.repo, &git::branch_ref(&ctx.repo, &resolved)) {
             return Err(CoreError::Unsupported(
-                "the native worktree pool does not seed .worktreeinclude files yet".into(),
+                "the native worktree pool does not seed .worktreeinclude files yet: remove .worktreeinclude from the base branch, or run quarkd with QUARK_WORKTREE_POOL=treehouse to use treehouse 3.1.2+ instead".into(),
             ));
         }
         if let Some(b) = branch {
@@ -861,5 +866,15 @@ impl Pool for NativePool {
     async fn list(&self, repo: &Path) -> Result<Vec<PoolEntry>> {
         let (me, repo) = (self.clone(), repo.to_path_buf());
         blocking(move || me.list_blocking(&repo, true)).await
+    }
+
+    async fn prune(&self, repo: &Path) -> Result<Cleanup> {
+        let (me, repo) = (self.clone(), repo.to_path_buf());
+        blocking(move || me.prune_blocking(&repo, false)).await
+    }
+
+    async fn destroy(&self, repo: &Path, path: &Path) -> Result<Cleanup> {
+        let (me, repo, path) = (self.clone(), repo.to_path_buf(), path.to_path_buf());
+        blocking(move || me.destroy_blocking(&repo, &path, DestroyOptions::default(), false)).await
     }
 }

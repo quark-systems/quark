@@ -4,10 +4,8 @@
 # Usage:
 #   selfhost/selfhost.sh [--daemon <url>] [--holdout <dir>]
 #
-# First installs treehouse 3.1.2 when this machine has no 3.x at or above it
-# (selfhost/treehouse.sh). Then runs selfhost/project-init.sh on this
-# directory, against a running quarkd (default http://127.0.0.1:7380, or
-# $QUARKD_URL) running the native engine:
+# Runs selfhost/project-init.sh on this directory, against a running quarkd
+# (default http://127.0.0.1:7380, or $QUARKD_URL) running the native engine:
 #   1. creates the Project "Quark" from project.json (the quark repo), or
 #      reuses it when one with that name exists, and waits until it is
 #      ready (a failed one is retried once);
@@ -29,11 +27,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "${1:-}" in
-  -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
-
-# Worktrees come from treehouse 3.1.2 or a later 3.x.
-"$HERE/treehouse.sh" || { echo "selfhost: treehouse 3.1.2 is required: see selfhost/treehouse.sh --help" >&2; exit 1; }
 
 # Before project-init.sh, the kickoff marker lived under selfhost/; carry it
 # over so a Project that already has its kickoff does not get it twice.

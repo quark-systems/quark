@@ -22,7 +22,7 @@ A person runs Quark on its own engine (`quarkd --engine native`): they create a 
 
 Preconditions:
 
-- tmux, jq, git and treehouse 3.1.2 or later (`selfhost/treehouse.sh`).
+- tmux, jq and git.
 - No run needs to be up: the journey launches its own (`--engine native --harness fake`) and cleans it up; `--keep` leaves it up to look at.
 
 - **Run it.** Run `$Q journey native`. Every check prints `PASS`, `FAIL` or `SKIP` with its reason; the command exits non-zero on any `FAIL`. Extra launch args go after `--`.
@@ -36,4 +36,4 @@ Preconditions:
 - The journey does not check the worker terminal (served from `quark-ptyd` since quark#115, `docs/engine/native-engine.md`, "Worker terminals"); it follows the worker through steering.
 - A cancelled task reads `failed`: the task state machine has no cancelled state.
 - `start_task` with no agent asks the Project's dispatch rules, and with no classifier configured every such task escalates and waits for `choose_profile`; the journey names the agent.
-- Worker worktrees come from treehouse, and the run keeps its pool in the instance (`TREEHOUSE_ROOT`), so cleanup removes them with the run.
+- Worker worktrees come from quarkd's native pool, and the run keeps the pool in the instance (`TREEHOUSE_ROOT`), so cleanup removes them with the run. `-- --env QUARK_WORKTREE_POOL=treehouse` runs the journey on the treehouse fallback instead.

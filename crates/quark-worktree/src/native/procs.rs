@@ -103,6 +103,21 @@ pub fn owner_alive(pid: i64, started_at_ms: i64) -> bool {
         .is_some_and(|p| (p.start_time() as i64 - started_at_ms / 1000).abs() <= 1)
 }
 
+/// This process's owner reservation `(pid, started_at)`, with the start
+/// time in milliseconds as treehouse records it (to the second: sysinfo
+/// reads whole seconds; [`owner_alive`] compares to the second).
+pub fn own_reservation() -> Option<(i64, i64)> {
+    let me = Pid::from_u32(std::process::id());
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[me]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+    let started = sys.process(me)?.start_time() as i64;
+    (started > 0).then_some((me.as_u32() as i64, started * 1000))
+}
+
 /// SIGTERM every process in `worktree`, SIGKILL whatever is left after
 /// `grace`, and report what was stopped and what still runs there.
 pub fn terminate(worktree: &Path, grace: Duration) -> (Vec<Proc>, Vec<Proc>) {

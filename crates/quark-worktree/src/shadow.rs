@@ -27,7 +27,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::native::{AcquirePlan, NativePool, ReleasePlan};
-use crate::treehouse::{LeaseInfo, Pool, PoolEntry, Release, TreehouseCli};
+use crate::treehouse::{Cleanup, LeaseInfo, Pool, PoolEntry, Release, TreehouseCli};
 
 /// Treehouse serving, the native pool compared. See the module docs.
 pub struct ShadowPool<P = TreehouseCli> {
@@ -272,6 +272,17 @@ impl<P: Pool> Pool for ShadowPool<P> {
             }
         }
         got
+    }
+
+    /// Not compared: treehouse prints no plan to compare with, and the
+    /// native pool's own prune is tested against treehouse's state in
+    /// `tests/native_parity.rs`.
+    async fn prune(&self, repo: &Path) -> Result<Cleanup> {
+        self.bash.prune(repo).await
+    }
+
+    async fn destroy(&self, repo: &Path, path: &Path) -> Result<Cleanup> {
+        self.bash.destroy(repo, path).await
     }
 }
 

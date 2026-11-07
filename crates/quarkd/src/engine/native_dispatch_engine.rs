@@ -88,6 +88,8 @@ pub struct DispatchParts {
     pub quota: Arc<dyn QuotaSource>,
     pub families: ProviderFamilies,
     pub settings: Settings,
+    /// Frees disk on a host running low by pruning idle pool worktrees.
+    pub pool: Option<Arc<dyn quark_dispatch::IdlePool>>,
 }
 
 impl DispatchParts {
@@ -108,6 +110,7 @@ impl DispatchParts {
                 key_present: key,
                 ..Settings::default()
             },
+            pool: None,
         }
     }
 }
@@ -152,7 +155,7 @@ impl NativeDispatch {
                 spawner: spawner.clone(),
                 // The red-main guard comes with native verification (slice 2).
                 guard: None,
-                pool: None,
+                pool: parts.pool,
             },
             parts.settings,
         )

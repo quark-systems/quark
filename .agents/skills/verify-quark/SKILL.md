@@ -27,7 +27,7 @@ Requirements: `cargo`, `node` 22 with `npm`, `tmux` 3.2+, `curl`, `git`, and a C
 ```sh
 $Q launch                                                    # real quarkd, stub engine (no agents, no network)
 $Q launch --daemon mock                                      # the app against app/mock/daemon.mjs (demo data, quiet)
-$Q launch --engine native                                    # quarkd's own engine, with real harnesses (needs treehouse)
+$Q launch --engine native                                    # quarkd's own engine, with real harnesses
 $Q launch --engine native --harness fake                     # agents run bin/fake-agent: no account or network needed
 ```
 
@@ -46,7 +46,7 @@ Modes and what they prove:
 | Mode | Proves | Does not prove |
 | :--- | :--- | :--- |
 | `--daemon real --engine stub` (default) | the app against the real daemon: API, store, events, Project provisioning without an engine | anything an engine or agent does: no tasks, decisions or terminals appear |
-| `--daemon real --engine native` | quarkd's own engine: provisioning, the coordinator window and its tools, dispatch, worker sessions in `quark-ptyd`, steering, decisions, cancel and relaunch | worker terminals in the app (not served yet); agent behavior unless a harness is signed in. Worker worktrees come from treehouse, kept in the run (`TREEHOUSE_ROOT`) |
+| `--daemon real --engine native` | quarkd's own engine: provisioning, the coordinator window and its tools, dispatch, worker sessions in `quark-ptyd`, steering, decisions, cancel and relaunch | worker terminals in the app (not served yet); agent behavior unless a harness is signed in. Worker worktrees come from quarkd's native pool, kept in the run (`TREEHOUSE_ROOT`) |
 | `--daemon mock` | app-only behavior against demo data (what `npm run e2e` uses) | the daemon or engine; say "against the mock" in any proof |
 
 ## Doctor

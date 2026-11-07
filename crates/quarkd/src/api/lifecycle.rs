@@ -113,6 +113,8 @@ pub async fn delete_project(
     let tasks = stop(&state, &project).await?;
     if let Some(ws) = workspace(&project) {
         release_worktrees(&state, &ws, &tasks).await?;
+        // Before its clones go: their pool slots would point at nothing.
+        crate::native_worktrees::retire_workspace(&ws.root).await;
     }
     remove_files(&state, &project).await?;
     // Terminals are optional; without them there is nothing to forget.

@@ -23,7 +23,9 @@ mod provider;
 pub mod shadow;
 pub mod treehouse;
 
-pub use native::{AcquirePlan, NativePool, ReleasePlan};
+pub use native::{AcquirePlan, DestroyOptions, NativePool, ReleasePlan};
 pub use provider::{holder_label, parse_holder, TreehouseProvider};
 pub use shadow::ShadowPool;
-pub use treehouse::{LeaseInfo, Pool, PoolEntry, Release, TreehouseCli, TREEHOUSE_VERSION};
+pub use treehouse::{
+    Cleanup, Kept, LeaseInfo, Pool, PoolEntry, Release, Removed, TreehouseCli, TREEHOUSE_VERSION,
+};

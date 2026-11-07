@@ -468,3 +468,107 @@ async fn shadow_records_divergence_once() {
         .collect();
     assert_eq!(kinds_seen, ["acquire", "list"]);
 }
+
+/// Four slots made by `maker`: 1 leased, 2 idle and landed, 3 idle with an
+/// unpushed commit, 4 idle and dirty.
+async fn mixed_pool(fx: &Fixture, maker: &dyn Pool) -> Vec<PathBuf> {
+    let mut leases = Vec::new();
+    for i in 0..4 {
+        leases.push(
+            maker
+                .acquire(&fx.repo, &format!("h{i}"), None, None)
+                .await
+                .unwrap(),
+        );
+    }
+    for l in &leases[1..] {
+        assert_eq!(
+            maker.release(&fx.repo, &l.path, &l.lease_id).await.unwrap(),
+            Release::Returned
+        );
+    }
+    git(
+        &leases[2].path,
+        &["commit", "-q", "--allow-empty", "-m", "local"],
+    );
+    std::fs::write(leases[3].path.join("scratch"), "x\n").unwrap();
+    leases.into_iter().map(|l| l.path).collect()
+}
+
+/// Slot numbers still in the pool, as treehouse lists them.
+async fn slot_names(fx: &Fixture) -> Vec<String> {
+    let mut names: Vec<String> = fx
+        .treehouse()
+        .list(&fx.repo)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn prune_removes_what_treehouse_prune_removes() {
+    if treehouse_bin().is_none() {
+        return;
+    }
+    for (maker_native, pruner_native) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let fx = Fixture::new().unwrap();
+        let (th, nat) = (fx.treehouse(), fx.native());
+        let maker: &dyn Pool = if maker_native { &nat } else { &th };
+        let paths = mixed_pool(&fx, maker).await;
+        let pruner: &dyn Pool = if pruner_native { &nat } else { &th };
+        let out = pruner.prune(&fx.repo).await.unwrap();
+        let case = format!(
+            "made by {}, pruned by {}",
+            name(maker_native),
+            name(pruner_native)
+        );
+        assert_eq!(slot_names(&fx).await, ["1", "3", "4"], "{case}");
+        assert_eq!(
+            out.removed.iter().map(|r| &r.path).collect::<Vec<_>>(),
+            [&paths[1]],
+            "{case}"
+        );
+        assert!(!paths[1].exists(), "{case}");
+        // Whoever pruned, the other still acquires from the pool.
+        let other: &dyn Pool = if pruner_native { &th } else { &nat };
+        other.acquire(&fx.repo, "after", None, None).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn destroy_agrees_with_treehouse_destroy() {
+    if treehouse_bin().is_none() {
+        return;
+    }
+    // Native destroy on one pool, treehouse destroy on its twin, slot by slot.
+    let (a, b) = (Fixture::new().unwrap(), Fixture::new().unwrap());
+    let pa = mixed_pool(&a, &a.treehouse()).await;
+    let pb = mixed_pool(&b, &b.treehouse()).await;
+    for i in 0..4 {
+        let native = a.native().destroy(&a.repo, &pa[i]).await.unwrap();
+        let treehouse = b.treehouse().destroy(&b.repo, &pb[i]).await.unwrap();
+        assert_eq!(
+            native.removed.len(),
+            treehouse.removed.len(),
+            "slot {}: native {native:?}, treehouse {treehouse:?}",
+            i + 1
+        );
+        assert_eq!(native.kept.len(), treehouse.kept.len(), "slot {}", i + 1);
+    }
+    assert_eq!(slot_names(&a).await, ["1", "3", "4"]);
+    assert_eq!(slot_names(&a).await, slot_names(&b).await);
+}
+
+fn name(native: bool) -> &'static str {
+    if native {
+        "native"
+    } else {
+        "treehouse"
+    }
+}

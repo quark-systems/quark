@@ -13,13 +13,13 @@ macOS is the main target. Linux runs the daemon and the app's web build; the des
 | Node 22 | builds the app | |
 | git | repos and worktrees | |
 | tmux 3.2 or newer | coordinator terminals | `--tmux` or `QUARKD_TMUX` picks the binary |
-| treehouse 3.1.2 | the worktree pool workers run in | `selfhost/treehouse.sh` installs it |
 | GitHub CLI (`gh`) | cloning, the PR center, merges | run `gh auth login` first |
 | Claude Code, Codex or Pi | the coordinator, and workers | signed in; Claude Code is the default; other harnesses are optional for workers |
 
 Optional:
 
 - `bd` and `dolt` ([Beads](https://github.com/gastownhall/beads)) for the Issues tab and Beads memory. quarkd sets up one Beads database per Project under `~/.quark/beads/`.
+- treehouse 3.1.2+ only to run the worktree pool on treehouse instead of quarkd's own (`QUARK_WORKTREE_POOL=treehouse`; `selfhost/treehouse.sh` installs it).
 - `quota-axi` for account quota in the app (`--quota-axi` or `QUARKD_QUOTA_AXI` picks the binary).
 - Any other harness you want workers to use (Codex, Cursor, Gemini, OpenCode, Pi, Kiro and more), installed and signed in. The app detects what is installed.
 
@@ -32,7 +32,6 @@ Optional:
 ```sh
 git clone git@github.com:quark-systems/quark.git
 cd quark
-selfhost/treehouse.sh                     # no-op when treehouse 3.1.2+ is on PATH
 cargo run --release -p quarkd
 ```
 

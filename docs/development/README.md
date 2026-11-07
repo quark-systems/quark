@@ -38,7 +38,7 @@ The `quark-*` crates are the native engine, one per subsystem, meeting at the co
 | [`quark-triggers`](../../crates/quark-triggers) | Triggers, channels (the inbox first) and the away policy for the native Quark engine (slice 7), recorded in the event log. |
 | [`quark-verify`](../../crates/quark-verify) | The native engine's verification workflow and merge guard (slice 2): gates, rebase and re-verify, and the red-main guardrail. |
 | [`quark-worker`](../../crates/quark-worker) | The worker protocol: MCP tools, harness hook ingest and a status-file fallback, all recorded in the event log. |
-| [`quark-worktree`](../../crates/quark-worktree) | WorktreeProvider for the native Quark engine: treehouse 3.1.2 adapter, the native pool that replaces it (slice 9) and the shadow comparing them, with the isolation assertion, tangle check and landed-work check. |
+| [`quark-worktree`](../../crates/quark-worktree) | WorktreeProvider for the native Quark engine: the native worktree pool (slice 9, the default), the treehouse 3.1.2 adapter it replaced (a fallback) and the shadow comparing them, with the isolation assertion, tangle check and landed-work check. |
 | [`quarkd`](../../crates/quarkd) | Quark local control plane daemon |
 
 ## Tests
@@ -54,7 +54,7 @@ npm test                # unit tests (vitest)
 npm run e2e             # Playwright against the demo daemon
 ```
 
-The worktree tests need treehouse 3.1.2 (`selfhost/treehouse.sh`, or `TREEHOUSE_BIN`).
+The worktree parity tests compare with treehouse 3.1.2 (`selfhost/treehouse.sh`, or `TREEHOUSE_BIN`) and pass vacuously without it; CI installs it.
 CI (`.github/workflows/ci.yml`) runs the same checks on every pull request.
 
 After changing the API, regenerate the contract with `cargo run -p quarkd -- openapi > api/openapi.json`.

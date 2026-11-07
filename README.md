@@ -35,8 +35,6 @@ There is no official release yet, so you build it. macOS is the main target; Lin
 ```sh
 git clone git@github.com:quark-systems/quark.git
 cd quark
-selfhost/treehouse.sh                     # installs treehouse 3.1.2, which manages worktrees
-
 cargo run --release -p quarkd
 ```
 

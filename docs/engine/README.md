@@ -12,4 +12,4 @@ It was built slice by slice beside firstmate, the bash engine Quark drove before
 - [The judgment-only coordinator](coordinator.md) (slice 6): prompt layers, wake queue and native tools.
 - [Sub-coordinators and runtimes](sub-coordinators.md) (slice 7): coordinator homes, local and SSH.
 - [Triggers, channels and the away policy](triggers.md) (slice 7): the inbox, watches and quiet modes.
-- [Worktree pool](worktrees.md) (slice 9): isolated worktrees, treehouse and the native pool.
+- [Worktree pool](worktrees.md) (slice 9): isolated worktrees from the native pool, with treehouse as a fallback.

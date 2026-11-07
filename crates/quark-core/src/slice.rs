@@ -1,7 +1,7 @@
 //! The slices of the native port, and what a shadow comparison records.
 //!
 //! Every slice now runs native. The worktree pool can still be compared
-//! with treehouse ([`Divergence`]); older event logs also carry the
+//! with treehouse on request ([`Divergence`]); older event logs also carry the
 //! firstmate comparisons recorded before firstmate was retired.
 
 use std::fmt;

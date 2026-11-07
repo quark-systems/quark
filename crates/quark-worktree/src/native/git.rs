@@ -124,7 +124,7 @@ pub(crate) fn default_branch_for_worktree(wt: &Path) -> Result<String> {
     default_branch(Path::new(&top))
 }
 
-fn main_repo_root(repo: &Path) -> PathBuf {
+pub(crate) fn main_repo_root(repo: &Path) -> PathBuf {
     let common = run(
         repo,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -197,6 +197,85 @@ pub(crate) fn add_worktree(repo: &Path, path: &Path, branch: &str) -> Result<()>
     let r = branch_ref(repo, branch);
     let p = path.to_string_lossy();
     run(repo, &["worktree", "add", "--detach", &p, &r]).map(|_| ())
+}
+
+/// `git worktree remove [--force] <path>`: without `force` git refuses a
+/// worktree with changes.
+pub(crate) fn remove_worktree(repo: &Path, path: &Path, force: bool) -> Result<()> {
+    let p = path.to_string_lossy();
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(&p);
+    run(repo, &args).map(|_| ())
+}
+
+/// The primary checkout of the repository `dir` is in (a linked worktree
+/// resolves to the repository that owns it).
+pub(crate) fn find_main_repo_root_from(dir: &Path) -> Result<PathBuf> {
+    let top = run(dir, &["rev-parse", "--show-toplevel"])?;
+    Ok(main_repo_root(Path::new(&top)))
+}
+
+/// The fully qualified ref merge-safety checks compare with: origin's
+/// current default branch's tracking ref, refused when that ref is missing
+/// or does not match what origin reports; the local default branch when
+/// there is no origin.
+pub(crate) fn default_branch_merge_ref(repo: &Path) -> Result<String> {
+    if has_remote(repo, "origin") {
+        let (branch, sha) = remote_default_branch(repo, "origin")?;
+        let r = format!("refs/remotes/origin/{branch}");
+        let local =
+            ref_commit(repo, &r).map_err(|_| CoreError::Backend(format!("{r} is unavailable")))?;
+        if local != sha {
+            return Err(CoreError::Backend(format!(
+                "{r} is stale: expected {sha}, got {local}"
+            )));
+        }
+        return Ok(r);
+    }
+    let branch = default_branch(repo)?;
+    let r = format!("refs/heads/{branch}");
+    ref_commit(repo, &r).map_err(|_| CoreError::Backend(format!("{r} is unavailable")))?;
+    Ok(r)
+}
+
+fn remote_default_branch(repo: &Path, remote: &str) -> Result<(String, String)> {
+    let out = run(repo, &["ls-remote", "--symref", remote, "HEAD"])?;
+    let (mut branch, mut sha) = (String::new(), String::new());
+    for line in out.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() == 3 && f[0] == "ref:" && f[2] == "HEAD" {
+            if let Some(b) = f[1].strip_prefix("refs/heads/") {
+                branch = b.to_string();
+            }
+        } else if f.len() == 2 && f[1] == "HEAD" {
+            sha = f[0].to_string();
+        }
+    }
+    if branch.is_empty() {
+        return Err(CoreError::Backend(format!(
+            "cannot determine {remote} default branch"
+        )));
+    }
+    if sha.is_empty() {
+        return Err(CoreError::Backend(format!(
+            "cannot determine {remote} default branch commit"
+        )));
+    }
+    Ok((branch, sha))
+}
+
+/// The ref for the base a slot records being cut from, when that branch
+/// still exists.
+pub(crate) fn base_branch_merge_ref(wt: &Path, branch: &str) -> Option<String> {
+    if branch.is_empty() {
+        return None;
+    }
+    let top = run(wt, &["rev-parse", "--show-toplevel"]).ok()?;
+    let top = Path::new(&top);
+    branch_exists(top, branch).then(|| branch_ref(top, branch))
 }
 
 pub(crate) fn prune_worktrees(repo: &Path) -> Result<()> {
