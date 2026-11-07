@@ -37,7 +37,7 @@ git clone git@github.com:quark-systems/quark.git
 cd quark
 selfhost/treehouse.sh                     # installs treehouse 3.1.2, which manages worktrees
 
-cargo run --release -p quarkd -- --engine native
+cargo run --release -p quarkd
 ```
 
 The daemon listens on `http://127.0.0.1:7380` and keeps its data in `~/.quark` (`QUARK_HOME` moves it). Then, in another terminal:
@@ -50,7 +50,7 @@ npm run tauri dev                         # the desktop app
 
 Click **New project**, give it a name, a goal and a repository, and pick the default agent. The coordinator starts in the Project's Conversation tab; tell it what to do.
 
-Without `--engine native`, quarkd runs an in-memory stub engine meant for tests. To try the app with no agents at all, `npm run mock` in `app/` serves demo data on the same port.
+`--engine stub` runs an in-memory stub engine meant for tests. To try the app with no agents at all, `npm run mock` in `app/` serves demo data on the same port.
 
 The full walkthrough, with optional pieces (Beads issues, account quota) and where things live on disk, is in [Build from source](docs/getting-started/build-from-source.md).
 

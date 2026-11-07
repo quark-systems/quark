@@ -8,7 +8,8 @@
 //! longer run. The command-center workspace was a firstmate primary, with
 //! the same `data/` and `state/`.
 //!
-//! [`retire`] runs when quarkd starts. Each workspace under
+//! [`retire`] runs once, in the home format migration from an unversioned
+//! home ([`crate::home_format`]). Each workspace under
 //! `<home>/workspaces` that still carries firstmate has those files moved,
 //! not deleted, to `<home>/backups/firstmate/<workspace>-<time>/`, and a
 //! Project workspace is then claimed as a native one
@@ -18,7 +19,7 @@
 //! `verify/`, `.mcp.json` and `.claude/settings.local.json`. A backup is a
 //! firstmate home that `quarkd import firstmate` can still read.
 //!
-//! A cleaned workspace has no firstmate marker left, so the next start
+//! A cleaned workspace has no firstmate marker left, so running it again
 //! leaves it alone. A coordinator already running keeps what it loaded until
 //! it is restarted.
 
@@ -96,11 +97,12 @@ pub struct Retired {
     pub moved: Vec<String>,
 }
 
-/// Take firstmate out of every workspace under `layout`. Never fails: a
-/// workspace that cannot be cleaned is logged and left for the next start.
-pub fn retire(layout: &Layout) -> Vec<Retired> {
+/// Take firstmate out of every workspace under `layout`. Stops at the first
+/// workspace that cannot be cleaned, naming it; what was moved before stays
+/// moved, and running it again carries on.
+pub fn retire(layout: &Layout) -> std::io::Result<Vec<Retired>> {
     let Ok(entries) = std::fs::read_dir(layout.home.join("workspaces")) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut dirs: Vec<PathBuf> = entries
         .flatten()
@@ -111,25 +113,23 @@ pub fn retire(layout: &Layout) -> Vec<Retired> {
     let stamp = stamp();
     let mut out = Vec::new();
     for dir in dirs {
-        match retire_one(layout, &dir, &stamp) {
-            Ok(Some(r)) => {
-                tracing::info!(
-                    workspace = %r.workspace.display(),
-                    backup = %r.backup.display(),
-                    moved = r.moved.len(),
-                    "moved firstmate's files out of a workspace"
-                );
-                out.push(r);
-            }
-            Ok(None) => {}
-            Err(e) => tracing::warn!(
-                workspace = %dir.display(),
-                error = %e,
-                "could not move firstmate's files out of a workspace"
-            ),
+        let r = retire_one(layout, &dir, &stamp).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("moving firstmate's files out of {}: {e}", dir.display()),
+            )
+        })?;
+        if let Some(r) = r {
+            tracing::info!(
+                workspace = %r.workspace.display(),
+                backup = %r.backup.display(),
+                moved = r.moved.len(),
+                "moved firstmate's files out of a workspace"
+            );
+            out.push(r);
         }
     }
-    out
+    Ok(out)
 }
 
 fn retire_one(layout: &Layout, ws: &Path, stamp: &str) -> std::io::Result<Option<Retired>> {
@@ -216,7 +216,7 @@ fn tracked(ws: &Path) -> Vec<String> {
 fn note(ws: &Path, moved: &[String]) -> String {
     let mut s = format!(
         "# firstmate files from {}\n\n\
-         quarkd moved these out of the workspace when it started, since Quark no longer runs \
+         quarkd moved these out of the workspace when it upgraded this Quark home, since Quark no longer runs \
          firstmate. Nothing else was changed. To put a file back, move it to the same path in \
          the workspace. `quarkd import firstmate <this folder>` reads it as a firstmate home.\n\n",
         ws.display()
@@ -293,7 +293,7 @@ mod tests {
         let ws = layout.workspace("prj_1");
         secondmate(&ws);
 
-        let done = retire(&layout);
+        let done = retire(&layout).unwrap();
         assert_eq!(done.len(), 1);
         let backup = &done[0].backup;
         assert!(backup.starts_with(home.path().join("backups/firstmate")));
@@ -335,7 +335,7 @@ mod tests {
             .contains("`AGENTS.md`"));
 
         // Nothing firstmate is left, so a second start changes nothing.
-        assert!(retire(&layout).is_empty());
+        assert!(retire(&layout).unwrap().is_empty());
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         write(&cmd.join("repos/quark/.git/HEAD"), "x\n");
         write(&cmd.join("projects/quark/.git/HEAD"), "x\n");
 
-        let done = retire(&layout);
+        let done = retire(&layout).unwrap();
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].moved, ["data", "state"]);
         assert!(cmd.join("coordinators/prj_1.json").exists());
@@ -369,7 +369,7 @@ mod tests {
         );
         write(&ws.join("repos/site/.git/HEAD"), "x\n");
         write(&ws.join("AGENTS.md"), "the user's own\n");
-        assert!(retire(&layout).is_empty());
+        assert!(retire(&layout).unwrap().is_empty());
         assert!(ws.join("AGENTS.md").exists());
     }
 }
