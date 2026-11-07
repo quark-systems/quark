@@ -33,6 +33,30 @@ const nextId = (p) => `${p}-${(++idn).toString(36)}${Math.random().toString(36).
 
 // ---------------------------------------------------------------- state
 
+// First-run setup checks. QUARK_MOCK_SETUP=needs starts with tmux, gh sign-in and treehouse
+// missing, so the Setup screen opens on its own; otherwise every check passes.
+const needsSetup = process.env.QUARK_MOCK_SETUP === "needs";
+const setupChecks = [
+  { id: "git", title: "git", required: true, why: "Repos, worktrees, branches and merges.", status: "ok", detail: "git version 2.50.1 at /usr/bin/git" },
+  needsSetup
+    ? { id: "tmux", title: "tmux 3.2 or later", required: true, why: "Coordinator terminals run on a private tmux server.", status: "missing", detail: "not installed", fix: { label: "Install with Homebrew", command: "brew install tmux", runnable: true } }
+    : { id: "tmux", title: "tmux 3.2 or later", required: true, why: "Coordinator terminals run on a private tmux server.", status: "ok", detail: "tmux 3.5a at /opt/homebrew/bin/tmux" },
+  { id: "gh", title: "GitHub CLI", required: true, why: "Cloning, the PR center and merges.", status: "ok", detail: "gh version 2.83.0 at /opt/homebrew/bin/gh" },
+  needsSetup
+    ? { id: "gh_auth", title: "Signed in to GitHub", required: true, why: "Quark reads and merges pull requests as you.", status: "missing", detail: "not signed in", fix: { label: "Sign in", command: "gh auth login", runnable: false } }
+    : { id: "gh_auth", title: "Signed in to GitHub", required: true, why: "Quark reads and merges pull requests as you.", status: "ok", detail: "Logged in to github.com account octocat" },
+  { id: "coordinator", title: "Coordinator harness, signed in", required: true, why: "The coordinator runs each project's conversation and starts workers.", status: "ok", detail: "Claude Code 2.1.0" },
+  needsSetup
+    ? { id: "treehouse", title: "treehouse 3.1.2 or a later 3.x", required: true, why: "The worktree pool workers run in.", status: "missing", detail: "not installed", fix: { label: "Install treehouse 3.1.2", command: "the pinned treehouse 3.1.2 release, into ~/.local/bin (selfhost/treehouse.sh)", runnable: true } }
+    : { id: "treehouse", title: "treehouse 3.1.2 or a later 3.x", required: true, why: "The worktree pool workers run in.", status: "ok", detail: "treehouse 3.1.2 at ~/.local/bin/treehouse" },
+  { id: "bd", title: "Beads (bd)", required: false, why: "The Issues tab, decisions and Beads memory.", status: "ok", detail: "bd version 1.1.0 at /opt/homebrew/bin/bd" },
+  { id: "dolt", title: "Dolt", required: false, why: "The database server Beads runs on.", status: "ok", detail: "dolt version 2.4.1 at /opt/homebrew/bin/dolt" },
+  { id: "quota_axi", title: "quota-axi", required: false, why: "Claude and Codex quota for dispatch and the Accounts view.", status: "missing", detail: "not installed; quota stays unmeasured without it", fix: { label: "Install with npm", command: "npm install -g quota-axi", runnable: true } },
+  { id: "home", title: "Quark home", required: true, why: "Where Quark keeps projects, their working copies and its databases.", status: "ok", detail: "~/.quark (format 1)" },
+  { id: "disk", title: "Free disk", required: false, why: "Worktrees and agent logs need room; below 5 GB new workers may not start.", status: "ok", detail: "212.4 GB free" },
+];
+const setupReport = () => ({ ready: setupChecks.every((c) => !c.required || c.status !== "missing"), checks: setupChecks });
+
 const projects = new Map();
 const tasks = new Map();
 const decisions = new Map();
@@ -1568,6 +1592,14 @@ const server = http.createServer(async (req, res) => {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);
     return send(res, 200, metricsOf(proj, Number(url.searchParams.get("days")) || 7));
+  }
+  if (url.pathname === "/v1/setup" && req.method === "GET") return send(res, 200, setupReport());
+  if ((r = m(/^\/v1\/setup\/([^/]+)$/)) && req.method === "POST") {
+    const id = decodeURIComponent(r[1]);
+    const c = setupChecks.find((x) => x.id === id);
+    if (!c?.fix?.runnable || c.status === "ok") return send(res, 400, { error: { code: "invalid", message: `${c?.title ?? id} has no fix Quark can run` } });
+    Object.assign(c, { status: "ok", detail: `${c.title} installed (mock)`, fix: null });
+    return send(res, 200, { id, ok: true, output: `==> ${id} installed (mock)`, report: setupReport() });
   }
   if (url.pathname === "/v1/hosts" && req.method === "GET") {
     return send(res, 200, hostsOf(Math.min(48, Math.max(1, Number(url.searchParams.get("hours")) || 6))));

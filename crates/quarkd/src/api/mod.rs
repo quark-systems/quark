@@ -24,6 +24,7 @@ mod personas;
 pub mod pull_requests;
 mod repositories;
 mod routes;
+mod setup;
 mod status;
 mod terminals;
 
@@ -154,6 +155,10 @@ const MODULES: &[Module] = &[
     Module {
         router: diagnostics::router,
         openapi: <diagnostics::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: setup::router,
+        openapi: <setup::Api as OpenApi>::openapi,
     },
     Module {
         router: events::router,

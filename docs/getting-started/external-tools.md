@@ -1,7 +1,7 @@
 # External tools
 
 Every program outside this repository that quarkd, the desktop app or the menu bar app runs at runtime. Rust and npm library dependencies are not listed; see `Cargo.lock`, `app/package.json` and [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
-Keep this page current: a PR that makes Quark shell out to a new program, or stop using one, updates it.
+Keep this page current: a PR that makes Quark shell out to a new program, or stop using one, updates it, and adds a check to `crates/quarkd/src/setup.rs` (`quarkd doctor`, `GET /v1/setup`) when people must install it.
 
 ## Third-party helper tools
 

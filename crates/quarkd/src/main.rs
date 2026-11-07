@@ -44,6 +44,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Check that this machine has what Quark needs (git, tmux, gh signed
+    /// in, a coordinator agent, treehouse, ...). Exits 1 when a required
+    /// check fails. The app's setup screen shows the same checks.
+    Doctor {
+        /// Quark home directory [default: $QUARK_HOME or ~/.quark]
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// File what `diagnose` finds as beads: a new finding becomes a bug, one
     /// seen again gets a comment, one that came back after closing is
     /// reopened.
@@ -220,6 +231,20 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", quarkd::diagnose::render(&report));
+            }
+            Ok(())
+        }
+        Command::Doctor { home, json } => {
+            let home = home.unwrap_or_else(config::default_home);
+            let harnesses = quarkd::harness::HarnessRegistry::load(&home.join("harnesses"));
+            let report = quarkd::setup::check(&home, &harnesses).await;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", quarkd::setup::render(&report));
+            }
+            if !report.ready {
+                std::process::exit(1);
             }
             Ok(())
         }
