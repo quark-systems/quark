@@ -1,6 +1,6 @@
 # Build from source
 
-Quark has no official release yet. This page builds the daemon and the desktop app from a checkout and starts your first Project.
+This page builds the daemon and the desktop app from a checkout and starts your first Project. To install the Mac app instead, see [Install](../../README.md#install).
 macOS is the main target. Linux runs the daemon and the app's web build; the desktop build needs the WebKitGTK packages listed in [`app/README.md`](../../app/README.md).
 
 ## Prerequisites

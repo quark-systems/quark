@@ -3,7 +3,7 @@
 Quark's own work runs as a Quark Project named "Quark", with `quark-systems/quark` as its repo.
 
 ```sh
-cargo run -p quarkd -- --engine native         # in one terminal
+cargo run -p quarkd                            # in one terminal
 selfhost/selfhost.sh --holdout <dir>           # in another
 ```
 

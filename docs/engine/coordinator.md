@@ -130,7 +130,7 @@ The Metrics tab prices turns at read time (`quarkd::spend`), so a price fix appl
 
 ## In quarkd
 
-With `--engine native`, quarkd runs the coordinator for every Project on a timer, in `crates/quarkd/src/native_coordinator.rs`.
+quarkd runs the coordinator for every Project on a timer, in `crates/quarkd/src/native_coordinator.rs`.
 
 | Piece | Where | Does |
 |---|---|---|
