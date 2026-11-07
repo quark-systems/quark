@@ -2,8 +2,8 @@
 //! and the fixes Quark can make for it.
 //!
 //! [`check`] looks at the tools quarkd runs (git, tmux 3.2+, gh signed in, a
-//! coordinator harness signed in, treehouse) and the optional ones (bd and
-//! dolt for Issues, quota-axi for quota), plus the home itself (writable,
+//! coordinator harness signed in) and the optional ones (bd and dolt for
+//! Issues, quota-axi for quota, treehouse unless it is the worktree pool), plus the home itself (writable,
 //! format, free disk). `quarkd doctor` prints it; `GET /v1/setup` serves it
 //! to the app's setup screen.
 //!
@@ -215,11 +215,22 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
             .into(),
         runnable: true,
     };
+    // The native worktree pool is the default; treehouse is needed only as
+    // the fallback pool or the shadow's reference.
+    let pool = crate::native_worktrees::Mode::parse(
+        env.var(crate::native_worktrees::ENV),
+        env.var(crate::native_worktrees::LEGACY_SHADOW_ENV),
+    );
+    let treehouse_needed = pool != crate::native_worktrees::Mode::Native;
     let mut tree_check = tool(
         "treehouse",
         "treehouse 3.1.2 or a later 3.x",
-        true,
-        "The worktree pool workers run in.",
+        treehouse_needed,
+        if treehouse_needed {
+            "The worktree pool workers run in (QUARK_WORKTREE_POOL asks for treehouse)."
+        } else {
+            "Only for QUARK_WORKTREE_POOL=treehouse; Quark's own worktree pool is the default."
+        },
         treehouse.as_ref(),
         None,
         Some(treehouse_fix.clone()),
@@ -675,6 +686,8 @@ mod tests {
         for id in ["git", "tmux", "gh", "gh_auth", "coordinator", "treehouse"] {
             assert_eq!(r.get(id).unwrap().status, CheckStatus::Missing, "{id}");
         }
+        // treehouse is optional unless the treehouse pool is asked for.
+        assert!(!r.get("treehouse").unwrap().required);
         assert_eq!(r.get("home").unwrap().status, CheckStatus::Ok);
         let tmux = r.get("tmux").unwrap().fix.clone().unwrap();
         assert_eq!(tmux.command, "brew install tmux");

@@ -23,15 +23,17 @@ updates.
   `~/Library/Logs/Quark/quarkd.log`.
 - The **Setup** page opens on first run and lists what this Mac still needs: git, tmux
   3.2+, the GitHub CLI signed in, a coordinator harness signed in (Claude Code, Codex or
-  Pi) and treehouse 3.1.2. It installs what it can with one button (Homebrew, npm, the
-  pinned treehouse release) and gives the command for sign-ins. `quarkd doctor` runs the
+  Pi). It installs what it can with one button (Homebrew, npm) and gives the command for
+  sign-ins. `quarkd doctor` runs the
   same checks in a terminal.
 
 ### What's in it
 
 - **Projects run on quarkd's own engine**, now the default (`--engine stub` remains for
   tests). Each project has a coordinator (Claude Code, Codex or Pi) that plans, starts
-  workers in their own worktrees, asks you decisions and merges.
+  workers in their own worktrees, asks you decisions and merges. Worktrees come from
+  Quark's own pool, so treehouse is no longer needed (`QUARK_WORKTREE_POOL=treehouse`
+  falls back to it).
 - **Workers** on Claude Code, Codex, Cursor Agent, Gemini CLI, OpenCode, Pi, IBM Bob, Kiro
   CLI and more, picked by per-project dispatch rules with quota-aware account pools and
   an optional classifier (System One or Ollama). Workers survive quarkd restarts in the
@@ -71,5 +73,4 @@ updates.
 
 - Apple silicon Macs only; no Windows or Intel build in 0.1.
 - Not signed or notarized, and no automatic updates yet: install the next build by hand.
-- treehouse is still required for worker worktrees until the native pool replaces it.
 - Account quota for Claude and Codex needs `quota-axi` (optional).

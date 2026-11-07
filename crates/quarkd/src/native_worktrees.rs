@@ -60,7 +60,7 @@ impl Mode {
         )
     }
 
-    fn parse(value: Option<&str>, legacy: Option<&str>) -> Self {
+    pub(crate) fn parse(value: Option<&str>, legacy: Option<&str>) -> Self {
         match value.map(str::trim) {
             None | Some("") if legacy == Some("1") => Mode::Shadow,
             None | Some("") | Some("native") => Mode::Native,
