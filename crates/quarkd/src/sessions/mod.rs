@@ -182,6 +182,16 @@ impl Sessions {
         self.pty.as_ref().filter(|p| p.owns(terminal_id))
     }
 
+    /// Process ids of the running PTY sessions, by endpoint
+    /// (`pty:<session id>`, as the engine names a task's terminal). Empty
+    /// without the PTY supervisor.
+    pub async fn pty_pids(&self) -> HashMap<String, Vec<u32>> {
+        match &self.pty {
+            Some(hub) => hub.pids().await,
+            None => HashMap::new(),
+        }
+    }
+
     /// The tmux binary to use: `tmux` from `PATH` unless given, checked by
     /// running `tmux -V`. Disabled sessions when it does not run.
     pub fn detect(tmux: Option<&Path>, run_dir: PathBuf, store: Arc<Store>) -> Self {

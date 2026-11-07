@@ -33,7 +33,9 @@ const WAITING_AFTER: Duration = Duration::hours(12);
 const BIG_STORE: u64 = 500 * 1024 * 1024;
 /// Event-log kinds that mean trouble, with the severity they report at.
 const TROUBLE_KINDS: &[(&str, Severity)] = &[
-    ("supervisor.stale", Severity::Warn),
+    // A quiet worker is the fleet check's to act on (it nudges, then wakes
+    // the coordinator); one that stays quiet for hours is the task finding.
+    ("supervisor.stale", Severity::Info),
     ("supervisor.exited", Severity::Warn),
     ("dispatch.spawn_failed", Severity::Error),
     ("dispatch.host_unhealthy", Severity::Warn),
@@ -81,7 +83,23 @@ pub struct StoreSizes {
     pub quark_db_bytes: u64,
     pub events_db_bytes: u64,
     pub logs_bytes: u64,
+    /// The event types and kinds holding the most payload, biggest first.
+    pub largest: Vec<KindSize>,
 }
+
+/// How much of a database one event type (quark.db) or kind (events.db)
+/// takes.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct KindSize {
+    /// `quark.db` or `events.db`.
+    pub db: String,
+    pub kind: String,
+    pub events: u64,
+    pub payload_bytes: u64,
+}
+
+/// Kinds listed per database in [`StoreSizes::largest`].
+const LARGEST_KINDS: usize = 6;
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Diagnostics {
@@ -104,22 +122,26 @@ pub fn diagnose(home: &Path, since: OffsetDateTime, now: OffsetDateTime) -> Diag
     let logs = home.join("logs");
     let last_log_at = read_logs(&logs, &since_s, &mut f);
     let quark_db = home.join("quark.db");
+    let mut largest = Vec::new();
     if let Some(c) = open(&quark_db) {
         let r = read_store(&c, &since_s, now, &mut f);
         if let Err(e) = r {
             f.add_error("store", &format!("could not read quark.db: {e}"));
         }
+        largest.extend(kind_sizes(&c, "quark.db", "type").unwrap_or_default());
     }
     let events_db = home.join(quark_eventlog::FILE_NAME);
     if let Some(c) = open(&events_db) {
         if let Err(e) = read_events(&c, &since_s, &mut f) {
             f.add_error("event", &format!("could not read the event log: {e}"));
         }
+        largest.extend(kind_sizes(&c, "events.db", "kind").unwrap_or_default());
     }
     let sizes = StoreSizes {
         quark_db_bytes: db_size(&quark_db),
         events_db_bytes: db_size(&events_db),
         logs_bytes: dir_size(&logs),
+        largest,
     };
     for (name, bytes) in [
         ("quark.db", sizes.quark_db_bytes),
@@ -167,6 +189,16 @@ pub fn render(d: &Diagnostics) -> String {
         mb(d.sizes.events_db_bytes),
         mb(d.sizes.logs_bytes)
     );
+    for k in &d.sizes.largest {
+        let _ = writeln!(
+            out,
+            "  {} {}: {} events, {:.1} MB",
+            k.db,
+            k.kind,
+            k.events,
+            mb(k.payload_bytes)
+        );
+    }
     if d.findings.is_empty() {
         out.push_str("\nnothing wrong found\n");
     }
@@ -468,6 +500,24 @@ fn read_events(c: &Connection, since: &str, f: &mut Findings) -> rusqlite::Resul
         }
     }
     Ok(())
+}
+
+/// The [`LARGEST_KINDS`] event types or kinds (`column`) with the most
+/// payload in `db`'s `events` table.
+fn kind_sizes(c: &Connection, db: &str, column: &str) -> rusqlite::Result<Vec<KindSize>> {
+    let mut stmt = c.prepare(&format!(
+        "SELECT {column}, COUNT(*), COALESCE(SUM(LENGTH(payload)), 0) FROM events
+         GROUP BY {column} ORDER BY 3 DESC LIMIT ?1"
+    ))?;
+    let rows = stmt.query_map([LARGEST_KINDS as i64], |r| {
+        Ok(KindSize {
+            db: db.to_string(),
+            kind: r.get(0)?,
+            events: r.get::<_, i64>(1)? as u64,
+            payload_bytes: r.get::<_, i64>(2)? as u64,
+        })
+    })?;
+    rows.collect()
 }
 
 fn open(path: &Path) -> Option<Connection> {

@@ -102,6 +102,8 @@ pub struct ProjectSetup {
     /// The home directory whose default Claude Code config the coordinator
     /// uses when its account names none ([`quark_harness::prepare_folder`]).
     agent_home: Option<PathBuf>,
+    /// `bd`, for the memories a Codex or Pi coordinator's prompt carries.
+    bd: PathBuf,
     /// Coordinator starts take turns, so two never race for one window.
     starts: tokio::sync::Mutex<()>,
 }
@@ -120,6 +122,7 @@ impl ProjectSetup {
             base_url: base_url.into(),
             roots: SessionRoots::from_env(),
             agent_home: std::env::var_os("HOME").map(PathBuf::from),
+            bd: PathBuf::from("bd"),
             starts: tokio::sync::Mutex::new(()),
         }
     }
@@ -137,6 +140,13 @@ impl ProjectSetup {
 
     pub fn with_agent_home(mut self, home: impl Into<PathBuf>) -> Self {
         self.agent_home = Some(home.into());
+        self
+    }
+
+    /// The `bd` to prime Codex and Pi coordinators with, instead of `bd`
+    /// from `PATH`.
+    pub fn with_bd(mut self, bd: impl Into<PathBuf>) -> Self {
+        self.bd = bd.into();
         self
     }
 
@@ -309,10 +319,21 @@ impl ProjectSetup {
         wiring: Wiring,
     ) -> Result<PathBuf, EngineError> {
         let (layout, pid, root) = (self.layout.clone(), ws.project_id.clone(), ws.root.clone());
+        // Claude Code primes itself from its session-start hook; Codex and
+        // Pi have none, so their prompt carries the memories as of launch.
+        let memories = match wiring {
+            Wiring::Claude => None,
+            Wiring::Codex | Wiring::Pi => {
+                crate::beads::prime_memories(&self.bd, &layout.home, &pid).await
+            }
+        };
         tokio::task::spawn_blocking(move || {
             let (prompt, _) = crate::native_coordinator::build_prompt(&layout, &pid, &root)
                 .map_err(|e| EngineError::Invalid(format!("the coordinator's prompt: {e}")))?;
             let mut text = prompt_text(&prompt);
+            if let Some(m) = memories {
+                text = format!("{}\n\n{}", text.trim_end(), m);
+            }
             // The last switch's handoff, until the next one replaces it.
             let handoff = root.join(STATE_DIR).join(crate::switch::HANDOFF_FILE);
             if let Ok(h) = std::fs::read_to_string(&handoff) {
@@ -774,6 +795,7 @@ mod tests {
             ..Default::default()
         })
         .with_agent_home(dir.join("agent-home"))
+        .with_bd(dir.join("no-bd"))
     }
 
     fn agent(harness: &str) -> AgentConfig {
@@ -1035,6 +1057,40 @@ mod tests {
         let md = std::fs::read_to_string(ws.join(".quark/coordinator.md")).unwrap();
         assert_eq!(text, md);
         assert!(text.contains("Say \"hi\"\\ then\nstop."));
+    }
+
+    #[test]
+    fn codex_and_pi_prompts_carry_the_beads_memories() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join("project")).unwrap();
+        let bd = dir.path().join("fake-bd");
+        std::fs::write(
+            &bd,
+            "#!/bin/sh\n[ \"$*\" = \"prime --memories-only\" ] || exit 1\necho \"# Memories from $BEADS_DIR\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let setup = setup(dir.path(), Sessions::disabled("no tmux in this test")).with_bd(&bd);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let wref = WorkspaceRef {
+            project_id: "p1".into(),
+            root: ws.clone(),
+        };
+        let md = || std::fs::read_to_string(ws.join(".quark/coordinator.md")).unwrap();
+        let want = format!(
+            "# Memories from {}",
+            crate::beads::beads_dir(&dir.path().join("home"), "p1").display()
+        );
+        for wiring in [Wiring::Codex, Wiring::Pi] {
+            rt.block_on(setup.write_prompt(&wref, wiring)).unwrap();
+            assert!(md().contains(&want), "{wiring:?}: {}", md());
+        }
+        // Claude Code primes itself from its session-start hook.
+        rt.block_on(setup.write_prompt(&wref, Wiring::Claude))
+            .unwrap();
+        assert!(!md().contains("# Memories"));
     }
 
     /// A Claude Code stand-in that records its arguments, then waits.

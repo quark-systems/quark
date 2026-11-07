@@ -118,9 +118,17 @@ impl EngineView {
         out
     }
 
-    /// Root process ids of every pane on the shared tmux server, by
-    /// `session:window` target.
+    /// Root process ids of every terminal, by the target the engine names
+    /// it with: each pane on the shared tmux server by `session:window`
+    /// (coordinators), and each PTY supervisor session by `pty:<id>`
+    /// (native workers).
     async fn pane_pids(&self) -> HashMap<String, Vec<u32>> {
+        let mut map = self.tmux_pids().await;
+        map.extend(self.sessions.pty_pids().await);
+        map
+    }
+
+    async fn tmux_pids(&self) -> HashMap<String, Vec<u32>> {
         let Ok(server) = self.sessions.server() else {
             return HashMap::new();
         };

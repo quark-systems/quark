@@ -50,6 +50,10 @@ pub struct SessionInfo {
     pub alive: bool,
     /// The process's exit code once it has exited.
     pub exit_code: Option<i32>,
+    /// The program's process id, where the backend knows it. A supervisor
+    /// from an older build leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 /// Screen contents at one moment, for reconnecting viewers.

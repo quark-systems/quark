@@ -10018,6 +10018,35 @@
           }
         }
       },
+      "KindSize": {
+        "type": "object",
+        "description": "How much of a database one event type (quark.db) or kind (events.db)\ntakes.",
+        "required": [
+          "db",
+          "kind",
+          "events",
+          "payload_bytes"
+        ],
+        "properties": {
+          "db": {
+            "type": "string",
+            "description": "`quark.db` or `events.db`."
+          },
+          "events": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "LeadTime": {
         "type": "object",
         "description": "From a task's first spawn to its `done`, over tasks done in the window.",
@@ -12442,13 +12471,21 @@
         "required": [
           "quark_db_bytes",
           "events_db_bytes",
-          "logs_bytes"
+          "logs_bytes",
+          "largest"
         ],
         "properties": {
           "events_db_bytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "largest": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KindSize"
+            },
+            "description": "The event types and kinds holding the most payload, biggest first."
           },
           "logs_bytes": {
             "type": "integer",

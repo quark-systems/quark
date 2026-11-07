@@ -68,6 +68,7 @@ impl SessionBackend for FakeSessions {
             task: spec.task.clone(),
             alive: true,
             exit_code: None,
+            pid: None,
         };
         let (tx, _) = broadcast::channel(64);
         s.insert(

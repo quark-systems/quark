@@ -108,6 +108,23 @@ impl PtyHub {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// The process id of every running session the supervisor reports one
+    /// for, by endpoint ([`target`]).
+    pub(super) async fn pids(&self) -> HashMap<String, Vec<u32>> {
+        let sessions = match self.backend.list().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::debug!(error = %e, "could not list PTY sessions");
+                return HashMap::new();
+            }
+        };
+        sessions
+            .into_iter()
+            .filter(|s| s.alive)
+            .filter_map(|s| Some((target(&s.id), vec![s.pid?])))
+            .collect()
+    }
+
     /// Replaces one Project's PTY terminals with `tasks` (terminal id and
     /// session), attaching new ones and switching any whose session changed.
     pub(super) fn sync(self: &Arc<Self>, project_id: &str, tasks: Vec<(String, SessionId)>) {
@@ -529,8 +546,18 @@ mod tests {
                 task: None,
                 alive: true,
                 exit_code: None,
+                pid: Some(4242),
             }])
         }
+    }
+
+    #[tokio::test]
+    async fn running_sessions_report_their_pids_by_endpoint() {
+        let (sink, _rx) = std::sync::mpsc::channel();
+        let hub = PtyHub::new(Arc::new(Flaky::default()), sink);
+        let pids = hub.pids().await;
+        assert_eq!(pids.get("pty:pty-1"), Some(&vec![4242]));
+        assert_eq!(pids.len(), 1);
     }
 
     #[tokio::test]

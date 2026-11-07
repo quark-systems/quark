@@ -184,18 +184,19 @@ impl SessionBackend for PtySupervisor {
         let (spawned, spec) = spawned;
         let n = self.inner.next.fetch_add(1, Ordering::Relaxed) + 1;
         let id = SessionId(format!("pty-{}-{n}", std::process::id()));
+        let pid = Pid::from_child(&spawned.child);
         let info = SessionInfo {
             id: id.clone(),
             name: spec.name.clone(),
             task: spec.task.clone(),
             alive: true,
             exit_code: None,
+            pid: Some(pid.as_raw_nonzero().get() as u32),
         };
         let reader = spawned
             .master
             .try_clone()
             .map_err(|e| CoreError::Backend(e.to_string()))?;
-        let pid = Pid::from_child(&spawned.child);
         let session = Arc::new(Session {
             info: Mutex::new(info.clone()),
             screen: Mutex::new(vt100::Parser::new(
