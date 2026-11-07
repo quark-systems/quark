@@ -179,6 +179,21 @@ else
   fail "coordinator: start_task failed: $(jq -c '.result // .error' "$ev/start_task.json")"
   finish
 fi
+# With no rules file and no quota-axi, dispatch leaves the pick to the
+# coordinator, which names the agent with choose_profile.
+answer=$(jq -r '.result.content[0].text' "$ev/start_task.json")
+if [[ $answer == *"Pick with choose_profile for task "* ]]; then
+  slug=${answer##*choose_profile for task }
+  slug=${slug%.}
+  rpc "$(jq -nc --arg t "$slug" '{jsonrpc: "2.0", id: 3, method: "tools/call", params: {name: "choose_profile",
+    arguments: {task: $t, agent: {harness: "claude-code", effort: "low"}}}}')" >"$ev/choose_profile.json"
+  if jq -e '.result.isError == false' "$ev/choose_profile.json" >/dev/null; then
+    pass "coordinator: choose_profile answered: $(jq -r '.result.content[0].text' "$ev/choose_profile.json")"
+  else
+    fail "coordinator: choose_profile failed: $(jq -c '.result // .error' "$ev/choose_profile.json")"
+    finish
+  fi
+fi
 
 task_json() { api GET "/v1/projects/$project/tasks" | jq -c --arg t "$title" '.[] | select(.title == $t)'; }
 if wait_for 60 bash -c "'$Q' api GET /v1/projects/$project/tasks 2>/dev/null | jq -e --arg t '$title' 'any(.[]; .title == \$t and .state == \"running\")' >/dev/null"; then
