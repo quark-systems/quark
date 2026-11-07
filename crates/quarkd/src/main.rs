@@ -162,8 +162,8 @@ struct ServeArgs {
     #[arg(long, env = "QUARKD_LISTEN",
           default_value_t = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config::DEFAULT_PORT))]
     listen: SocketAddr,
-    /// Engine adapter to read workspaces with.
-    #[arg(long, value_enum, default_value_t = EngineKind::Stub)]
+    /// Engine to run: quarkd's own (native), or an in-memory stub for tests.
+    #[arg(long, value_enum, default_value_t = EngineKind::Native)]
     engine: EngineKind,
     /// Seconds between projection refreshes.
     #[arg(long, default_value_t = 5)]

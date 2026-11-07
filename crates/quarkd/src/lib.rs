@@ -26,6 +26,7 @@ pub mod fleet_check;
 pub mod forge;
 pub mod gates;
 pub mod harness;
+pub mod home_format;
 pub mod host_sources;
 pub mod hosts;
 pub mod housekeeping;
@@ -92,6 +93,19 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             config.listen
         );
     }
+    // Before anything is opened in the home: an older home is brought
+    // forward, a newer one refused.
+    let migrated = home_format::migrate(&config.home)?;
+    if migrated.from != Some(migrated.to) {
+        tracing::info!(
+            from = ?migrated.from,
+            to = migrated.to,
+            retired = migrated.retired.len(),
+            linked = migrated.linked.len(),
+            "Quark home at format {}",
+            migrated.to
+        );
+    }
     std::fs::create_dir_all(config.home.join("logs"))
         .with_context(|| format!("creating {}", config.home.display()))?;
     let db_path = config.db_path();
@@ -126,8 +140,6 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         None => sessions,
     };
     let layout = provision::Layout::new(&config.home).with_user_memory(config.user_memory.clone());
-    // Before anything starts in a workspace firstmate made.
-    firstmate::workspace::retire(&layout);
     // Native dispatch (slice 5) starts the native engine's tasks.
     let dispatch = match &native {
         Some(n) => {
@@ -231,9 +243,14 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             sessions.clone(),
             layout.command_workspace(),
             layout.home.clone(),
-        )
-        // A Project created under firstmate has no native coordinator record.
-        .adopting(engine::native_project::WINDOW_PREFIX);
+        );
+        // A Project created under firstmate has no native coordinator
+        // record; the start that upgrades a home made before 0.1 gives it one.
+        let recovery = if migrated.adopt_legacy_projects {
+            recovery.adopting(engine::native_project::WINDOW_PREFIX)
+        } else {
+            recovery
+        };
         tokio::spawn(recovery.run(recovery::INTERVAL))
     });
     let usage_task = tokio::spawn(

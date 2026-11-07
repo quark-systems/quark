@@ -25,8 +25,9 @@
 //!
 //! [`CoordinatorRecovery::adopting`] also starts the coordinator of a ready
 //! Project the engine has no record of, when no window of the engine's
-//! coordinator name is listed. The native engine uses it, so a Project
-//! created under firstmate gets a native coordinator after the switch.
+//! coordinator name is listed. quarkd turns it on for the start that
+//! upgrades a home made before 0.1 ([`crate::home_format`]), so a Project
+//! created under firstmate gets a native coordinator.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

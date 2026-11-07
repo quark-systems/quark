@@ -260,19 +260,15 @@ impl PoolReporter {
     }
 }
 
-/// Repo clones in a workspace: each git checkout directly under
-/// `<root>/projects/` (firstmate) or `<root>/repos/` (native).
+/// Repo clones in a workspace: each git checkout under `<root>/repos/`,
+/// with links to firstmate's `projects/` clones followed.
 fn clones(root: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = ["projects", crate::engine::native_project::REPOS_DIR]
-        .iter()
-        .filter_map(|d| std::fs::read_dir(root.join(d)).ok())
-        .flatten()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.join(".git").exists())
-        .collect();
-    out.sort();
-    out
+    crate::engine::native_dispatch_engine::checkouts(
+        &root.join(crate::engine::native_project::REPOS_DIR),
+    )
+    .into_iter()
+    .map(|(_, p)| p)
+    .collect()
 }
 
 /// Every pool slot of every workspace's clones, plus task worktrees no pool
@@ -424,11 +420,11 @@ mod tests {
     }
 
     #[test]
-    fn clones_are_git_checkouts_under_projects() {
+    fn clones_are_git_checkouts_under_repos() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("projects/a/.git")).unwrap();
-        std::fs::create_dir_all(dir.path().join("projects/b")).unwrap();
-        assert_eq!(clones(dir.path()), vec![dir.path().join("projects/a")]);
+        std::fs::create_dir_all(dir.path().join("repos/a/.git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("repos/b")).unwrap();
+        assert_eq!(clones(dir.path()), vec![dir.path().join("repos/a")]);
         assert!(clones(&dir.path().join("missing")).is_empty());
     }
 }

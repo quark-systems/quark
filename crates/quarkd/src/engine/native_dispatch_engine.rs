@@ -17,8 +17,10 @@
 //! Layout, in the Project workspace (`WorkspaceRef::root`):
 //!
 //! - `repos/<name>` is each source repo's primary checkout, the one task
-//!   worktrees are cut from. `projects/<name>`, where firstmate clones
-//!   them, is read too, so a workspace firstmate seeded runs natively.
+//!   worktrees are cut from. In a workspace firstmate seeded the clone
+//!   stays in `projects/<name>` and `repos/<name>` links to it (the home
+//!   format migration, [`crate::home_format`]); the link is followed, so
+//!   worktrees keep the path they were cut from.
 //! - `config/crew-dispatch.json` holds the dispatch rules
 //!   ([`NativeDispatch::set_config`]), the same file firstmate reads.
 //!
@@ -53,8 +55,6 @@ use super::{
 
 /// Where a Project workspace keeps its source repos' primary checkouts.
 pub const REPOS_DIR: &str = "repos";
-/// Where firstmate clones them, read as a fallback.
-pub const FIRSTMATE_REPOS_DIR: &str = "projects";
 /// The dispatch rules, relative to the workspace root.
 pub const CONFIG_FILE: &str = "config/crew-dispatch.json";
 /// How often waiting tasks are offered to admission control again.
@@ -508,50 +508,63 @@ pub fn slug(title: &str) -> String {
 /// The primary checkout of the source repo `name` in the workspace at
 /// `root` (see the module docs), or of its only repo when `name` is `None`.
 pub fn source_repo(root: &Path, name: Option<&str>) -> Result<PathBuf, EngineError> {
-    let dirs = [root.join(REPOS_DIR), root.join(FIRSTMATE_REPOS_DIR)];
+    let dir = root.join(REPOS_DIR);
     if let Some(name) = name {
         if !super::valid_task_id(name) {
             return Err(EngineError::Invalid(format!("{name:?} is not a repo name")));
         }
-        return dirs
-            .iter()
-            .map(|d| d.join(name))
-            .find(|p| p.join(".git").exists())
-            .ok_or_else(|| {
-                EngineError::Invalid(format!(
-                    "no repo {name} in {}",
-                    root.join(REPOS_DIR).display()
-                ))
-            });
-    }
-    let mut found: Vec<(String, PathBuf)> = Vec::new();
-    for d in &dirs {
-        let Ok(entries) = std::fs::read_dir(d) else {
-            continue;
+        let p = dir.join(name);
+        return if p.join(".git").exists() {
+            Ok(linked_checkout(p))
+        } else {
+            Err(EngineError::Invalid(format!(
+                "no repo {name} in {}",
+                dir.display()
+            )))
         };
-        let mut here: Vec<(String, PathBuf)> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.join(".git").exists())
-            .filter_map(|p| Some((p.file_name()?.to_str()?.to_string(), p)))
-            .filter(|(n, _)| !found.iter().any(|(f, _)| f == n))
-            .collect();
-        here.sort();
-        found.extend(here);
     }
-    match found.as_slice() {
-        [(_, only)] => Ok(only.clone()),
-        [] => Err(EngineError::Invalid(format!(
+    let mut found = checkouts(&dir);
+    match found.len() {
+        1 => Ok(found.remove(0).1),
+        0 => Err(EngineError::Invalid(format!(
             "the workspace has no repo in {}",
-            root.join(REPOS_DIR).display()
+            dir.display()
         ))),
-        many => Err(EngineError::Invalid(format!(
+        _ => Err(EngineError::Invalid(format!(
             "name the repo: one of {}",
-            many.iter()
+            found
+                .iter()
                 .map(|(n, _)| n.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         ))),
+    }
+}
+
+/// Each git checkout directly in `dir`, by name, sorted, with links followed
+/// ([`linked_checkout`]).
+pub fn checkouts(dir: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join(".git").exists())
+        .filter_map(|p| Some((p.file_name()?.to_str()?.to_string(), linked_checkout(p))))
+        .collect();
+    out.sort();
+    out
+}
+
+/// The path a checkout link names, or `p` itself when it is not a link. A
+/// workspace firstmate seeded links `repos/<name>` to its `projects/<name>`
+/// clone, and worktrees already cut from that clone know it by that path.
+pub fn linked_checkout(p: PathBuf) -> PathBuf {
+    match std::fs::read_link(&p) {
+        Ok(target) if target.is_absolute() => target,
+        Ok(target) => p.parent().map_or(target.clone(), |d| d.join(&target)),
+        Err(_) => p,
     }
 }
 
@@ -823,14 +836,21 @@ mod tests {
         assert!(source_repo(root, None).is_err());
         std::fs::create_dir_all(root.join("repos/app/.git")).unwrap();
         assert_eq!(source_repo(root, None).unwrap(), root.join("repos/app"));
-        // firstmate's layout is read too.
+        // A clone left where firstmate made it is reached through its link,
+        // and known by its own path.
         std::fs::create_dir_all(root.join("projects/site/.git")).unwrap();
-        let both = source_repo(root, None).unwrap_err().to_string();
-        assert!(both.contains("app, site"), "{both}");
-        assert_eq!(
-            source_repo(root, Some("site")).unwrap(),
-            root.join("projects/site")
-        );
+        assert_eq!(source_repo(root, None).unwrap(), root.join("repos/app"));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("projects/site"), root.join("repos/site"))
+                .unwrap();
+            let both = source_repo(root, None).unwrap_err().to_string();
+            assert!(both.contains("app, site"), "{both}");
+            assert_eq!(
+                source_repo(root, Some("site")).unwrap(),
+                root.join("projects/site")
+            );
+        }
         assert!(source_repo(root, Some("nope")).is_err());
         assert!(source_repo(root, Some("../app")).is_err());
     }

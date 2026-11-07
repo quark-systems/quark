@@ -29,11 +29,11 @@ Optional:
 git clone git@github.com:quark-systems/quark.git
 cd quark
 selfhost/treehouse.sh                     # no-op when treehouse 3.1.2+ is on PATH
-cargo run --release -p quarkd -- --engine native
+cargo run --release -p quarkd
 ```
 
 quarkd serves `http://127.0.0.1:7380` and starts its PTY supervisor (`quarkd ptyd`), which keeps running after quarkd stops so workers survive a restart.
-Always pass `--engine native`: the default is an in-memory stub engine for tests.
+The native engine is the default; `--engine stub` runs an in-memory adapter with no engine behind it, for tests.
 
 Useful flags (`cargo run -p quarkd -- --help` lists them all):
 
@@ -90,6 +90,7 @@ Everything is under `~/.quark` (or `QUARK_HOME`):
 | `beads/<project-id>/` | the Project's Beads database |
 | `run/tmux/quark` | the private tmux server's socket |
 | `config.yaml` | user-level settings, such as the [classifier](../configuration/dispatch-rules.md#classifier) |
+| `format.json` | which layout these files follow; see Upgrading |
 
 ## Upgrading
 
@@ -101,4 +102,6 @@ cargo build --release -p quarkd
 ```
 
 Restart quarkd; running workers stay up in the PTY supervisor and reattach.
+
+`~/.quark/format.json` records the home's format. When a new quarkd changes the layout, it upgrades the home on its first start and logs what it did; a quarkd older than the home refuses to start rather than read files it doesn't know. A home from before 0.1 (no `format.json`) is upgraded once: firstmate's files are moved out of its workspaces into `~/.quark/backups/firstmate`, and source clones firstmate made under a workspace's `projects/` are linked from `repos/`.
 If you ran Quark before firstmate was retired, `~/.quark/engine` is no longer used and can be deleted, and any Project that lists the `firstmate` repo can detach it in its settings.

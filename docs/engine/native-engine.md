@@ -1,6 +1,6 @@
 # The native engine
 
-`quarkd --engine native` runs Quark; it is the only real engine since firstmate was retired (slice 10), and `--engine stub` is an in-memory adapter for tests.
+`quarkd` runs Quark on the native engine (the default, `--engine native`); it is the only real engine since firstmate was retired (slice 10), and `--engine stub` is an in-memory adapter for tests.
 The engine adapter is `crates/quarkd/src/engine/native.rs` (`NativeEngine`).
 It sits on the native supervisor (`quark-supervisor`, slice 4), native verification (`quark-verify`, slice 2), native dispatch (`quark-dispatch`, slice 5) and the event log (slice 1).
 
