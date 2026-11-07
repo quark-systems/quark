@@ -6,7 +6,9 @@ release plan; what is not here yet is listed at the end.
 ## Cut a release
 
 1. `scripts/bump-version.sh 0.1.0-beta.1` sets the version in every file that carries it
-   (`crates/quarkd/tests/version.rs` fails if they drift). Commit it to `main`.
+   (`crates/quarkd/tests/version.rs` fails if they drift). Add a `## 0.1.0-beta.1` section
+   to `CHANGELOG.md`: it becomes the release notes, and the workflow fails without it.
+   Commit both to `main`.
 2. Tag the commit `v0.1.0-beta.1` and push the tag.
 3. `.github/workflows/release.yml` builds and attaches to a **draft** GitHub Release:
    - `Quark_<version>_aarch64.dmg`: Quark.app for Apple silicon. It carries QuarkBar.app
@@ -15,7 +17,8 @@ release plan; what is not here yet is listed at the end.
      QuarkBar, which on its first run registers quarkd as a LaunchAgent and itself as a
      login item, so opening Quark once starts all three and they come back after a
      restart (quarkd's log: `~/Library/Logs/Quark/quarkd.log`).
-   - `Quark_<version>_x64-setup.exe`: the Windows app. quarkd runs in WSL.
+   - `Quark_<version>_x64-setup.exe`: the Windows app (quarkd runs in WSL), only when the
+     repository variable `RELEASE_WINDOWS` is `true`. 0.1 is Mac only, so it is off.
    - `quarkd-x86_64-unknown-linux-gnu.tar.gz` and `install-wsl.sh`: quarkd for WSL and Linux.
    - `latest.json` (the updater manifest) and `SHA256SUMS`.
 4. Publish the draft. A version with a `-` suffix is marked a pre-release, which the
@@ -50,7 +53,6 @@ the app has no updater.
 
 ## Not yet
 
-- First-run setup screen and WSL setup from the Windows app.
+- WSL setup from the Windows app.
 - Windows code signing; Homebrew cask and winget.
 - A beta update channel.
-- A format version for `~/.quark` and an upgrade test.
