@@ -7,6 +7,7 @@ import { Dock, MOD } from "./shell/Dock";
 import { goNextAttention, useAttention } from "./shell/NextAttention";
 import { parseRoute, useRoute } from "./nav";
 import { Palette } from "./Palette";
+import { checkFirstRun } from "./firstRun";
 
 
 export function App() {
@@ -17,6 +18,8 @@ export function App() {
   // The coordinator's own conversation (the project route) has its message box; every other screen has the dock.
   // The worker view places its own, under the worker's conversation.
   const hasDock = route.name !== "project" && route.name !== "task";
+  const health = useStore((s) => s.health);
+  useEffect(() => { if (health) void checkFirstRun(); }, [health]);
   const latest = useRef({ queue });
   latest.current = { queue };
 

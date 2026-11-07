@@ -4828,6 +4828,60 @@
         }
       }
     },
+    "/v1/setup": {
+      "get": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "What this machine still needs before Quark can run a Project: tools\n(git, tmux 3.2+, gh signed in, a coordinator agent signed in,\ntreehouse), optional ones (Beads, Dolt, quota-axi) and the home. Each\nmissing check may carry a fix.",
+        "operationId": "report",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/setup/{id}": {
+      "post": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Run check `id`'s fix, when quarkd can run it without a prompt (a\nHomebrew or npm install, or the pinned treehouse download), and check\nagain. Sign-ins can't be run here; their fix names the command.",
+        "operationId": "fix",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The check's id, e.g. `tmux`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No such check, or no fix quarkd can run"
+          }
+        }
+      }
+    },
     "/v1/status": {
       "get": {
         "tags": [
@@ -8709,6 +8763,53 @@
           }
         }
       },
+      "Fix": {
+        "type": "object",
+        "required": [
+          "label",
+          "command",
+          "runnable"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "What it runs, shown so the person knows; for a sign-in, the command\nto run in a terminal."
+          },
+          "label": {
+            "type": "string",
+            "description": "The button's words, e.g. \"Install with Homebrew\"."
+          },
+          "runnable": {
+            "type": "boolean",
+            "description": "quarkd can run it itself (`POST /v1/setup/<id>`)."
+          }
+        }
+      },
+      "FixOutcome": {
+        "type": "object",
+        "required": [
+          "id",
+          "ok",
+          "output",
+          "report"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "output": {
+            "type": "string",
+            "description": "The fix's output, stdout then stderr, trimmed to the last 8 KB."
+          },
+          "report": {
+            "$ref": "#/components/schemas/SetupReport",
+            "description": "The checks again, after the fix."
+          }
+        }
+      },
       "ForgeRepository": {
         "type": "object",
         "description": "A repository the forge account can reach, offered when adding\nrepositories to a Project.",
@@ -12232,6 +12333,25 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "SetupReport": {
+        "type": "object",
+        "required": [
+          "ready",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            }
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Every required check is ok or warn."
           }
         }
       },

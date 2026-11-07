@@ -47,6 +47,7 @@ pub mod recovery;
 pub mod secrets;
 pub mod sessions;
 pub mod settings;
+pub mod setup;
 pub mod spend;
 pub mod status;
 pub mod store;
