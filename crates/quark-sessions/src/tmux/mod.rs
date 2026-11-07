@@ -275,6 +275,7 @@ fn info(p: Pane) -> SessionInfo {
         task: p.task,
         alive: !p.dead,
         exit_code: p.dead.then_some(p.dead_status).flatten(),
+        pid: None,
     }
 }
 
@@ -322,6 +323,7 @@ impl SessionBackend for TmuxBackend {
             task: spec.task.clone(),
             alive: true,
             exit_code: None,
+            pid: None,
         })
     }
 

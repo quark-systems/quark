@@ -139,6 +139,35 @@ pub fn beads_dir(home: &Path, project_id: &str) -> PathBuf {
     dir_of(home, project_id).join(".beads")
 }
 
+/// Longest a `bd prime` for a coordinator's prompt may take.
+const PRIME_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The Project's Beads memories as `bd prime --memories-only` prints them,
+/// for a coordinator whose harness has no session-start hook to run it
+/// (Codex, Pi): Claude Code gets them from the hook [`crate::coordinator_http`]
+/// installs. `None` without `bd`, without a database yet, or when it prints
+/// nothing.
+pub async fn prime_memories(bd: &Path, home: &Path, project_id: &str) -> Option<String> {
+    let (key, value) = agent_env(home, project_id);
+    let mut cmd = Command::new(bd);
+    cmd.args(["prime", "--memories-only"])
+        .env(key, value)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let out = match tokio::time::timeout(PRIME_TIMEOUT, cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => out,
+        Ok(Ok(_)) | Ok(Err(_)) => return None,
+        Err(_) => {
+            tracing::warn!(project = %project_id, "bd prime took too long; the coordinator starts without its memories");
+            return None;
+        }
+    };
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 impl Beads {
     /// `bd` from `PATH` unless given; `api_base` is where the daemon listens.
     pub fn new(bd: Option<PathBuf>, api_base: String) -> Self {
@@ -1081,7 +1110,9 @@ pub fn validate_drafts(drafts: &[DraftIssue]) -> Result<(), String> {
 }
 
 /// `bd create --graph` input for the drafts: a draft's `blocked_by` names
-/// another draft by key or an existing bead by id.
+/// another draft by key or an existing bead by id. Each link is an edge
+/// from the blocked draft to its blocker (`to_key` for a draft, `to_id`
+/// for a bead); bd 1.1 drops a per-node `deps` list without linking.
 fn graph_plan(drafts: &[DraftIssue]) -> Result<serde_json::Value, BeadsError> {
     validate_drafts(drafts).map_err(BeadsError::Invalid)?;
     if drafts.is_empty() {
@@ -1089,21 +1120,16 @@ fn graph_plan(drafts: &[DraftIssue]) -> Result<serde_json::Value, BeadsError> {
             "the draft has no issues to create".into(),
         ));
     }
+    let keys: HashSet<&str> = drafts.iter().map(|d| d.key.as_str()).collect();
     let nodes: Vec<serde_json::Value> = drafts
         .iter()
         .map(|d| {
-            let deps: Vec<serde_json::Value> = d
-                .blocked_by
-                .iter()
-                .map(|t| serde_json::json!({ "type": "blocks", "target": t }))
-                .collect();
             let mut node = serde_json::json!({
                 "key": d.key,
                 "title": d.title.trim(),
                 "type": d.issue_type,
                 "priority": d.priority,
                 "labels": d.labels,
-                "deps": deps,
             });
             if !d.description.trim().is_empty() {
                 node["description"] = d.description.trim().into();
@@ -1111,9 +1137,24 @@ fn graph_plan(drafts: &[DraftIssue]) -> Result<serde_json::Value, BeadsError> {
             node
         })
         .collect();
+    let edges: Vec<serde_json::Value> = drafts
+        .iter()
+        .flat_map(|d| {
+            let keys = &keys;
+            d.blocked_by.iter().map(move |t| {
+                let to = if keys.contains(t.as_str()) {
+                    "to_key"
+                } else {
+                    "to_id"
+                };
+                serde_json::json!({ "from_key": d.key, to: t, "type": "blocks" })
+            })
+        })
+        .collect();
     Ok(serde_json::json!({
         "commit_message": "quark: create issues from a New issue draft",
         "nodes": nodes,
+        "edges": edges,
     }))
 }
 
@@ -1398,10 +1439,13 @@ mod tests {
         let plan = graph_plan(&[draft("1", &[]), draft("2", &["1", "qk-41"])]).unwrap();
         let nodes = plan["nodes"].as_array().unwrap();
         assert_eq!(
-            nodes[1]["deps"][0],
-            serde_json::json!({"type": "blocks", "target": "1"})
+            plan["edges"],
+            serde_json::json!([
+                {"from_key": "2", "to_key": "1", "type": "blocks"},
+                {"from_key": "2", "to_id": "qk-41", "type": "blocks"},
+            ])
         );
-        assert_eq!(nodes[1]["deps"][1]["target"], "qk-41");
+        assert!(nodes[1].get("deps").is_none());
         assert!(nodes[0].get("description").is_none());
         assert!(graph_plan(&[]).is_err());
         assert!(graph_plan(&[draft("1", &[]), draft("1", &[])]).is_err());

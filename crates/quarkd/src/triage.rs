@@ -329,6 +329,7 @@ mod tests {
                 quark_db_bytes: 0,
                 events_db_bytes: 0,
                 logs_bytes: 0,
+                largest: Vec::new(),
             },
             findings,
         }

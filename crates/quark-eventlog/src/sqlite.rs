@@ -11,6 +11,11 @@
 //! ([`SqliteEventLog::append_batch`]). An ingester that stores its read
 //! position this way delivers each source record exactly once across
 //! crashes.
+//!
+//! Retention ([`SqliteEventLog::prune`]) deletes events no read model needs
+//! any more, such as old host telemetry. It never deletes the head, so
+//! `seq` keeps counting up and is never reused; after the first prune the
+//! log has gaps, which a reader following `seq` skips over.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -48,6 +53,24 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     value TEXT NOT NULL
 );
 ";
+
+/// The checkpoint [`SqliteEventLog::prune`] sets once it has deleted
+/// anything, so [`SqliteEventLog::verify`] stops expecting `seq` without
+/// gaps.
+const PRUNED: &str = "eventlog.pruned";
+
+/// Which events one [`SqliteEventLog::prune`] call deletes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Prune {
+    /// Every event whose kind starts with this prefix, however new.
+    KindPrefix(String),
+    /// Events of this kind older than `before`, except each host's newest,
+    /// which readers take as the current reading.
+    OlderThan {
+        kind: String,
+        before: OffsetDateTime,
+    },
+}
 
 /// How often a subscription re-reads the file when nothing in this process
 /// appended, so it also follows writers in other processes.
@@ -225,8 +248,106 @@ impl SqliteEventLog {
         .await
     }
 
+    /// Delete up to `limit` events that `rule` selects, never the head.
+    /// Returns how many went, so a caller clears a backlog in batches
+    /// without holding the log.
+    pub async fn prune(&self, rule: Prune, limit: usize) -> Result<usize> {
+        self.with_conn(move |conn| {
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(backend)?;
+            let limit = limit.min(i64::MAX as usize) as i64;
+            let n = match &rule {
+                Prune::KindPrefix(prefix) => {
+                    // `kind >= prefix AND kind < prefix + U+10FFFF` uses the
+                    // kind index, where LIKE would not.
+                    let end = format!("{prefix}\u{10FFFF}");
+                    tx.execute(
+                        "DELETE FROM events WHERE seq IN (
+                             SELECT seq FROM events
+                             WHERE kind >= ?1 AND kind < ?2
+                               AND seq < (SELECT MAX(seq) FROM events)
+                             ORDER BY seq LIMIT ?3)",
+                        params![prefix, end, limit],
+                    )
+                }
+                Prune::OlderThan { kind, before } => {
+                    let before = before.format(&Rfc3339).map_err(backend)?;
+                    tx.execute(
+                        "DELETE FROM events WHERE seq IN (
+                             SELECT seq FROM events
+                             WHERE kind = ?1 AND ts < ?2
+                               AND seq < (SELECT MAX(seq) FROM events)
+                               AND seq NOT IN (
+                                   SELECT MAX(seq) FROM events WHERE kind = ?1 GROUP BY host)
+                             ORDER BY seq LIMIT ?3)",
+                        params![kind, before, limit],
+                    )
+                }
+            }
+            .map_err(backend)?;
+            if n > 0 {
+                tx.execute(
+                    "INSERT INTO checkpoints (name, value) VALUES (?1, '1')
+                     ON CONFLICT(name) DO NOTHING",
+                    [PRUNED],
+                )
+                .map_err(backend)?;
+            }
+            tx.commit().map_err(backend)?;
+            Ok(n)
+        })
+        .await
+    }
+
+    /// Give free pages back to the filesystem when at least `min_free`
+    /// bytes and half the file are free, as after the first prune of a
+    /// long-running log. Returns the bytes freed.
+    pub async fn vacuum_if_mostly_free(&self, min_free: u64) -> Result<u64> {
+        self.with_conn(move |conn| {
+            let (free, total): (i64, i64) = conn
+                .query_row(
+                    "SELECT f.freelist_count * s.page_size, n.page_count * s.page_size
+                     FROM pragma_freelist_count f, pragma_page_count n, pragma_page_size s",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(backend)?;
+            if (free as u64) < min_free || free * 2 < total {
+                return Ok(0);
+            }
+            conn.execute_batch("VACUUM").map_err(backend)?;
+            Ok(free as u64)
+        })
+        .await
+    }
+
+    /// Bytes and events per kind, largest first, for diagnostics.
+    pub async fn kind_sizes(&self) -> Result<Vec<(String, u64, u64)>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT kind, COUNT(*), SUM(LENGTH(payload)) FROM events
+                     GROUP BY kind ORDER BY 3 DESC",
+                )
+                .map_err(backend)?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)? as u64,
+                        r.get::<_, Option<i64>>(2)?.unwrap_or(0) as u64,
+                    ))
+                })
+                .map_err(backend)?;
+            rows.collect::<rusqlite::Result<_>>().map_err(backend)
+        })
+        .await
+    }
+
     /// Check the file: SQLite's own integrity check, then that `seq` runs
-    /// 1..=head with no gaps. Returns the head.
+    /// 1..=head with no gaps, unless retention has pruned it. Returns the
+    /// head.
     pub async fn verify(&self) -> Result<Seq> {
         self.with_conn(|conn| {
             let ok: String = conn
@@ -234,6 +355,21 @@ impl SqliteEventLog {
                 .map_err(backend)?;
             if ok != "ok" {
                 return Err(CoreError::Backend(format!("integrity check: {ok}")));
+            }
+            let pruned: bool = conn
+                .query_row(
+                    "SELECT 1 FROM checkpoints WHERE name = ?1",
+                    [PRUNED],
+                    |_| Ok(true),
+                )
+                .optional()
+                .map_err(backend)?
+                .unwrap_or(false);
+            if pruned {
+                let head: i64 = conn
+                    .query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| r.get(0))
+                    .map_err(backend)?;
+                return Ok(Seq(head as u64));
             }
             let (count, min, max): (i64, i64, i64) = conn
                 .query_row(
@@ -470,6 +606,78 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got.unwrap().unwrap().seq, Seq(1));
+    }
+
+    fn ev_on(host: &str, kind: &str, ts: OffsetDateTime) -> NewEvent {
+        let mut e = NewEvent::new(
+            HostId::from(host),
+            ProjectId::from("p"),
+            None,
+            kind,
+            serde_json::json!({}),
+        );
+        e.ts = ts;
+        e
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_the_head_and_each_hosts_newest() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let now = OffsetDateTime::now_utc();
+        let old = now - time::Duration::days(10);
+        log.append(ev_on("a", "telemetry.sample", old))
+            .await
+            .unwrap(); // 1
+        log.append(ev_on("a", "telemetry.sample", old))
+            .await
+            .unwrap(); // 2: a's newest
+        log.append(ev_on("b", "telemetry.sample", old))
+            .await
+            .unwrap(); // 3: b's newest
+        log.append(ev_on("a", "firstmate.task", now)).await.unwrap(); // 4
+        log.append(ev_on("a", "task.transition", old))
+            .await
+            .unwrap(); // 5
+        log.append(ev_on("a", "firstmate.tick", now)).await.unwrap(); // 6: head
+        let before = now - time::Duration::days(3);
+        let rule = Prune::OlderThan {
+            kind: "telemetry.sample".into(),
+            before,
+        };
+        assert_eq!(log.prune(rule.clone(), 100).await.unwrap(), 1);
+        assert_eq!(log.prune(rule, 100).await.unwrap(), 0);
+        let prefix = Prune::KindPrefix("firstmate.".into());
+        assert_eq!(log.prune(prefix, 100).await.unwrap(), 1);
+        let left: Vec<u64> = log
+            .read(Seq::ZERO, 100)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| e.seq.0)
+            .collect();
+        assert_eq!(left, vec![2, 3, 5, 6]);
+        // The head stays, so the next event still gets a new seq.
+        assert_eq!(log.append(ev("a.x")).await.unwrap(), Seq(7));
+        assert_eq!(log.verify().await.unwrap(), Seq(7));
+        let sizes = log.kind_sizes().await.unwrap();
+        assert_eq!(sizes.iter().map(|s| s.1).sum::<u64>(), 5);
+    }
+
+    #[tokio::test]
+    async fn prune_works_in_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        for _ in 0..5 {
+            log.append(ev("shadow.divergence")).await.unwrap();
+        }
+        log.append(ev("a.x")).await.unwrap();
+        let rule = Prune::KindPrefix("shadow.".into());
+        assert_eq!(log.prune(rule.clone(), 2).await.unwrap(), 2);
+        assert_eq!(log.prune(rule.clone(), 2).await.unwrap(), 2);
+        assert_eq!(log.prune(rule.clone(), 2).await.unwrap(), 1);
+        assert_eq!(log.prune(rule, 2).await.unwrap(), 0);
+        assert_eq!(log.read(Seq::ZERO, 10).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

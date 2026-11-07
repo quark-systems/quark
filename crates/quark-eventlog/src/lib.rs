@@ -12,7 +12,7 @@
 mod sqlite;
 pub mod tasks;
 
-pub use sqlite::SqliteEventLog;
+pub use sqlite::{Prune, SqliteEventLog};
 pub use tasks::{TaskLedger, TaskRecord, TaskStates};
 
 /// The log's file name inside quarkd's home.

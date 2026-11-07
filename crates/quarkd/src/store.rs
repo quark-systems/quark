@@ -1528,6 +1528,83 @@ impl Store {
         })
     }
 
+    /// Done or failed tasks, last changed before `before`, that still keep
+    /// any terminal output.
+    pub fn finished_terminals_before(&self, before: &str) -> Result<Vec<String>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT t.id FROM tasks t
+                 WHERE t.state IN ('done', 'failed') AND t.updated_at < ?1
+                   AND EXISTS (SELECT 1 FROM events e
+                               WHERE e.subject = t.id AND e.type = 'worker.output')",
+            )?;
+            let rows = stmt.query_map([before], |r| r.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Worker terminals whose task is gone (cleared from the store, or its
+    /// Project deleted) and whose newest output is older than `before`.
+    pub fn orphan_worker_terminals(&self, before: &str) -> Result<Vec<String>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT subject FROM events
+                 WHERE type = 'worker.output' AND subject IS NOT NULL
+                   AND json_extract(payload, '$.role') = 'worker'
+                   AND subject NOT IN (SELECT id FROM tasks)
+                 GROUP BY subject HAVING MAX(ts) < ?1",
+            )?;
+            let rows = stmt.query_map([before], |r| r.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Deletes all of a terminal's output. Returns how many events went.
+    pub fn drop_terminal_output(&self, terminal_id: &str) -> Result<usize> {
+        self.read(|c| {
+            Ok(c.execute(
+                "DELETE FROM events WHERE subject = ?1 AND type = 'worker.output'",
+                [terminal_id],
+            )?)
+        })
+    }
+
+    /// Deletes up to `limit` change notices older than `before`: every event
+    /// but terminal output and transcripts. They only tell a connected
+    /// client what changed; the rows they describe (tasks, decisions, pull
+    /// requests...) keep the state. Returns how many went.
+    pub fn prune_notices(&self, before: &str, limit: u32) -> Result<usize> {
+        self.read(|c| {
+            Ok(c.execute(
+                "DELETE FROM events WHERE seq IN (
+                     SELECT seq FROM events
+                     WHERE ts < ?1
+                       AND type NOT IN ('worker.output', 'worker.transcript', 'coordinator.message')
+                     ORDER BY seq LIMIT ?2
+                 )",
+                params![before, limit],
+            )?)
+        })
+    }
+
+    /// Bytes and events per event type, largest first, for diagnostics.
+    pub fn event_sizes(&self) -> Result<Vec<(String, u64, u64)>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT type, COUNT(*), SUM(LENGTH(payload)) FROM events
+                 GROUP BY type ORDER BY 3 DESC",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, Option<i64>>(2)?.unwrap_or(0) as u64,
+                ))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     /// Gives free pages back to the filesystem when at least `min_free`
     /// bytes and half the file are free, as after the first prune of a
     /// long-running home. Returns the bytes freed.
@@ -2590,6 +2667,82 @@ mod tests {
         // Asking to keep more than is there removes nothing.
         assert_eq!(store.trim_finished_terminal(&task_id, 10_000).unwrap(), 0);
         assert_eq!(count(), 4);
+    }
+
+    #[test]
+    fn retention_drops_old_output_orphans_and_notices() {
+        use base64::Engine as _;
+        use quark_systems::{TerminalChunkKind, TerminalRole};
+
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_snapshot(
+                &p.id,
+                &FleetSnapshot {
+                    tasks: vec![engine_task("a", TaskState::Done)],
+                },
+            )
+            .unwrap();
+        let task_id: String = store
+            .read(|c| Ok(c.query_row("SELECT id FROM tasks", [], |r| r.get(0))?))
+            .unwrap();
+        let chunk = |terminal: &str, role| TerminalOutput {
+            project_id: Some(p.id.clone()),
+            output: quark_systems::TerminalOutput {
+                terminal_id: terminal.to_string(),
+                role,
+                task_id: None,
+                kind: TerminalChunkKind::Output,
+                data_b64: base64::engine::general_purpose::STANDARD.encode(b"xx"),
+                cols: None,
+                rows: None,
+            },
+        };
+        store
+            .append_terminal_output(&[
+                chunk(&task_id, TerminalRole::Worker),
+                chunk("tsk_gone", TerminalRole::Worker),
+                chunk("coordinator-x", TerminalRole::Coordinator),
+            ])
+            .unwrap();
+        let count = |sql: &str| -> i64 {
+            store
+                .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+                .unwrap()
+        };
+
+        // Nothing is old yet.
+        let past = "2000-01-01T00:00:00Z";
+        let future = "2099-01-01T00:00:00Z";
+        assert!(store.finished_terminals_before(past).unwrap().is_empty());
+        assert!(store.orphan_worker_terminals(past).unwrap().is_empty());
+        assert_eq!(store.prune_notices(past, 100).unwrap(), 0);
+
+        // A finished task's output, and a worker terminal with no task; a
+        // coordinator's terminal is never an orphan.
+        assert_eq!(
+            store.finished_terminals_before(future).unwrap(),
+            [task_id.as_str()]
+        );
+        assert_eq!(store.orphan_worker_terminals(future).unwrap(), ["tsk_gone"]);
+        assert_eq!(store.drop_terminal_output(&task_id).unwrap(), 1);
+        assert_eq!(store.drop_terminal_output("tsk_gone").unwrap(), 1);
+        assert!(store.finished_terminals_before(future).unwrap().is_empty());
+
+        // Notices go; the coordinator's output and the task row stay.
+        let notices = count("SELECT COUNT(*) FROM events WHERE type != 'worker.output'");
+        assert!(notices > 0);
+        assert_eq!(store.prune_notices(future, 1).unwrap(), 1);
+        store.prune_notices(future, 1000).unwrap();
+        assert_eq!(
+            count("SELECT COUNT(*) FROM events WHERE type != 'worker.output'"),
+            0
+        );
+        assert_eq!(count("SELECT COUNT(*) FROM events"), 1);
+        assert_eq!(store.list_tasks(&p.id).unwrap().len(), 1);
+        let sizes = store.event_sizes().unwrap();
+        assert_eq!(sizes[0].0, "worker.output");
     }
 
     #[test]

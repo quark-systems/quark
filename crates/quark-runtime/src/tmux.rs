@@ -142,6 +142,7 @@ impl SessionBackend for TmuxSessions {
             task: spec.task.clone(),
             alive: true,
             exit_code: None,
+            pid: None,
         })
     }
 
@@ -274,6 +275,7 @@ fn parse_session(line: &str) -> Option<SessionInfo> {
         task: None,
         alive: !dead,
         exit_code: if dead { status.parse().ok() } else { None },
+        pid: None,
     })
 }
 

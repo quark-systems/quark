@@ -7,12 +7,12 @@ It holds the native engine's source of truth: every state change is an event fir
 
 quarkd keeps the log in `<quark home>/events.db`, a SQLite file of its own, separate from the projection store `quark.db`.
 
-- `events(seq, id, ts, host, project, task, kind, payload)`: `seq` starts at 1 with no gaps; `id` is the event's UUIDv7 and unique; `payload` is JSON.
+- `events(seq, id, ts, host, project, task, kind, payload)`: `seq` starts at 1 and only counts up; until retention first deletes something it has no gaps. `id` is the event's UUIDv7 and unique; `payload` is JSON.
 - `checkpoints(name, value)`: read positions of readers that turn files into events (such as quarkd's `usage.turn` reader), written in the same transaction as the events they cover.
 
 Every append is one `BEGIN IMMEDIATE` transaction in WAL mode with `synchronous=FULL`, so an event is on disk before `append` returns.
 `seq` is assigned inside that transaction, and appending a known `id` returns its original `seq`.
-`SqliteEventLog::verify` runs SQLite's integrity check and checks that `seq` has no gaps.
+`SqliteEventLog::verify` runs SQLite's integrity check and, on a log retention has never pruned, checks that `seq` has no gaps.
 Subscriptions wake on appends from the same process and poll the file every 250 ms to follow other writers.
 
 ## Tasks
@@ -25,10 +25,25 @@ A transition already in the log that the machine refuses leaves the state alone 
 It catches up with the log, checks the transition against the machine, appends it, and only then applies it.
 An illegal transition is refused with `IllegalTransition` and appends nothing.
 
+## Retention
+
+quarkd's hourly housekeeping (`crates/quarkd/src/housekeeping.rs`) deletes what no read model folds into state, through `SqliteEventLog::prune`:
+
+- `telemetry.sample` and `host.worktrees` older than 3 days, except each host's newest, which dispatch and the Hosts view take as its current reading (the Hosts view shows 48 hours);
+- every `firstmate.*` and `shadow.*` event (below).
+
+Every kind a read model replays (task transitions, supervisor, dispatch, coordinator, trigger, verify, usage and worker events) is kept.
+`prune` never deletes the head, so `seq` is never reused; it sets the `eventlog.pruned` checkpoint, after which `verify` no longer expects `seq` without gaps.
+Readers that follow `seq` (`read`, subscriptions, replay) skip gaps.
+When most of the file is free afterwards, it is compacted (`VACUUM`).
+
+The same pass bounds `quark.db`: change notices (every store event but terminal output and transcripts) go after 30 days, a finished task's terminal output 30 days after it ended (trimmed to its last screens after a day), and a worker terminal whose task is gone once it has been quiet a day.
+`quarkd diagnose` lists the event types and kinds holding the most payload in each file.
+
 ## Old logs
 
-Before firstmate was retired, a bridge copied each Project's firstmate status lines and worker spawns into the log as `firstmate.status`, `firstmate.spawn` and `firstmate.tasks` events.
-A log from then still holds them; nothing reads them now, so the Overview and Metrics show no history from before the switch.
+Before firstmate was retired, a bridge copied each Project's firstmate status lines and worker spawns into the log as `firstmate.status`, `firstmate.spawn` and `firstmate.tasks` events, and shadows recorded `shadow.divergence`.
+Nothing reads them now, so the Overview and Metrics show no history from before the switch, and retention deletes them.
 
 ## Crash tests
 
