@@ -1,5 +1,8 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+// Pinned to an xterm 6.1 beta set: 6.0 / addon-webgl 0.19 can leave a stale glyph texture on the
+// GPU after its glyph atlas merges pages, so long-running terminals lose or garble characters
+// until the app restarts. Move back to a stable release once 6.1 ships.
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { AdapterCallbacks, AdapterOptions, TermAdapter, terminalTheme } from "./types";
