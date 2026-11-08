@@ -6,6 +6,21 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
+## 0.1.0-alpha.2
+
+A fix build of the first alpha, installed the same way (download
+`Quark_0.1.0-alpha.2_aarch64.dmg`, drag Quark to Applications, then right-click and Open,
+or run `xattr -dr com.apple.quarantine /Applications/Quark.app` before the first launch so
+Quark can start its menu bar app and quarkd).
+
+### Fixed
+
+- Setup and `quarkd doctor` no longer list treehouse unless `QUARK_WORKTREE_POOL` asks for
+  it, and they read versions written as `v3.1.5` correctly.
+- Terminal text no longer garbles: xterm.js moves to the 6.1 beta with the WebGL atlas fix.
+- The README and docs describe installing the Mac app and the native engine as the
+  default.
+
 ## 0.1.0-alpha.1
 
 The first tagged build of Quark: a Mac app you install instead of building from source.
