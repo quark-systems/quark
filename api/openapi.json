@@ -420,7 +420,7 @@
           {
             "name": "after",
             "in": "query",
-            "description": "Only entries with `id` greater than this.",
+            "description": "Only entries with `id` greater than this, oldest first. Without it,\nthe newest `limit` entries.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5344,7 +5344,7 @@
           {
             "name": "after",
             "in": "query",
-            "description": "Only entries with `id` greater than this.",
+            "description": "Only entries with `id` greater than this, oldest first. Without it,\nthe newest `limit` entries.",
             "required": false,
             "schema": {
               "type": "integer",

@@ -288,13 +288,41 @@ mod tests {
                 &TranscriptSource::Coordinator {
                     project_id: p.clone(),
                 },
-                0,
+                Some(0),
                 10,
             )
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].entry.text, "PR #12 merged.");
         assert_eq!(items[0].entry.role, TranscriptRole::Assistant);
+    }
+
+    #[test]
+    fn an_opening_chat_gets_the_newest_messages() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        for n in 1..=5 {
+            store.coordinator_says(&p, &format!("message {n}")).unwrap();
+        }
+        let source = TranscriptSource::Coordinator {
+            project_id: p.clone(),
+        };
+        let text = |items: Vec<quark_systems::TranscriptItem>| -> Vec<String> {
+            items.into_iter().map(|i| i.entry.text).collect()
+        };
+        // No cursor: the newest two, oldest first.
+        let newest = store.transcript(&source, None, 2).unwrap();
+        let first_new = newest[0].id;
+        assert_eq!(text(newest), ["message 4", "message 5"]);
+        // A cursor pages forward from it.
+        assert_eq!(
+            text(store.transcript(&source, Some(0), 2).unwrap()),
+            ["message 1", "message 2"]
+        );
+        assert_eq!(
+            text(store.transcript(&source, Some(first_new), 10).unwrap()),
+            ["message 5"]
+        );
     }
 
     #[test]

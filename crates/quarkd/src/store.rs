@@ -1317,12 +1317,13 @@ impl Store {
         })
     }
 
-    /// Transcript entries already projected for `source`, oldest first, with
-    /// event `seq > after`, at most `limit`.
+    /// Transcript entries already projected for `source`, oldest first, at
+    /// most `limit`: those with event `seq > after`, or with no `after` the
+    /// newest `limit` (what a chat shows when it opens).
     pub fn transcript(
         &self,
         source: &TranscriptSource,
-        after: i64,
+        after: Option<i64>,
         limit: u32,
     ) -> Result<Vec<TranscriptItem>> {
         let (event_type, key, id) = match source {
@@ -1336,18 +1337,27 @@ impl Store {
             }
         };
         self.read(|c| {
-            let mut stmt = c.prepare(
+            let sql = if after.is_some() {
                 "SELECT seq, json_extract(payload, '$.entry') FROM events
                  WHERE type = ?1 AND json_extract(payload, ?2) = ?3 AND seq > ?4
-                 ORDER BY seq LIMIT ?5",
-            )?;
-            let rows = stmt
-                .query_map(params![event_type.as_str(), key, id, after, limit], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })?;
+                 ORDER BY seq LIMIT ?5"
+            } else {
+                "SELECT seq, json_extract(payload, '$.entry') FROM events
+                 WHERE type = ?1 AND json_extract(payload, ?2) = ?3 AND seq > ?4
+                 ORDER BY seq DESC LIMIT ?5"
+            };
+            let mut stmt = c.prepare(sql)?;
+            let mut rows = stmt
+                .query_map(
+                    params![event_type.as_str(), key, id, after.unwrap_or(0), limit],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if after.is_none() {
+                rows.reverse();
+            }
             let mut out = Vec::new();
-            for row in rows {
-                let (id, entry) = row?;
+            for (id, entry) in rows {
                 let entry: quark_systems::TranscriptEntry = serde_json::from_str(&entry)?;
                 if recorded_compaction_summary(&entry) {
                     continue;

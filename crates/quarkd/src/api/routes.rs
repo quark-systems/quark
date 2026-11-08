@@ -1001,18 +1001,16 @@ pub(super) fn daemon_user() -> String {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct TranscriptQuery {
-    /// Only entries with `id` greater than this.
+    /// Only entries with `id` greater than this, oldest first. Without it,
+    /// the newest `limit` entries.
     pub after: Option<i64>,
     /// At most this many entries (default and maximum 1000).
     pub limit: Option<u32>,
 }
 
 impl TranscriptQuery {
-    fn bounds(&self) -> (i64, u32) {
-        (
-            self.after.unwrap_or(0),
-            self.limit.unwrap_or(1000).clamp(1, 1000),
-        )
+    fn bounds(&self) -> (Option<i64>, u32) {
+        (self.after, self.limit.unwrap_or(1000).clamp(1, 1000))
     }
 }
 
