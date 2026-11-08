@@ -3,7 +3,7 @@
 //!
 //! [`check`] looks at the tools quarkd runs (git, tmux 3.2+, gh signed in, a
 //! coordinator harness signed in, Beads and Dolt) and the optional ones
-//! (quota-axi for quota, treehouse unless it is the worktree pool), plus the home itself (writable,
+//! (quota-axi for quota, and treehouse only when `QUARK_WORKTREE_POOL` asks for it), plus the home itself (writable,
 //! format, free disk). `quarkd doctor` prints it; `GET /v1/setup` serves it
 //! to the app's setup screen.
 //!
@@ -109,11 +109,24 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
     let env = harnesses.env();
     let brew = env.which("brew");
     let npm = env.which("npm");
+    // The native worktree pool is the default; treehouse is checked only when
+    // QUARK_WORKTREE_POOL asks for it (the fallback pool or the shadow).
+    let treehouse_needed = crate::native_worktrees::Mode::parse(
+        env.var(crate::native_worktrees::ENV),
+        env.var(crate::native_worktrees::LEGACY_SHADOW_ENV),
+    ) != crate::native_worktrees::Mode::Native;
+    let treehouse_probe = async {
+        if treehouse_needed {
+            version_of(env, "treehouse", &["--version"]).await
+        } else {
+            None
+        }
+    };
     let (git, tmux, gh, treehouse, bd, dolt, quota) = tokio::join!(
         version_of(env, "git", &["--version"]),
         version_of(env, "tmux", &["-V"]),
         version_of(env, "gh", &["--version"]),
-        version_of(env, "treehouse", &["--version"]),
+        treehouse_probe,
         version_of(env, "bd", &["--version"]),
         version_of(env, "dolt", &["version"]),
         version_of(env, "quota-axi", &["--version"]),
@@ -205,42 +218,34 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
         },
     });
     checks.push(coordinator_check(&infos, npm.is_some()));
-    let tree_old = treehouse
-        .as_ref()
-        .and_then(|(_, v)| parse_version(v))
-        .is_some_and(|v| v < TREEHOUSE_MIN || v.0 != TREEHOUSE_MIN.0);
-    let treehouse_fix = Fix {
-        label: "Install treehouse 3.1.2".into(),
-        command: "the pinned treehouse 3.1.2 release, into ~/.local/bin (selfhost/treehouse.sh)"
-            .into(),
-        runnable: true,
-    };
-    // The native worktree pool is the default; treehouse is needed only as
-    // the fallback pool or the shadow's reference.
-    let pool = crate::native_worktrees::Mode::parse(
-        env.var(crate::native_worktrees::ENV),
-        env.var(crate::native_worktrees::LEGACY_SHADOW_ENV),
-    );
-    let treehouse_needed = pool != crate::native_worktrees::Mode::Native;
-    let mut tree_check = tool(
-        "treehouse",
-        "treehouse 3.1.2 or a later 3.x",
-        treehouse_needed,
-        if treehouse_needed {
-            "The worktree pool workers run in (QUARK_WORKTREE_POOL asks for treehouse)."
-        } else {
-            "Only for QUARK_WORKTREE_POOL=treehouse; Quark's own worktree pool is the default."
-        },
-        treehouse.as_ref(),
-        None,
-        Some(treehouse_fix.clone()),
-    );
-    if tree_old {
-        tree_check.status = CheckStatus::Missing;
-        tree_check.detail = format!("{}; 3.1.2 or a later 3.x is needed", tree_check.detail);
-        tree_check.fix = Some(treehouse_fix);
+    if treehouse_needed {
+        let tree_old = treehouse
+            .as_ref()
+            .and_then(|(_, v)| parse_version(v))
+            .is_some_and(|v| v < TREEHOUSE_MIN || v.0 != TREEHOUSE_MIN.0);
+        let treehouse_fix = Fix {
+            label: "Install treehouse 3.1.2".into(),
+            command:
+                "the pinned treehouse 3.1.2 release, into ~/.local/bin (selfhost/treehouse.sh)"
+                    .into(),
+            runnable: true,
+        };
+        let mut tree_check = tool(
+            "treehouse",
+            "treehouse 3.1.2 or a later 3.x",
+            true,
+            "The worktree pool workers run in (QUARK_WORKTREE_POOL asks for treehouse).",
+            treehouse.as_ref(),
+            None,
+            Some(treehouse_fix.clone()),
+        );
+        if tree_old {
+            tree_check.status = CheckStatus::Missing;
+            tree_check.detail = format!("{}; 3.1.2 or a later 3.x is needed", tree_check.detail);
+            tree_check.fix = Some(treehouse_fix);
+        }
+        checks.push(tree_check);
     }
-    checks.push(tree_check);
     checks.push(tool(
         "bd",
         "Beads (bd)",
@@ -470,7 +475,11 @@ pub fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i].is_ascii_digit() && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) {
+        // A version starts after a non-alphanumeric, or after a `v` that does (`v3.1.5`).
+        let starts = i == 0
+            || !bytes[i - 1].is_ascii_alphanumeric()
+            || (bytes[i - 1] == b'v' && (i == 1 || !bytes[i - 2].is_ascii_alphanumeric()));
+        if bytes[i].is_ascii_digit() && starts {
             let rest = &s[i..];
             let end = rest
                 .find(|c: char| !(c.is_ascii_digit() || c == '.'))
@@ -635,6 +644,9 @@ mod tests {
         assert_eq!(parse_version("tmux 3.3a"), Some((3, 3, 0)));
         assert_eq!(parse_version("tmux next-3.6"), Some((3, 6, 0)));
         assert_eq!(parse_version("treehouse version 3.1.2"), Some((3, 1, 2)));
+        assert_eq!(parse_version("v3.1.5"), Some((3, 1, 5)));
+        assert_eq!(parse_version("treehouse v3.1.5"), Some((3, 1, 5)));
+        assert_eq!(parse_version("dev3.1"), None);
         assert_eq!(
             parse_version("git version 2.50.1 (Apple Git-155)"),
             Some((2, 50, 1))
@@ -683,26 +695,24 @@ mod tests {
         let reg = HarnessRegistry::new(crate::harness::builtin(), env);
         let r = check(home.path(), &reg).await;
         assert!(!r.ready);
-        for id in [
-            "git",
-            "tmux",
-            "gh",
-            "gh_auth",
-            "coordinator",
-            "bd",
-            "dolt",
-            "treehouse",
-        ] {
+        for id in ["git", "tmux", "gh", "gh_auth", "coordinator", "bd", "dolt"] {
             assert_eq!(r.get(id).unwrap().status, CheckStatus::Missing, "{id}");
         }
         assert!(r.get("bd").unwrap().required && r.get("dolt").unwrap().required);
-        // treehouse is optional unless the treehouse pool is asked for.
-        assert!(!r.get("treehouse").unwrap().required);
+        // treehouse is not checked unless the treehouse pool is asked for.
+        assert!(r.get("treehouse").is_none());
+        let mut env = reg.env().clone();
+        env.vars
+            .insert(crate::native_worktrees::ENV.into(), "treehouse".into());
+        let tree_reg = HarnessRegistry::new(crate::harness::builtin(), env);
+        let tree = check(home.path(), &tree_reg).await;
+        let t = tree.get("treehouse").unwrap();
+        assert!(t.required && t.status == CheckStatus::Missing);
+        assert!(t.fix.as_ref().unwrap().runnable);
         assert_eq!(r.get("home").unwrap().status, CheckStatus::Ok);
         let tmux = r.get("tmux").unwrap().fix.clone().unwrap();
         assert_eq!(tmux.command, "brew install tmux");
         assert!(!tmux.runnable, "no brew on this PATH");
-        assert!(r.get("treehouse").unwrap().fix.as_ref().unwrap().runnable);
         assert!(render(&r).contains("Not ready"));
         // A fix Quark can't run is refused.
         assert!(fix(home.path(), &reg, "gh_auth").await.is_err());
