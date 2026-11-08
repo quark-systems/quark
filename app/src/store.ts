@@ -480,6 +480,13 @@ function connect(cursor: number | null) {
       if (!state.health) { void start(); return; } // never reached it: start over
       // Resume from the cursor; refetch snapshots too, since retention is bounded.
       connect(state.lastSeq);
+      // The daemon may have restarted as another version (an upgrade).
+      api.health().then((health) => {
+        if (gen !== generation) return;
+        set({ health });
+        const mismatch = apiMismatch(health.api_version, health.version);
+        if (mismatch) set({ error: mismatch });
+      }).catch(() => {});
       refreshSnapshots().catch((err) => set({ error: String(err.message ?? err) }));
     }, backoff);
     backoff = Math.min(backoff * 2, 5000);
