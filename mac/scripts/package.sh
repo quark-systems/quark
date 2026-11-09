@@ -36,6 +36,7 @@ sed -e "s/__VERSION__/$version/" -e "s/__BUILD__/$build/" "$mac/Resources/Widget
 cp -f "$bin/QuarkMenuBar" "$app/Contents/MacOS/QuarkBar"
 cp -f "$repo/target/release/quarkd" "$app/Contents/MacOS/quarkd"
 cp -f "$mac/Resources/quarkd-launch" "$app/Contents/Resources/quarkd-launch"
+cp -f "$mac/Resources/MenuBarIcon.png" "$mac/Resources/MenuBarIcon@2x.png" "$app/Contents/Resources/"
 cp -f "$mac/Resources/systems.quark.quarkd.plist" "$app/Contents/Library/LaunchAgents/"
 sed -e "s/__VERSION__/$version/" -e "s/__BUILD__/$build/" "$mac/Resources/Info.plist" > "$app/Contents/Info.plist"
 if [ -f "$repo/app/src-tauri/icons/icon.icns" ]; then
