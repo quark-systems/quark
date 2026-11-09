@@ -68,6 +68,8 @@ pub const ACCOUNT_ENVS: &[&str] = &[
     "PI_CODING_AGENT_DIR",
     // IBM Bob key accounts: the key's reference and its team.
     "QUARK_SECRET_BOB_API_KEY",
+    // Kiro CLI keys, the default login's included.
+    "QUARK_SECRET_KIRO_API_KEY",
     "BOB_TEAM_ID",
 ];
 /// Longest task id made from a title, before any `-<n>` suffix.

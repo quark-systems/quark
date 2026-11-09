@@ -40,6 +40,14 @@ options = ["Trust, continue", "Don't trust, exit"]
 choose = "Trust, continue"
 cursor = "❯"
 
+# Kiro keeps one login (`kiro-cli login`, in its own data directory), so
+# more accounts are API keys, kept in the Keychain. The default login can
+# take a kept key too, which is how a quarkd launchd starts signs in.
+[account]
+config_dir = ".kiro"
+auth_env = ["KIRO_API_KEY"]
+key_env = "KIRO_API_KEY"
+
 [hooks]
 install = "kiro-hooks"
 events = { UserPromptSubmit = "busy", Stop = "turn_end" }

@@ -362,7 +362,7 @@ async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result
             }
         }
         QuotaCommand::Kiro { json } => {
-            let v = kiro::KiroUsage::for_home(home).read().await;
+            let v = quarkd::native_dispatch::kiro_usage(home).read().await;
             if json {
                 println!("{v}");
             } else {

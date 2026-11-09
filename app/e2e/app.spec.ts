@@ -637,17 +637,27 @@ test("PR center: verification evidence with failing journeys, screenshots and tr
   await expect(page.getByTestId("pr-diff")).toBeVisible();
 });
 
-test("accounts: Bob and Kiro show their logins, and Bob takes an API key account", async ({ page }) => {
+test("accounts: Bob and Kiro show their logins, Bob takes an API key account, Kiro's default keeps a key", async ({ page }) => {
   await open(page, "#/accounts");
   const bob = page.getByTestId("accounts-bob");
   await expect(bob.getByTestId("account-row")).toHaveCount(1);
   await expect(bob.getByTestId("account-quota")).toContainText("71% left");
   const kiro = page.getByTestId("accounts-kiro");
-  await expect(kiro.getByTestId("account-row")).toContainText("the harness's own login");
+  await expect(kiro.getByTestId("account-row")).toContainText("/home/demo/.kiro");
   await expect(kiro.getByTestId("account-quota")).toContainText("54% left");
+  await expect(kiro.getByTestId("account-health")).toHaveText("Login unknown");
+
+  // Kiro's default login keeps a key, so a quarkd launchd starts signs in too.
+  await kiro.getByTestId("set-key").click();
+  await kiro.getByLabel("API key for Default").fill("ksk_secret4321");
+  await kiro.getByRole("button", { name: "Save" }).click();
+  await expect(kiro.getByTestId("account-row")).toContainText("API key in the Keychain");
+  await expect(kiro.getByTestId("account-health")).toHaveText("Logged in");
+  await expect(page.locator("body")).not.toContainText("ksk_secret4321");
+  await kiro.getByTestId("forget-key").click();
+  await expect(kiro.getByTestId("account-health")).toHaveText("Login unknown");
 
   const form = page.getByTestId("add-account-form");
-  await expect(form.getByLabel("Harness").locator("option", { hasText: "Kiro CLI" })).toHaveCount(0);
   await form.getByLabel("Harness").selectOption("bob");
   await expect(form.getByLabel("Config directory")).toHaveCount(0);
   await form.getByLabel("API key").fill("has space");

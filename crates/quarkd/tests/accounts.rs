@@ -371,10 +371,12 @@ async fn quota_is_read_once_per_account_and_changes_stream() {
     let events = quota_events(&s.store);
     assert_eq!(events.len(), 4);
     assert_eq!(events[2]["account_id"], "default-claude-code");
-    assert_eq!(events[2]["quota"]["state"], "error");
+    // A read that did not finish keeps the last reading, saying why.
+    assert_eq!(events[2]["quota"]["state"], "known");
+    assert_eq!(events[2]["quota"]["remaining_percent"], 40.0);
     assert_eq!(
         events[2]["quota"]["detail"],
-        "quota-axi timed out after 60s"
+        "Showing the last reading; the latest read failed: quota-axi timed out after 60s"
     );
     assert_eq!(events[3]["quota"]["remaining_percent"], 0.0);
 }
@@ -720,7 +722,7 @@ async fn single_account_harnesses_list_their_default_login_with_quota() {
     std::fs::write(bob_dir.join("settings/auth-secrets.json"), "{}").unwrap();
     // quarkd's own readings, as `quark_dispatch::local` prints them.
     s.quota.set(
-        "",
+        s.home().join(".kiro"),
         Ok(json!({
             "schemaVersion": 5,
             "providers": [{
@@ -765,7 +767,7 @@ async fn single_account_harnesses_list_their_default_login_with_quota() {
     assert_eq!(bob["quota"]["detail"], "no anchor recorded");
     assert_eq!(bob["quota"]["plan"], "1500 Bobcoins a month");
     let kiro = by_id("default-kiro");
-    assert_eq!(kiro["config_dir"], Value::Null);
+    assert_eq!(kiro["config_dir"], s.home().join(".kiro").to_str().unwrap());
     assert_eq!(kiro["quota"]["state"], "known");
     assert_eq!(kiro["quota"]["remaining_percent"], 62.5);
     assert_eq!(kiro["quota"]["plan"], "KIRO PRO");
@@ -784,7 +786,7 @@ async fn single_account_harnesses_list_their_default_login_with_quota() {
         reads,
         [
             ("bob".into(), "".into(), bob_dir.clone(), true),
-            ("kiro".into(), "".into(), PathBuf::new(), true),
+            ("kiro".into(), "".into(), s.home().join(".kiro"), true),
         ]
     );
 
@@ -900,5 +902,106 @@ async fn bob_takes_more_accounts_as_api_keys_kept_out_of_the_database() {
     s.store.set_coordinator_account(&pid, None).unwrap();
     let (status, _) = call(&s.app, "DELETE", &format!("/v1/accounts/{id}"), None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(s.secrets.services().is_empty());
+}
+
+#[tokio::test]
+async fn a_default_account_signs_in_with_a_kept_key() {
+    let s = setup_with(&["CLAUDE_CONFIG_DIR", "QUARK_SECRET_KIRO_API_KEY"]);
+    exe(&s.dir.path().join("bin/kiro-cli"), "echo 1.20.0");
+    const KEY: &str = "ksk_secret9876";
+    let kiro = |pct: f64| {
+        Ok(json!({
+            "schemaVersion": 5,
+            "providers": [{
+                "provider": "kiro",
+                "state": {"status": "fresh"},
+                "quotaSemantics": {"status": "known", "effectiveAvailability": [
+                    {"scope": "all_models", "status": "known", "effectivePercentRemaining": pct}]},
+                "kiro": {"usedCredits": 10, "planCredits": 1000}
+            }]
+        })
+        .to_string())
+    };
+    s.quota.set(format!("key:{KEY}"), kiro(70.0));
+
+    // Without one, the login is whatever quarkd's environment has.
+    let before = s.accounts.get("default-kiro").await.unwrap();
+    assert!(!before.api_key);
+    assert_eq!(before.health.state, quark_systems::AuthState::Unknown);
+    assert!(s
+        .accounts
+        .pool_accounts("kiro")
+        .await
+        .unwrap()
+        .iter()
+        .all(|a| a.env.is_empty()));
+
+    // Only a default account of a key harness takes one.
+    let (status, _) = call(
+        &s.app,
+        "PUT",
+        "/v1/accounts/default-claude-code/key",
+        Some(json!({"api_key": KEY})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, account) = call(
+        &s.app,
+        "PUT",
+        "/v1/accounts/default-kiro/key",
+        Some(json!({"api_key": KEY})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{account}");
+    assert!(!account.to_string().contains(KEY), "{account}");
+    assert_eq!(account["api_key"], true);
+    assert_eq!(account["default"], true);
+    assert_eq!(account["launchable"], true);
+    assert_eq!(account["health"]["state"], "configured");
+    assert_eq!(
+        s.secrets.services(),
+        ["quark/accounts/default-kiro".to_string()]
+    );
+
+    // Its quota is read with the key, and its launches carry a reference.
+    s.accounts
+        .refresh_quota(Some("default-kiro"))
+        .await
+        .unwrap();
+    let account = s.accounts.get("default-kiro").await.unwrap();
+    assert_eq!(account.quota.remaining_percent, Some(70.0));
+    let pool = s.accounts.pool_accounts("kiro").await.unwrap();
+    assert_eq!(
+        pool[0].env.iter().collect::<Vec<_>>(),
+        [(
+            &"QUARK_SECRET_KIRO_API_KEY".to_string(),
+            &"keychain:quark/accounts/default-kiro".to_string()
+        )]
+    );
+
+    // A read that does not finish keeps the last reading, noting why.
+    s.quota.set(
+        format!("key:{KEY}"),
+        Err("kiro-cli did not answer within 75s".into()),
+    );
+    s.accounts
+        .refresh_quota(Some("default-kiro"))
+        .await
+        .unwrap();
+    let kept = s.accounts.get("default-kiro").await.unwrap();
+    assert_eq!(kept.quota.state, quark_systems::QuotaState::Known);
+    assert_eq!(kept.quota.remaining_percent, Some(70.0));
+    assert!(kept
+        .quota
+        .detail
+        .as_deref()
+        .is_some_and(|d| d.contains("did not answer")));
+
+    // Forgetting it goes back to the environment's login.
+    let (status, account) = call(&s.app, "DELETE", "/v1/accounts/default-kiro/key", None).await;
+    assert_eq!(status, StatusCode::OK, "{account}");
+    assert_eq!(account["api_key"], false);
     assert!(s.secrets.services().is_empty());
 }

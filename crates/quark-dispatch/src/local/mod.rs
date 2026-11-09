@@ -170,16 +170,19 @@ fn strip_ansi(text: &str) -> String {
     out
 }
 
-/// Run `argv` in `cwd` with stdin closed, bounded by `timeout`; stdout and
-/// stderr together, or why it did not run.
-async fn run(
+/// Run `argv` in `cwd` with `env` added to the daemon's own environment and
+/// stdin closed, bounded by `timeout`; stdout and stderr together, or why it
+/// did not run.
+async fn run_with(
     argv: &[String],
     cwd: Option<&std::path::Path>,
+    env: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<(bool, String), String> {
     let (exe, args) = argv.split_first().ok_or("empty command")?;
     let mut cmd = tokio::process::Command::new(exe);
     cmd.args(args)
+        .envs(env.iter().copied())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     if let Some(cwd) = cwd {

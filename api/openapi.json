@@ -238,6 +238,113 @@
         }
       }
     },
+    "/v1/accounts/{id}/key": {
+      "put": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Keep an API key in the Keychain for a default account to sign in with,\nfor a harness that takes keys (`HarnessInfo.key_env`, e.g. Kiro CLI).\nIts launches and quota reads then use the key, not quarkd's own\nenvironment, so a quarkd launchd started signs in too. Replaces an\nearlier key. The account's quota is read again right away.",
+        "operationId": "set_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "A default account's id, e.g. `default-kiro`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAccountKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a default account, or its harness takes no key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Forget a default account's kept key: it signs in from quarkd's own\nenvironment again.",
+        "operationId": "clear_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "A default account's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/accounts/{id}/keychain-grant": {
       "post": {
         "tags": [
@@ -12309,6 +12416,19 @@
           "text": {
             "type": "string",
             "description": "Plain text for the worker to read; may span several lines."
+          }
+        }
+      },
+      "SetAccountKey": {
+        "type": "object",
+        "description": "An API key for a default account to sign in with, kept in the Keychain\n(`PUT /v1/accounts/{id}/key`).",
+        "required": [
+          "api_key"
+        ],
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "description": "Never returned or logged."
           }
         }
       },
