@@ -41,6 +41,8 @@ use quark_systems::{
     UpdateAccount,
 };
 use serde::Deserialize;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::harness::{self, pool_name_ok, Harness, HarnessRegistry};
 use crate::now_rfc3339;
@@ -370,12 +372,13 @@ impl Accounts {
     pub async fn list(&self) -> Result<Vec<Account>> {
         let infos = self.harnesses.list(false).await;
         let store = self.store.clone();
-        let (rows, pools, quotas, leases) = tokio::task::spawn_blocking(move || {
+        let (rows, pools, quotas, leases, kept) = tokio::task::spawn_blocking(move || {
             Ok::<_, StoreError>((
                 store.account_rows()?,
                 store.account_pools()?,
                 store.account_quotas()?,
                 store.active_leases()?,
+                store.default_account_keys()?,
             ))
         })
         .await
@@ -403,8 +406,20 @@ impl Accounts {
                     })
             };
             let default_id = default_account_id(h.id());
+            // A kept key signs the default login in wherever quarkd runs.
+            let keyed = h.key_env().is_some() && kept.contains(&default_id);
+            let (health, launchable) = if keyed {
+                (
+                    kept_key_health(),
+                    account_env(h.as_ref(), &default_id, None, true, None)
+                        .iter()
+                        .all(|(v, _)| self.forwarded.contains(&v.as_str())),
+                )
+            } else {
+                (h.auth_status(env, &harness::Account::default()), true)
+            };
             out.push(Account {
-                health: h.auth_status(env, &harness::Account::default()),
+                health,
                 quota: quota_for(&default_id),
                 pools: pools.get(&default_id).cloned().unwrap_or_default(),
                 active_tasks: leases.get(&default_id).copied().unwrap_or(0),
@@ -412,10 +427,10 @@ impl Accounts {
                 harness: h.id().into(),
                 label: "Default".into(),
                 config_dir: h.default_config_dir(env).map(|d| d.display().to_string()),
-                api_key: false,
+                api_key: keyed,
                 team_id: None,
                 default: true,
-                launchable: true,
+                launchable,
                 created_at: None,
             });
             for r in added {
@@ -423,10 +438,7 @@ impl Accounts {
                 let (config_dir, health, launchable) = if keyed {
                     (
                         None,
-                        quark_systems::HarnessAuth {
-                            state: AuthState::Configured,
-                            detail: "API key kept in the Keychain".into(),
-                        },
+                        kept_key_health(),
                         account_env(h.as_ref(), &r.id, None, true, r.team_id.as_deref())
                             .iter()
                             .all(|(v, _)| self.forwarded.contains(&v.as_str())),
@@ -591,6 +603,59 @@ impl Accounts {
             return Err(e);
         }
         self.get(&id).await
+    }
+
+    /// Keeps `key` in the Keychain as default account `id`'s API key, so
+    /// its launches and quota reads sign in with it rather than with
+    /// whatever quarkd's own environment has (a quarkd launchd starts has
+    /// no shell profile). Replaces an earlier kept key.
+    pub async fn set_default_key(&self, id: &str, key: &str) -> Result<Account> {
+        let account = self.get(id).await?;
+        let h = self.default_key_harness(&account)?;
+        let key = api_key(key)?;
+        self.secrets
+            .set(&key_service(id), &key)
+            .await
+            .map_err(|e| {
+                AccountError::Invalid(format!("could not keep the key in the Keychain: {e}"))
+            })?;
+        let (store, id2, at) = (self.store.clone(), id.to_string(), now_rfc3339());
+        blocking(move || store.set_default_account_key(&id2, true, &at)).await?;
+        tracing::info!(account = %id, harness = %h, "kept an API key for the default account");
+        self.get(id).await
+    }
+
+    /// Forgets default account `id`'s kept key: it signs in from quarkd's
+    /// environment again.
+    pub async fn clear_default_key(&self, id: &str) -> Result<Account> {
+        let account = self.get(id).await?;
+        self.default_key_harness(&account)?;
+        let (store, id2, at) = (self.store.clone(), id.to_string(), now_rfc3339());
+        blocking(move || store.set_default_account_key(&id2, false, &at)).await?;
+        if let Err(e) = self.secrets.delete(&key_service(id)).await {
+            tracing::warn!(account = %id, error = %e, "could not remove the account's key from the Keychain");
+        }
+        self.get(id).await
+    }
+
+    /// The harness of a default account that can keep a key.
+    fn default_key_harness(&self, account: &Account) -> Result<String> {
+        if !account.default {
+            return Err(AccountError::Invalid(
+                "only a default account takes a kept key; an added key account is its key".into(),
+            ));
+        }
+        let h = self
+            .harnesses
+            .get(&account.harness)
+            .ok_or(AccountError::NotFound)?;
+        if h.key_env().is_none() {
+            return Err(AccountError::Invalid(format!(
+                "{} does not sign in with an API key",
+                h.name()
+            )));
+        }
+        Ok(h.id().to_string())
     }
 
     /// Renames an added account or replaces any account's pools.
@@ -797,62 +862,74 @@ impl Accounts {
     }
 
     async fn read_quota(&self, only: Option<&str>, grant: bool) -> Result<()> {
-        for account in self.list().await? {
-            if only.is_some_and(|id| id != account.id) {
-                continue;
+        // Accounts are read side by side: one slow reader (Kiro's /usage
+        // with an API key takes tens of seconds) must not hold up the rest,
+        // nor an API call waiting on all of them.
+        let reads = self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|a| only.is_none_or(|id| id == a.id))
+            .map(|a| self.read_account_quota(a, grant));
+        for r in futures_util::future::join_all(reads).await {
+            r?;
+        }
+        Ok(())
+    }
+
+    async fn read_account_quota(&self, account: Account, grant: bool) -> Result<()> {
+        let Some(h) = self.harnesses.get(&account.harness).cloned() else {
+            return Ok(());
+        };
+        let Some(provider) = h.quota_provider() else {
+            return Ok(());
+        };
+        let var = h.account_env().unwrap_or_default();
+        // A single-account harness's login is wherever the harness
+        // keeps it, with or without a directory Quark knows.
+        let dir = match (&account.config_dir, var.is_empty()) {
+            (None, true) => Some(String::new()),
+            (dir, _) => dir.clone(),
+        };
+        let quota = if account.api_key {
+            match self.secrets.get(&key_service(&account.id)).await {
+                Ok(key) => match self.quota.read_key(provider, &key).await {
+                    Ok(json) => parse_quota(provider, &json),
+                    Err(detail) => AccountQuota::empty(QuotaState::Error, Some(detail)),
+                },
+                Err(e) => AccountQuota::empty(QuotaState::Error, Some(e)),
             }
-            let Some(h) = self.harnesses.get(&account.harness).cloned() else {
-                continue;
-            };
-            let Some(provider) = h.quota_provider() else {
-                continue;
-            };
-            let var = h.account_env().unwrap_or_default();
-            // A single-account harness's login is wherever the harness
-            // keeps it, with or without a directory Quark knows.
-            let dir = match (&account.config_dir, var.is_empty()) {
-                (None, true) => Some(String::new()),
-                (dir, _) => dir.clone(),
-            };
-            let quota = if account.api_key {
-                match self.secrets.get(&key_service(&account.id)).await {
-                    Ok(key) => match self.quota.read_key(provider, &key).await {
-                        Ok(json) => parse_quota(provider, &json),
+        } else {
+            match &dir {
+                None => AccountQuota::empty(
+                    QuotaState::Error,
+                    Some("the account has no config directory".into()),
+                ),
+                Some(dir) => {
+                    let path = Path::new(dir);
+                    let read = if grant {
+                        self.quota.grant(provider, var, path, account.default).await
+                    } else {
+                        self.quota.read(provider, var, path, account.default).await
+                    };
+                    // A fix quota-axi names runs against this account's
+                    // directory, not the default login.
+                    let select = (!account.default && !var.is_empty() && !dir.is_empty())
+                        .then(|| format!("{var}={}", shell_quote(dir)));
+                    match read {
+                        Ok(json) => parse_quota_for(provider, &json, select.as_deref()),
                         Err(detail) => AccountQuota::empty(QuotaState::Error, Some(detail)),
-                    },
-                    Err(e) => AccountQuota::empty(QuotaState::Error, Some(e)),
-                }
-            } else {
-                match &dir {
-                    None => AccountQuota::empty(
-                        QuotaState::Error,
-                        Some("the account has no config directory".into()),
-                    ),
-                    Some(dir) => {
-                        let path = Path::new(dir);
-                        let read = if grant {
-                            self.quota.grant(provider, var, path, account.default).await
-                        } else {
-                            self.quota.read(provider, var, path, account.default).await
-                        };
-                        // A fix quota-axi names runs against this account's
-                        // directory, not the default login.
-                        let select = (!account.default && !var.is_empty() && !dir.is_empty())
-                            .then(|| format!("{var}={}", shell_quote(dir)));
-                        match read {
-                            Ok(json) => parse_quota_for(provider, &json, select.as_deref()),
-                            Err(detail) => AccountQuota::empty(QuotaState::Error, Some(detail)),
-                        }
                     }
                 }
-            };
-            let quota = AccountQuota {
-                checked_at: Some(now_rfc3339()),
-                ..quota
-            };
-            let (store, id, harness) = (self.store.clone(), account.id.clone(), account.harness);
-            blocking(move || store.set_account_quota(&id, &harness, &quota)).await?;
-        }
+            }
+        };
+        let quota = AccountQuota {
+            checked_at: Some(now_rfc3339()),
+            ..quota
+        };
+        let quota = keep_last_reading(&account.quota, quota, OffsetDateTime::now_utc());
+        let (store, id, harness) = (self.store.clone(), account.id.clone(), account.harness);
+        blocking(move || store.set_account_quota(&id, &harness, &quota)).await?;
         Ok(())
     }
 
@@ -881,7 +958,7 @@ fn env_of(h: &dyn Harness, a: &Account) -> Vec<(String, String)> {
         a.team_id.as_deref(),
     )
     .into_iter()
-    .filter(|_| !a.default)
+    .filter(|_| !a.default || a.api_key)
     .collect()
 }
 
@@ -908,6 +985,44 @@ fn account_env(
     match (h.account_env(), config_dir) {
         (Some(var), Some(dir)) => vec![(var.into(), dir.into())],
         _ => Vec::new(),
+    }
+}
+
+/// How long a reading stands in for reads that did not finish.
+const KEEP_READING_FOR: time::Duration = time::Duration::hours(6);
+
+/// `new`, or when its read did not finish (a reader that timed out or could
+/// not run) the last reading with numbers, if under [`KEEP_READING_FOR`]
+/// old, noting the failed read. A read that answered, such as a lapsed
+/// login, always replaces it.
+fn keep_last_reading(last: &AccountQuota, new: AccountQuota, now: OffsetDateTime) -> AccountQuota {
+    let unfinished = new.state == QuotaState::Error
+        || new
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("did not answer within") || d.contains("timed out"));
+    let fresh = last
+        .checked_at
+        .as_deref()
+        .and_then(|t| OffsetDateTime::parse(t, &Rfc3339).ok())
+        .is_some_and(|t| now - t < KEEP_READING_FOR);
+    if new.state == QuotaState::Known || !unfinished || last.state != QuotaState::Known || !fresh {
+        return new;
+    }
+    let failed = new.detail.as_deref().unwrap_or("the read failed");
+    // Never stack one note on another.
+    let note = format!("Showing the last reading; the latest read failed: {failed}");
+    AccountQuota {
+        detail: Some(note.chars().take(QUOTA_DETAIL_CHARS).collect()),
+        ..last.clone()
+    }
+}
+
+/// The health of an account that signs in with a key Quark keeps.
+fn kept_key_health() -> quark_systems::HarnessAuth {
+    quark_systems::HarnessAuth {
+        state: AuthState::Configured,
+        detail: "API key kept in the Keychain".into(),
     }
 }
 

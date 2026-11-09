@@ -23,7 +23,7 @@ quota-axi reports neither IBM Bob nor Kiro CLI, so `quark_dispatch::local` reads
 
 `quarkd quota bob` and `quarkd quota kiro` print the reading in one line (`--json` for the snapshot dispatch sees).
 
-**Kiro** runs `kiro-cli chat --v2 --no-interactive /usage` in `<home>/run/kiro-usage-probe` (12 s bound), which prints the plan's credits without a model call. It always passes `--v2`: under `--v3` the same text is a prompt, and spends credits. `<home>/quota/kiro.json` is optional:
+**Kiro** runs `kiro-cli chat --v2 --no-interactive /usage` in `<home>/run/kiro-usage-probe` (75 s bound: with an API key `/usage` takes 20-30 s, sometimes more), which prints the plan's credits without a model call. It always passes `--v2`: under `--v3` the same text is a prompt, and spends credits. `<home>/quota/kiro.json` is optional:
 
 ```json
 { "overage_allowed": true }
@@ -49,13 +49,19 @@ The Accounts view shows the same readings: each installed harness's default logi
 
 ## Bob and Kiro accounts
 
-Kiro has one login, its default account. Bob always keeps its login in `~/.bob`, so its extra accounts are API keys instead of config directories (manifest `account.key_env`, `account.team_env`):
+Kiro keeps one login (`kiro-cli login`) and Bob always keeps its login in `~/.bob`, so both take extra accounts as API keys instead of config directories (manifest `account.key_env`, `account.team_env`):
 
 - `POST /v1/accounts` with `api_key` (and `team_id` for a key of type "general") stores the key in the macOS Keychain under `quark/accounts/<account id>` (`quarkd::secrets`, through `security -i` on stdin so the key is never on a command line). The database keeps only that Keychain name; the API never returns the key; removing the account removes the Keychain item.
-- A worker starts under it with `QUARK_SECRET_BOB_API_KEY=keychain:<service>` and `BOB_TEAM_ID=<team>` in its environment, which is what dispatch and the event log record. The supervisor reads the key only when it starts the session (`quark_supervisor::secrets`), and the manifest passes the team as `--team-id`.
+- A worker starts under it with `QUARK_SECRET_<KEY_ENV>=keychain:<service>` (e.g. `QUARK_SECRET_BOB_API_KEY`) and `BOB_TEAM_ID=<team>` in its environment, which is what dispatch and the event log record. The supervisor reads the key only when it starts the session (`quark_supervisor::secrets`), and the manifest passes the team as `--team-id`.
 - Its quota is the live Bob API read with its own key; the ledger and anchor belong to the default login.
 
 Key accounts join pools like any other, so a profile naming a pool balances Bob tasks across keys.
+
+### A default login's kept key
+
+A default account of a key harness can keep a key too: `PUT /v1/accounts/default-kiro/key` with `{"api_key": "…"}` (the app's **Use API key** on the Default row), `DELETE` to forget it. The key goes to the Keychain under `quark/accounts/default-kiro`, the default account then reads `api_key: true` and logged in, its launches carry the `QUARK_SECRET_…` reference, and its quota (and dispatch's Kiro reading) signs in with it. This is how quarkd signs a harness in when launchd starts it (QuarkBar's LaunchAgent runs a login shell, which never reads `~/.zshrc`, so a `KIRO_API_KEY` exported there is not seen). Without a kept key the default login is whatever quarkd's own environment signs in with.
+
+A quota read that does not finish (a reader that timed out or failed to run) keeps the account's last reading for up to 6 hours, with a note saying the latest read failed; a read that answers, such as a lapsed login, always replaces it. Accounts are read side by side, so one slow reader holds up neither the others nor `GET /v1/accounts?refresh=true`.
 
 firstmate's opt-in per-session cap (`spawn_max_cost`) has no setting here: put `--max-cost <coins>` on `launch.argv` in a `<home>/harnesses/bob.toml` copy of the built-in manifest instead.
 

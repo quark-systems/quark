@@ -33,8 +33,14 @@ public struct QuarkClient: Sendable {
 
     /// Every account with its latest quota reading. `refresh` reads each
     /// account's quota now instead of returning the last reading.
+    /// Every account. `refresh` has quarkd read each one's quota first,
+    /// which takes as long as the slowest reader (Kiro's can take a minute).
     public func accounts(refresh: Bool = false) async throws -> [Account] {
-        try await get("/v1/accounts", query: refresh ? [URLQueryItem(name: "refresh", value: "true")] : [])
+        try await get(
+            "/v1/accounts",
+            query: refresh ? [URLQueryItem(name: "refresh", value: "true")] : [],
+            timeout: refresh ? 150 : 30
+        )
     }
 
     public func harnesses() async throws -> [Harness] {
@@ -53,11 +59,11 @@ public struct QuarkClient: Sendable {
         return c.url!
     }
 
-    func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
+    func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], timeout: TimeInterval = 30) async throws -> T {
         var c = URLComponents(url: base.appendingPathComponent(String(path.dropFirst())), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { c.queryItems = query }
         var req = URLRequest(url: c.url!)
-        req.timeoutInterval = 30
+        req.timeoutInterval = timeout
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw QuarkError.notHTTP }
         guard (200..<300).contains(http.statusCode) else {

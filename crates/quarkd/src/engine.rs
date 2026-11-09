@@ -696,6 +696,8 @@ const STUB_ACCOUNT_ENVS: &[&str] = &[
     "GROK_HOME",
     // IBM Bob key accounts: the key's reference and its team.
     "QUARK_SECRET_BOB_API_KEY",
+    // Kiro CLI keys, the default login's included.
+    "QUARK_SECRET_KIRO_API_KEY",
     "BOB_TEAM_ID",
 ];
 

@@ -21,7 +21,7 @@ export interface AccountQuota {
 export interface Account {
   /** `acc_...`, or `default-<harness>` for a harness's default account. */
   id: string; harness: string; label: string; config_dir?: string | null;
-  /** Signs in with an API key kept in the Keychain; the key is never returned. */
+  /** Signs in with an API key kept in the Keychain (an added key account, or a default one given a key); the key is never returned. */
   api_key?: boolean;
   /** A key account's team. */
   team_id?: string | null;
@@ -54,4 +54,8 @@ export const accountsApi = {
   removeAccount: (id: string) => req<void>("DELETE", `/v1/accounts/${enc(id)}`),
   /** Reads quota letting macOS prompt for the login's Keychain item; answers once the prompt is. */
   keychainGrant: (id: string) => req<Account>("POST", `/v1/accounts/${enc(id)}/keychain-grant`),
+  /** Keeps an API key in the Keychain for a default account to sign in with, wherever quarkd runs. */
+  setAccountKey: (id: string, apiKey: string) => req<Account>("PUT", `/v1/accounts/${enc(id)}/key`, { api_key: apiKey }),
+  /** Forgets a default account's kept key; it signs in from quarkd's environment again. */
+  clearAccountKey: (id: string) => req<Account>("DELETE", `/v1/accounts/${enc(id)}/key`),
 };

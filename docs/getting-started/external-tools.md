@@ -56,7 +56,7 @@ Shipped with the OS; listed so a port to a new platform knows what to replace.
 
 | Tool | What Quark uses it for | Where | Platform |
 | :--- | :--- | :--- | :--- |
-| `security` | Keychain: whether a harness login exists, Bob API keys for added accounts, the classifier's `keychain:` credential | `crates/quark-harness/src/host.rs`, `crates/quarkd/src/secrets.rs`, `crates/quark-dispatch/src/classify.rs` | macOS |
+| `security` | Keychain: whether a harness login exists, API keys for key accounts and default logins (Bob, Kiro), the classifier's `keychain:` credential | `crates/quark-harness/src/host.rs`, `crates/quarkd/src/secrets.rs`, `crates/quark-dispatch/src/classify.rs` | macOS |
 | `sandbox-exec` | Seatbelt isolation for sandboxed workers | `crates/quark-isolation/src/seatbelt.rs` | macOS |
 | `bwrap` (bubblewrap) | Sandbox isolation for workers, when installed | `crates/quark-isolation/src/bwrap.rs` | Linux (`apt install bubblewrap`) |
 | `sysctl` | Memory pressure for host health | `crates/quark-hosts/src/pressure.rs` | macOS (Linux reads `/proc/pressure`) |

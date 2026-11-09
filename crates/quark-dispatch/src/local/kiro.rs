@@ -15,6 +15,11 @@
 //! session for it per read) with stdin closed and a hard bound, generous
 //! because a `KIRO_API_KEY` sign-in makes `/usage` take tens of seconds.
 //!
+//! The default login is the key Quark keeps for it in the Keychain when
+//! there is one ([`KiroUsage::secrets`]), else whatever the daemon's own
+//! environment signs in with (`KIRO_API_KEY` or `kiro-cli login`). So a
+//! quarkd launchd started, without the person's shell, still reads it.
+//!
 //! The reading is one `all_models` row: the plan credits not yet used as
 //! `effectivePercentRemaining`, quota-axi's `spendPriority` over the month
 //! ending at the reset (00:00 UTC on the printed date), and an `overage`
@@ -24,6 +29,7 @@
 //! a month's pace that runs out before the reset is `projected_exhaustion`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -31,9 +37,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use time::{Date, Month, OffsetDateTime, Time};
 
-use super::{epoch, leading_number, run, selection, snapshot, strip_ansi, tidy, utc_iso};
+use super::{epoch, leading_number, run_with, selection, snapshot, strip_ansi, tidy, utc_iso};
 
 pub const PROVIDER: &str = "kiro";
+/// The variable that signs Kiro CLI in with an API key.
+pub const KEY_ENV: &str = "KIRO_API_KEY";
 const SOURCE: &str = "kiro-cli chat --v2 --no-interactive /usage";
 
 /// `<home>/quota/kiro.json`. Absent means overage is not allowed.
@@ -46,7 +54,7 @@ pub struct KiroConfig {
 }
 
 /// Reads Kiro's `/usage`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KiroUsage {
     pub bin: String,
     /// Where `/usage` runs.
@@ -54,6 +62,21 @@ pub struct KiroUsage {
     /// `kiro.json`; a missing file is the defaults.
     pub config: PathBuf,
     pub timeout: Duration,
+    /// Where the default login's API key may be kept, and its service name.
+    /// A key found there signs `/usage` in; none leaves the environment's.
+    pub secrets: Option<(Arc<dyn quark_supervisor::Secrets>, String)>,
+}
+
+impl std::fmt::Debug for KiroUsage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KiroUsage")
+            .field("bin", &self.bin)
+            .field("probe_dir", &self.probe_dir)
+            .field("config", &self.config)
+            .field("timeout", &self.timeout)
+            .field("key_service", &self.secrets.as_ref().map(|(_, s)| s))
+            .finish()
+    }
 }
 
 impl KiroUsage {
@@ -65,9 +88,32 @@ impl KiroUsage {
             probe_dir: home.join("run").join("kiro-usage-probe"),
             config: home.join("quota").join("kiro.json"),
             // With KIRO_API_KEY set, /usage takes 20-30s (2s on an SSO
-            // sign-in alone).
-            timeout: Duration::from_secs(45),
+            // sign-in alone), and was seen past 45s on 2026-11-09.
+            timeout: Duration::from_secs(75),
+            secrets: None,
         }
+    }
+
+    /// Sign the default login's reads in with the key kept in `secrets`
+    /// under `service`, when there is one.
+    pub fn with_secrets(
+        mut self,
+        secrets: Arc<dyn quark_supervisor::Secrets>,
+        service: impl Into<String>,
+    ) -> Self {
+        self.secrets = Some((secrets, service.into()));
+        self
+    }
+
+    /// The default login's kept key, if any.
+    async fn kept_key(&self) -> Option<String> {
+        let (secrets, service) = self.secrets.as_ref()?;
+        secrets
+            .get(service)
+            .await
+            .ok()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
     }
 
     fn load_config(&self) -> Result<KiroConfig, String> {
@@ -79,17 +125,28 @@ impl KiroUsage {
         }
     }
 
-    async fn usage_text(&self) -> Result<String, String> {
+    async fn usage_text(&self, key: Option<&str>) -> Result<String, String> {
         std::fs::create_dir_all(&self.probe_dir)
             .map_err(|e| format!("cannot create {}: {e}", self.probe_dir.display()))?;
         let argv: Vec<String> = [&self.bin, "chat", "--v2", "--no-interactive", "/usage"]
             .iter()
             .map(|s| s.to_string())
             .collect();
+        let env: Vec<(&str, &str)> = key.map(|k| (KEY_ENV, k)).into_iter().collect();
         // A failed exit can still print the usage lines; the parse decides.
-        run(&argv, Some(&self.probe_dir), self.timeout)
+        run_with(&argv, Some(&self.probe_dir), &env, self.timeout)
             .await
             .map(|(_, text)| text)
+    }
+
+    async fn read_signed_in(&self, key: Option<&str>) -> Value {
+        let now = OffsetDateTime::now_utc();
+        let config = self.load_config();
+        let text = match &config {
+            Err(_) => Ok(String::new()),
+            Ok(_) => self.usage_text(key).await,
+        };
+        reading(config, text, now)
     }
 }
 
@@ -100,13 +157,13 @@ impl super::LocalReading for KiroUsage {
     }
 
     async fn read(&self) -> Value {
-        let now = OffsetDateTime::now_utc();
-        let config = self.load_config();
-        let text = match &config {
-            Err(_) => Ok(String::new()),
-            Ok(_) => self.usage_text().await,
-        };
-        reading(config, text, now)
+        let key = self.kept_key().await;
+        self.read_signed_in(key.as_deref()).await
+    }
+
+    /// Kiro's plan usage for an account that signs in with `key`.
+    async fn read_with_key(&self, key: &str) -> Option<Value> {
+        Some(self.read_signed_in(Some(key.trim())).await)
     }
 }
 
@@ -304,6 +361,7 @@ pub fn status_line(reading: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local::LocalReading;
     use crate::QuotaSnapshot;
 
     const USAGE: &str = "\x1b[1mEstimated Usage\x1b[0m | resets on 2026-11-01 | KIRO PRO\n\
@@ -433,5 +491,58 @@ mod tests {
         std::fs::write(&r.config, r#"{"overage_allowed": true}"#).unwrap();
         assert!(r.load_config().unwrap().overage_allowed);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A fake `kiro-cli` that prints usage only when signed in with `sk-kept`.
+    #[cfg(unix)]
+    fn fake_kiro(dir: &std::path::Path) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("kiro-cli");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nif [ \"$KIRO_API_KEY\" = sk-kept ]; then\n\
+             echo 'Estimated Usage | resets on 2099-11-01 | KIRO PRO'\n\
+             echo 'Credits (250 of 1,000 covered in plan), 25%'\n\
+             else echo 'Not logged in.'; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin.display().to_string()
+    }
+
+    struct Kept(Option<&'static str>);
+
+    #[async_trait]
+    impl quark_supervisor::Secrets for Kept {
+        async fn get(&self, service: &str) -> Result<String, String> {
+            assert_eq!(service, "quark/accounts/default-kiro");
+            self.0
+                .map(String::from)
+                .ok_or_else(|| "no such item".into())
+        }
+    }
+
+    fn measured(v: &Value) -> bool {
+        v["providers"][0]["quotaSemantics"]["status"] == "known"
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_kept_key_signs_the_default_read_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = KiroUsage::for_home(dir.path());
+        r.bin = fake_kiro(dir.path());
+        assert!(!measured(&r.read().await), "no key anywhere");
+        let kept = r.clone().with_secrets(
+            Arc::new(Kept(Some("sk-kept\n"))),
+            "quark/accounts/default-kiro",
+        );
+        assert!(measured(&kept.read().await));
+        let missing = r
+            .clone()
+            .with_secrets(Arc::new(Kept(None)), "quark/accounts/default-kiro");
+        assert!(!measured(&missing.read().await));
+        let keyed = r.read_with_key("sk-kept").await.unwrap();
+        assert!(measured(&keyed));
     }
 }

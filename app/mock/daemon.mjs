@@ -899,8 +899,8 @@ function seed() {
     quota: { state: "known", remaining_percent: 71, plan: "1500 Bobcoins a month", detail: null, checked_at: now(),
       windows: [{ id: "monthly", label: "month", percent_remaining: 71, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString(),
         used: 435, limit: 1500, unit: "Bobcoins", overage: null }] } });
-  addAccount({ id: "default-kiro", harness: "kiro", label: "Default", config_dir: null, default: true,
-    health: { state: "unknown", detail: "Kiro CLI has no credential Quark can check" },
+  addAccount({ id: "default-kiro", harness: "kiro", label: "Default", config_dir: "/home/demo/.kiro", default: true,
+    health: { state: "unknown", detail: "none of KIRO_API_KEY found" },
     quota: { state: "known", remaining_percent: 54, plan: "KIRO PRO", detail: null, checked_at: now(),
       windows: [{ id: "monthly", label: "month", percent_remaining: 54, resets_at: new Date(Date.now() + 9 * 86_400_000).toISOString(),
         used: 460, limit: 1000, unit: "credits", overage: null }] } });
@@ -1354,7 +1354,7 @@ function terminalInput(task, data) {
 const ACCOUNT_ENV = { "claude-code": "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", pi: "PI_CODING_AGENT_DIR" };
 const QUOTA_PROVIDER = { "claude-code": "claude", codex: "codex", bob: "bob" };
 // Harnesses whose extra accounts are API keys kept in the Keychain.
-const KEY_ENV = { bob: "BOB_API_KEY" };
+const KEY_ENV = { bob: "BOB_API_KEY", kiro: "KIRO_API_KEY" };
 
 const quotaReading = (remaining, plan, minutesToReset = 140) => ({
   state: "known", remaining_percent: remaining, plan, detail: null, checked_at: now(),
@@ -1390,7 +1390,7 @@ function accountList() {
   // Grouped by harness in the registry's order, default first, like quarkd.
   const order = HARNESSES.map((h) => h.id);
   return [...accounts.values()]
-    .map((a) => ({ ...a, active_tasks: busy[a.id] ?? 0 }))
+    .map(({ saved_health: _, ...a }) => ({ ...a, active_tasks: busy[a.id] ?? 0 }))
     .sort((a, b) => order.indexOf(a.harness) - order.indexOf(b.harness) || Number(b.default) - Number(a.default));
 }
 
@@ -2029,6 +2029,26 @@ const server = http.createServer(async (req, res) => {
     // Read its quota shortly after, like quarkd does in the background.
     if (QUOTA_PROVIDER[h.id]) setTimeout(() => readQuota(account, quotaReading(100, "max", 300)), QUIET ? 150 : 900);
     return send(res, 201, accountList().find((a) => a.id === account.id));
+  }
+  if ((r = m(/^\/v1\/accounts\/([^/]+)\/key$/))) {
+    // Like quarkd: a default account of a key harness keeps a key in the Keychain.
+    const a = accounts.get(decodeURIComponent(r[1]));
+    if (!a) return notFound(res);
+    if (!a.default) return invalid(res, "only a default account takes a kept key; an added key account is its key");
+    if (!KEY_ENV[a.harness]) return invalid(res, `${a.harness} does not sign in with an API key`);
+    if (req.method === "PUT") {
+      const key = String((await readJson(req))?.api_key ?? "").trim();
+      if (!key || /[\s"\\]/.test(key)) return invalid(res, "api_key must be one word: no spaces, quotes or backslashes");
+      a.saved_health = a.saved_health ?? a.health;
+      a.api_key = true;
+      a.health = { state: "configured", detail: "API key kept in the Keychain" };
+      return send(res, 200, accountList().find((x) => x.id === a.id));
+    }
+    if (req.method === "DELETE") {
+      a.api_key = false;
+      if (a.saved_health) a.health = a.saved_health;
+      return send(res, 200, accountList().find((x) => x.id === a.id));
+    }
   }
   if ((r = m(/^\/v1\/accounts\/([^/]+)$/))) {
     const a = accounts.get(decodeURIComponent(r[1]));

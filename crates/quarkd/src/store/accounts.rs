@@ -5,7 +5,7 @@
 //! harness's default account has no row of its own; it is addressed as
 //! `default-<harness>` in pools, quota readings and task records.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use quark_systems::{AccountQuota, AccountQuotaChanged, EventType, Task};
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -168,6 +168,34 @@ impl Store {
             }
             tx.execute("DELETE FROM account_pools WHERE account_id = ?1", [id])?;
             tx.execute("DELETE FROM account_quota WHERE account_id = ?1", [id])?;
+            Ok(())
+        })
+    }
+
+    /// Default accounts whose API key Quark keeps in the Keychain.
+    pub fn default_account_keys(&self) -> Result<HashSet<String>> {
+        self.read(|c| {
+            let mut stmt = c.prepare("SELECT account_id FROM default_account_keys")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    /// Records whether default account `id` has a kept API key.
+    pub fn set_default_account_key(&self, id: &str, kept: bool, at: &str) -> Result<()> {
+        self.write(|tx, _| {
+            if kept {
+                tx.execute(
+                    "INSERT INTO default_account_keys (account_id, created_at) VALUES (?1, ?2)
+                     ON CONFLICT (account_id) DO UPDATE SET created_at = excluded.created_at",
+                    params![id, at],
+                )?;
+            } else {
+                tx.execute(
+                    "DELETE FROM default_account_keys WHERE account_id = ?1",
+                    [id],
+                )?;
+            }
             Ok(())
         })
     }

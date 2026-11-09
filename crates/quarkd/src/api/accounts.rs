@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use quark_systems::{Account, CreateAccount, ErrorBody, UpdateAccount};
+use quark_systems::{Account, CreateAccount, ErrorBody, SetAccountKey, UpdateAccount};
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -148,12 +148,64 @@ pub async fn keychain_grant(
     Ok(Json(state.accounts.grant_keychain(&id).await?))
 }
 
+/// Keep an API key in the Keychain for a default account to sign in with,
+/// for a harness that takes keys (`HarnessInfo.key_env`, e.g. Kiro CLI).
+/// Its launches and quota reads then use the key, not quarkd's own
+/// environment, so a quarkd launchd started signs in too. Replaces an
+/// earlier key. The account's quota is read again right away.
+#[utoipa::path(
+    put,
+    path = "/v1/accounts/{id}/key",
+    tag = "accounts",
+    params(("id" = String, Path, description = "A default account's id, e.g. `default-kiro`")),
+    request_body = SetAccountKey,
+    responses(
+        (status = 200, body = Account),
+        (status = 400, body = ErrorBody, description = "Not a default account, or its harness takes no key"),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn set_key(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<SetAccountKey>,
+) -> Result<Json<Account>, ApiError> {
+    let account = state.accounts.set_default_key(&id, &input.api_key).await?;
+    let accounts = state.accounts.clone();
+    tokio::spawn(async move {
+        if let Err(e) = accounts.refresh_quota(Some(&id)).await {
+            tracing::warn!(account = %id, error = %e, "quota read failed");
+        }
+    });
+    Ok(Json(account))
+}
+
+/// Forget a default account's kept key: it signs in from quarkd's own
+/// environment again.
+#[utoipa::path(
+    delete,
+    path = "/v1/accounts/{id}/key",
+    tag = "accounts",
+    params(("id" = String, Path, description = "A default account's id")),
+    responses(
+        (status = 200, body = Account),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn clear_key(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Account>, ApiError> {
+    Ok(Json(state.accounts.clear_default_key(&id).await?))
+}
+
 /// This module's endpoints, plus schemas the generator does not reach from
 /// them (event payloads), merged into the served document by
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
 #[openapi(
-    paths(list, get, create, update, delete, keychain_grant),
+    paths(list, get, create, update, delete, keychain_grant, set_key, clear_key),
     components(schemas(
         quark_systems::QuotaState,
         quark_systems::AccountQuotaChanged,
@@ -165,7 +217,7 @@ pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.
 pub(super) fn router() -> axum::Router<AppState> {
-    use axum::routing::{get, post};
+    use axum::routing::{get, post, put};
     axum::Router::new()
         .route("/v1/accounts", get(list).post(create))
         .route(
@@ -173,4 +225,5 @@ pub(super) fn router() -> axum::Router<AppState> {
             get(self::get).patch(update).delete(self::delete),
         )
         .route("/v1/accounts/{id}/keychain-grant", post(keychain_grant))
+        .route("/v1/accounts/{id}/key", put(set_key).delete(clear_key))
 }

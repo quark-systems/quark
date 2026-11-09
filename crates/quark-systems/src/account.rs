@@ -96,6 +96,14 @@ pub struct CreateAccount {
     pub pools: Vec<String>,
 }
 
+/// An API key for a default account to sign in with, kept in the Keychain
+/// (`PUT /v1/accounts/{id}/key`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SetAccountKey {
+    /// Never returned or logged.
+    pub api_key: String,
+}
+
 /// Partial update; absent fields are left unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct UpdateAccount {

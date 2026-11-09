@@ -51,7 +51,10 @@ export function Accounts() {
             {groups.map((g) => (
               <section key={g.harness} className="account-group" data-testid={`accounts-${g.harness}`}>
                 <h2>{g.name} <span className="count faint">{g.accounts.length}</span></h2>
-                {g.accounts.map((a) => <AccountRow key={a.id} account={a} onError={setErr} />)}
+                {g.accounts.map((a) => (
+                  <AccountRow key={a.id} account={a} onError={setErr}
+                    keyEnv={harnesses.find((h) => h.id === a.harness)?.key_env ?? null} />
+                ))}
               </section>
             ))}
             {!groups.length && (
@@ -67,7 +70,11 @@ export function Accounts() {
   );
 }
 
-function AccountRow({ account: a, onError }: { account: Account; onError: (e: string | null) => void }) {
+function AccountRow({ account: a, onError, keyEnv }: {
+  account: Account; onError: (e: string | null) => void;
+  /** The harness's API key variable, when it signs in with keys. */
+  keyEnv: string | null;
+}) {
   const h = healthMeta[a.health.state];
   const q = a.quota;
   const [editing, setEditing] = useState(false);
@@ -90,6 +97,27 @@ function AccountRow({ account: a, onError }: { account: Account; onError: (e: st
     setBusy(true); onError(null);
     try {
       await api.keychainGrant(a.id);
+      setAccounts(await api.accounts());
+    } catch (e) { onError(errText(e)); } finally { setBusy(false); }
+  };
+  const [keying, setKeying] = useState(false);
+  const [key, setKey] = useState("");
+  const badKey = /[\s"\\]/.test(key.trim());
+  // A default login can keep a key, so quarkd signs in without the person's shell (launchd).
+  const keyable = a.default && !!keyEnv;
+  const saveKey = async () => {
+    if (!key.trim() || badKey) return;
+    setBusy(true); onError(null);
+    try {
+      await api.setAccountKey(a.id, key.trim());
+      setAccounts(await api.accounts());
+      setKeying(false); setKey("");
+    } catch (e) { onError(errText(e)); } finally { setBusy(false); }
+  };
+  const forgetKey = async () => {
+    setBusy(true); onError(null);
+    try {
+      await api.clearAccountKey(a.id);
       setAccounts(await api.accounts());
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
@@ -157,6 +185,26 @@ function AccountRow({ account: a, onError }: { account: Account; onError: (e: st
       </div>
       <div className="account-actions">
         <span className="faint">{a.active_tasks} running</span>
+        {keyable && !keying && (a.api_key ? (
+          <button className="btn small" onClick={forgetKey} disabled={busy} data-testid="forget-key"
+            title={`Sign in from quarkd's own environment (${keyEnv} or the harness's login) again`}>
+            Forget key
+          </button>
+        ) : (
+          <button className="btn small" onClick={() => setKeying(true)} disabled={busy} data-testid="set-key"
+            title={`Keep an API key in the Keychain, so quarkd signs in without ${keyEnv} in its environment`}>
+            Use API key
+          </button>
+        ))}
+        {keying && (
+          <form className="pool-form" onSubmit={(e) => { e.preventDefault(); void saveKey(); }}>
+            <input autoFocus type="password" value={key} onChange={(e) => setKey(e.target.value)}
+              placeholder={keyEnv ?? "API key"} aria-label={`API key for ${a.label}`} autoComplete="off"
+              className={badKey ? "invalid" : ""} />
+            <button className="btn small" type="submit" disabled={busy || !key.trim() || badKey}>Save</button>
+            <button className="btn small" type="button" onClick={() => { setKeying(false); setKey(""); }}>Cancel</button>
+          </form>
+        )}
         {!a.default && (
           <button className={"btn small" + (confirm ? " danger" : "")} onClick={remove} disabled={busy}
             onBlur={() => setConfirm(false)} aria-label={`Remove ${a.label}`}>

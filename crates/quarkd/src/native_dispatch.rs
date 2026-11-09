@@ -48,8 +48,19 @@ pub fn local_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
     vec![
         Arc::new(BobUsage::for_home(&config.home, user_home.as_deref())),
-        Arc::new(KiroUsage::for_home(&config.home)),
+        Arc::new(kiro_usage(&config.home)),
     ]
+}
+
+/// Kiro CLI's reader for a Quark home, signing the default login in with
+/// the API key kept for it in the Keychain when there is one.
+pub fn kiro_usage(home: &std::path::Path) -> KiroUsage {
+    KiroUsage::for_home(home).with_secrets(
+        Arc::new(crate::secrets::Keychain::default()),
+        crate::accounts::key_service(&crate::store::default_account_id(
+            quark_dispatch::local::kiro::PROVIDER,
+        )),
+    )
 }
 
 /// This host in the registry, sampled on a timer.
