@@ -38,9 +38,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: Icon
 
+    private static let markIcon: NSImage? = {
+        guard let image = Bundle.main.image(forResource: "MenuBarIcon") else { return nil }
+        image.size = NSSize(width: 18, height: 18)
+        image.accessibilityDescription = "Quark"
+        return image
+    }()
+
     private func updateIcon() {
         guard let button = item.button else { return }
-        let image = NSImage(systemSymbolName: "atom", accessibilityDescription: "Quark")
+        // The Quark mark as a template image (MenuBarIcon.png/@2x, copied in by
+        // scripts/package.sh); an unbundled `swift run` falls back to an SF Symbol.
+        let image = Self.markIcon ?? NSImage(systemSymbolName: "atom", accessibilityDescription: "Quark")
         image?.isTemplate = true
         button.image = image
         button.appearsDisabled = !store.isConnected

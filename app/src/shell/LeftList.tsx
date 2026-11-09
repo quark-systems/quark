@@ -22,7 +22,10 @@ export function LeftList({ mod }: { mod: string }) {
     <nav className="left-list sidebar" aria-label="Projects">
       <div className="drag-strip" data-tauri-drag-region />
       <div className="ll-head">
-        <span className="ll-logo" aria-hidden="true">Q</span>
+        <span className="ll-logo" aria-hidden="true">
+          {/* The Quark mark, small-size drawing (docs/brand/marks/quark-mark-small.svg). */}
+          <svg width="16" height="16" viewBox="0 0 100 100"><path d="M60 12 H36 Q12 12 12 36 V64 Q12 88 36 88 H64 Q88 88 88 64 V40" fill="none" stroke="currentColor" strokeWidth="15" strokeLinejoin="round" /><circle cx="40" cy="60" r="11" fill="currentColor" /><circle cx="80" cy="20" r="13" fill="currentColor" /></svg>
+        </span>
         <a className="ll-brand" href={href({ name: "projects" })}>Quark</a>
         <a className="ll-new" href={href({ name: "new" })} aria-label="New project" title="New project" data-testid="nav-new-project">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
