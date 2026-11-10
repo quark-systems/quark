@@ -488,27 +488,41 @@ fn is_commit_id(s: &str) -> bool {
     matches!(s.len(), 40 | 64) && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Reset `wt` to `branch` (resolved once) from whatever HEAD it has now.
-pub(crate) fn reset_worktree(wt: &Path, branch: &str) -> Result<()> {
+/// Reset `wt` to `branch` (resolved once) from whatever HEAD it has now,
+/// removing the trusted seed inventory `seeded` first (`None`: an unknown
+/// inventory, which authorizes no ignored-file deletion).
+pub(crate) fn reset_worktree(wt: &Path, branch: &str, seeded: Option<&[String]>) -> Result<()> {
     let target = resolve_reset_ref(wt, branch)?;
     let h = head(wt)?;
-    reset_to_ref(wt, &target, &h, false)
+    reset_to_ref(wt, &target, &h, false, seeded)
 }
 
 /// Reset `wt` to the commit `target` while holding git's own `HEAD.lock`,
 /// refusing when HEAD is no longer `expected_head` (or, with
 /// `require_clean`, when the tree became dirty since the caller checked).
+/// The seeded files `seeded` lists are removed under the lock first; `git
+/// clean -fd` leaves every other ignored file alone.
 pub(crate) fn reset_to_ref(
     wt: &Path,
     target: &str,
     expected_head: &str,
     require_clean: bool,
+    seeded: Option<&[String]>,
 ) -> Result<()> {
     if !is_commit_id(expected_head) || !is_commit_id(target) {
         return Err(CoreError::Backend(
             "worktree reset requires resolved commit IDs".into(),
         ));
     }
+    let cleanup_identity = match seeded {
+        Some(_) => Some(super::seed::identity(wt).map_err(|_| {
+            CoreError::Refused(format!(
+                "refusing to clean replaced worktree {}",
+                wt.display()
+            ))
+        })?),
+        None => None,
+    };
     let head_path = git_path(wt, "HEAD")?;
     let lock_path = PathBuf::from(format!("{}.lock", head_path.display()));
     let mut lock = std::fs::OpenOptions::new()
@@ -528,6 +542,9 @@ pub(crate) fn reset_to_ref(
                 "worktree became dirty after safety check".into(),
             ));
         }
+        if let (Some(paths), Some(id)) = (seeded, cleanup_identity) {
+            super::seed::remove_seeded(wt, paths, id)?;
+        }
         run(wt, &["read-tree", "--reset", "-u", target])?;
         run(wt, &["clean", "-fd"])?;
         writeln!(lock, "{target}")
@@ -540,13 +557,6 @@ pub(crate) fn reset_to_ref(
         let _ = std::fs::remove_file(&lock_path);
     }
     result
-}
-
-/// `.worktreeinclude` is committed at `rev` (treehouse would seed ignored
-/// files from it, which the native pool does not do yet).
-pub(crate) fn has_worktree_include(repo: &Path, rev: &str) -> bool {
-    let spec = format!("{rev}:.worktreeinclude");
-    succeeds(repo, &["cat-file", "-e", &spec])
 }
 
 fn nul_list(data: &[u8]) -> Vec<String> {

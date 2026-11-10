@@ -140,13 +140,29 @@ impl Entry {
         self.set_seed_inventory_empty();
     }
 
-    /// A verified-empty seed inventory; the native pool seeds nothing.
+    /// A verified-empty seed inventory.
     pub fn set_seed_inventory_empty(&mut self) {
-        self.seeded_paths.clear();
-        self.seed_inventory_known = true;
+        self.set_seed_inventory(Vec::new(), true);
+    }
+
+    /// The seeded files and whether that list can be trusted (treehouse's
+    /// `setSeedInventory`; a trusted, non-empty list records the git backend,
+    /// as treehouse's write does).
+    pub fn set_seed_inventory(&mut self, paths: Vec<String>, known: bool) {
+        self.seed_backend = if paths.is_empty() || !known {
+            String::new()
+        } else {
+            "git".into()
+        };
+        self.seeded_paths = paths;
+        self.seed_inventory_known = known;
         self.seed_inventory_digest.clear();
-        self.seed_backend.clear();
         self.seed_auth_identity.clear();
+    }
+
+    /// The inventory a cleanup may trust: `None` when it is unknown.
+    pub fn trusted_seeds(&self) -> Option<Vec<String>> {
+        self.seed_inventory_known.then(|| self.seeded_paths.clone())
     }
 
     /// Durably leased to `holder` under a fresh lease id.

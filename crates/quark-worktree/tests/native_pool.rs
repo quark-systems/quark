@@ -151,32 +151,222 @@ async fn full_pools_and_bad_requests_are_refused() {
         .is_err());
 }
 
+impl Fixture {
+    /// Commit `files` and push them to origin's main.
+    fn commit(&self, files: &[(&str, &str)]) {
+        for (name, body) in files {
+            let p = self.repo.join(name);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+            git(&self.repo, &["add", "-f", name]);
+        }
+        git(&self.repo, &["commit", "-q", "-m", "files"]);
+        git(&self.repo, &["push", "-q", "origin", "HEAD:main"]);
+    }
+
+    /// Local pool settings, kept out of `git status`.
+    fn settings(&self, toml: &str) {
+        std::fs::write(self.repo.join("treehouse.toml"), toml).unwrap();
+        std::fs::write(self.repo.join(".git/info/exclude"), "treehouse.toml\n").unwrap();
+    }
+
+    fn entry(&self, path: &Path) -> state::Entry {
+        let pool = self.pool().pool_dir(&self.repo).unwrap();
+        state::read(&pool)
+            .unwrap()
+            .worktrees
+            .into_iter()
+            .find(|w| w.path == path)
+            .unwrap()
+    }
+}
+
 #[tokio::test]
-async fn unsupported_settings_are_refused_not_ignored() {
+async fn jj_is_still_refused_not_ignored() {
     let fx = Fixture::new();
-    std::fs::write(
-        fx.repo.join("treehouse.toml"),
-        "worktree_path = \"{pool}/{slot}/x\"\n",
-    )
-    .unwrap();
+    std::fs::create_dir(fx.repo.join(".jj")).unwrap();
+    std::fs::write(fx.repo.join(".git/info/exclude"), ".jj\ntreehouse.toml\n").unwrap();
+    std::fs::write(fx.repo.join("treehouse.toml"), "vcs = \"jj\"\n").unwrap();
     let err = fx
         .pool()
         .acquire(&fx.repo, "a", None, None)
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("worktree_path"), "{err}");
+    assert!(err.to_string().contains("jj workspaces"), "{err}");
 
     let fx = Fixture::new();
-    std::fs::write(fx.repo.join(".worktreeinclude"), ".env\n").unwrap();
-    git(&fx.repo, &["add", ".worktreeinclude"]);
-    git(&fx.repo, &["commit", "-q", "-m", "include"]);
-    git(&fx.repo, &["push", "-q", "origin", "HEAD:main"]);
+    fx.settings("apfs_sharing = \"on\"\n");
     let err = fx
         .pool()
         .acquire(&fx.repo, "a", None, None)
         .await
         .unwrap_err();
-    assert!(err.to_string().contains(".worktreeinclude"), "{err}");
+    assert!(err.to_string().contains("invalid apfs_sharing"), "{err}");
+}
+
+#[tokio::test]
+async fn worktreeinclude_seeds_ignored_files_and_cleans_exactly_those() {
+    let fx = Fixture::new();
+    fx.commit(&[
+        (".gitignore", "*.seed\n.env\nbuild/\n"),
+        (
+            ".worktreeinclude",
+            ".env\nconfig/*.seed\n!config/skip.seed\n",
+        ),
+        ("config/tracked.seed", "tracked\n"),
+    ]);
+    std::fs::write(fx.repo.join(".env"), "SECRET=1\n").unwrap();
+    std::fs::create_dir_all(fx.repo.join("config")).unwrap();
+    std::fs::write(fx.repo.join("config/local.seed"), "local\n").unwrap();
+    std::fs::write(fx.repo.join("config/skip.seed"), "skip\n").unwrap();
+    std::fs::write(fx.repo.join("other.seed"), "not selected\n").unwrap();
+    std::fs::write(fx.repo.join("notes.txt"), "untracked, not ignored\n").unwrap();
+    std::fs::set_permissions(
+        fx.repo.join(".env"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+
+    let pool = fx.pool();
+    let a = pool.acquire(&fx.repo, "a", None, None).await.unwrap();
+    let read = |p: &Path, name: &str| std::fs::read_to_string(p.join(name)).ok();
+    assert_eq!(read(&a.path, ".env").as_deref(), Some("SECRET=1\n"));
+    assert_eq!(
+        read(&a.path, "config/local.seed").as_deref(),
+        Some("local\n")
+    );
+    assert_eq!(
+        read(&a.path, "config/skip.seed"),
+        None,
+        "negation is honoured"
+    );
+    assert_eq!(read(&a.path, "other.seed"), None, "only selected files");
+    assert_eq!(read(&a.path, "notes.txt"), None, "only ignored files");
+    assert_eq!(
+        read(&a.path, "config/tracked.seed").as_deref(),
+        Some("tracked\n")
+    );
+    let mode = std::fs::metadata(a.path.join(".env"))
+        .unwrap()
+        .permissions();
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
+        0o600
+    );
+    let mut seeded = fx.entry(&a.path).seeded_paths;
+    seeded.sort();
+    assert_eq!(seeded, [".env", "config/local.seed"]);
+    assert!(fx.entry(&a.path).seed_inventory_known);
+
+    // The task leaves its own ignored output; a release removes only the
+    // seeded files (git clean leaves other ignored files, as treehouse does).
+    std::fs::create_dir_all(a.path.join("build")).unwrap();
+    std::fs::write(a.path.join("build/out"), "artifact\n").unwrap();
+    assert_eq!(
+        pool.release(&fx.repo, &a.path, &a.lease_id).await.unwrap(),
+        Release::Returned
+    );
+    assert_eq!(read(&a.path, ".env"), None);
+    assert_eq!(read(&a.path, "config/local.seed"), None);
+    assert_eq!(read(&a.path, "build/out").as_deref(), Some("artifact\n"));
+    assert!(fx.entry(&a.path).seeded_paths.is_empty());
+
+    // The seeded slot is reused, with fresh copies.
+    std::fs::write(fx.repo.join(".env"), "SECRET=2\n").unwrap();
+    let b = pool.acquire(&fx.repo, "b", None, None).await.unwrap();
+    assert_eq!(b.path, a.path, "a seeded slot is reusable");
+    assert_eq!(read(&b.path, ".env").as_deref(), Some("SECRET=2\n"));
+
+    // Reusing a slot whose seeds are still there (a branch creation that
+    // failed and freed it) replaces them instead of failing on them.
+    let pool_dir = pool.pool_dir(&fx.repo).unwrap();
+    let mut s = state::read(&pool_dir).unwrap();
+    let wt = s.worktrees.iter_mut().find(|w| w.path == b.path).unwrap();
+    wt.clear_lease();
+    state::write(&pool_dir, s).unwrap();
+    std::fs::write(fx.repo.join(".env"), "SECRET=3\n").unwrap();
+    let c = pool
+        .acquire(&fx.repo, "c", Some("feat"), None)
+        .await
+        .unwrap();
+    assert_eq!(c.path, b.path);
+    assert_eq!(read(&c.path, ".env").as_deref(), Some("SECRET=3\n"));
+}
+
+#[tokio::test]
+async fn seeding_never_replaces_tracked_paths_or_trusts_an_uncommitted_manifest() {
+    let fx = Fixture::new();
+    fx.commit(&[(".gitignore", ".env\n")]);
+    std::fs::write(fx.repo.join(".env"), "x\n").unwrap();
+    // An uncommitted .worktreeinclude is not read.
+    std::fs::write(fx.repo.join(".worktreeinclude"), ".env\n").unwrap();
+    let pool = fx.pool();
+    let a = pool.acquire(&fx.repo, "a", None, None).await.unwrap();
+    assert!(!a.path.join(".env").exists());
+    assert!(!a.path.join(".worktreeinclude").exists());
+}
+
+#[tokio::test]
+async fn unique_leaf_and_worktree_path_place_new_slots() {
+    let fx = Fixture::new();
+    fx.settings("unique_leaf = true\n");
+    let pool = fx.pool();
+    let a = pool.acquire(&fx.repo, "a", None, None).await.unwrap();
+    assert_eq!(a.path.file_name().unwrap(), "repo-1");
+    assert_eq!(a.path.parent().unwrap().file_name().unwrap(), "1");
+
+    let fx = Fixture::new();
+    fx.settings("worktree_path = \"{repo_parent}/{repo}-wt-{slot}\"\n");
+    let base = fx.repo.parent().unwrap().to_path_buf();
+    // An existing directory is never adopted: slot 1's path is taken.
+    std::fs::create_dir(base.join("repo-wt-1")).unwrap();
+    let pool = fx.pool();
+    let a = pool.acquire(&fx.repo, "a", None, None).await.unwrap();
+    assert_eq!(a.path, base.join("repo-wt-2"));
+    assert_eq!(fx.entry(&a.path).name, "2");
+    let b = pool.acquire(&fx.repo, "b", None, None).await.unwrap();
+    assert_eq!(b.path, base.join("repo-wt-3"));
+    // Releases and reuse work on templated paths.
+    pool.release(&fx.repo, &a.path, &a.lease_id).await.unwrap();
+    let c = pool.acquire(&fx.repo, "c", None, None).await.unwrap();
+    assert_eq!(c.path, a.path);
+    pool.release(&fx.repo, &c.path, &c.lease_id).await.unwrap();
+    // Destroy removes the worktree only, never the directory holding it.
+    let out = pool.destroy(&fx.repo, &c.path).await.unwrap();
+    assert_eq!(out.removed.len(), 1, "{out:?}");
+    assert!(!c.path.exists());
+    assert!(base.join("repo-wt-1").exists());
+    assert!(fx.repo.exists());
+
+    // A template that escapes into the repository is refused up front.
+    fx.settings("worktree_path = \"{repo_parent}/{repo}/wt-{slot}\"\n");
+    let err = pool.acquire(&fx.repo, "d", None, None).await.unwrap_err();
+    assert!(err.to_string().contains("inside the repository"), "{err}");
+}
+
+#[tokio::test]
+async fn recovered_slot_untracked_files_move_to_a_backup() {
+    let fx = Fixture::new();
+    let pool = fx.pool();
+    let a = pool.acquire(&fx.repo, "a", None, None).await.unwrap();
+    let pool_dir = pool.pool_dir(&fx.repo).unwrap();
+    std::fs::write(a.path.join("notes.txt"), "keep me\n").unwrap();
+    // The state is lost: the slot comes back quarantined as recovered.
+    std::fs::remove_file(pool_dir.join("treehouse-state.json")).unwrap();
+    let listed = pool.list(&fx.repo).await.unwrap();
+    let e = listed.iter().find(|e| e.path == a.path).unwrap();
+    // Listing freed it after moving the file into the retained backup.
+    assert_eq!(e.status, "available", "{e:?}");
+    let backup = pool_dir.parent().unwrap().join(format!(
+        "treehouse-recovered-backup-{}-1",
+        pool_dir.file_name().unwrap().to_string_lossy()
+    ));
+    assert_eq!(
+        std::fs::read_to_string(backup.join("notes.txt")).unwrap(),
+        "keep me\n"
+    );
+    assert!(!a.path.join("notes.txt").exists());
+    assert_eq!(e.recovery_backup, backup.to_string_lossy());
 }
 
 #[tokio::test]

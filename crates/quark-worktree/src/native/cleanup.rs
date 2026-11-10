@@ -31,12 +31,11 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use quark_core::{CoreError, Result};
 
 use super::state::{self, Entry, State};
-use super::{git, heal, locked, procs, same_path, NativePool, TERMINATE_GRACE};
+use super::{git, heal, hooks, locked, procs, same_path, NativePool, TERMINATE_GRACE};
 use crate::treehouse::{Cleanup, Kept, Removed};
 
 /// Which risky slots a [`NativePool::destroy_blocking`] may remove, each
@@ -246,7 +245,7 @@ impl NativePool {
         }
 
         for wt in &reserved {
-            run_hooks(&ctx.cfg.hooks.pre_destroy, &wt.path);
+            hooks::run("pre_destroy", &ctx.cfg.hooks.pre_destroy, &wt.path);
         }
 
         let _lock = locked(&pool)?;
@@ -311,7 +310,7 @@ impl NativePool {
         dry_run: bool,
     ) -> Result<Cleanup> {
         let pool = self.pool_of(repo, path)?;
-        let hooks = self.ctx(repo)?.cfg.hooks.pre_destroy;
+        let hook_cmds = self.ctx(repo)?.cfg.hooks.pre_destroy;
         let entry = {
             let _lock = locked(&pool)?;
             let s = heal(state::read(&pool)?);
@@ -366,7 +365,7 @@ impl NativePool {
             state::write(&pool, s)?;
         }
 
-        run_hooks(&hooks, &entry.path);
+        hooks::run("pre_destroy", &hook_cmds, &entry.path);
 
         let _lock = locked(&pool)?;
         let mut s = state::read(&pool)?;
@@ -602,28 +601,6 @@ fn clear_reservation(wt: &mut Entry) {
 fn drop_removed(s: &mut State, removed: &[Removed]) {
     s.worktrees
         .retain(|w| !removed.iter().any(|r| r.path == w.path));
-}
-
-/// Run each `pre_destroy` hook with `/bin/sh -c` in `dir`; a failing hook is
-/// logged and does not stop the rest (treehouse's `hooks.Run`).
-fn run_hooks(hooks: &[String], dir: &Path) {
-    for hook in hooks {
-        let status = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(hook)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => tracing::warn!(hook, dir = %dir.display(), %s, "pre_destroy hook failed"),
-            Err(e) => {
-                tracing::warn!(hook, dir = %dir.display(), error = %e, "pre_destroy hook failed")
-            }
-        }
-    }
 }
 
 /// Deregister the slot from git (when its repository is still there) and

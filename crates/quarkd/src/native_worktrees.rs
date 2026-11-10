@@ -13,10 +13,8 @@
 //! [`LEGACY_SHADOW_ENV`]`=1` (the flag from before the switch) still means
 //! `shadow` when [`ENV`] is unset.
 //!
-//! The native pool refuses the treehouse settings it does not support
-//! (jj, `worktree_path`, `unique_leaf`, APFS sharing, `post_create` hooks,
-//! `.worktreeinclude` seeding) with an error naming the setting and this
-//! fallback. The shadow is only compared with treehouse 3.1.2 or a later
+//! The native pool refuses the one treehouse setting it does not support
+//! (jj workspaces) with an error naming it and this fallback. The shadow is only compared with treehouse 3.1.2 or a later
 //! 3.x: an older one answers differently by design, so against one quarkd
 //! says which version it found and runs the native pool alone.
 //!

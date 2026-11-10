@@ -489,6 +489,7 @@ mod tests {
             branch: String::new(),
             detached: false,
             recovery_reason: recovery.into(),
+            recovery_backup: String::new(),
             lease_id: String::new(),
             lease_holder: holder.into(),
         }

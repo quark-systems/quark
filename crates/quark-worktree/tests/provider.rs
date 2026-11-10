@@ -138,6 +138,7 @@ impl Pool for GitPool {
             branch: branch.unwrap_or_default().into(),
             detached: branch.is_none(),
             recovery_reason: String::new(),
+            recovery_backup: String::new(),
             lease_id: lease_id.clone(),
             lease_holder: holder.into(),
         });

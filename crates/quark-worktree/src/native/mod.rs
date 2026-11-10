@@ -18,28 +18,35 @@
 //!
 //! Recovered slots (quarantined after a lost or untrusted state) are freed
 //! under the lock before each operation when they are provably safe, as
-//! treehouse does, except that one holding untracked files stays
-//! quarantined: treehouse moves those into a backup folder first, which the
-//! native pool does not do yet.
+//! treehouse does, after moving any untracked files into a retained backup
+//! folder ([`recovery`]).
 //!
-//! `prune` and a single-slot `destroy` are ported too ([`cleanup`]): they
-//! remove only slots proven disposable, unless a destroy opts into more.
+//! Also ported: seeding ignored files from `.worktreeinclude` and removing
+//! exactly those again ([`seed`]), the user's `post_create` hooks
+//! ([`hooks`]), `unique_leaf` and `worktree_path` placement ([`placement`]),
+//! and `apfs_sharing = "fresh"` ([`apfs`]). `prune` and a single-slot
+//! `destroy` are ported too ([`cleanup`]): they remove only slots proven
+//! disposable, unless a destroy opts into more.
 //!
-//! Not ported yet; the native pool refuses rather than diverge: jj
-//! workspaces, `worktree_path` templates, `unique_leaf`, APFS sharing,
-//! `post_create` hooks and seeding ignored files from `.worktreeinclude`.
-//! Also not ported: interactive (owner-process) acquisition, which only
-//! firstmate's `treehouse get` subshell used (its reservations are still
-//! read and respected), `prune --prune-orphans` and `destroy --all`.
+//! Not ported; the native pool refuses rather than diverge: jj workspaces.
+//! Also not ported, as Quark never used them: interactive (owner-process)
+//! acquisition, which only firstmate's `treehouse get` subshell used (its
+//! reservations are still read and respected), `get --include-file`,
+//! `prune --prune-orphans` and `destroy --all`.
 //!
 //! [`NativePool::plan_acquire`] and [`NativePool::plan_release`] answer what
 //! the native pool *would* do without doing it; the shadow
 //! ([`crate::shadow`]) compares them with what treehouse did.
 
+mod apfs;
 mod cleanup;
 pub mod config;
 mod git;
+mod hooks;
+mod placement;
 pub mod procs;
+mod recovery;
+mod seed;
 pub mod state;
 
 use std::cell::OnceCell;
@@ -163,6 +170,8 @@ impl NativePool {
         if let Some(why) = ctx.cfg.unsupported(&ctx.repo) {
             return Err(CoreError::Unsupported(why));
         }
+        ctx.cfg.apfs_sharing()?;
+        placement::validate_template(&ctx.cfg.worktree_path)?;
         if let Some(b) = branch {
             git::validate_branch_name(&ctx.repo, b)?;
         }
@@ -178,11 +187,6 @@ impl NativePool {
             git::verify_base_branch(&ctx.repo, &requested)?;
             requested.clone()
         };
-        if git::has_worktree_include(&ctx.repo, &git::branch_ref(&ctx.repo, &resolved)) {
-            return Err(CoreError::Unsupported(
-                "the native worktree pool does not seed .worktreeinclude files yet: remove .worktreeinclude from the base branch, or run quarkd with QUARK_WORKTREE_POOL=treehouse to use treehouse 3.1.2+ instead".into(),
-            ));
-        }
         if let Some(b) = branch {
             if git::local_branch_exists(&ctx.repo, b)? {
                 return Err(CoreError::Invalid(format!("branch {b:?} already exists")));
@@ -226,10 +230,6 @@ impl NativePool {
             }
             Some(_) => {}
         }
-        // Seeded ignored files would need cleaning before reuse.
-        if !wt.seeded_paths.is_empty() {
-            return None;
-        }
         if !processes
             .get_or_init(procs::Snapshot::take)
             .in_worktree(&wt.path)
@@ -271,11 +271,37 @@ impl NativePool {
         CoreError::Refused(msg)
     }
 
-    fn new_slot(ctx: &Ctx, state: &State) -> (String, PathBuf) {
+    /// The name and path of the slot a creation would make: the built-in
+    /// `<pool>/<n>/<repo>` (`<repo>-<n>` with `unique_leaf`), or the
+    /// `worktree_path` template's first unoccupied expansion.
+    fn new_slot(ctx: &Ctx, state: &State) -> Result<(String, PathBuf)> {
         let name = next_slot(state).to_string();
-        let leaf = ctx.repo.file_name().unwrap_or_default();
-        let path = ctx.pool.join(&name).join(leaf);
-        (name, path)
+        let template = &ctx.cfg.worktree_path;
+        if template.is_empty() {
+            let path = placement::resolve(&ctx.repo, &ctx.pool, &name, "", ctx.cfg.unique_leaf)?;
+            return Ok((name, path));
+        }
+        placement::free_templated_slot(
+            &ctx.repo,
+            &ctx.pool,
+            next_slot(state),
+            ctx.cfg.max_trees(),
+            template,
+        )
+    }
+
+    /// The placement rules, checked before any slot is looked at so a bad
+    /// template is reported whether or not the pool would create a slot.
+    fn check_placement(ctx: &Ctx, state: &State) -> Result<()> {
+        let name = next_slot(state).to_string();
+        placement::resolve(
+            &ctx.repo,
+            &ctx.pool,
+            &name,
+            &ctx.cfg.worktree_path,
+            ctx.cfg.unique_leaf,
+        )
+        .map(|_| ())
     }
 
     /// What [`Pool::acquire`] would do now, without fetching or changing
@@ -302,6 +328,11 @@ impl NativePool {
             false => None,
         };
         let state = heal(state::read(&ctx.pool)?);
+        if let Err(e) = Self::check_placement(&ctx, &state) {
+            return Ok(AcquirePlan::Refuse {
+                reason: e.to_string(),
+            });
+        }
         let mut skipped = Skipped::default();
         let processes = OnceCell::new();
         for wt in &state.worktrees {
@@ -317,11 +348,16 @@ impl NativePool {
                 reason: e.to_string(),
             });
         }
-        Ok(AcquirePlan::Create {
-            path: Self::new_slot(&ctx, &state).1,
+        Ok(match Self::new_slot(&ctx, &state) {
+            Ok((_, path)) => AcquirePlan::Create { path },
+            Err(e) => AcquirePlan::Refuse {
+                reason: e.to_string(),
+            },
         })
     }
 
+    /// treehouse `get --lease`: lease a slot, then run the user's
+    /// `post_create` hooks in it with the pool unlocked.
     fn acquire_blocking(
         &self,
         repo: &Path,
@@ -330,14 +366,32 @@ impl NativePool {
         base: Option<&str>,
     ) -> Result<LeaseInfo> {
         let ctx = self.ctx(repo)?;
+        let info = self.acquire_locked(&ctx, holder, branch, base)?;
+        hooks::run("post_create", &ctx.cfg.hooks.post_create, &info.path);
+        Ok(info)
+    }
+
+    fn acquire_locked(
+        &self,
+        ctx: &Ctx,
+        holder: &str,
+        branch: Option<&str>,
+        base: Option<&str>,
+    ) -> Result<LeaseInfo> {
+        let repo = ctx.repo.as_path();
         if let Some(root) = ctx.pool.parent() {
             config::ensure_excluded(root);
         }
-        let (requested, resolved) = self.prepare(&ctx, branch, base, self.fetch)?;
+        let (requested, resolved) = self.prepare(ctx, branch, base, self.fetch)?;
+        let apfs = ctx.cfg.apfs_sharing()?;
+        if !ctx.cfg.worktree_path.is_empty() && ctx.cfg.unique_leaf {
+            tracing::warn!("worktree_path is set, so unique_leaf is ignored - the template names every segment of the path. Write {{repo}}-{{slot}} in it for a unique leaf.");
+        }
         let identity = clone_identity(repo);
 
         let _lock = locked(&ctx.pool)?;
         let mut state = heal(state::read(&ctx.pool)?);
+        Self::check_placement(ctx, &state)?;
 
         let mut skipped = Skipped::default();
         let processes = OnceCell::new();
@@ -352,32 +406,55 @@ impl NativePool {
                 continue;
             };
             let path = state.worktrees[i].path.clone();
-            if git::reset_to_ref(&path, &target, &head, true).is_err() {
+            let previous = state.worktrees[i].trusted_seeds();
+            if git::reset_to_ref(&path, &target, &head, true, previous.as_deref()).is_err() {
                 continue;
             }
             let wt = &mut state.worktrees[i];
             wt.base_branch = requested.clone();
-            wt.seed_inventory_known = false;
+            wt.set_seed_inventory(Vec::new(), false);
             wt.quarantine(INCOMPLETE_HOLDER);
             state::write(&ctx.pool, state.clone())?;
-            state.worktrees[i].set_seed_inventory_empty();
+            // Partial ignored files stay away from later acquisitions until
+            // a person verifies and returns the slot.
+            let seeded = match seed::seed_worktree(repo, &path) {
+                Ok(seeded) => seeded,
+                Err(f) => {
+                    let cleanup = git::reset_to_ref(&path, &target, &target, true, Some(&f.copied));
+                    let wt = &mut state.worktrees[i];
+                    match &cleanup {
+                        Ok(()) => wt.set_seed_inventory(Vec::new(), true),
+                        Err(_) => wt.set_seed_inventory(f.copied, false),
+                    }
+                    wt.quarantine("quarantined: worktree seeding failed");
+                    state::write(&ctx.pool, state)?;
+                    return Err(seed_error(&path, &f.error, cleanup.err()));
+                }
+            };
+            state.worktrees[i].set_seed_inventory(seeded.clone(), true);
             if let Some(b) = branch {
                 if let Err(f) = git::create_branch(&path, b) {
+                    let detached = git::checked_out_branch(&path);
+                    let unknown = seed::has_unseeded_branch_output(&path, &seeded);
                     let wt = &mut state.worktrees[i];
                     wt.owner_pid = 0;
                     wt.owner_started_at = 0;
-                    let clean = matches!(git::checked_out_branch(&path), Ok(None))
-                        && matches!(git::is_dirty(&path), Ok(false));
+                    let quarantined = f.created || !matches!(detached, Ok(None)) || unknown;
                     if f.created {
                         wt.quarantine("quarantined: branch checkout failed");
-                    } else if clean {
-                        wt.clear_lease();
-                    } else {
+                    } else if quarantined {
                         wt.quarantine("quarantined: branch creation cleanup failed");
+                    } else {
+                        wt.clear_lease();
                     }
                     state::write(&ctx.pool, state)?;
+                    let note = if quarantined {
+                        " (worktree quarantined for inspection)"
+                    } else {
+                        ""
+                    };
                     return Err(CoreError::Backend(format!(
-                        "failed to create branch {b:?} in {}: {}",
+                        "failed to create branch {b:?} in {}: {}{note}",
                         path.display(),
                         f.error
                     )));
@@ -395,23 +472,41 @@ impl NativePool {
         if state.worktrees.len() >= max {
             return Err(Self::full_error(&state, max, &skipped, identity.is_some()));
         }
-        let (name, path) = Self::new_slot(&ctx, &state);
+        let (name, path) = Self::new_slot(ctx, &state)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| CoreError::Backend(format!("creating {}: {e}", parent.display())))?;
         }
-        let _ = git::prune_worktrees(&ctx.repo);
+        let _ = git::prune_worktrees(repo);
         let expected = match branch {
-            Some(b) => Some(git::branch_commit(&ctx.repo, &resolved).map_err(|e| {
+            Some(b) => Some(git::branch_commit(repo, &resolved).map_err(|e| {
                 CoreError::Backend(format!(
                     "failed to resolve base commit for branch {b:?}: {e}"
                 ))
             })?),
             None => None,
         };
-        git::add_worktree(&ctx.repo, &path, &resolved)
+        git::add_worktree(repo, &path, &resolved)
             .map_err(|e| CoreError::Backend(format!("failed to create worktree: {e}")))?;
-        state.worktrees.push(Entry::new(&name, &path, &requested));
+        let seeded = match seed::seed_worktree(repo, &path) {
+            Ok(seeded) => seeded,
+            Err(f) => {
+                // A failed removal leaves a real worktree behind: keep it in
+                // the state, quarantined, so its slot is never reused.
+                if let Err(cleanup) = git::remove_worktree(repo, &path, true) {
+                    let mut entry = Entry::new(&name, &path, &requested);
+                    entry.quarantine("quarantined: worktree seeding cleanup failed");
+                    entry.set_seed_inventory(f.copied, true);
+                    state.worktrees.push(entry);
+                    state::write(&ctx.pool, state)?;
+                    return Err(seed_error(&path, &f.error, Some(cleanup)));
+                }
+                return Err(seed_error(&path, &f.error, None));
+            }
+        };
+        let mut entry = Entry::new(&name, &path, &requested);
+        entry.set_seed_inventory(seeded.clone(), true);
+        state.worktrees.push(entry);
         let i = state.worktrees.len() - 1;
         state::write(&ctx.pool, state.clone())?;
         if let (Some(b), Some(expected)) = (branch, expected) {
@@ -424,17 +519,43 @@ impl NativePool {
                 )));
             }
             if let Err(f) = git::create_branch(&path, b) {
-                let holder = if f.created {
-                    "quarantined: branch checkout failed"
-                } else {
-                    "quarantined: branch creation cleanup failed"
+                let fail = |note: &str| {
+                    CoreError::Backend(format!(
+                        "failed to create branch {b:?} in {}: {}{note}",
+                        path.display(),
+                        f.error
+                    ))
                 };
-                state.worktrees[i].quarantine(holder);
+                if f.created {
+                    state.worktrees[i].quarantine("quarantined: branch checkout failed");
+                    state::write(&ctx.pool, state)?;
+                    return Err(fail(" (worktree quarantined for inspection)"));
+                }
+                // Only the authenticated seed inventory may be discarded.
+                if seed::has_unseeded_branch_output(&path, &seeded) {
+                    state.worktrees[i].quarantine("quarantined: branch creation cleanup failed");
+                    state::write(&ctx.pool, state)?;
+                    return Err(fail(" (worktree quarantined for inspection)"));
+                }
+                if let Err(cleanup) = git::remove_worktree(repo, &path, true) {
+                    state.worktrees[i].clear_lease();
+                    state.worktrees[i].quarantine("quarantined: branch creation cleanup failed");
+                    state::write(&ctx.pool, state)?;
+                    return Err(fail(&format!(" (cleanup failed: {cleanup})")));
+                }
+                state.worktrees.pop();
+                state::write(&ctx.pool, state)?;
+                return Err(fail(""));
+            }
+        }
+        // Fresh slots only: a reused slot may still have external writers.
+        if apfs {
+            if let Err(e) = apfs::share_worktree_files(repo, &path) {
+                state.worktrees[i]
+                    .quarantine("quarantined: APFS sharing interrupted or changed worktree");
                 state::write(&ctx.pool, state)?;
                 return Err(CoreError::Backend(format!(
-                    "failed to create branch {b:?} in {}: {} (worktree quarantined for inspection)",
-                    path.display(),
-                    f.error
+                    "APFS sharing failed; worktree quarantined for inspection: {e}"
                 )));
             }
         }
@@ -490,11 +611,6 @@ impl NativePool {
                 "lease precondition failed: lease identity does not match worktree {}",
                 path.display()
             )));
-        }
-        if !wt.seeded_paths.is_empty() {
-            return Err(CoreError::Unsupported(
-                "the native worktree pool cannot clean seeded .worktreeinclude files yet".into(),
-            ));
         }
         Ok(wt)
     }
@@ -569,12 +685,16 @@ impl NativePool {
             git::detach(path)
                 .map_err(|e| CoreError::Backend(format!("failed to detach worktree HEAD: {e}")))?;
             stop_processes(path)?;
+            let seeded = wt.trusted_seeds();
+            if seeded.is_none() {
+                tracing::warn!(path = %path.display(), "slot was recovered without a trusted record of the ignored files seeded into it; any such files are not cleaned up and remain in the worktree");
+            }
             let mut recorded = requested;
-            if let Err(e) = git::reset_worktree(path, &branch) {
+            if let Err(e) = git::reset_worktree(path, &branch, seeded.as_deref()) {
                 if fallback.is_empty() || fallback == branch {
                     return Err(e);
                 }
-                git::reset_worktree(path, &fallback)?;
+                git::reset_worktree(path, &fallback, seeded.as_deref())?;
                 recorded = String::new();
             }
             wt.base_branch = recorded;
@@ -611,12 +731,12 @@ impl NativePool {
             .worktrees
             .iter()
             .filter(|w| !w.destroying)
-            .map(|w| status_of(w, &cwd, &processes))
+            .map(|w| status_of(&ctx.pool, w, &cwd, &processes))
             .collect())
     }
 }
 
-fn status_of(wt: &Entry, cwd: &Path, processes: &procs::Snapshot) -> PoolEntry {
+fn status_of(pool: &Path, wt: &Entry, cwd: &Path, processes: &procs::Snapshot) -> PoolEntry {
     let flavor = state::marker(&wt.path).ok().flatten();
     let owned = procs::owner_alive(wt.owner_pid, wt.owner_started_at);
     let mut status = if wt.leased {
@@ -652,6 +772,7 @@ fn status_of(wt: &Entry, cwd: &Path, processes: &procs::Snapshot) -> PoolEntry {
         branch,
         detached,
         recovery_reason: wt.recovery_reason.clone(),
+        recovery_backup: recovery::backup_of(pool, &wt.name),
         lease_id: if leased {
             wt.lease_id.clone()
         } else {
@@ -678,7 +799,7 @@ fn locked(pool: &Path) -> Result<Lock> {
         {
             continue;
         }
-        match unsafe_to_free(wt) {
+        match unsafe_to_free(pool, wt) {
             None => {
                 wt.release();
                 changed = true;
@@ -698,7 +819,7 @@ fn locked(pool: &Path) -> Result<Lock> {
 
 /// Why a recovered slot must stay quarantined, or `None` when nothing uses
 /// it, it holds no edits and its HEAD is safely reachable.
-fn unsafe_to_free(wt: &Entry) -> Option<String> {
+fn unsafe_to_free(pool: &Path, wt: &Entry) -> Option<String> {
     if !wt.recovery_error.is_empty() {
         return Some(
             "its VCS marker could not be read, so it cannot be verified automatically".into(),
@@ -725,7 +846,14 @@ fn unsafe_to_free(wt: &Entry) -> Option<String> {
         return Some("HEAD is not contained in a remote-tracking ref or the slot's base branch; push or preserve it".into());
     }
     if !untracked.is_empty() {
-        return Some("it holds untracked files, which the native pool does not back up yet; check them and return the worktree by name".into());
+        let backup = recovery::backup_dir(pool, &wt.name);
+        if let Err(e) = recovery::backup_untracked(&backup, &wt.path, &untracked) {
+            return Some(format!(
+                "untracked files could not all be moved into backup {} ({e})",
+                backup.display()
+            ));
+        }
+        tracing::warn!(slot = %wt.path.display(), backup = %backup.display(), "recovered untracked files into retained backup");
     }
     None
 }
@@ -830,6 +958,18 @@ fn stop_processes(path: &Path) -> Result<()> {
         path.display(),
         names.join(", ")
     )))
+}
+
+/// treehouse's message for a failed `.worktreeinclude` seeding.
+fn seed_error(path: &Path, error: &CoreError, cleanup: Option<CoreError>) -> CoreError {
+    let detail = match cleanup {
+        Some(c) => format!(" (cleanup failed: {c})"),
+        None => String::new(),
+    };
+    CoreError::Backend(format!(
+        "failed to seed .worktreeinclude into {}: {error}{detail}",
+        path.display()
+    ))
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
