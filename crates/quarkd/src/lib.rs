@@ -10,6 +10,7 @@ pub mod beads;
 pub mod chat;
 pub mod classifier;
 pub mod clear;
+pub mod clone_sync;
 pub mod compaction;
 pub mod config;
 pub mod coordinator_commands;
@@ -183,6 +184,13 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             .with_events(events.clone())
             .run(housekeeping::INTERVAL),
     );
+    // The clones Projects work from follow their remote's default branch.
+    let clone_sync_task = native_engine.then(|| {
+        tokio::spawn(
+            clone_sync::CloneSync::new(store.clone(), layout.command_workspace())
+                .run(clone_sync::INTERVAL),
+        )
+    });
     let harnesses = Arc::new(harness::HarnessRegistry::load(
         &config.home.join("harnesses"),
     ));
@@ -432,6 +440,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     }
     pr_task.abort();
     housekeeping_task.abort();
+    if let Some(t) = clone_sync_task {
+        t.abort();
+    }
     quota_task.abort();
     if let Some(t) = dispatch_task {
         t.abort();

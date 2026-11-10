@@ -121,12 +121,14 @@ impl NativeVerify {
                 if record.state != TaskState::Done {
                     supervisor.complete(&project, task).await.map_err(core)?;
                 }
+                crate::clone_sync::after_merge(worker.assignment.repo.clone());
                 Ok(())
             }
             Outcome::AlreadyMerged => {
                 if record.state != TaskState::Done {
                     self.land_outside(supervisor, &project, task, url).await?;
                 }
+                crate::clone_sync::after_merge(worker.assignment.repo.clone());
                 Ok(())
             }
             Outcome::Refused { reason } => {
@@ -147,7 +149,7 @@ impl NativeVerify {
         url: &str,
     ) -> Result<(), EngineError> {
         let project = ProjectId::new(ws.project_id.clone());
-        let Some((record, _)) = supervisor
+        let Some((record, worker)) = supervisor
             .tasks(&project)
             .await
             .map_err(core)?
@@ -161,7 +163,9 @@ impl NativeVerify {
         {
             return Ok(());
         }
-        self.land_outside(supervisor, &project, task, url).await
+        self.land_outside(supervisor, &project, task, url).await?;
+        crate::clone_sync::after_merge(worker.assignment.repo.clone());
+        Ok(())
     }
 
     /// Record the merge first: a lost completion is retried, a lost record
