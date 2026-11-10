@@ -350,6 +350,13 @@ impl EngineAdapter for NativeEngine {
             .map_err(engine_error)
     }
 
+    async fn screen(&self, ws: &WorkspaceRef, task: &str) -> Result<String, EngineError> {
+        self.supervisor
+            .screen(&project(ws), &task_id(task)?)
+            .await
+            .map_err(engine_error)
+    }
+
     async fn worker_healthy(&self, ws: &WorkspaceRef, task: &str) -> Result<bool, EngineError> {
         self.supervisor
             .mark_healthy(&project(ws), &task_id(task)?)

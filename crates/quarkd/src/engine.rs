@@ -359,6 +359,14 @@ pub trait EngineAdapter: Send + Sync {
         Ok(false)
     }
 
+    /// What the task's running worker's terminal shows now, as plain text,
+    /// one line per row. Engines that cannot read it refuse.
+    async fn screen(&self, _ws: &WorkspaceRef, _task_id: &str) -> Result<String, EngineError> {
+        Err(EngineError::Invalid(
+            "this engine cannot read worker screens".into(),
+        ))
+    }
+
     /// Answer the open hold `hold_id` with `answer`, recording `answered_by`
     /// as the person who answered. `Ok` means the engine durably recorded the
     /// answer and the question is no longer waiting; the hold leaves later
@@ -810,6 +818,8 @@ pub struct StubEngine {
     briefs: Mutex<HashMap<String, EngineBrief>>,
     /// Why each unhealthy task's worker cannot work, by engine task id.
     unhealthy: Mutex<HashMap<String, String>>,
+    /// What each task's worker's screen shows, by engine task id.
+    screens: Mutex<HashMap<String, String>>,
 }
 
 impl StubEngine {
@@ -823,6 +833,14 @@ impl StubEngine {
 
     pub fn set_holds(&self, holds: Vec<Hold>) {
         *self.holds.lock().unwrap() = holds;
+    }
+
+    /// What `task_id`'s worker's screen shows.
+    pub fn set_screen(&self, task_id: &str, screen: &str) {
+        self.screens
+            .lock()
+            .unwrap()
+            .insert(task_id.into(), screen.into());
     }
 
     /// Coordinator window targets by Project id.
@@ -985,6 +1003,15 @@ impl EngineAdapter for StubEngine {
             unhealthy: None,
         })?;
         Ok(true)
+    }
+
+    async fn screen(&self, _ws: &WorkspaceRef, task_id: &str) -> Result<String, EngineError> {
+        self.screens
+            .lock()
+            .unwrap()
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| EngineError::TaskNotFound(task_id.into()))
     }
 
     async fn send_message(
