@@ -8,8 +8,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use quark_core::harness::HarnessManifest;
 use quark_core::isolation::ProcessSpec;
+use quark_core::session::Snapshot;
 use quark_core::session::{SessionBackend, SessionId, SessionInfo, SessionSpec, TermSize};
-use quark_core::worker::WorkerEnvelope;
+use quark_core::worker::{Transport, WorkerEnvelope, WorkerMessage};
 use quark_core::worktree::{ReturnOutcome, WorktreeRequest};
 use quark_core::{
     replay, CoreError, EventLog, HostId, Isolation, NewEvent, ProjectId, Result, Seq, TaskEvent,
@@ -24,6 +25,7 @@ use tokio::sync::OwnedMutexGuard;
 use crate::events::{Assignment, Cause, SupervisorEvent};
 use crate::fleet::{is_worker_message, Fleet, Generation, Worker};
 use crate::launch::{self, WorkerUrls};
+use crate::prompt::{self, Prompt};
 use crate::ready;
 
 /// Events read per batch when replaying or handling worker messages.
@@ -64,6 +66,10 @@ pub struct Config {
     pub brief_confirm: Duration,
     /// No screen change or worker message for this long is reported stale.
     pub stale_after: Duration,
+    /// How long a prompt waiting for a keypress (a permission request, a
+    /// menu) must stay on a worker's screen before it is asked as the
+    /// worker's question. Long enough for one the agent clears itself.
+    pub prompt_after: Duration,
     /// Times in a row the supervisor relaunches a worker whose session
     /// ended unexpectedly before failing the task.
     pub max_recoveries: u32,
@@ -87,6 +93,7 @@ impl Config {
             ready_settle: Duration::from_millis(1000),
             brief_confirm: Duration::from_secs(10),
             stale_after: Duration::from_secs(15 * 60),
+            prompt_after: Duration::from_secs(10),
             max_recoveries: 2,
             exit_grace: Duration::from_secs(3),
             agent_home: std::env::var_os("HOME").map(PathBuf::from),
@@ -167,6 +174,9 @@ pub struct Tick {
     pub exited: usize,
     pub recovered: usize,
     pub stale: usize,
+    /// Prompts on workers' screens asked as their question, or closed
+    /// because they went away.
+    pub prompts: usize,
     pub resumed_spawns: usize,
     /// Done tasks' worktrees given back to the pool.
     pub released: usize,
@@ -202,7 +212,26 @@ struct Watch {
     screen: u64,
     active_at: Instant,
     stale_reported: bool,
+    /// The prompt on the worker's screen, while one is.
+    prompt: Option<PromptSeen>,
 }
+
+/// A prompt the supervisor sees on a worker's screen.
+struct PromptSeen {
+    prompt: Prompt,
+    /// When it appeared.
+    since: Instant,
+    /// When it was last seen.
+    seen_at: Instant,
+    /// Whether it was asked as the worker's question.
+    asked: bool,
+}
+
+/// A prompt gone from the screen this long has been answered there (a
+/// redraw can hide it for a pass).
+const PROMPT_GONE: Duration = Duration::from_secs(4);
+/// Most keys sent selecting one choice of a prompt.
+const PROMPT_KEYS: usize = 16;
 
 type Key = (ProjectId, TaskId);
 
@@ -851,6 +880,9 @@ impl Supervisor {
         key: &str,
         answer: &str,
     ) -> Result<String> {
+        if prompt::is_prompt_key(key) {
+            return self.answer_prompt(project, task, key, answer).await;
+        }
         self.refresh().await?;
         let record = self.ledger.states().get(project, task);
         let events = record
@@ -875,6 +907,11 @@ impl Supervisor {
         let Some(g) = w.current.clone().filter(|g| g.exited.is_none()) else {
             return Ok(0);
         };
+        if self.prompt_on_screen(&(project.clone(), task.clone()), &g.id) {
+            // Pasted text would answer the prompt; the message waits for it
+            // to be answered.
+            return Ok(0);
+        }
         let mut n = 0;
         for s in w.undelivered() {
             // The message is already recorded; a session that just died
@@ -1585,9 +1622,17 @@ impl Supervisor {
                 }
                 return Ok(());
             }
+            let snap = self.sessions.snapshot(&g.session).await.ok();
+            if let Some(snap) = &snap {
+                if matches!(state, TaskState::Running | TaskState::NeedsDecision) {
+                    t.prompts += self.check_prompt(key, &g, snap).await?;
+                }
+            }
             t.delivered += self.deliver(project, task).await?;
             if state == TaskState::Running {
-                t.stale += self.check_stale(key, &g).await?;
+                if let Some(snap) = &snap {
+                    t.stale += self.check_stale(key, &g, snap).await?;
+                }
             }
         } else if active && !w.is_released() {
             // Ended earlier and not yet replaced (a crash between noticing
@@ -1649,11 +1694,183 @@ impl Supervisor {
         })
     }
 
-    async fn check_stale(&self, key: &Key, g: &Generation) -> Result<usize> {
-        let screen = match self.sessions.snapshot(&g.session).await {
-            Ok(s) => hash(&s.bytes),
-            Err(_) => return Ok(0),
+    /// Watch the worker's screen for a prompt waiting for a keypress. One
+    /// that stays [`Config::prompt_after`] is recorded as the worker asking
+    /// it (so it reaches the coordinator and the user like any question,
+    /// and [`Supervisor::answer`] picks the choice on screen); one that goes
+    /// away unanswered was answered in the terminal, and its question
+    /// closes. The caller holds the task's lock. Returns how many questions
+    /// were asked or closed.
+    async fn check_prompt(&self, key: &Key, g: &Generation, snap: &Snapshot) -> Result<usize> {
+        let found = prompt::detect(&ready::viewport(snap));
+        let now = Instant::now();
+        let (ask, close) = {
+            let mut watches = self.watches.lock().unwrap();
+            let Some(w) = watches.get_mut(key).filter(|w| w.generation == g.id) else {
+                return Ok(0);
+            };
+            match found {
+                Some(p) => match w.prompt.as_mut().filter(|s| s.prompt.key == p.key) {
+                    Some(s) => {
+                        s.seen_at = now;
+                        s.prompt = p;
+                        let due = !s.asked
+                            && now.saturating_duration_since(s.since) >= self.config.prompt_after;
+                        if due {
+                            s.asked = true;
+                        }
+                        (due.then(|| s.prompt.clone()), None)
+                    }
+                    None => {
+                        // Another prompt replaced it: the earlier one was
+                        // answered.
+                        let close = w.prompt.take().filter(|s| s.asked).map(|s| s.prompt.key);
+                        w.prompt = Some(PromptSeen {
+                            prompt: p,
+                            since: now,
+                            seen_at: now,
+                            asked: false,
+                        });
+                        (None, close)
+                    }
+                },
+                None => match &w.prompt {
+                    Some(s) if now.saturating_duration_since(s.seen_at) >= PROMPT_GONE => {
+                        let s = w.prompt.take().expect("checked");
+                        (None, s.asked.then_some(s.prompt.key))
+                    }
+                    _ => (None, None),
+                },
+            }
         };
+        let (project, task) = key;
+        let open = |k: &str| {
+            self.ledger
+                .states()
+                .get(project, task)
+                .is_some_and(|r| r.open_decisions.contains(k))
+        };
+        let mut n = 0;
+        if let Some(k) = close.filter(|k| open(k)) {
+            tracing::info!(%task, key = %k, "a prompt left the worker's screen; its question is closed");
+            self.transition(project, task, TaskEvent::DecisionAnswered { key: k })
+                .await?;
+            n += 1;
+        }
+        if let Some(p) = ask.filter(|p| !open(&p.key)) {
+            tracing::info!(%task, key = %p.key, "a prompt waits on the worker's screen; asking it");
+            let envelope = WorkerIdentity::new(task.clone(), &g.id).envelope(
+                Transport::Screen,
+                WorkerMessage::Ask {
+                    key: p.key.clone(),
+                    question: p.question(),
+                },
+            );
+            use quark_core::worker::WorkerProtocol as _;
+            self.recorder.receive(envelope).await?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// Whether a prompt is on the worker's screen, as of the last pass.
+    /// Typed text would land in it, so steering waits.
+    fn prompt_on_screen(&self, key: &Key, generation: &str) -> bool {
+        self.watches
+            .lock()
+            .unwrap()
+            .get(key)
+            .is_some_and(|w| w.generation == generation && w.prompt.is_some())
+    }
+
+    /// Answer the prompt on the worker's screen asked under `key`: move its
+    /// cursor to the choice `answer` names and press Enter.
+    async fn answer_prompt(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+        key: &str,
+        answer: &str,
+    ) -> Result<String> {
+        let lock_key = (project.clone(), task.clone());
+        let _guard = self.lock(&lock_key).await;
+        self.refresh().await?;
+        let open = self
+            .ledger
+            .states()
+            .get(project, task)
+            .is_some_and(|r| r.open_decisions.contains(key));
+        if !open {
+            return Err(CoreError::NotFound(format!(
+                "open decision {key} on {task}"
+            )));
+        }
+        let g = self.live(project, task)?;
+        let mut chosen: Option<(usize, String)> = None;
+        let mut pressed = false;
+        for _ in 0..PROMPT_KEYS {
+            let snap = self.sessions.snapshot(&g.session).await?;
+            let Some(p) = prompt::detect(&ready::viewport(&snap)).filter(|p| p.key == key) else {
+                break;
+            };
+            let (target, _) = match &chosen {
+                Some(c) => c.clone(),
+                None => {
+                    let i = p.choice(answer).map_err(CoreError::Invalid)?;
+                    let c = (i, p.options[i].clone());
+                    chosen = Some(c.clone());
+                    c
+                }
+            };
+            let keys: &[u8] = match p.selected.cmp(&target) {
+                std::cmp::Ordering::Equal => b"\r",
+                std::cmp::Ordering::Less => ready::DOWN,
+                std::cmp::Ordering::Greater => ready::UP,
+            };
+            self.sessions.input(&g.session, keys).await?;
+            if keys == b"\r" {
+                pressed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        let said = match (&chosen, pressed) {
+            (Some((i, label)), true) => format!("selected {}. {label} on its screen", i + 1),
+            (None, _) => "the prompt had already left its screen; nothing was pressed".into(),
+            (Some(_), false) => {
+                return Err(CoreError::Invalid(
+                    "could not move the prompt's cursor to that choice; read its screen and \
+                     try again"
+                        .into(),
+                ))
+            }
+        };
+        self.transition(
+            project,
+            task,
+            TaskEvent::DecisionAnswered {
+                key: key.to_string(),
+            },
+        )
+        .await?;
+        // Until the agent redraws, the screen can still show the prompt;
+        // it stays marked asked, so it is not asked again, and leaving the
+        // screen closes nothing.
+        if let Some(s) = self
+            .watches
+            .lock()
+            .unwrap()
+            .get_mut(&lock_key)
+            .and_then(|w| w.prompt.as_mut())
+            .filter(|s| s.prompt.key == key)
+        {
+            s.asked = true;
+        }
+        Ok(said)
+    }
+
+    async fn check_stale(&self, key: &Key, g: &Generation, snap: &Snapshot) -> Result<usize> {
+        let screen = hash(&snap.bytes);
         let idle = {
             let mut watches = self.watches.lock().unwrap();
             let Some(w) = watches.get_mut(key).filter(|w| w.generation == g.id) else {
@@ -1693,6 +1910,7 @@ impl Watch {
             screen: 0,
             active_at: Instant::now(),
             stale_reported: false,
+            prompt: None,
         }
     }
 }

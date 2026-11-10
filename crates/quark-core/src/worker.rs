@@ -45,6 +45,9 @@ pub enum Transport {
     Mcp,
     Hook,
     File,
+    /// Read off the worker's screen by the supervisor: a prompt waiting
+    /// for a keypress, asked on the worker's behalf.
+    Screen,
 }
 
 /// Payload of a worker event.

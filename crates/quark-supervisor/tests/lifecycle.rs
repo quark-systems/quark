@@ -980,3 +980,82 @@ async fn a_refused_sign_in_blocks_the_task_until_the_worker_works_again() {
     assert_eq!(record.state, TaskState::Running);
     assert!(w.health().is_none());
 }
+
+/// Type `text` into the worker's terminal, whose echo puts it on screen.
+async fn show(pty: &PtySupervisor, session: &quark_core::session::SessionId, text: &str) {
+    pty.input(session, text.replace('\n', "\r").as_bytes())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_permission_prompt_on_screen_is_asked_and_answered_there() {
+    let env = Env::new();
+    let pty = Arc::new(PtySupervisor::new());
+    let mut config = env.config();
+    config.prompt_after = std::time::Duration::ZERO;
+    let sup = env.supervisor_with(pty.clone(), config).await;
+    let (p, t) = ids("t1");
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+    eventually("the brief", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Fix the parser.")
+    })
+    .await;
+
+    // The agent draws a permission prompt (here the terminal's echo of one).
+    show(
+        &pty,
+        &g.session,
+        "Allow execution of: 'make'?\n ● 1. Yes, allow once\n   2. No, suggest changes\n",
+    )
+    .await;
+    eventually("the prompt asked as the worker's question", async || {
+        sup.tick().await.unwrap();
+        sup.task(&p, &t).unwrap().0.state == TaskState::NeedsDecision
+    })
+    .await;
+    let record = sup.task(&p, &t).unwrap().0;
+    let key = record.open_decisions.iter().next().unwrap().clone();
+    assert!(key.starts_with("screen-"), "{key}");
+
+    // A steer waits: pasted text would land in the prompt.
+    sup.steer(&p, &t, "carry on").await.unwrap();
+    sup.tick().await.unwrap();
+    assert_eq!(
+        sup.task(&p, &t).unwrap().1.steers[0].status(),
+        SteerStatus::Queued
+    );
+
+    // An answer that names no choice is refused; one that does is pressed.
+    assert!(sup.answer(&p, &t, &key, "maybe").await.is_err());
+    let said = sup.answer(&p, &t, &key, "1").await.unwrap();
+    assert!(said.contains("1. Yes, allow once"), "{said}");
+    assert_eq!(sup.task(&p, &t).unwrap().0.state, TaskState::Running);
+    // Still drawn until the agent redraws: not asked again.
+    sup.tick().await.unwrap();
+    sup.tick().await.unwrap();
+    assert_eq!(sup.task(&p, &t).unwrap().0.state, TaskState::Running);
+
+    // Another prompt answered in the terminal instead closes by itself.
+    show(
+        &pty,
+        &g.session,
+        "Allow execution of: 'rm'?\n ● 1. Yes, allow once\n   2. No, suggest changes\n",
+    )
+    .await;
+    eventually("the second prompt asked", async || {
+        sup.tick().await.unwrap();
+        sup.task(&p, &t).unwrap().0.state == TaskState::NeedsDecision
+    })
+    .await;
+    show(&pty, &g.session, &"done\n".repeat(16)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    eventually("the question closed and the steer delivered", async || {
+        sup.tick().await.unwrap();
+        let (record, w) = sup.task(&p, &t).unwrap();
+        record.state == TaskState::Running && w.steers[0].status() != SteerStatus::Queued
+    })
+    .await;
+}

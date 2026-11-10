@@ -9,8 +9,8 @@ use quark_core::harness::{Dialog, HarnessManifest};
 use quark_core::session::Snapshot;
 
 /// Up and Down arrow keys.
-const UP: &[u8] = b"\x1b[A";
-const DOWN: &[u8] = b"\x1b[B";
+pub(crate) const UP: &[u8] = b"\x1b[A";
+pub(crate) const DOWN: &[u8] = b"\x1b[B";
 
 /// What the screen says about typing the brief now.
 #[derive(Debug, Clone, PartialEq, Eq)]

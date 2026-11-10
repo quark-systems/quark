@@ -26,6 +26,7 @@
 pub mod events;
 mod fleet;
 pub mod launch;
+pub mod prompt;
 mod ready;
 pub mod rules;
 pub mod secrets;

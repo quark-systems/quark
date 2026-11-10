@@ -307,6 +307,14 @@ impl Hands for EngineHands {
                 }
                 Ok(out)
             }
+            ToolCall::Screen { task } => {
+                let screen = self.engine.screen(&ws, task.as_str()).await.map_err(core)?;
+                let screen = screen.trim_end();
+                if screen.trim().is_empty() {
+                    return Ok(format!("{task}'s screen is blank."));
+                }
+                Ok(format!("{task}'s screen:\n```\n{screen}\n```"))
+            }
             ToolCall::Steer { task, text } => {
                 self.engine
                     .send_message(&ws, task.as_str(), text)
@@ -521,6 +529,18 @@ mod tests {
             .await
             .unwrap();
         assert!(one.contains("needs-decision [key=schema]"), "{one}");
+        engine.set_screen(
+            "t1",
+            " Allow execution of: 'make'?\n ● 1. Yes\n   2. No\n\n\n",
+        );
+        let screen = hands
+            .run(&p, &ToolCall::Screen { task: t1.clone() })
+            .await
+            .unwrap();
+        assert_eq!(
+            screen,
+            "t1's screen:\n```\n Allow execution of: 'make'?\n ● 1. Yes\n   2. No\n```"
+        );
         assert!(hands
             .run(
                 &p,

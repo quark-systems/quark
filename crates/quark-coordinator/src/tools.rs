@@ -34,6 +34,8 @@ pub enum ToolCall {
     Fleet {},
     /// One task: its instructions, state and recent worker messages.
     Task { task: TaskId },
+    /// What a running worker's terminal shows now.
+    Screen { task: TaskId },
     /// A skill's full text.
     LoadSkill { name: String },
     /// Start a task. Dispatch picks the agent from the Project's rules;
@@ -121,6 +123,7 @@ impl ToolCall {
         match self {
             ToolCall::Fleet {} => "fleet",
             ToolCall::Task { .. } => "task",
+            ToolCall::Screen { .. } => "screen",
             ToolCall::LoadSkill { .. } => "load_skill",
             ToolCall::StartTask { .. } => "start_task",
             ToolCall::Steer { .. } => "steer",
@@ -141,7 +144,10 @@ impl ToolCall {
     pub fn acts(&self) -> bool {
         !matches!(
             self,
-            ToolCall::Fleet {} | ToolCall::Task { .. } | ToolCall::LoadSkill { .. }
+            ToolCall::Fleet {}
+                | ToolCall::Task { .. }
+                | ToolCall::Screen { .. }
+                | ToolCall::LoadSkill { .. }
         )
     }
 
@@ -202,7 +208,7 @@ impl ToolCall {
         };
         match self {
             ToolCall::Fleet {} => Ok(()),
-            ToolCall::Task { task } => blank("task", task.as_str()),
+            ToolCall::Task { task } | ToolCall::Screen { task } => blank("task", task.as_str()),
             ToolCall::ChooseProfile { task, agent, rule } => {
                 blank("task", task.as_str())?;
                 match (agent, rule) {
@@ -334,7 +340,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "steer",
-            description: "Send a running worker a message. It is delivered even if the worker is replaced. `task` shows whether the worker reacted; one that leaves a steer unanswered may be stuck: check its screen or relaunch it.",
+            description: "Send a running worker a message. It is delivered even if the worker is replaced, and waits while a prompt is on the worker's screen (typed text would answer it). `task` shows whether the worker reacted; one that leaves a steer unanswered may be stuck: read its screen with `screen`, or relaunch it.",
             input_schema: object(
                 json!({"task": text("Task id."), "text": text("The message.")}),
                 &["task", "text"],
@@ -342,7 +348,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "answer",
-            description: "Answer a worker's question by its key. Answer yourself when the user's intent already settles it; otherwise use ask_user.",
+            description: "Answer a worker's question by its key. Answer yourself when the user's intent already settles it; otherwise use ask_user. A question keyed screen-... is a prompt on the worker's screen (a permission or approval request, or a menu): answer with the number of the choice and Quark selects it there. Approve only what the task needs and the user's rules allow; ask the user about anything destructive or outside the task.",
             input_schema: object(
                 json!({"task": text("Task id."), "key": text("The question's key."), "answer": text("Your answer.")}),
                 &["task", "key", "answer"],
@@ -447,6 +453,11 @@ pub fn catalog() -> Vec<ToolSpec> {
             input_schema: object(json!({}), &[]),
         },
         ToolSpec {
+            name: "screen",
+            description: "What a running worker's terminal shows now, as text: what it is doing, or a prompt or error it is stuck on. Use it when a worker seems stuck or does not react to steers.",
+            input_schema: object(json!({"task": text("Task id.")}), &["task"]),
+        },
+        ToolSpec {
             name: "task",
             description: "One task: its instructions, state, recent worker messages, and your steers with whether the worker reacted to each.",
             input_schema: object(json!({"task": text("Task id.")}), &["task"]),
@@ -494,7 +505,7 @@ mod tests {
             "ack_message" => json!({"channel": "inbox", "id": "1"}),
             "load_skill" => json!({"name": "s"}),
             "fleet" => json!({}),
-            "task" => json!({"task": "t1"}),
+            "task" | "screen" => json!({"task": "t1"}),
             other => panic!("no sample for {other}"),
         };
         for spec in catalog() {
