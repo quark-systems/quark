@@ -27,7 +27,7 @@ use quark_core::{CoreError, HarnessRegistry, Result};
 pub use account::{auth_status, config_dir};
 pub use host::{probe_version, resolve_bin, HostEnv, Keychain};
 pub use launch::{argv, LaunchVars};
-pub use prepare::{launch_warnings, prepare_folder};
+pub use prepare::{hooks_reach_quark, launch_warnings, prepare_folder};
 
 /// The built-in manifests as `(file name, TOML)`, in display order.
 pub const BUILTIN_SOURCES: &[(&str, &str)] = &[

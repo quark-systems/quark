@@ -39,6 +39,9 @@ events = { UserPromptSubmit = "busy", Stop = "turn_end" }
 busy = "hooks"
 turn_end = "hooks"
 summary = "Bob hooks (UserPromptSubmit, Stop)"
+# Bob draws its composer (❯) while it works too ("Processing… (Enter to
+# steer, Tab to queue)"), so this only says Bob has started, not that it
+# is idle.
 idle_patterns = ["❯"]
 
 [keys]

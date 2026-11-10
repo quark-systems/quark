@@ -303,8 +303,9 @@ fn init_tracing(
     use tracing_subscriber::Layer;
 
     let filter = || {
-        tracing_subscriber::EnvFilter::try_from_env("QUARKD_LOG")
-            .unwrap_or_else(|_| "quarkd=info,tower_http=info".into())
+        tracing_subscriber::EnvFilter::try_from_env("QUARKD_LOG").unwrap_or_else(|_| {
+            "quarkd=info,quark_supervisor=info,quark_worker=info,tower_http=info".into()
+        })
     };
     let stderr = tracing_subscriber::fmt::layer().with_filter(filter());
     let file = log_dir.and_then(|dir| {

@@ -126,6 +126,33 @@ pub fn launch_warnings(m: &HarnessManifest, home: Option<&Path>) -> Vec<String> 
     )]
 }
 
+/// Whether the harness's hooks reach quarkd: its settings file names
+/// `QUARK_HOOK_URL` in a hook command. `None` when Quark cannot tell (no
+/// `[hooks]` section, or an installer whose settings it does not read);
+/// `Some(false)` when it read them and found no Quark hook.
+///
+/// Quark does not install worker hooks yet, so a `busy = "hooks"` harness
+/// sends no busy signal unless the person added one. Waiting for that
+/// signal after the brief would always time out and paste the brief again
+/// into an agent already working on it.
+pub fn hooks_reach_quark(
+    m: &HarnessManifest,
+    env: &BTreeMap<String, String>,
+    home: Option<&Path>,
+) -> Option<bool> {
+    let install = m.hooks.as_ref()?.install.as_str();
+    let path = match install {
+        CLAUDE => match env.get(CONFIG_ENV).filter(|d| !d.is_empty()) {
+            Some(dir) => PathBuf::from(dir).join("settings.json"),
+            None => home?.join(".claude").join("settings.json"),
+        },
+        BOB => home?.join(".bob").join("settings").join("settings.json"),
+        _ => return None,
+    };
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    Some(text.contains("QUARK_HOOK_URL"))
+}
+
 /// Apply `edit` to the JSON object at `path` (an empty object when the file
 /// is missing), writing it back atomically only when it changed. A file
 /// that is not a JSON object is left alone with an error.
@@ -170,6 +197,52 @@ mod tests {
 
     fn read(p: &Path) -> Value {
         serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn hooks_reach_quark_only_when_a_hook_names_its_url() {
+        let reg = ManifestRegistry::builtin();
+        let bob = reg.get("bob").unwrap();
+        let claude = reg.get("claude-code").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let none = BTreeMap::new();
+        assert_eq!(hooks_reach_quark(bob, &none, Some(home)), Some(false));
+        let settings = home.join(".bob/settings/settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings,
+            r#"{"hooks":{"Stop":[{"hooks":[{"command":"other"}]}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(hooks_reach_quark(bob, &none, Some(home)), Some(false));
+        std::fs::write(
+            &settings,
+            r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"command":"curl -X POST $QUARK_HOOK_URL/UserPromptSubmit"}]}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(hooks_reach_quark(bob, &none, Some(home)), Some(true));
+
+        // Claude Code reads the account's config directory first.
+        let account = home.join("account");
+        std::fs::create_dir_all(&account).unwrap();
+        std::fs::write(
+            account.join("settings.json"),
+            r#"{"hooks":{"x":"$QUARK_HOOK_URL"}}"#,
+        )
+        .unwrap();
+        let env = BTreeMap::from([(
+            CONFIG_ENV.to_string(),
+            account.to_string_lossy().into_owned(),
+        )]);
+        assert_eq!(hooks_reach_quark(claude, &env, Some(home)), Some(true));
+        assert_eq!(hooks_reach_quark(claude, &none, Some(home)), Some(false));
+
+        // Installers Quark does not read, and no hooks at all: unknown.
+        assert_eq!(
+            hooks_reach_quark(reg.get("kiro").unwrap(), &none, Some(home)),
+            None
+        );
     }
 
     #[test]
