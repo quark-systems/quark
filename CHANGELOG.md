@@ -6,6 +6,28 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
+## 0.1.0-alpha.3
+
+Installed the same way as alpha.2. After dragging Quark over the old one, run
+`xattr -dr com.apple.quarantine /Applications/Quark.app`, open Quark, and choose Restart
+quarkd in the menu bar so the new quarkd runs.
+
+### Fixed
+
+- Coordinator chats and worker transcripts open on their newest entries. Before, a chat
+  longer than 1,000 messages hid everything newer after the app reloaded.
+- The app reads quarkd's version again when it reconnects, so it shows the right one after
+  quarkd restarts or upgrades.
+
+### Changed
+
+- The native worktree pool seeds files listed in `.worktreeinclude` and closes the other
+  gaps it had with treehouse.
+- IBM Bob workers get Quark's worker hooks, and their brief is typed once, after Bob has
+  started; a task can report a second pull request.
+- Harness API keys for default logins (Kiro too) are kept in the Keychain.
+- New Quark icons, and a docs diagram of how quarkd works.
+
 ## 0.1.0-alpha.2
 
 A fix build of the first alpha, installed the same way (download
