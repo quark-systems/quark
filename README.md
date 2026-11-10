@@ -1,4 +1,9 @@
-# Quark
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/lockups/quark-lockup-on-dark.svg">
+    <img alt="Quark" src="docs/brand/lockups/quark-lockup-on-light.svg" height="56">
+  </picture>
+</h1>
 
 Quark is an open-source control plane for running teams of coding agents on your own machine.
 You give it a goal and the repositories it touches; a coordinator agent plans the work, hands tasks to worker agents in isolated git worktrees, and brings back pull requests that have already passed your checks.
