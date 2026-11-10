@@ -61,6 +61,10 @@ pub struct PoolEntry {
     /// it until someone inspects it.
     #[serde(default)]
     pub recovery_reason: String,
+    /// The retained folder recovery moved this slot's untracked files into,
+    /// when it holds any.
+    #[serde(default)]
+    pub recovery_backup: String,
     #[serde(default)]
     pub lease_id: String,
     #[serde(default)]

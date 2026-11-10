@@ -108,27 +108,28 @@ impl Config {
         }
     }
 
-    /// What this config asks for that the native pool does not do yet; the
+    /// What this config asks for that the native pool does not do; the
     /// native pool refuses such a repo rather than act differently from
-    /// treehouse.
+    /// treehouse. Only jj workspaces remain (experimental in treehouse, and
+    /// Quark's provider works in git terms: branches, landed-work checks).
     pub fn unsupported(&self, repo: &Path) -> Option<String> {
         let selects_jj = self.vcs == "jj" && repo.join(".jj").is_dir();
-        let reason = if selects_jj {
-            "jj workspaces"
-        } else if !self.worktree_path.is_empty() {
-            "worktree_path templates"
-        } else if self.unique_leaf {
-            "unique_leaf"
-        } else if !matches!(self.apfs_sharing.as_str(), "" | "off") {
-            "apfs_sharing"
-        } else if !self.hooks.post_create.is_empty() {
-            "post_create hooks"
-        } else {
-            return None;
-        };
-        Some(format!(
-            "the native worktree pool does not support {reason} yet: {UNSUPPORTED_HINT}"
-        ))
+        selects_jj.then(|| {
+            format!("the native worktree pool does not support jj workspaces: {UNSUPPORTED_HINT}")
+        })
+    }
+
+    /// Whether fresh git slots share tracked files with the primary checkout
+    /// as APFS clones (`apfs_sharing = "fresh"`); anything but `off`/`fresh`
+    /// is refused, as treehouse refuses it.
+    pub fn apfs_sharing(&self) -> Result<bool> {
+        match self.apfs_sharing.as_str() {
+            "" | "off" => Ok(false),
+            "fresh" => Ok(true),
+            v => Err(CoreError::Invalid(format!(
+                "invalid apfs_sharing {v:?}: use off or fresh"
+            ))),
+        }
     }
 }
 
@@ -281,8 +282,13 @@ mod tests {
         assert_eq!(c.base_branch, "dev");
         assert_eq!(Config::default().max_trees(), DEFAULT_MAX_TREES);
         let c: Config = toml::from_str("worktree_path = \"{pool}/{slot}/x\"").unwrap();
-        assert!(c.unsupported(Path::new("/r")).is_some());
+        assert!(c.unsupported(Path::new("/r")).is_none());
         assert!(Config::default().unsupported(Path::new("/r")).is_none());
+        let c: Config = toml::from_str("apfs_sharing = \"fresh\"").unwrap();
+        assert!(c.apfs_sharing().unwrap());
+        let c: Config = toml::from_str("apfs_sharing = \"on\"").unwrap();
+        assert!(c.apfs_sharing().is_err());
+        assert!(!Config::default().apfs_sharing().unwrap());
     }
 
     #[test]

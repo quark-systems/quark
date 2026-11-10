@@ -572,3 +572,189 @@ fn name(native: bool) -> &'static str {
         "treehouse"
     }
 }
+
+impl Fixture {
+    /// Commit `files` and push them to origin's main.
+    fn commit(&self, files: &[(&str, &str)]) {
+        for (name, body) in files {
+            std::fs::write(self.repo.join(name), body).unwrap();
+            git(&self.repo, &["add", "-f", name]);
+        }
+        git(&self.repo, &["commit", "-q", "-m", "files"]);
+        git(&self.repo, &["push", "-q", "origin", "HEAD:main"]);
+    }
+
+    fn settings(&self, toml: &str) {
+        std::fs::write(self.repo.join("treehouse.toml"), toml).unwrap();
+        std::fs::write(self.repo.join(".git/info/exclude"), "treehouse.toml\n").unwrap();
+    }
+
+    fn seeded(&self, path: &Path) -> Vec<String> {
+        let pool = self.native().pool_dir(&self.repo).unwrap();
+        let mut v = quark_worktree::native::state::read(&pool)
+            .unwrap()
+            .worktrees
+            .into_iter()
+            .find(|w| w.path == path)
+            .unwrap()
+            .seeded_paths;
+        v.sort();
+        v
+    }
+}
+
+#[tokio::test]
+async fn both_seed_the_same_files_and_clean_each_others_seeds() {
+    let Some(fx) = Fixture::new() else { return };
+    fx.commit(&[
+        (".gitignore", ".env\n*.seed\n"),
+        (".worktreeinclude", ".env\n*.seed\n!skip.seed\n"),
+    ]);
+    for (name, body) in [(".env", "E\n"), ("a.seed", "A\n"), ("skip.seed", "S\n")] {
+        std::fs::write(fx.repo.join(name), body).unwrap();
+    }
+    let (th, native) = (fx.treehouse(), fx.native());
+
+    let t = th.acquire(&fx.repo, HOLDER, None, None).await.unwrap();
+    let n = native.acquire(&fx.repo, HOLDER, None, None).await.unwrap();
+    assert_eq!(fx.seeded(&t.path), [".env", "a.seed"]);
+    assert_eq!(fx.seeded(&n.path), fx.seeded(&t.path), "same inventory");
+    for p in [&t.path, &n.path] {
+        assert_eq!(std::fs::read_to_string(p.join(".env")).unwrap(), "E\n");
+        assert!(!p.join("skip.seed").exists());
+    }
+    // Each authenticates the other's signed inventory...
+    let theirs = th.list(&fx.repo).await.unwrap();
+    assert!(
+        theirs.iter().all(|e| e.lease_holder == HOLDER),
+        "{theirs:?}"
+    );
+    // ...and removes the other's seeds on return.
+    th.release(&fx.repo, &n.path, &n.lease_id).await.unwrap();
+    native
+        .release(&fx.repo, &t.path, &t.lease_id)
+        .await
+        .unwrap();
+    for p in [&t.path, &n.path] {
+        assert!(!p.join(".env").exists(), "{}", p.display());
+        assert!(!p.join("a.seed").exists(), "{}", p.display());
+    }
+
+    // A slot treehouse seeded and freed is reused and reseeded natively,
+    // and the other way round.
+    let n2 = native.acquire(&fx.repo, HOLDER, None, None).await.unwrap();
+    assert!(n2.path == t.path || n2.path == n.path);
+    let t2 = th.acquire(&fx.repo, HOLDER, None, None).await.unwrap();
+    assert!(t2.path == t.path || t2.path == n.path);
+    assert_ne!(t2.path, n2.path);
+    assert_eq!(fx.seeded(&n2.path), [".env", "a.seed"]);
+    native
+        .release(&fx.repo, &t2.path, &t2.lease_id)
+        .await
+        .unwrap();
+    th.release(&fx.repo, &n2.path, &n2.lease_id).await.unwrap();
+    assert!(!t2.path.join(".env").exists());
+    assert!(!n2.path.join(".env").exists());
+}
+
+#[tokio::test]
+async fn both_place_slots_alike() {
+    let Some(fx) = Fixture::new() else { return };
+    fx.settings("unique_leaf = true\n");
+    let t = fx
+        .treehouse()
+        .acquire(&fx.repo, HOLDER, None, None)
+        .await
+        .unwrap();
+    let n = fx
+        .native()
+        .acquire(&fx.repo, HOLDER, None, None)
+        .await
+        .unwrap();
+    assert_eq!(t.path.file_name().unwrap(), "repo-1");
+    assert_eq!(n.path.file_name().unwrap(), "repo-2");
+    assert_eq!(
+        n.path.parent().unwrap().parent(),
+        t.path.parent().unwrap().parent()
+    );
+
+    let Some(fx) = Fixture::new() else { return };
+    fx.settings("worktree_path = \"{repo_parent}/{repo}-wt-{slot}\"\n");
+    let base = fx.repo.parent().unwrap().to_path_buf();
+    std::fs::create_dir(base.join("repo-wt-2")).unwrap();
+    let t = fx
+        .treehouse()
+        .acquire(&fx.repo, HOLDER, None, None)
+        .await
+        .unwrap();
+    let n = fx
+        .native()
+        .acquire(&fx.repo, HOLDER, None, None)
+        .await
+        .unwrap();
+    assert_eq!(t.path, base.join("repo-wt-1"));
+    assert_eq!(n.path, base.join("repo-wt-3"), "both skip an occupied path");
+    // Either releases the other's templated slot.
+    fx.treehouse()
+        .release(&fx.repo, &n.path, &n.lease_id)
+        .await
+        .unwrap();
+    fx.native()
+        .release(&fx.repo, &t.path, &t.lease_id)
+        .await
+        .unwrap();
+    let plan = fx.native().plan_acquire(&fx.repo, None, None).unwrap();
+    let again = fx
+        .treehouse()
+        .acquire(&fx.repo, HOLDER, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        plan,
+        AcquirePlan::Reuse {
+            path: again.path.clone()
+        }
+    );
+}
+
+#[tokio::test]
+async fn both_back_up_a_recovered_slots_untracked_files_alike() {
+    let Some(fx) = Fixture::new() else { return };
+    let native = fx.native();
+    let pool = native.pool_dir(&fx.repo).unwrap();
+    let mut backups = Vec::new();
+    for use_native in [true, false] {
+        let a = native.acquire(&fx.repo, HOLDER, None, None).await.unwrap();
+        std::fs::write(a.path.join("notes.txt"), "keep\n").unwrap();
+        std::fs::remove_file(pool.join("treehouse-state.json")).unwrap();
+        let listed = if use_native {
+            native.list(&fx.repo).await.unwrap()
+        } else {
+            fx.treehouse().list(&fx.repo).await.unwrap()
+        };
+        let e = listed.iter().find(|e| e.path == a.path).unwrap().clone();
+        assert_eq!(e.status, "available", "{}: {e:?}", name(use_native));
+        assert!(!a.path.join("notes.txt").exists());
+        backups.push(e.recovery_backup.clone());
+        // Each sees the backup the other made.
+        let other = if use_native {
+            fx.treehouse().list(&fx.repo).await.unwrap()
+        } else {
+            native.list(&fx.repo).await.unwrap()
+        };
+        let o = other.iter().find(|o| o.path == a.path).unwrap();
+        assert_eq!(o.recovery_backup, e.recovery_backup);
+        let backup = PathBuf::from(&e.recovery_backup);
+        assert!(backup.join("notes.txt").exists() || backup.join("notes.txt.1").exists());
+    }
+    assert_eq!(backups[0], backups[1], "same backup folder for slot 1");
+    let backup = PathBuf::from(&backups[0]);
+    assert_eq!(
+        std::fs::read_to_string(backup.join("notes.txt")).unwrap(),
+        "keep\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(backup.join("notes.txt.1")).unwrap(),
+        "keep\n"
+    );
+}
