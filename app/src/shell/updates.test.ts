@@ -16,6 +16,11 @@ describe("describeUpdate", () => {
       .toMatchObject({ who: "M4 search", label: "Blocked", tone: "needs-you", detail: "needs a token" });
   });
 
+  it("reads the worker's name from `worker` when `task_id` is the API id", () => {
+    expect(describeUpdate(now("m4-search: done: shipped", { task_id: "tsk_9", worker: "m4-search", occasion: "done" })))
+      .toMatchObject({ who: "M4 search", label: "Finished", detail: "shipped" });
+  });
+
   it("reads the occasion from older updates that carry none", () => {
     expect(describeUpdate(now("t1: needs-decision which db?", { task_id: "t1" }))).toMatchObject({ label: "Needs your decision", detail: "which db?" });
     expect(describeUpdate(now("t1: asks: which db?", { task_id: "t1" }))).toMatchObject({ label: "Needs your decision", detail: "which db?" });

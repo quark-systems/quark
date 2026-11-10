@@ -151,6 +151,42 @@ impl DaemonEffects {
         .map_err(|e| CoreError::Backend(e.to_string()))?
         .map_err(|e| CoreError::Backend(e.to_string()))
     }
+
+    /// The API ids of the tasks the engine knows by these names, so a notice
+    /// links to `GET /v1/tasks/{id}` and the app's `#/t/<id>`. A name the
+    /// store does not know is kept as it is.
+    async fn api_ids(&self, project: &ProjectId) -> HashMap<String, String> {
+        let store = self.store.clone();
+        let pid = project.to_string();
+        match tokio::task::spawn_blocking(move || store.task_ids_by_engine(&pid)).await {
+            Ok(Ok(ids)) => ids,
+            Ok(Err(e)) => {
+                tracing::warn!(project = %project, error = %e, "could not read task ids for a notice");
+                HashMap::new()
+            }
+            Err(e) => {
+                tracing::warn!(project = %project, error = %e, "could not read task ids for a notice");
+                HashMap::new()
+            }
+        }
+    }
+}
+
+/// A notice's `task_id` (the API id when known) and `worker` (the engine's name).
+fn task_ref(
+    ids: &HashMap<String, String>,
+    task: Option<&TaskId>,
+) -> (Option<String>, Option<String>) {
+    match task {
+        None => (None, None),
+        Some(t) => {
+            let name = t.to_string();
+            (
+                Some(ids.get(&name).cloned().unwrap_or_else(|| name.clone())),
+                Some(name),
+            )
+        }
+    }
 }
 
 #[async_trait]
@@ -182,11 +218,17 @@ impl Effects for DaemonEffects {
         occasion: Occasion,
         note: &str,
     ) -> quark_core::Result<()> {
+        let ids = match task {
+            Some(_) => self.api_ids(project).await,
+            None => HashMap::new(),
+        };
+        let (task_id, worker) = task_ref(&ids, task);
         self.post(Notice {
             project_id: project.to_string(),
             kind: NoticeKind::Now,
             text: note.to_string(),
-            task_id: task.map(|t| t.to_string()),
+            task_id,
+            worker,
             occasion: Some(crate::api::automation::occasion_out(occasion)),
             items: Vec::new(),
         })
@@ -201,6 +243,11 @@ impl Effects for DaemonEffects {
     ) -> quark_core::Result<()> {
         let n = items.len();
         let s = if n == 1 { "" } else { "s" };
+        let ids = if items.iter().any(|i| i.task.is_some()) {
+            self.api_ids(project).await
+        } else {
+            HashMap::new()
+        };
         self.post(Notice {
             project_id: project.to_string(),
             kind: if returning {
@@ -214,14 +261,19 @@ impl Effects for DaemonEffects {
                 format!("{n} update{s} since the last digest")
             },
             task_id: None,
+            worker: None,
             occasion: None,
             items: items
                 .iter()
-                .map(|i| NoticeItem {
-                    occasion: crate::api::automation::occasion_out(i.occasion),
-                    summary: i.summary.clone(),
-                    task_id: i.task.as_ref().map(|t| t.to_string()),
-                    at: i.at.format(&Rfc3339).unwrap_or_default(),
+                .map(|i| {
+                    let (task_id, worker) = task_ref(&ids, i.task.as_ref());
+                    NoticeItem {
+                        occasion: crate::api::automation::occasion_out(i.occasion),
+                        summary: i.summary.clone(),
+                        task_id,
+                        worker,
+                        at: i.at.format(&Rfc3339).unwrap_or_default(),
+                    }
                 })
                 .collect(),
         })
@@ -247,10 +299,10 @@ mod tests {
     use std::path::PathBuf;
 
     use quark_core::Seq;
-    use quark_systems::CreateProject;
+    use quark_systems::{CreateProject, TaskState};
 
     use super::*;
-    use crate::engine::{StubEngine, StubWrite};
+    use crate::engine::{EngineTask, FleetSnapshot, StubEngine, StubWrite};
 
     fn messages(stub: &StubEngine) -> Vec<(String, String)> {
         stub.writes()
@@ -317,10 +369,44 @@ mod tests {
             log: Arc::new(log.clone()),
             adapter: stub.clone(),
         };
+        // The engine knows the task as t1; the store and the app by its API id.
+        store
+            .apply_snapshot(
+                &pid,
+                &FleetSnapshot {
+                    tasks: vec![EngineTask {
+                        id: "t1".into(),
+                        title: "t1 title".into(),
+                        kind: None,
+                        state: TaskState::Done,
+                        state_note: None,
+                        state_source: None,
+                        harness: None,
+                        pull_request_url: None,
+                        terminal: None,
+                        worktree: None,
+                        worktree_at: None,
+                        unhealthy: None,
+                        unanswered_since: None,
+                    }],
+                },
+            )
+            .unwrap();
+        let api_id = store.task_id_for_engine(&pid, "t1").unwrap().unwrap();
+        assert_ne!(api_id, "t1");
         let p = ProjectId::new(pid.clone());
         effects.wake(&p, None, "check the nightly").await.unwrap();
         effects
             .notify(&p, Some(&TaskId::from("t1")), Occasion::Done, "t1: done")
+            .await
+            .unwrap();
+        effects
+            .notify(
+                &p,
+                Some(&TaskId::from("gone")),
+                Occasion::Done,
+                "gone: done",
+            )
             .await
             .unwrap();
         effects
@@ -342,10 +428,16 @@ mod tests {
             .into_iter()
             .filter(|e| e.event_type == EventType::NoticePosted)
             .collect();
-        assert_eq!(notices.len(), 1);
+        assert_eq!(notices.len(), 2);
         assert_eq!(notices[0].payload["text"], "t1: done");
         assert_eq!(notices[0].payload["kind"], "now");
         assert_eq!(notices[0].payload["occasion"], "done");
+        // The link goes to the task's API id, not the engine's name for it.
+        assert_eq!(notices[0].payload["task_id"], api_id.as_str());
+        assert_eq!(notices[0].payload["worker"], "t1");
+        // A name the store does not know is passed on as it is.
+        assert_eq!(notices[1].payload["task_id"], "gone");
+        assert_eq!(notices[1].payload["worker"], "gone");
         assert_eq!(
             messages(&stub),
             [("t1".to_string(), "rebase please".to_string())]
