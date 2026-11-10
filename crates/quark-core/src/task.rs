@@ -55,7 +55,7 @@ pub trait TaskMachine: Send + Sync {
 /// | any other | `DecisionAnswered` | unchanged (the worker moved on) |
 /// | `Running`, `NeedsDecision` | `Blocked` / `Paused` | `Blocked` / `Paused` |
 /// | `Blocked`, `Paused` | `Resumed` | `Running` |
-/// | `Running`, `NeedsDecision` | `InReview` | `InReview` |
+/// | `Running`, `NeedsDecision`, `InReview` | `InReview` | `InReview` (a later pull request) |
 /// | `InReview` | `Completed` | `Done` |
 /// | `Running`, `NeedsDecision` | `Completed` | `Done` (reports, local-only) |
 /// | any but `Done`, `Failed` | `Failed` / `Cancelled` | `Failed` |
@@ -81,7 +81,11 @@ impl TaskMachine for ReferenceMachine {
             (S::Running | S::NeedsDecision, TaskEvent::Paused { .. }) => Some(S::Paused),
             (S::Blocked | S::Paused, TaskEvent::Resumed) => Some(S::Running),
             // A worker can finish without waiting for its question.
-            (S::Running | S::NeedsDecision, TaskEvent::InReview { .. }) => Some(S::InReview),
+            // A worker in review that opens another pull request reports
+            // it too; refusing it would lose that pull request.
+            (S::Running | S::NeedsDecision | S::InReview, TaskEvent::InReview { .. }) => {
+                Some(S::InReview)
+            }
             (S::InReview | S::Running | S::NeedsDecision, TaskEvent::Completed) => Some(S::Done),
             (s, TaskEvent::Failed { .. } | TaskEvent::Cancelled) if !terminal && s != S::Failed => {
                 Some(S::Failed)
@@ -174,6 +178,22 @@ mod tests {
         ]
         .concat());
         assert_eq!(s, Ok(TaskState::Done));
+    }
+
+    #[test]
+    fn a_second_pull_request_keeps_the_task_in_review() {
+        let pr = |n: &str| TaskEvent::InReview {
+            pull_request: Some(format!("https://github.com/o/r/pull/{n}")),
+        };
+        let s = run(&[
+            TaskEvent::Queued { title: "t".into() },
+            TaskEvent::Started {
+                generation: "1".into(),
+            },
+            pr("1"),
+            pr("2"),
+        ]);
+        assert_eq!(s, Ok(TaskState::InReview));
     }
 
     #[test]

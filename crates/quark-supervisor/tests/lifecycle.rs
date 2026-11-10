@@ -800,6 +800,52 @@ async fn a_brief_with_no_busy_signal_is_typed_again() {
     .await;
 }
 
+/// Takes its brief at once and works quietly, sending no busy signal, the
+/// way IBM Bob does when no hook reaches quarkd.
+const QUIET_WORKER_AGENT: &str = r#"#!/bin/sh
+dir=$(dirname "$QUARK_STATUS_FILE")
+echo "ready for work"
+while IFS= read -r line; do
+  printf '%s\n' "$line" | tr -d '\033\r' | sed 's/\[20[01]~//g' >> "$dir/received"
+done
+"#;
+
+#[tokio::test]
+async fn a_brief_is_typed_once_when_no_hook_reaches_quark() {
+    let mut env = Env::new();
+    paste_agent(&mut env, QUIET_WORKER_AGENT, "hooks");
+    // Its hooks are Bob's settings file, which names no Quark hook.
+    let manifests = env.manifests.clone();
+    let mut m = (**manifests.get("fake").unwrap()).clone();
+    m.hooks = Some(quark_core::harness::Hooks {
+        install: "bob-settings".into(),
+        events: Default::default(),
+    });
+    env.manifests = Arc::new(quark_harness::ManifestRegistry::with([m]));
+    let mut config = env.config();
+    config.worker_urls = Some(quark_supervisor::WorkerUrls {
+        base: "http://127.0.0.1:9/worker".into(),
+    });
+    config.brief_confirm = std::time::Duration::from_millis(500);
+    let sup = env
+        .supervisor_with(Arc::new(PtySupervisor::new()), config)
+        .await;
+    let g = sup.spawn(env.request("t1")).await.unwrap().current.unwrap();
+    eventually("the brief", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Fix the parser.")
+    })
+    .await;
+    // Longer than the confirm path's two waits would take.
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    let briefs = received(&env, "t1", &g.id)
+        .iter()
+        .filter(|l| *l == "Fix the parser.")
+        .count();
+    assert_eq!(briefs, 1);
+}
+
 #[tokio::test]
 async fn a_quiet_worker_is_nudged_unless_a_menu_is_up() {
     let env = Env::new();

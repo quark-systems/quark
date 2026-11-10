@@ -535,6 +535,13 @@ impl Supervisor {
         {
             tracing::warn!(%project, %task, harness = %manifest.id, "{warning}");
         }
+        // A brief is confirmed by the busy hook only when that hook can
+        // reach quarkd; otherwise waiting for it always times out.
+        let hooks_live = quark_harness::hooks_reach_quark(
+            &manifest,
+            &plan.env,
+            self.config.agent_home.as_deref(),
+        ) != Some(false);
         let mut policy = a.policy.clone();
         for p in [&worktree.path, &dir] {
             if !policy.writable.contains(p) {
@@ -594,8 +601,15 @@ impl Supervisor {
             .await?;
         }
         if plan.type_brief {
-            self.type_brief(task, &generation, &info.id, &manifest, &plan.brief)
-                .await?;
+            self.type_brief(
+                task,
+                &generation,
+                &info.id,
+                &manifest,
+                &plan.brief,
+                hooks_live,
+            )
+            .await?;
         }
         // Missed steering went into the brief, so it has been delivered.
         for s in steers {
@@ -623,7 +637,9 @@ impl Supervisor {
     /// harness that reports `busy` through hooks is watched for it: a brief
     /// pasted while the agent's input was not yet live is lost without a
     /// trace, so without the signal Enter is pressed (a paste left in the
-    /// composer) and then the brief is pasted once more.
+    /// composer) and then the brief is pasted once more. Only when its hooks
+    /// reach quarkd (`hooks_live`): without them no signal ever comes, and
+    /// the second paste lands in an agent already working on the first.
     async fn type_brief(
         &self,
         task: &TaskId,
@@ -631,8 +647,11 @@ impl Supervisor {
         session: &SessionId,
         manifest: &HarnessManifest,
         brief: &str,
+        hooks_live: bool,
     ) -> Result<()> {
-        let confirm = manifest.turn_signals.busy == "hooks" && self.config.worker_urls.is_some();
+        let confirm = manifest.turn_signals.busy == "hooks"
+            && hooks_live
+            && self.config.worker_urls.is_some();
         let mut after = if confirm {
             self.log.head().await?
         } else {
@@ -1436,7 +1455,15 @@ impl Supervisor {
             match self.transition(project, &env.task, e).await {
                 Ok(()) => n += 1,
                 Err(err) => {
-                    tracing::info!(task = %env.task, error = %err, "worker message changes nothing");
+                    if let quark_core::WorkerMessage::Done {
+                        pull_request: Some(pr),
+                        ..
+                    } = &env.message
+                    {
+                        tracing::warn!(task = %env.task, %pr, error = %err, "a pull request the worker reported was not recorded");
+                    } else {
+                        tracing::info!(task = %env.task, error = %err, "worker message changes nothing");
+                    }
                     break;
                 }
             }
