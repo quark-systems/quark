@@ -93,7 +93,11 @@ public struct Notice: Codable, Equatable, Sendable {
     /// `now` (one update), `digest` or `return`.
     public var kind: String
     public var text: String
+    /// The task's API id, which `DeskLink.worker` opens. Updates from before
+    /// quarkd resolved it carry the engine's name for the task here instead.
     public var taskId: String?
+    /// The engine's name for the task, as `text` starts with it.
+    public var worker: String?
     public var occasion: String?
 }
 

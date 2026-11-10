@@ -35,9 +35,13 @@ export interface ProjectAutomation {
 
 /** Something the automation engine told you (a `notice.posted` event): one update now, or a digest of what waited. */
 export type NoticeKind = "now" | "digest" | "return";
-export interface NoticeItem { occasion: AwayOccasion; summary: string; task_id?: string | null; at: string }
+/**
+ * `task_id` is the task's API id (`#/t/<id>`) when the daemon knows it; older updates carry the
+ * engine's name for it there instead. `worker` is that engine name, which `text` starts with.
+ */
+export interface NoticeItem { occasion: AwayOccasion; summary: string; task_id?: string | null; worker?: string | null; at: string }
 export interface Notice {
-  project_id: string; kind: NoticeKind; text: string; task_id?: string | null;
+  project_id: string; kind: NoticeKind; text: string; task_id?: string | null; worker?: string | null;
   /** What happened, for `now` updates. Older updates carry none. */
   occasion?: AwayOccasion | null;
   items?: NoticeItem[];

@@ -10693,11 +10693,18 @@
               "string",
               "null"
             ],
-            "description": "The task it is about, for `now`."
+            "description": "The task it is about, for `now`: its API id (`GET /v1/tasks/{id}`)\nwhen the daemon knows it, else the engine's name for it."
           },
           "text": {
             "type": "string",
             "description": "One line for `now`; a heading for digests."
+          },
+          "worker": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's name for that task, as `text` starts with it."
           }
         }
       },
@@ -10724,7 +10731,15 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The task's API id when the daemon knows it, else the engine's name."
+          },
+          "worker": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's name for the task, as `summary` starts with it."
           }
         }
       },

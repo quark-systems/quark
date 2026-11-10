@@ -48,9 +48,10 @@ function inferOccasion(line: string): AwayOccasion {
 
 export function describeUpdate(n: Notice, title?: string): UpdateView {
   let line = n.text.trim();
-  if (n.task_id && line.startsWith(`${n.task_id}: `)) line = line.slice(n.task_id.length + 2);
+  const name = n.worker ?? n.task_id;
+  if (name && line.startsWith(`${name}: `)) line = line.slice(name.length + 2);
   const occasion = n.occasion ?? inferOccasion(line);
   const detail = line.replace(VERB, "").replace(/^no activity for a while$/, "");
-  const who = title?.trim() || (n.task_id ? humanize(n.task_id) : undefined);
+  const who = title?.trim() || (name ? humanize(name) : undefined);
   return { who, ...WORDS[occasion], detail };
 }

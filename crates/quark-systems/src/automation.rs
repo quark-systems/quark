@@ -161,9 +161,13 @@ pub struct Notice {
     pub kind: NoticeKind,
     /// One line for `now`; a heading for digests.
     pub text: String,
-    /// The task it is about, for `now`.
+    /// The task it is about, for `now`: its API id (`GET /v1/tasks/{id}`)
+    /// when the daemon knows it, else the engine's name for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// The engine's name for that task, as `text` starts with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
     /// What happened, for `now`: the app words and colors the update by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occasion: Option<AwayOccasion>,
@@ -188,8 +192,12 @@ pub enum NoticeKind {
 pub struct NoticeItem {
     pub occasion: AwayOccasion,
     pub summary: String,
+    /// The task's API id when the daemon knows it, else the engine's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// The engine's name for the task, as `summary` starts with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
     /// RFC 3339.
     pub at: String,
 }
