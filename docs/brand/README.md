@@ -25,7 +25,8 @@ from the same parts (units, inner cells, strokes) that says what it does to the 
   outlined (IBM Plex Sans SemiBold, lowercase, tracking -0.015em) so no font is needed.
 - `app-icons/<name>-app-icon.svg` and `-1024.png`: macOS icon grid (824px tile on a 1024
   canvas). `app/src-tauri/icons/` is generated from the Quark one with
-  `npx tauri icon docs/brand/app-icons/quark-app-icon-1024.png`.
+  `npx tauri icon docs/brand/app-icons/quark-app-icon-1024.png` (`app/src-tauri/app-icon.png`,
+  Tauri's default source, is a copy of it).
 - `social/<name>-social-preview-1280x640.png`: GitHub social preview images (repo Settings → General → Social preview; upload by hand, there is no API).
 - `menubar/quarkbar-template.svg`: QuarkBar's menu bar template image (black on transparent,
   18pt canvas). `mac/Resources/MenuBarIcon.png` and `@2x` are renders of it.

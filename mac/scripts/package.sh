@@ -11,7 +11,14 @@ mac="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$mac/.." && pwd)"
 # quarkd takes its version from the workspace.
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
-build="$(git -C "$repo" rev-list --count HEAD 2>/dev/null || echo 1)"
+# QuarkBar's CFBundleVersion. It must grow with every build: macOS caches an app's icon
+# (Notification Center, Dock) per bundle version, so an unchanged number keeps showing the
+# icon of the first build it saw. A shallow clone would count 1, so refuse one.
+if [ "$(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+  echo "package.sh needs full git history for the build number (checkout fetch-depth: 0)" >&2
+  exit 1
+fi
+build="$(git -C "$repo" rev-list --count HEAD 2>/dev/null || date +%s)"
 app="$mac/dist/QuarkBar.app"
 
 echo "building quarkd $version"
