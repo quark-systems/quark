@@ -78,7 +78,11 @@ jobs:
     needs: version
     runs-on: macos-15
     steps:
+      # Full history: package.sh numbers QuarkBar's build (CFBundleVersion) by commit
+      # count, and a shallow clone makes it 1 on every release.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
