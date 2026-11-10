@@ -11,6 +11,9 @@
 //! `skipDangerousModePermissionPrompt` in `settings.json`. Nothing is
 //! written into the folder itself, so a worker's worktree stays clean.
 //!
+//! IBM Bob gets Quark's worker hooks in its settings (Bob keeps one
+//! settings file), each a no-op unless `QUARK_HOOK_URL` is set.
+//!
 //! IBM Bob asks before every read, write or edit outside its workspace,
 //! whatever `--auto-approve` says, unless the person opted those tool groups
 //! in; a worker writes its status file outside its worktree, so it would
@@ -42,6 +45,12 @@ pub fn prepare_folder(
     env: &BTreeMap<String, String>,
     home: Option<&Path>,
 ) -> std::io::Result<()> {
+    if let Some(h) = m.hooks.as_ref().filter(|h| h.install == BOB) {
+        return match home {
+            Some(home) => install_bob_hooks(h, home),
+            None => Ok(()),
+        };
+    }
     if m.hooks.as_ref().is_none_or(|h| h.install != CLAUDE) {
         return Ok(());
     }
@@ -78,6 +87,57 @@ pub fn prepare_folder(
     })?;
     edit_json(&settings, |v| {
         v["skipDangerousModePermissionPrompt"] = json!(true);
+    })
+}
+
+/// Marks the hook commands Quark owns in a harness's settings.
+const QUARK_HOOK_MARK: &str = "# QUARK WORKER HOOK";
+
+/// The command a Bob hook runs for `event`: POST to the worker's hook URL
+/// when Bob runs as a Quark worker, nothing otherwise. Bob's own output
+/// and the hook payload are not used, and a failure never fails the hook.
+fn bob_hook_command(event: &str) -> String {
+    format!(
+        "[ -n \"$QUARK_HOOK_URL\" ] && curl -fsS -m 5 -X POST -d '' \"$QUARK_HOOK_URL/{event}\" >/dev/null 2>&1 </dev/null; exit 0 {QUARK_HOOK_MARK}"
+    )
+}
+
+/// Add a Quark hook for each event the manifest maps to Bob's settings
+/// (`~/.bob/settings/settings.json`: Bob keeps one login and one settings
+/// file, so a worker reads the person's). The hook does nothing outside a
+/// Quark worker. Other hooks are left as they are, and an outdated Quark
+/// hook is replaced.
+fn install_bob_hooks(h: &quark_core::harness::Hooks, home: &Path) -> std::io::Result<()> {
+    let path = home.join(".bob").join("settings").join("settings.json");
+    edit_json(&path, |v| {
+        if !v["hooks"].is_object() {
+            v["hooks"] = json!({});
+        }
+        for event in h.events.keys() {
+            let list = &mut v["hooks"][event.as_str()];
+            if !list.is_array() {
+                *list = json!([]);
+            }
+            let list = list.as_array_mut().expect("an array");
+            let ours = |g: &Value| {
+                g["hooks"].as_array().is_some_and(|hs| {
+                    hs.iter().any(|h| {
+                        h["command"]
+                            .as_str()
+                            .is_some_and(|c| c.contains(QUARK_HOOK_MARK))
+                    })
+                })
+            };
+            let entry = json!({"hooks": [{
+                "type": "command",
+                "command": bob_hook_command(event),
+                "timeout": 10,
+            }]});
+            match list.iter().position(ours) {
+                Some(i) => list[i] = entry,
+                None => list.push(entry),
+            }
+        }
     })
 }
 
@@ -243,6 +303,70 @@ mod tests {
             hooks_reach_quark(reg.get("kiro").unwrap(), &none, Some(home)),
             None
         );
+    }
+
+    #[test]
+    fn installs_bob_hooks_once_and_keeps_the_rest() {
+        let reg = ManifestRegistry::builtin();
+        let bob = reg.get("bob").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let settings = home.join(".bob/settings/settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings,
+            r#"{"ui":{"theme":"dark"},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"theirs"}]}]}}"#,
+        )
+        .unwrap();
+        let none = BTreeMap::new();
+        assert_eq!(hooks_reach_quark(bob, &none, Some(home)), Some(false));
+        let folder = home.join("ws");
+        prepare_folder(bob, &folder, &none, Some(home)).unwrap();
+        prepare_folder(bob, &folder, &none, Some(home)).unwrap();
+        let v = read(&settings);
+        assert_eq!(v["ui"]["theme"], "dark");
+        let stop = v["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "theirs");
+        for event in bob.hooks.as_ref().unwrap().events.keys() {
+            let list = v["hooks"][event.as_str()].as_array().unwrap();
+            let ours: Vec<_> = list
+                .iter()
+                .filter_map(|g| g["hooks"][0]["command"].as_str())
+                .filter(|c| c.contains(QUARK_HOOK_MARK))
+                .collect();
+            assert_eq!(ours.len(), 1, "{event}");
+            assert!(ours[0].contains(&format!("$QUARK_HOOK_URL/{event}")));
+        }
+        assert_eq!(hooks_reach_quark(bob, &none, Some(home)), Some(true));
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn the_bob_hook_posts_only_inside_a_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let curl = dir.path().join("curl");
+        std::fs::write(&curl, "#!/bin/sh\necho \"$@\" >> \"$0.args\"\nexit 7\n").unwrap();
+        std::fs::set_permissions(&curl, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = format!("{}:/usr/bin:/bin", dir.path().display());
+        let run = |url: Option<&str>| {
+            let mut c = std::process::Command::new("sh");
+            c.arg("-c").arg(bob_hook_command("Stop")).env("PATH", &path);
+            c.env_remove("QUARK_HOOK_URL");
+            if let Some(u) = url {
+                c.env("QUARK_HOOK_URL", u);
+            }
+            c.output().unwrap()
+        };
+        let out = run(None);
+        assert!(out.status.success() && out.stdout.is_empty());
+        assert!(!dir.path().join("curl.args").exists());
+        // A failing POST still succeeds, silently.
+        let out = run(Some("http://127.0.0.1:9/worker/hooks/t/g"));
+        assert!(out.status.success() && out.stdout.is_empty());
+        let args = std::fs::read_to_string(dir.path().join("curl.args")).unwrap();
+        assert!(args.contains("http://127.0.0.1:9/worker/hooks/t/g/Stop"));
     }
 
     #[test]

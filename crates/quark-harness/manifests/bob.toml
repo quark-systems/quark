@@ -33,12 +33,14 @@ team_env = "BOB_TEAM_ID"
 
 [hooks]
 install = "bob-settings"
-events = { UserPromptSubmit = "busy", Stop = "turn_end" }
+# Quark adds a hook per event to Bob's settings (a no-op outside a worker).
+# SessionStart (Bob 2.1) says Bob's input is live, before the brief.
+events = { SessionStart = "ready", UserPromptSubmit = "busy", Stop = "turn_end" }
 
 [turn_signals]
 busy = "hooks"
 turn_end = "hooks"
-summary = "Bob hooks (UserPromptSubmit, Stop)"
+summary = "Bob hooks (SessionStart, UserPromptSubmit, Stop)"
 # Bob draws its composer (❯) while it works too ("Processing… (Enter to
 # steer, Tab to queue)"), so this only says Bob has started, not that it
 # is idle.

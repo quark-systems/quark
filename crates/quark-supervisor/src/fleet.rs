@@ -112,6 +112,8 @@ impl Steer {
             return;
         }
         match message {
+            // The agent starting says nothing about a message.
+            WorkerMessage::Signal { signal } if signal == "ready" => {}
             WorkerMessage::Signal { signal } if signal == "busy" => {
                 self.read_at.get_or_insert(at);
             }

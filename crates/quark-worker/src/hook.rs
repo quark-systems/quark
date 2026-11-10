@@ -5,7 +5,7 @@
 //! is the harness's hook name (`Stop`, `UserPromptSubmit`, ...). The task's
 //! manifest maps that name to a neutral signal in `hooks.events`:
 //!
-//! - `busy`, `turn_end` and any other signal name become
+//! - `ready`, `busy`, `turn_end` and any other signal name become
 //!   [`WorkerMessage::Signal`]; the harness payload is not kept.
 //! - `report` means the body is itself a [`WorkerMessage`] (`{"tool":
 //!   "report", ...}`), for harnesses whose hooks can run a worker command.
@@ -25,7 +25,7 @@ use crate::recorder::{Recorder, WorkerIdentity};
 pub const REPORT: &str = "report";
 
 /// Signals a hook may name directly without a manifest mapping.
-pub const NEUTRAL: &[&str] = &["busy", "turn_end", REPORT];
+pub const NEUTRAL: &[&str] = &["ready", "busy", "turn_end", REPORT];
 
 /// The message one hook call carries.
 pub fn hook_message(

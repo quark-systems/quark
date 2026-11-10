@@ -32,6 +32,13 @@ const BATCH: usize = 512;
 /// that never clears cannot be driven forever.
 const MAX_DIALOG_KEYS: usize = 12;
 
+/// The worker signal an agent's start-up hook sends once its input is live.
+const READY: &str = "ready";
+
+fn is_signal(m: &quark_core::WorkerMessage, name: &str) -> bool {
+    matches!(m, quark_core::WorkerMessage::Signal { signal } if signal == name)
+}
+
 /// Tunables. [`Config::new`] has the defaults.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -561,6 +568,8 @@ impl Supervisor {
                 policy,
             })
             .await?;
+        // The agent's `ready` hook can fire as soon as it starts.
+        let before_launch = self.log.head().await?;
         let info = self
             .sessions
             .create(&SessionSpec {
@@ -607,7 +616,7 @@ impl Supervisor {
                 &info.id,
                 &manifest,
                 &plan.brief,
-                hooks_live,
+                hooks_live.then_some(before_launch),
             )
             .await?;
         }
@@ -638,7 +647,8 @@ impl Supervisor {
     /// pasted while the agent's input was not yet live is lost without a
     /// trace, so without the signal Enter is pressed (a paste left in the
     /// composer) and then the brief is pasted once more. Only when its hooks
-    /// reach quarkd (`hooks_live`): without them no signal ever comes, and
+    /// reach quarkd (`hooks_since`, the log head before the agent started):
+    /// without them no signal ever comes, and
     /// the second paste lands in an agent already working on the first.
     async fn type_brief(
         &self,
@@ -647,11 +657,25 @@ impl Supervisor {
         session: &SessionId,
         manifest: &HarnessManifest,
         brief: &str,
-        hooks_live: bool,
+        hooks_since: Option<Seq>,
     ) -> Result<()> {
-        let confirm = manifest.turn_signals.busy == "hooks"
-            && hooks_live
-            && self.config.worker_urls.is_some();
+        let hooked = hooks_since.is_some() && self.config.worker_urls.is_some();
+        let confirm = manifest.turn_signals.busy == "hooks" && hooked;
+        let says_ready = hooked
+            && manifest
+                .hooks
+                .as_ref()
+                .is_some_and(|h| h.events.values().any(|s| s == READY));
+        if says_ready {
+            let mut from = hooks_since.unwrap_or(Seq::ZERO);
+            let wait = self.config.ready_timeout;
+            if !self
+                .heard(task, generation, &mut from, wait, |m| is_signal(m, READY))
+                .await?
+            {
+                tracing::warn!(%task, %generation, harness = %manifest.id, "no ready signal from the agent; going by its screen");
+            }
+        }
         let mut after = if confirm {
             self.log.head().await?
         } else {
@@ -684,14 +708,28 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Whether the worker of `generation` sends any message within `wait`,
-    /// reading the log from `after` on.
+    /// Whether the worker of `generation` sends any message but `ready`
+    /// within `wait`, reading the log from `after` on.
     async fn heard_from(
         &self,
         task: &TaskId,
         generation: &str,
         after: &mut Seq,
         wait: Duration,
+    ) -> Result<bool> {
+        self.heard(task, generation, after, wait, |m| !is_signal(m, READY))
+            .await
+    }
+
+    /// Whether the worker of `generation` sends a message `wanted` accepts
+    /// within `wait`, reading the log from `after` on.
+    async fn heard(
+        &self,
+        task: &TaskId,
+        generation: &str,
+        after: &mut Seq,
+        wait: Duration,
+        wanted: impl Fn(&quark_core::WorkerMessage) -> bool,
     ) -> Result<bool> {
         let deadline = Instant::now() + wait;
         loop {
@@ -705,7 +743,7 @@ impl Supervisor {
                     .iter()
                     .filter(|e| is_worker_message(e) && e.task.as_ref() == Some(task))
                     .filter_map(|e| e.decode::<WorkerEnvelope>().ok())
-                    .any(|env| env.generation == generation);
+                    .any(|env| env.generation == generation && wanted(&env.message));
                 if heard {
                     return Ok(true);
                 }
