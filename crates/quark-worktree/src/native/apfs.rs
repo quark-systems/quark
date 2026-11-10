@@ -748,4 +748,66 @@ mod tests {
             "APFS sharing: cloned=2 logical_bytes=300000 acl=1 below_threshold=2"
         );
     }
+
+    /// On a Mac (whose temp directory is APFS) identical large tracked
+    /// files are cloned and everything else is kept.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn clones_identical_large_files_on_apfs() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let repo = base.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        let big = vec![7u8; 200 * 1024];
+        std::fs::write(repo.join("big.bin"), &big).unwrap();
+        std::fs::write(repo.join("changed.bin"), &big).unwrap();
+        std::fs::write(repo.join("small.txt"), "small").unwrap();
+        std::fs::set_permissions(repo.join("big.bin"), std::fs::Permissions::from_mode(0o640))
+            .unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "files"]);
+        let wt = base.join("wt");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+        );
+        // The primary checkout's copy now differs: that file is kept.
+        let mut other = big.clone();
+        other[0] = 8;
+        std::fs::write(repo.join("changed.bin"), &other).unwrap();
+        let mtime = std::fs::metadata(wt.join("big.bin"))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        let report = share(&repo, &wt).unwrap();
+        assert_eq!(report.reason, "", "{report}");
+        assert_eq!(report.cloned, 1, "{report}");
+        assert_eq!(report.skipped.get("below_threshold"), Some(&1), "{report}");
+        assert_eq!(
+            report.skipped.get("different_content"),
+            Some(&1),
+            "{report}"
+        );
+        assert_eq!(std::fs::read(wt.join("big.bin")).unwrap(), big);
+        let meta = std::fs::metadata(wt.join("big.bin")).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        assert_eq!(meta.modified().unwrap(), mtime);
+        // Independent: editing the clone leaves the source alone.
+        std::fs::write(wt.join("big.bin"), b"edited").unwrap();
+        assert_eq!(std::fs::read(repo.join("big.bin")).unwrap(), big);
+        // No staging is left behind.
+        let leftovers: Vec<_> = std::fs::read_dir(&wt)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".treehouse-sharing")
+            })
+            .collect();
+        assert!(leftovers.is_empty());
+    }
 }
