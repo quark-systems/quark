@@ -48,21 +48,50 @@ final class Daemon: ObservableObject {
         return FileManager.default.fileExists(atPath: plist.path)
     }
 
-    /// The first time QuarkBar.app runs, it starts quarkd unless one is
-    /// already answering (started some other way), and opens itself at login.
+    /// The build of QuarkBar that last turned the LaunchAgent on, so that
+    /// afterwards an agent that is off was turned off on purpose (Stop quarkd)
+    /// and stays off, until another build runs. The defaults are shared by
+    /// every QuarkBar.app (a build from source in mac/dist, an installed
+    /// Quark), so a plain flag set by one left a freshly installed one never
+    /// starting quarkd. Not the old "quarkdSetUp" key, which was also set when
+    /// another quarkd was answering.
+    private static let agentKey = "quarkdAgentOnFor"
+    /// The same for opening QuarkBar at login, which is per app bundle too.
+    private static let loginKey = "loginItemSetUpFor"
+
+    /// This QuarkBar.app: where it is, its version and its build number.
+    static var buildIdentity: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return "\(Bundle.main.bundleURL.path)#\(version)(\(build))"
+    }
+
+    private static func doneByThisBuild(_ key: String) -> Bool {
+        UserDefaults.standard.string(forKey: key) == buildIdentity
+    }
+
+    private static func markDoneByThisBuild(_ key: String) {
+        UserDefaults.standard.set(buildIdentity, forKey: key)
+    }
+
+    /// The first time each build of QuarkBar.app runs, it opens itself at
+    /// login and turns quarkd's LaunchAgent on, unless a quarkd is already
+    /// answering (started some other way, e.g. from source); then it looks
+    /// again at its next launch, which is the next login at the latest.
     /// Quark.app opens the QuarkBar inside it on every launch, so installing
     /// Quark and opening it once sets up all three.
     func startIfFirstRun() {
-        let loginKey = "loginItemSetUp"
-        if state != .notBundled, !UserDefaults.standard.bool(forKey: loginKey) {
-            UserDefaults.standard.set(true, forKey: loginKey)
+        if state != .notBundled, !Daemon.doneByThisBuild(Daemon.loginKey) {
+            Daemon.markDoneByThisBuild(Daemon.loginKey)
             if !launchesAtLogin { setLaunchesAtLogin(true) }
         }
-        let key = "quarkdSetUp"
-        guard state == .off, !UserDefaults.standard.bool(forKey: key) else { return }
+        if state == .managed || state == .needsApproval {
+            Daemon.markDoneByThisBuild(Daemon.agentKey)
+        }
+        guard state == .off, !Daemon.doneByThisBuild(Daemon.agentKey) else { return }
         Task {
             await store.load()
-            UserDefaults.standard.set(true, forKey: key)
             if !store.isConnected { start() }
         }
     }
@@ -70,6 +99,7 @@ final class Daemon: ObservableObject {
     func start() {
         do {
             try agent.register()
+            Daemon.markDoneByThisBuild(Daemon.agentKey)
             lastError = nil
         } catch {
             lastError = error.localizedDescription
