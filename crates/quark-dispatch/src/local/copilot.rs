@@ -74,7 +74,7 @@ impl CopilotUsage {
     }
 
     /// The Copilot CLI's token, or `Err` when the Keychain withheld it.
-    async fn cli_token(&self, grant: bool) -> Result<Option<String>, ()> {
+    async fn cli_token(&self, grant: bool) -> Result<Option<String>, support::Withheld> {
         let Some(home) = &self.copilot_home else {
             return Ok(None);
         };
@@ -160,7 +160,7 @@ impl CopilotUsage {
         match self.cli_token(grant).await {
             Ok(Some(t)) => tried.push(t),
             Ok(None) => {}
-            Err(()) => withheld = true,
+            Err(support::Withheld) => withheld = true,
         }
         tried.extend(self.apps_token());
         tried.extend(self.gh_hosts_token());

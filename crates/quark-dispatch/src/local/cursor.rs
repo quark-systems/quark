@@ -127,7 +127,7 @@ impl CursorUsage {
     }
 
     /// The CLI's login, or `Err` when the Keychain withheld it.
-    async fn cli_login(&self, grant: bool) -> Result<Option<Login>, ()> {
+    async fn cli_login(&self, grant: bool) -> Result<Option<Login>, support::Withheld> {
         if let Some(f) = &self.cli_auth {
             if let Ok(Some(v)) = support::read_json(f) {
                 if let Some(t) = support::text(v.get("accessToken")) {
@@ -180,14 +180,14 @@ impl CursorUsage {
                     Err(e) => last = Some(e),
                 },
                 Ok(None) => {}
-                Err(()) if last.is_none() => {
+                Err(support::Withheld) if last.is_none() => {
                     return fail(
                         "unavailable",
                         &support::withheld_message("Cursor's sign-in"),
                         Some(KEYCHAIN_REASON),
                     )
                 }
-                Err(()) => {}
+                Err(support::Withheld) => {}
             }
         }
         match last {

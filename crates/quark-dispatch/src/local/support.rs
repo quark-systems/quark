@@ -245,6 +245,10 @@ impl Default for Keychain {
     }
 }
 
+/// A Keychain item that was withheld: its read timed out or was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Withheld;
+
 /// The message for an item the Keychain withheld.
 pub fn withheld_message(what: &str) -> String {
     format!("Keychain access needed: allow Quark to read {what} (Accounts, Allow Keychain access)")
@@ -258,19 +262,19 @@ impl Keychain {
     }
 
     /// The item's secret, `None` when there is no such item (or no
-    /// Keychain here), or `Err` when it was withheld.
+    /// Keychain here), or [`Withheld`].
     pub async fn read(
         &self,
         service: &str,
         account: Option<&str>,
         grant: bool,
-    ) -> Result<Option<String>, ()> {
+    ) -> Result<Option<String>, Withheld> {
         if !self.enabled {
             return Ok(None);
         }
         let key = format!("{service}\n{}", account.unwrap_or(""));
         if !grant && self.withheld.lock().unwrap().contains(&key) {
-            return Err(());
+            return Err(Withheld);
         }
         let mut cmd = tokio::process::Command::new(&self.security);
         cmd.arg("find-generic-password");
@@ -306,7 +310,7 @@ impl Keychain {
             Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             _ => {
                 mark(true);
-                Err(())
+                Err(Withheld)
             }
         }
     }

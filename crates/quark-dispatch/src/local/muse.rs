@@ -111,7 +111,7 @@ impl MuseUsage {
                         )
                     }
                 },
-                Err(()) => match &self.api_key {
+                Err(support::Withheld) => match &self.api_key {
                     Some(k) => k.clone(),
                     None => {
                         return fail(
