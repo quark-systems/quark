@@ -25,6 +25,16 @@ final class QuarkKitTests: XCTestCase {
         XCTAssertEqual(accounts[2].health.state, .unknown)
         XCTAssertEqual(accounts[2].quota.state, .unknown)
         XCTAssertEqual(lowestRemaining(accounts), 38)
+        XCTAssertNil(claude.quota.keychainGrant, "older quarkd sends no keychain_grant")
+    }
+
+    func testKeychainGrantNote() throws {
+        let json = #"{"state":"error","remaining_percent":null,"plan":null,"windows":[],"detail":"keychain_prompt_required; run `quota-axi --allow-keychain-prompt` once","checked_at":null,"keychain_grant":true}"#
+        let quota = try JSONDecoder.quark.decode(AccountQuota.self, from: Data(json.utf8))
+        XCTAssertEqual(quota.keychainGrant, true)
+        var account = try JSONDecoder.quark.decode([Account].self, from: fixture("accounts"))[0]
+        account.quota = quota
+        XCTAssertEqual(account.quotaNote, "Needs Keychain access")
     }
 
     func testDecodesHosts() throws {

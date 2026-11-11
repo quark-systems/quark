@@ -165,6 +165,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.sectionHeader(title: "Quota"))
         for a in accounts {
             menu.addItem(hostedItem(QuotaRow(account: a, harness: store.harnessName(a.harness), now: store.now)))
+            // quota-axi's own fix is a terminal command; the app asks macOS for
+            // the same grant with a button, so send people there.
+            if a.quota.keychainGrant == true {
+                menu.addItem(action(NSAttributedString(string: "Allow Keychain Access in Quark…")) { Opener.open(.accounts) })
+            }
         }
     }
 

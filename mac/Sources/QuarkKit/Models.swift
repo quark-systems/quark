@@ -133,6 +133,9 @@ public struct AccountQuota: Codable, Equatable, Sendable {
     public var windows: [QuotaWindow]
     public var detail: String?
     public var checkedAt: Date?
+    /// quota-axi may read this login's Keychain item only once you allow it,
+    /// which the desktop app's Accounts screen asks macOS for.
+    public var keychainGrant: Bool?
 }
 
 public enum QuotaState: String, Codable, Sendable, UnknownDecodable {

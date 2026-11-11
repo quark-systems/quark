@@ -10,6 +10,10 @@ page lists every merged pull request.
 
 ### Fixed
 
+- QuarkBar's Quota section says "Needs Keychain access" instead of quota-axi's raw
+  `keychain_prompt_required` error, and offers Allow Keychain Access in Quark…, which opens
+  Accounts, where the button asks macOS for the grant.
+
 - Opening a newly installed Quark starts quarkd and puts QuarkBar in Login Items, also on a
   Mac that ran Quark from source before or where another quarkd was answering. QuarkBar
   remembered that setup was done for any build, so it often never turned quarkd on. Now each

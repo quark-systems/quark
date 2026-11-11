@@ -57,6 +57,7 @@ extension Account {
 
     /// Why there are no numbers, in a few words.
     public var quotaNote: String? {
+        if quota.keychainGrant == true { return "Needs Keychain access" }
         switch quota.state {
         case .known: return nil
         case .pending: return "Not read yet"
