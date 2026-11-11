@@ -14,6 +14,9 @@
 //! | `muse` | [`muse`] | the Muse CLI's `auth.json`, Keychain item or `META_API_KEY`, then Meta's `/muse-code/key` |
 //! | `gemini` | [`gemini`] | Gemini CLI's `oauth_creds.json`, then Code Assist's `retrieveUserQuota` |
 //! | `copilot` | [`copilot`] | the Copilot CLI's, editors' or `gh`'s login, then GitHub's `copilot_internal/user` |
+//! | `openrouter`, `deepseek`, `zai`, `minimax`, `opencode-go`, `commandcode`, `mimo` | [`keyed`] | the provider's API key (environment, Pi's or OpenCode's `auth.json`, the provider CLI's config), then its key, balance or plan endpoint |
+//! | `alibaba` | [`alibaba`] | `bl usage token-plan --output json` |
+//! | `pi`, `opencode` | [`logins`] | every provider login in the harness's `auth.json`, each read by the readers above (Accounts only) |
 //!
 //! Each reading is one schema-5 snapshot holding just its provider, so
 //! [`crate::LocalQuota`] puts them side by side and dispatch ranks them the
@@ -22,6 +25,7 @@
 //! beside the row. [`support`] holds what the readers share.
 
 pub mod agy;
+pub mod alibaba;
 pub mod bob;
 pub mod claude;
 pub mod codex;
@@ -29,8 +33,10 @@ pub mod copilot;
 pub mod cursor;
 pub mod gemini;
 pub mod grok;
+pub mod keyed;
 pub mod kimi;
 pub mod kiro;
+pub mod logins;
 pub mod muse;
 pub mod support;
 pub mod windows;
@@ -43,6 +49,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 pub use agy::AgyUsage;
+pub use alibaba::AlibabaUsage;
 pub use bob::BobUsage;
 pub use claude::ClaudeUsage;
 pub use codex::CodexUsage;
@@ -50,8 +57,10 @@ pub use copilot::CopilotUsage;
 pub use cursor::CursorUsage;
 pub use gemini::GeminiUsage;
 pub use grok::GrokUsage;
+pub use keyed::KeyedUsage;
 pub use kimi::KimiUsage;
 pub use kiro::KiroUsage;
+pub use logins::{Harness, LoginsUsage};
 pub use muse::MuseUsage;
 
 /// One provider's local quota reading.
@@ -236,7 +245,21 @@ async fn run_with(
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    let out = tokio::time::timeout(timeout, cmd.output())
+    let run = async {
+        // A script just written can be busy for a moment (ETXTBSY) while
+        // another thread's child still holds it open for writing.
+        let mut tries = 0;
+        loop {
+            match cmd.output().await {
+                Err(e) if e.raw_os_error() == Some(26) && tries < 5 => {
+                    tries += 1;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                r => return r,
+            }
+        }
+    };
+    let out = tokio::time::timeout(timeout, run)
         .await
         .map_err(|_| format!("{exe} did not answer within {}s", timeout.as_secs()))?
         .map_err(|e| format!("{exe}: {e}"))?;

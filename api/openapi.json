@@ -6249,6 +6249,13 @@
             ],
             "description": "The subscription plan, when reported."
           },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderQuota"
+            },
+            "description": "For a harness that signs in to many providers (Pi, OpenCode), one\nreading per provider login; the fields above then sum them up."
+          },
           "remaining_percent": {
             "type": [
               "number",
@@ -12040,6 +12047,54 @@
               "null"
             ],
             "description": "Who is promoting, as for [`AcceptMemoryProposal::decided_by`]."
+          }
+        }
+      },
+      "ProviderQuota": {
+        "type": "object",
+        "description": "One provider login's reading within a multi-provider account.",
+        "required": [
+          "provider",
+          "label",
+          "state",
+          "windows"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "Its display name."
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "description": "The quota provider (`claude`, `openrouter`, ...)."
+          },
+          "remaining_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "state": {
+            "$ref": "#/components/schemas/QuotaState"
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuotaWindow"
+            }
           }
         }
       },

@@ -9,8 +9,9 @@ use std::time::Duration;
 use quark_core::host::{Capacity, Health, Host, HostRegistry, Platform, RuntimeKind};
 use quark_core::EventLog;
 use quark_dispatch::local::{
-    AgyUsage, BobUsage, ClaudeUsage, CodexUsage, CopilotUsage, CursorUsage, GeminiUsage, GrokUsage,
-    KimiUsage, KiroUsage, LocalReading, MuseUsage,
+    AgyUsage, AlibabaUsage, BobUsage, ClaudeUsage, CodexUsage, CopilotUsage, CursorUsage,
+    GeminiUsage, GrokUsage, Harness, KeyedUsage, KimiUsage, KiroUsage, LocalReading, LoginsUsage,
+    MuseUsage,
 };
 use quark_dispatch::{LocalQuota, ProviderFamilies};
 use quark_hosts::{EventHosts, HostSampler, Probe, SamplerConfig, SystemProbe, Workloads};
@@ -49,7 +50,7 @@ pub fn quota(config: &Config) -> LocalQuota {
 /// quarkd's own quota readers, one per provider.
 pub fn local_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
-    vec![
+    let readers: Vec<Arc<dyn LocalReading>> = vec![
         Arc::new(ClaudeUsage::from_env()),
         Arc::new(CodexUsage::from_env()),
         Arc::new(BobUsage::for_home(&config.home, user_home.as_deref())),
@@ -61,7 +62,25 @@ pub fn local_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
         Arc::new(MuseUsage::from_env()),
         Arc::new(GeminiUsage::from_env()),
         Arc::new(CopilotUsage::from_env()),
-    ]
+        Arc::new(AlibabaUsage::default()),
+    ];
+    readers
+        .into_iter()
+        .chain(
+            quark_dispatch::local::keyed::Api::ALL
+                .iter()
+                .map(|api| Arc::new(KeyedUsage::from_env(*api)) as Arc<dyn LocalReading>),
+        )
+        .collect()
+}
+
+/// The readers Accounts uses: dispatch's, plus Pi's and OpenCode's, whose
+/// readings hold one provider per login and so are not dispatch rows.
+pub fn account_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
+    let mut v = local_readings(config);
+    v.push(Arc::new(LoginsUsage::from_env(Harness::Pi)));
+    v.push(Arc::new(LoginsUsage::from_env(Harness::OpenCode)));
+    v
 }
 
 /// Kiro CLI's reader for a Quark home, signing the default login in with

@@ -190,6 +190,15 @@ impl GrokUsage {
         }
     }
 
+    /// The reading for a session token from another tool's login (Pi's
+    /// `xai` OAuth entry).
+    pub async fn read_token(&self, token: &str) -> Value {
+        match self.read_with(token).await {
+            Ok(v) => v,
+            Err((s, e)) => self.fail(&s, &e),
+        }
+    }
+
     async fn read_with(&self, token: &str) -> Result<Value, (String, String)> {
         let req = Request::post(&self.url, vec![0u8; 5])
             .bearer(token)

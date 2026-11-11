@@ -24,6 +24,12 @@ env = "PI_CODING_AGENT_DIR"
 config_dir = ".pi/agent"
 auth_files = ["auth.json"]
 
+# Many providers, one login each: Accounts reads them all; dispatch needs
+# `provider` on the profile.
+[quota]
+provider = "none"
+logins = true
+
 [turn_signals]
 busy = "extension"
 turn_end = "extension"

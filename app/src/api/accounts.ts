@@ -17,6 +17,13 @@ export interface AccountQuota {
   plan?: string | null; windows: QuotaWindow[]; detail?: string | null; checked_at?: string | null;
   /** The reading needs a one-time macOS Keychain grant for this login; see `keychainGrant`. */
   keychain_grant?: boolean;
+  /** A multi-provider login (Pi, OpenCode): one reading per provider it is signed in to. */
+  providers?: ProviderQuota[];
+}
+/** One provider login's reading within a multi-provider account. */
+export interface ProviderQuota {
+  provider: string; label: string; state: QuotaState;
+  remaining_percent?: number | null; plan?: string | null; windows: QuotaWindow[]; detail?: string | null;
 }
 export interface Account {
   /** `acc_...`, or `default-<harness>` for a harness's default account. */

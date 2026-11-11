@@ -181,6 +181,26 @@ enum QuotaCommand {
     Gemini(ReadArgs),
     /// GitHub Copilot's monthly allowances.
     Copilot(ReadArgs),
+    /// OpenRouter's key cap or credit balance.
+    Openrouter(ReadArgs),
+    /// DeepSeek's balance.
+    Deepseek(ReadArgs),
+    /// Z.ai's (or Zhipu's) coding plan windows.
+    Zai(ReadArgs),
+    /// MiniMax's coding plan per model, or its balance.
+    Minimax(ReadArgs),
+    /// OpenCode Go's rolling, weekly and monthly windows.
+    OpencodeGo(ReadArgs),
+    /// Command Code's included credits and balance.
+    Commandcode(ReadArgs),
+    /// Xiaomi MiMo's sign-in.
+    Mimo(ReadArgs),
+    /// Alibaba Coding Plan's weekly and per-model usage (`bl`).
+    Alibaba(ReadArgs),
+    /// Every provider Pi is signed in to.
+    Pi(ReadArgs),
+    /// Every provider OpenCode is signed in to.
+    Opencode(ReadArgs),
 }
 
 /// How to read one provider's quota.
@@ -433,16 +453,24 @@ fn init_tracing(
 }
 
 async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result<()> {
+    use quark_dispatch::local::keyed::Api;
     use quark_dispatch::local::{
-        agy, bob, copilot, cursor, gemini, grok, kimi, kiro, muse, windows, ClaudeUsage,
-        CodexUsage, LocalReading,
+        agy, bob, copilot, cursor, gemini, grok, kimi, kiro, muse, windows, AlibabaUsage,
+        ClaudeUsage, CodexUsage, Harness, KeyedUsage, LocalReading, LoginsUsage,
     };
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
     let print = |v: serde_json::Value, json: bool| {
         if json {
             println!("{v}");
-        } else {
-            println!("{}", windows::status_line(&v));
+            return;
+        }
+        // A Pi or OpenCode reading holds a provider per login.
+        for p in v["providers"].as_array().into_iter().flatten() {
+            let line = windows::status_line(&serde_json::json!({ "providers": [p] }));
+            match p["label"].as_str() {
+                Some(label) => println!("{label}: {line}"),
+                None => println!("{line}"),
+            }
         }
     };
     match provider {
@@ -501,6 +529,20 @@ async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result
                 QuotaCommand::Muse(a) => (Box::new(muse::MuseUsage::from_env()), a),
                 QuotaCommand::Gemini(a) => (Box::new(gemini::GeminiUsage::from_env()), a),
                 QuotaCommand::Copilot(a) => (Box::new(copilot::CopilotUsage::from_env()), a),
+                QuotaCommand::Openrouter(a) => (Box::new(KeyedUsage::from_env(Api::OpenRouter)), a),
+                QuotaCommand::Deepseek(a) => (Box::new(KeyedUsage::from_env(Api::DeepSeek)), a),
+                QuotaCommand::Zai(a) => (Box::new(KeyedUsage::from_env(Api::Zai)), a),
+                QuotaCommand::Minimax(a) => (Box::new(KeyedUsage::from_env(Api::MiniMax)), a),
+                QuotaCommand::OpencodeGo(a) => (Box::new(KeyedUsage::from_env(Api::OpenCodeGo)), a),
+                QuotaCommand::Commandcode(a) => {
+                    (Box::new(KeyedUsage::from_env(Api::CommandCode)), a)
+                }
+                QuotaCommand::Mimo(a) => (Box::new(KeyedUsage::from_env(Api::Mimo)), a),
+                QuotaCommand::Alibaba(a) => (Box::new(AlibabaUsage::default()), a),
+                QuotaCommand::Pi(a) => (Box::new(LoginsUsage::from_env(Harness::Pi)), a),
+                QuotaCommand::Opencode(a) => {
+                    (Box::new(LoginsUsage::from_env(Harness::OpenCode)), a)
+                }
                 _ => unreachable!("handled above"),
             };
             let name = reader.provider().to_string();

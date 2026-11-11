@@ -8,6 +8,12 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Added
+
+- Quark reads quota for OpenRouter, DeepSeek, Z.ai, MiniMax, OpenCode Go, Command Code and
+  Xiaomi MiMo (with their API keys) and Alibaba Coding Plan (with `bl`). Pi and OpenCode
+  accounts show a row for every provider they are signed in to.
+
 ### Fixed
 
 - After an update is undone because the new version didn't start, the updater's log names

@@ -165,11 +165,11 @@ impl Harness for ManifestHarness {
     }
 
     fn quota_provider(&self) -> Option<&str> {
-        self.m
-            .quota
-            .as_ref()
-            .map(|q| q.provider.as_str())
-            .filter(|p| *p != "none")
+        let q = self.m.quota.as_ref()?;
+        if q.logins {
+            return Some(self.m.id.as_str());
+        }
+        Some(q.provider.as_str()).filter(|p| *p != "none")
     }
 
     fn launch(

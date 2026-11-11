@@ -228,10 +228,32 @@ impl ClaudeUsage {
                 creds = c;
             }
         }
+        let expired = expired(&creds);
+        self.fetch(&creds.token, expired, creds.plan.as_deref(), now)
+            .await
+    }
+
+    /// The reading for an OAuth access token from another tool's login
+    /// (Pi's or OpenCode's `anthropic` entry).
+    pub async fn read_token(&self, token: &str) -> Value {
+        self.fetch(token, false, None, OffsetDateTime::now_utc())
+            .await
+    }
+
+    async fn fetch(
+        &self,
+        token: &str,
+        expired: bool,
+        plan: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Value {
+        let fail = |status: &str, error: &str, reason: Option<&str>| {
+            failure(PROVIDER, SOURCE, now, status, error, reason)
+        };
         let (code, body) = match curl_get(
             &self.curl,
             &self.url,
-            &creds.token,
+            token,
             &[
                 ("anthropic-beta", OAUTH_BETA),
                 ("User-Agent", USER_AGENT),
@@ -252,7 +274,7 @@ impl ClaudeUsage {
         };
         match code {
             200..=299 => {}
-            401 if expired(&creds) => {
+            401 if expired => {
                 return fail(
                     "auth_required",
                     "Claude Code's login has expired; run `claude` once to renew it",
@@ -272,7 +294,7 @@ impl ClaudeUsage {
         let Ok(usage) = serde_json::from_str::<Value>(&body) else {
             return fail("unavailable", "Claude quota response is not JSON", None);
         };
-        usage_reading(&usage, creds.plan.as_deref(), now)
+        usage_reading(&usage, plan, now)
     }
 
     /// The login's credentials: the Keychain item first on macOS, then the

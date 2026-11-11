@@ -262,6 +262,11 @@ pub struct Keys {
 pub struct QuotaSource {
     /// Quota provider name (`claude`, `codex`, `bob`, `kiro`), or `none`.
     pub provider: String,
+    /// The harness signs in to many providers (Pi, OpenCode): Accounts
+    /// reads every login it holds, one row per provider, under the
+    /// harness's own id. Dispatch still takes `provider`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub logins: bool,
 }
 
 /// Behavior implemented outside the manifest.

@@ -171,6 +171,24 @@ pub struct AccountQuota {
     /// login, given with `POST /v1/accounts/{id}/keychain-grant`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub keychain_grant: bool,
+    /// For a harness that signs in to many providers (Pi, OpenCode), one
+    /// reading per provider login; the fields above then sum them up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderQuota>,
+}
+
+/// One provider login's reading within a multi-provider account.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ProviderQuota {
+    /// The quota provider (`claude`, `openrouter`, ...).
+    pub provider: String,
+    /// Its display name.
+    pub label: String,
+    pub state: QuotaState,
+    pub remaining_percent: Option<f64>,
+    pub plan: Option<String>,
+    pub windows: Vec<QuotaWindow>,
+    pub detail: Option<String>,
 }
 
 impl AccountQuota {
@@ -184,6 +202,7 @@ impl AccountQuota {
             detail,
             checked_at: None,
             keychain_grant: false,
+            providers: Vec::new(),
         }
     }
 

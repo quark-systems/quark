@@ -115,8 +115,19 @@ impl KimiUsage {
                 "Kimi Code is not signed in here; run `kimi` and sign in",
             );
         };
+        self.fetch(&token, expired, now).await
+    }
+
+    /// The reading for a token from another tool's login (Pi's
+    /// `kimi-coding` or OpenCode's Kimi entry).
+    pub async fn read_token(&self, token: &str) -> Value {
+        self.fetch(token, false, OffsetDateTime::now_utc()).await
+    }
+
+    async fn fetch(&self, token: &str, expired: bool, now: OffsetDateTime) -> Value {
+        let fail = |status: &str, error: &str| failure(PROVIDER, SOURCE, now, status, error, None);
         let req = Request::get(&self.url)
-            .bearer(&token)
+            .bearer(token)
             .header("Accept", "application/json")
             .header("User-Agent", "quarkd");
         match self.http.send(&req).await {
