@@ -194,14 +194,13 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let harnesses = Arc::new(harness::HarnessRegistry::load(
         &config.home.join("harnesses"),
     ));
-    let quota_axi = accounts::QuotaAxi {
-        bin: config.quota_axi.clone(),
-        local: native_dispatch::local_readings(&config),
+    let quota_readers = accounts::LocalReaders {
+        readers: native_dispatch::local_readings(&config),
     };
     let accounts = Arc::new(accounts::Accounts::new(
         store.clone(),
         harnesses.clone(),
-        Arc::new(quota_axi),
+        Arc::new(quota_readers),
         engine.account_envs(),
     ));
     let quota_task = tokio::spawn(accounts.clone().run(config.quota_refresh_interval));

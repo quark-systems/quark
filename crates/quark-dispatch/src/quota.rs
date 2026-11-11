@@ -1,11 +1,12 @@
-//! Quota evidence: one `quota-axi --json` snapshot, read leniently.
+//! Quota evidence: one schema-5 snapshot (the shape quota-axi printed,
+//! which quarkd's own readers in [`crate::local`] now write), read
+//! leniently.
 //!
 //! Only the fields dispatch weighs are kept. A field of the wrong type reads
 //! as missing rather than failing the snapshot, the way firstmate's `jq`
 //! treats it.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -53,21 +54,21 @@ impl ProviderQuota {
     }
 }
 
-/// Every provider quota-axi reported.
+/// Every provider measured.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct QuotaSnapshot {
     pub providers: Vec<ProviderQuota>,
 }
 
 impl QuotaSnapshot {
-    /// Parse `quota-axi --json` output. Refuses anything without a
+    /// Parse a schema-5 snapshot. Refuses anything without a
     /// `providers` list of objects naming their provider.
     pub fn parse(json: &str) -> Result<Self, String> {
         let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
         Self::from_value(&v)
     }
 
-    /// Parse `quota-axi --json` output that must also pass firstmate's
+    /// Parse a schema-5 snapshot that must also pass firstmate's
     /// schema check ([`valid`]).
     pub fn parse_checked(json: &str) -> Result<Self, String> {
         let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -264,34 +265,27 @@ impl QuotaSource for FixedQuota {
     async fn snapshot(&self, _providers: &[String]) -> Result<QuotaSnapshot, String> {
         self.0
             .clone()
-            .ok_or_else(|| "quota-axi --json failed".to_string())
+            .ok_or_else(|| "quota reading failed".to_string())
     }
 }
 
-/// The longest a built-in reader may take; each bounds its own commands
-/// well inside this.
-const BUILTIN_READING_CAP: Duration = Duration::from_secs(90);
+/// The longest a reader may take; each bounds its own commands well inside
+/// this.
+const READING_CAP: Duration = Duration::from_secs(90);
 
-/// `quota-axi --json`, plus local readings for providers it does not report:
-/// a built-in reader ([`crate::local`], IBM Bob and Kiro) or a command that
-/// prints one. A local reading joins the snapshot only when it is a valid
-/// snapshot holding exactly that provider; any failure leaves the provider
-/// unmeasured.
-#[derive(Clone)]
-pub struct QuotaAxi {
-    pub bin: PathBuf,
-    /// Provider to the argv that prints its reading.
-    pub local: BTreeMap<String, Vec<String>>,
-    /// Built-in readers, consulted before `local`.
+/// quarkd's own quota readers ([`crate::local`]): Claude Code, Codex, IBM
+/// Bob and Kiro CLI. A snapshot reads every asked-for provider that has a
+/// reader, side by side; a reading joins the snapshot only when it is a
+/// valid snapshot holding exactly that provider, so any failure leaves the
+/// provider unmeasured. Providers with no reader are left out.
+#[derive(Clone, Default)]
+pub struct LocalQuota {
     pub readings: Vec<Arc<dyn LocalReading>>,
-    pub timeout: Duration,
 }
 
-impl std::fmt::Debug for QuotaAxi {
+impl std::fmt::Debug for LocalQuota {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QuotaAxi")
-            .field("bin", &self.bin)
-            .field("local", &self.local)
+        f.debug_struct("LocalQuota")
             .field(
                 "readings",
                 &self
@@ -300,80 +294,49 @@ impl std::fmt::Debug for QuotaAxi {
                     .map(|r| r.provider())
                     .collect::<Vec<_>>(),
             )
-            .field("timeout", &self.timeout)
             .finish()
     }
 }
 
-impl QuotaAxi {
-    pub fn new(bin: impl Into<PathBuf>) -> Self {
-        Self {
-            bin: bin.into(),
-            local: BTreeMap::new(),
-            readings: Vec::new(),
-            timeout: Duration::from_secs(15),
-        }
+impl LocalQuota {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Adds a built-in local reader.
+    /// Adds a reader.
     pub fn with_reading(mut self, reading: Arc<dyn LocalReading>) -> Self {
         self.readings.push(reading);
         self
     }
 
-    async fn local_reading(&self, provider: &str) -> Option<QuotaSnapshot> {
-        let out = if let Some(r) = self.readings.iter().find(|r| r.provider() == provider) {
-            // A built-in reader bounds its own commands and never fails, so
-            // this only stops one that hangs outright.
-            tokio::time::timeout(BUILTIN_READING_CAP, r.read())
-                .await
-                .ok()?
-                .to_string()
-        } else {
-            self.run(self.local.get(provider)?).await.ok()?
-        };
-        QuotaSnapshot::parse_checked(&out)
+    async fn reading(&self, provider: &str) -> Option<QuotaSnapshot> {
+        let r = self.readings.iter().find(|r| r.provider() == provider)?;
+        // A reader bounds its own commands and never fails, so this only
+        // stops one that hangs outright.
+        let out = tokio::time::timeout(READING_CAP, r.read()).await.ok()?;
+        QuotaSnapshot::parse_checked(&out.to_string())
             .ok()
             .filter(|r| r.providers.len() == 1 && r.providers[0].provider == provider)
-    }
-
-    async fn run(&self, argv: &[String]) -> Result<String, String> {
-        let (exe, args) = argv.split_first().ok_or("empty command")?;
-        let out = tokio::time::timeout(
-            self.timeout,
-            tokio::process::Command::new(exe)
-                .args(args)
-                .stdin(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
-        .map_err(|_| format!("{exe} timed out"))?
-        .map_err(|e| format!("{exe}: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("{exe} exited {}", out.status));
-        }
-        String::from_utf8(out.stdout).map_err(|e| e.to_string())
     }
 }
 
 #[async_trait]
-impl QuotaSource for QuotaAxi {
+impl QuotaSource for LocalQuota {
     async fn snapshot(&self, providers: &[String]) -> Result<QuotaSnapshot, String> {
-        let argv = vec![self.bin.to_string_lossy().into_owned(), "--json".into()];
-        let out = self
-            .run(&argv)
-            .await
-            .map_err(|_| "quota-axi --json failed".to_string())?;
-        let mut snap = QuotaSnapshot::parse_checked(&out)
-            .map_err(|_| "quota-axi --json returned an invalid snapshot".to_string())?;
+        let mut wanted: Vec<&String> = Vec::new();
         for p in providers {
-            if snap.provider(p).is_some() {
-                continue;
+            if !wanted.contains(&p) {
+                wanted.push(p);
             }
-            if let Some(r) = self.local_reading(p).await {
-                snap.merge_missing(r);
-            }
+        }
+        let reads = wanted.iter().map(|p| self.reading(p));
+        let mut snap = QuotaSnapshot::default();
+        for r in futures_util::future::join_all(reads)
+            .await
+            .into_iter()
+            .flatten()
+        {
+            snap.merge_missing(r);
         }
         Ok(snap)
     }
@@ -478,30 +441,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_readings_fill_missing_providers() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("quota-axi");
-        std::fs::write(
-            &bin,
-            "#!/bin/sh\nprintf '%s' '{\"schemaVersion\":5,\"providers\":[{\"provider\":\"claude\",\"quotaSemantics\":{\"status\":\"unknown\",\"effectiveAvailability\":[]}}]}'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+    async fn snapshots_hold_each_providers_own_reading() {
         let one = |p: &str, status: &str| {
             serde_json::json!({"schemaVersion": 5, "providers": [{"provider": p,
                 "quotaSemantics": {"status": status, "effectiveAvailability": []}}]})
         };
-        let q = QuotaAxi::new(&bin)
+        let q = LocalQuota::new()
             .with_reading(Arc::new(Reading("kiro", one("kiro", "unknown"))))
             // A reading naming another provider is dropped.
             .with_reading(Arc::new(Reading("bob", one("kimi", "unknown"))))
             .with_reading(Arc::new(Reading("claude", one("claude", "partial"))));
-        let providers = ["claude", "kiro", "bob"].map(String::from);
+        let providers = ["claude", "kiro", "bob", "grok", "claude"].map(String::from);
         let snap = q.snapshot(&providers).await.unwrap();
         let names: Vec<_> = snap.providers.iter().map(|p| p.provider.as_str()).collect();
         assert_eq!(names, ["claude", "kiro"]);
-        // quota-axi's own answer wins.
-        assert_eq!(snap.provider("claude").unwrap().status, "unknown");
+        assert_eq!(snap.provider("claude").unwrap().status, "partial");
     }
 }

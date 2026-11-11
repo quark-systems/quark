@@ -5,14 +5,13 @@ Keep this page current: a PR that makes Quark shell out to a new program, or sto
 
 ## Third-party helper tools
 
-Small tools Quark inherited from firstmate. Each one is a candidate to port into Quark, as the native worktree pool did for treehouse.
+Small tools Quark inherited from firstmate. Each one is a candidate to port into Quark, as the native worktree pool did for treehouse and the native quota readers did for quota-axi.
 
 | Tool | What Quark uses it for | Where | How it is installed | Required |
 | :--- | :--- | :--- | :--- | :--- |
-| `quota-axi` ([kunchenguid/quota-axi](https://github.com/kunchenguid/quota-axi)) | Account quota for Claude and Codex: dispatch judges candidates on one `quota-axi --json` snapshot, and the Accounts view runs `quota-axi --provider claude\|codex --json` per account | `crates/quark-dispatch/src/quota.rs`, `crates/quarkd/src/accounts.rs`, `crates/quarkd/src/native_dispatch.rs` | `npm install -g quota-axi`; `--quota-axi` or `QUARKD_QUOTA_AXI` picks the binary | Optional: without it quota is unmeasured, so candidates stay eligible but unranked |
 | `treehouse` 3.1.2+ ([kunchenguid/treehouse](https://github.com/kunchenguid/treehouse)) | Only as a fallback: quarkd's own native pool serves worktrees by default, on treehouse's pool format. `QUARK_WORKTREE_POOL=treehouse` uses treehouse instead (e.g. for a jj repository, the one setting the native pool refuses), and `QUARK_WORKTREE_POOL=shadow` runs it with the native pool compared | `crates/quark-worktree/src/treehouse.rs`, `crates/quarkd/src/native_worktrees.rs` | `selfhost/treehouse.sh` (pinned sha256); CI downloads it for the parity tests (`TREEHOUSE_BIN`) | No: only with `QUARK_WORKTREE_POOL=treehouse` or `shadow` |
 
-IBM Bob and Kiro CLI quota is read by quarkd itself (`crates/quark-dispatch/src/local/`), not by quota-axi. `tasks-axi`, needed in the firstmate era, is no longer used.
+Account quota for Claude Code, Codex, IBM Bob and Kiro CLI is read by quarkd itself (`crates/quark-dispatch/src/local/`). `quota-axi` and `tasks-axi`, needed in the firstmate era, are no longer used.
 
 ## Core tools
 
@@ -23,7 +22,7 @@ IBM Bob and Kiro CLI quota is read by quarkd itself (`crates/quark-dispatch/src/
 | `gh` (GitHub CLI) | The PR center and merges (`gh api`), cloning, and the GitHub token for Beads sync (`gh auth token` when `GITHUB_TOKEN` is unset) | `crates/quarkd/src/forge.rs`, `crates/quark-verify/src/forge.rs`, `crates/quarkd/src/beads.rs` | `brew install gh`, then `gh auth login` | Yes |
 | `bd` ([Beads](https://beads.gascity.com)) | The Issues tab, decisions and Beads memory; `quarkd triage` files issues with it | `crates/quarkd/src/beads.rs`, `crates/quarkd/src/beads/`, `crates/quarkd/src/triage.rs` | Latest bd from beads.gascity.com; `QUARKD_BD` picks the binary | Yes (Setup requires it for 0.1) |
 | `dolt` | The SQL server Beads runs each Project's database on (server mode) | `crates/quarkd/src/beads.rs` (checked before Beads starts) | [Dolt install](https://docs.dolthub.com/introduction/installation), e.g. `brew install dolt`; `BEADS_DOLT_BIN` overrides | With `bd` |
-| `curl` | IBM Bob's live usage API and the dispatch classifier's HTTP calls (System One or Ollama); the key goes on stdin, never argv | `crates/quark-dispatch/src/local/bob.rs`, `crates/quark-dispatch/src/classify.rs` | System | For Bob live quota and the classifier |
+| `curl` | Claude Code's, Codex's and IBM Bob's usage APIs, and the dispatch classifier's HTTP calls (System One or Ollama); the key goes on stdin, never argv | `crates/quark-dispatch/src/local/`, `crates/quark-dispatch/src/classify.rs` | System | For quota and the classifier |
 | `ssh` | Remote runtimes for SSH hosts | `crates/quark-runtime/src/exec.rs`, `crates/quark-runtime/src/ssh.rs` | System OpenSSH; `QUARK_SSH` overrides | For SSH hosts only |
 | `bash`, `sh` | Verification gate checks, trigger commands, login-shell PATH and quoting probes | `crates/quark-verify/src/pipeline.rs`, `crates/quark-triggers/src/commands.rs`, `crates/quark-runtime/src/quote.rs`, `app/src-tauri/src/release.rs` | System | Yes |
 
@@ -56,7 +55,7 @@ Shipped with the OS; listed so a port to a new platform knows what to replace.
 
 | Tool | What Quark uses it for | Where | Platform |
 | :--- | :--- | :--- | :--- |
-| `security` | Keychain: whether a harness login exists, API keys for key accounts and default logins (Bob, Kiro), the classifier's `keychain:` credential | `crates/quark-harness/src/host.rs`, `crates/quarkd/src/secrets.rs`, `crates/quark-dispatch/src/classify.rs` | macOS |
+| `security` | Keychain: whether a harness login exists, Claude Code's login for its quota read, API keys for key accounts and default logins (Bob, Kiro), the classifier's `keychain:` credential | `crates/quark-harness/src/host.rs`, `crates/quarkd/src/secrets.rs`, `crates/quark-dispatch/src/classify.rs`, `crates/quark-dispatch/src/local/claude.rs` | macOS |
 | `sandbox-exec` | Seatbelt isolation for sandboxed workers | `crates/quark-isolation/src/seatbelt.rs` | macOS |
 | `bwrap` (bubblewrap) | Sandbox isolation for workers, when installed | `crates/quark-isolation/src/bwrap.rs` | Linux (`apt install bubblewrap`) |
 | `sysctl` | Memory pressure for host health | `crates/quark-hosts/src/pressure.rs` | macOS (Linux reads `/proc/pressure`) |
@@ -71,5 +70,7 @@ Reached over the network rather than run as a program.
 | Service | What for | Where |
 | :--- | :--- | :--- |
 | GitHub API | PRs, checks, merges (through `gh`), Beads sync to `refs/dolt/data` | `crates/quarkd/src/forge.rs`, `crates/quarkd/src/beads.rs` |
+| Anthropic OAuth usage API (`api.anthropic.com/api/oauth/usage`) | Claude Code's session and weekly windows, with Claude Code's own login | `crates/quark-dispatch/src/local/claude.rs` |
+| ChatGPT usage API (`chatgpt.com/backend-api/wham/usage`) | Codex's session and weekly windows, with Codex's (or Pi's) login | `crates/quark-dispatch/src/local/codex.rs` |
 | IBM Bob usage API | Bob's live coin usage; needs `BOBSHELL_API_KEY` in quarkd's environment | `crates/quark-dispatch/src/local/bob.rs` |
 | System One API or an Ollama server | The dispatch classifier, when configured in `~/.quark/config.yaml` | `crates/quark-dispatch/src/classify.rs` |

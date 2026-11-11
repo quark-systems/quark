@@ -48,7 +48,6 @@ const setupChecks = [
   { id: "coordinator", title: "Coordinator harness, signed in", required: true, why: "The coordinator runs each project's conversation and starts workers.", status: "ok", detail: "Claude Code 2.1.0" },
   { id: "bd", title: "Beads (bd)", required: true, why: "Issues, decisions and memory live in each project's Beads database.", status: "ok", detail: "bd version 1.1.0 at /opt/homebrew/bin/bd" },
   { id: "dolt", title: "Dolt", required: true, why: "The database server Beads runs on.", status: "ok", detail: "dolt version 2.4.1 at /opt/homebrew/bin/dolt" },
-  { id: "quota_axi", title: "quota-axi", required: false, why: "Claude and Codex quota for dispatch and the Accounts view.", status: "missing", detail: "not installed; quota stays unmeasured without it", fix: { label: "Install with npm", command: "npm install -g quota-axi", runnable: true } },
   { id: "home", title: "Quark home", required: true, why: "Where Quark keeps projects, their working copies and its databases.", status: "ok", detail: "~/.quark (format 1)" },
   { id: "disk", title: "Free disk", required: false, why: "Worktrees and agent logs need room; below 5 GB new workers may not start.", status: "ok", detail: "212.4 GB free" },
 ];
@@ -1378,7 +1377,7 @@ function addAccount(a) {
   return account;
 }
 
-// Like quarkd's one quota-axi read per account, then account.quota_changed.
+// Like quarkd's one quota read per account, then account.quota_changed.
 function readQuota(account, reading) {
   account.quota = reading;
   emit("account.quota_changed", { account_id: account.id, harness: account.harness, quota: reading });

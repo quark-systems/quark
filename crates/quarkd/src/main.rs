@@ -21,8 +21,9 @@ enum Command {
     Serve(ServeArgs),
     /// Print the OpenAPI document for the /v1 API.
     Openapi,
-    /// Read IBM Bob's or Kiro CLI's quota the way dispatch does, or anchor
-    /// Bob's estimate with the "Monthly Usage" figure its /status shows.
+    /// Read Claude Code's, Codex's, IBM Bob's or Kiro CLI's quota the way
+    /// dispatch and Accounts do, or anchor Bob's estimate with the "Monthly
+    /// Usage" figure its /status shows.
     Quota {
         /// Quark home directory [default: $QUARK_HOME or ~/.quark]
         #[arg(long)]
@@ -101,9 +102,30 @@ enum Command {
 
 #[derive(Subcommand)]
 enum QuotaCommand {
+    /// Claude Code's session and weekly windows.
+    Claude {
+        /// Print the reading as JSON (schema 5).
+        #[arg(long)]
+        json: bool,
+        /// Another login's config directory (its CLAUDE_CONFIG_DIR).
+        #[arg(long, value_name = "DIR")]
+        config_dir: Option<PathBuf>,
+        /// Wait for a macOS Keychain prompt instead of giving up on it.
+        #[arg(long)]
+        allow_keychain_prompt: bool,
+    },
+    /// Codex's session and weekly windows.
+    Codex {
+        /// Print the reading as JSON (schema 5).
+        #[arg(long)]
+        json: bool,
+        /// Another login's config directory (its CODEX_HOME).
+        #[arg(long, value_name = "DIR")]
+        config_dir: Option<PathBuf>,
+    },
     /// IBM Bob's monthly Bobcoins.
     Bob {
-        /// Print the reading as JSON (quota-axi's schema 5).
+        /// Print the reading as JSON (schema 5).
         #[arg(long)]
         json: bool,
         /// Record this many used coins, from Bob's /status, as the anchor.
@@ -115,7 +137,7 @@ enum QuotaCommand {
     },
     /// Kiro CLI's plan credits.
     Kiro {
-        /// Print the reading as JSON (quota-axi's schema 5).
+        /// Print the reading as JSON (schema 5).
         #[arg(long)]
         json: bool,
     },
@@ -188,9 +210,6 @@ struct ServeArgs {
     /// Seconds between reads of each account's quota.
     #[arg(long, default_value_t = 300)]
     quota_refresh_secs: u64,
-    /// quota-axi binary that reads account quota.
-    #[arg(long, env = "QUARKD_QUOTA_AXI", default_value = "quota-axi")]
-    quota_axi: PathBuf,
     /// User-level memory directory, shared by every Project [default: <home>/memory]
     #[arg(long, env = "QUARK_USER_MEMORY")]
     user_memory: Option<PathBuf>,
@@ -284,7 +303,6 @@ async fn main() -> anyhow::Result<()> {
                 pr_refresh_interval: Duration::from_secs(args.pr_refresh_secs.max(5)),
                 tmux: args.tmux,
                 quota_refresh_interval: Duration::from_secs(args.quota_refresh_secs.max(30)),
-                quota_axi: args.quota_axi,
                 user_memory: args.user_memory,
             };
             quarkd::serve(config, args.engine).await
@@ -339,9 +357,34 @@ fn init_tracing(
 }
 
 async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result<()> {
-    use quark_dispatch::local::{bob, kiro, LocalReading};
+    use quark_dispatch::local::{bob, kiro, windows, ClaudeUsage, CodexUsage, LocalReading};
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    let print = |v: serde_json::Value, json: bool| {
+        if json {
+            println!("{v}");
+        } else {
+            println!("{}", windows::status_line(&v));
+        }
+    };
     match provider {
+        QuotaCommand::Claude {
+            json,
+            config_dir,
+            allow_keychain_prompt,
+        } => {
+            let v = ClaudeUsage::from_env()
+                .read_account(config_dir.as_deref(), allow_keychain_prompt)
+                .await
+                .unwrap_or_default();
+            print(v, json);
+        }
+        QuotaCommand::Codex { json, config_dir } => {
+            let v = CodexUsage::from_env()
+                .read_account(config_dir.as_deref(), false)
+                .await
+                .unwrap_or_default();
+            print(v, json);
+        }
         QuotaCommand::Bob {
             json,
             anchor,

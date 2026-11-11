@@ -29,7 +29,7 @@
           {
             "name": "refresh",
             "in": "query",
-            "description": "Read every listed account's quota now (one quota-axi call each)\ninstead of returning the last reading.",
+            "description": "Read every listed account's quota now (one read each)\ninstead of returning the last reading.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -350,7 +350,7 @@
         "tags": [
           "accounts"
         ],
-        "summary": "Read an account's quota letting quota-axi prompt on the Mac for its\nlogin's Keychain item (choose \"Always Allow\"), for a reading with\n`keychain_grant`. Later reads use the grant. Answers with the account and\nthe new reading once the prompt is answered.",
+        "summary": "Read an account's quota waiting on the Mac's Keychain prompt for its\nlogin's Keychain item (choose \"Always Allow\"), for a reading with\n`keychain_grant`. Later reads use the grant. Answers with the account and\nthe new reading once the prompt is answered.",
         "operationId": "keychain_grant",
         "parameters": [
           {
@@ -4940,7 +4940,7 @@
         "tags": [
           "daemon"
         ],
-        "summary": "What this machine still needs before Quark can run a Project: tools\n(git, tmux 3.2+, gh signed in, a coordinator agent signed in,\ntreehouse), optional ones (Beads, Dolt, quota-axi) and the home. Each\nmissing check may carry a fix.",
+        "summary": "What this machine still needs before Quark can run a Project: tools\n(git, tmux 3.2+, gh signed in, a coordinator agent signed in,\ntreehouse), optional ones (Beads, Dolt) and the home. Each\nmissing check may carry a fix.",
         "operationId": "report",
         "responses": {
           "200": {

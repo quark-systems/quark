@@ -260,7 +260,7 @@ pub struct Keys {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaSource {
-    /// `quota-axi` provider name, or `none`.
+    /// Quota provider name (`claude`, `codex`, `bob`, `kiro`), or `none`.
     pub provider: String,
 }
 

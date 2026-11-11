@@ -9,7 +9,7 @@ It sits in front of the slice 4 supervisor (`docs/engine/supervision.md`) and ke
 2. **Resolve.** The Project's rules (`dispatch.yaml`, compiled to `crew-dispatch.json`) are resolved exactly as firstmate resolves them, and the result is recorded as `dispatch.resolved`:
    - the classifier (the System-1 API, hosted or an Ollama server's; `classify::SystemOne`) picks a rule or `default` from the brief, with a confidence;
    - a rule needing approval, or whose floor cannot be verified, escalates; a rule floor below falls through to the default profiles; below the confidence floor the result is `ambiguous`, unless `on_failure: default` sends it (and any classifier failure) to the default profiles;
-   - each candidate is judged on one `quota-axi --json` snapshot, plus IBM Bob's and Kiro CLI's own readings ([Bob and Kiro quota](#bob-and-kiro-quota)): exhausted runway, 0% left without overage, or a profile floor below rule it out; missing or unverifiable evidence leaves it eligible but unranked; `pricing: budget` needs no quota;
+   - each candidate is judged on one quota snapshot from quarkd's own readers ([Quota readers](#quota-readers)): exhausted runway, 0% left without overage, or a profile floor below rule it out; missing or unverifiable evidence leaves it eligible but unranked; `pricing: budget` needs no quota;
    - `ordered` takes the first eligible candidate (escalating if its evidence is unverifiable), `quota-balanced` takes the highest spend priority, a budget candidate only when none ranks, and escalates on a tie.
 3. **Choose.** A clear resolution picks an account from the profile's pool and records `dispatch.chosen`. Pool rules are quarkd's: sticky while the account stays launchable and in the pool, otherwise the ready account with the fewest running tasks, then the most quota left. Anything not clear (off, ambiguous, escalated, error, an empty or exhausted pool) is `dispatch.escalated` until the coordinator calls `Dispatcher::choose` with a profile.
 4. **Admit.** Each `Dispatcher::tick` (oldest first) asks the red-main guard (`MergeGuard::may_dispatch`) and then admission control for a host. A held task records `dispatch.held` once per distinct reason.
@@ -17,11 +17,17 @@ It sits in front of the slice 4 supervisor (`docs/engine/supervision.md`) and ke
 
 A task can be taken back with `Dispatcher::withdraw` until it is placed.
 
-## Bob and Kiro quota
+## Quota readers
 
-quota-axi reports neither IBM Bob nor Kiro CLI, so `quark_dispatch::local` reads them itself (ports of firstmate's `fm-bob-quota.sh` and `fm-kiro-quota.sh`), each as a one-provider schema-5 snapshot merged when quota-axi lacks the provider. Both harnesses' manifests name their provider (`[quota]`), so a profile needs no `provider`. A reading that cannot be had leaves the provider unmeasured (eligible, unranked); it never invents a number. Both rows carry quota-axi's own `spendPriority` for the month, so they rank against quota-axi's rows under `quota-balanced`.
+`quark_dispatch::local` reads every provider itself, each as a one-provider schema-5 snapshot (the shape quota-axi printed, which Quark no longer needs): Claude Code, Codex, IBM Bob and Kiro CLI (ports of firstmate's `fm-bob-quota.sh` and `fm-kiro-quota.sh`). The providers are read side by side. Their harnesses' manifests name their provider (`[quota]`), so a profile needs no `provider`; a provider with no reader (Grok, Kimi, Cursor, Antigravity, Muse) is unmeasured. A reading that cannot be had leaves the provider unmeasured (eligible, unranked); it never invents a number. Every row carries a `spendPriority` (how far each window's allowance runs ahead of or behind its clock, weighted by cycle length), so providers rank against each other under `quota-balanced`.
 
-`quarkd quota bob` and `quarkd quota kiro` print the reading in one line (`--json` for the snapshot dispatch sees).
+`quarkd quota claude|codex|bob|kiro` prints the reading in one line (`--json` for the snapshot dispatch sees; `--config-dir` reads another Claude or Codex login).
+
+**Claude Code** reads Claude Code's own OAuth login: on macOS the Keychain item `Claude Code-credentials` (for another `CLAUDE_CONFIG_DIR`, the item suffixed with the first 8 hex digits of that path's SHA-256), with `security find-generic-password`, the tool Claude Code writes it with, so a quarkd started by launchd reads it without a prompt; else `<config dir>/.credentials.json`. The token goes to `GET https://api.anthropic.com/api/oauth/usage`: the five-hour session and the week bound `all_models`, a model's week adds a bound for its `model:<id>` scope, and extra usage is shown but bounds nothing. An expired session is renewed by Claude Code itself (`claude doctor`, at most every 10 minutes per login); quarkd never spends the refresh token. Should a Keychain item still want a prompt, the background read gives up after 10 s and stops asking for that item, and Accounts offers **Allow Keychain access** (`POST /v1/accounts/{id}/keychain-grant`), which waits for the person to answer it.
+
+**Codex** reads `auth.json` in the account's `CODEX_HOME` (default `~/.codex`) and sends its ChatGPT token and account id to `GET https://chatgpt.com/backend-api/wham/usage` (then `/backend-api/codex/usage`): the five-hour and weekly windows bound `all_models`, a named model limit adds `model:<id>`, code review is its own `code_review` scope. With no Codex login, the default account is read with Pi's (`openai-codex` in `~/.pi/agent/auth.json`). An API-key sign-in has no plan windows.
+
+Readings are reused for 45 s, so dispatch and Accounts reading together make one request.
 
 **Kiro** runs `kiro-cli chat --v2 --no-interactive /usage` in `<home>/run/kiro-usage-probe` (75 s bound: with an API key `/usage` takes 20-30 s, sometimes more), which prints the plan's credits without a model call. It always passes `--v2`: under `--v3` the same text is a prompt, and spends credits. `<home>/quota/kiro.json` is optional:
 

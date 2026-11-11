@@ -3,7 +3,7 @@
 //!
 //! [`check`] looks at the tools quarkd runs (git, tmux 3.2+, gh signed in, a
 //! coordinator harness signed in, Beads and Dolt) and the optional ones
-//! (quota-axi for quota, and treehouse only when `QUARK_WORKTREE_POOL` asks for it), plus the home itself (writable,
+//! (treehouse, only when `QUARK_WORKTREE_POOL` asks for it), plus the home itself (writable,
 //! format, free disk). `quarkd doctor` prints it; `GET /v1/setup` serves it
 //! to the app's setup screen.
 //!
@@ -122,14 +122,13 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
             None
         }
     };
-    let (git, tmux, gh, treehouse, bd, dolt, quota) = tokio::join!(
+    let (git, tmux, gh, treehouse, bd, dolt) = tokio::join!(
         version_of(env, "git", &["--version"]),
         version_of(env, "tmux", &["-V"]),
         version_of(env, "gh", &["--version"]),
         treehouse_probe,
         version_of(env, "bd", &["--version"]),
         version_of(env, "dolt", &["version"]),
-        version_of(env, "quota-axi", &["--version"]),
     );
     let gh_auth = match &gh {
         Some((path, _)) => Some(run(path, &["auth", "status"]).await),
@@ -267,19 +266,6 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
         dolt.as_ref(),
         None,
         Some(brew_fix("dolt")),
-    ));
-    checks.push(tool(
-        "quota_axi",
-        "quota-axi",
-        false,
-        "Claude and Codex quota for dispatch and the Accounts view.",
-        quota.as_ref(),
-        Some("quota stays unmeasured without it"),
-        Some(Fix {
-            label: "Install with npm".into(),
-            command: "npm install -g quota-axi".into(),
-            runnable: npm.is_some(),
-        }),
     ));
     checks.extend(home_checks(home));
     SetupReport::new(checks)

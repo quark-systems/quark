@@ -432,7 +432,7 @@ async fn a_description_is_tested_against_the_rules_on_main() {
     );
 
     // A resolution that fails still lists the candidates.
-    engine.set_description_resolution(Err("quota-axi timed out".into()));
+    engine.set_description_resolution(Err("quota read timed out".into()));
     let (status, t) = post(&app, &uri, ask.clone()).await;
     assert_eq!(status, 200, "{t}");
     assert_eq!(t["resolution"]["status"], "error");

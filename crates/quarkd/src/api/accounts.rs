@@ -12,7 +12,7 @@ use super::{ApiError, AppState};
 pub struct AccountQuery {
     /// Only this harness's accounts, e.g. `claude-code`.
     pub harness: Option<String>,
-    /// Read every listed account's quota now (one quota-axi call each)
+    /// Read every listed account's quota now (one read each)
     /// instead of returning the last reading.
     #[serde(default)]
     pub refresh: bool,
@@ -126,7 +126,7 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Read an account's quota letting quota-axi prompt on the Mac for its
+/// Read an account's quota waiting on the Mac's Keychain prompt for its
 /// login's Keychain item (choose "Always Allow"), for a reading with
 /// `keychain_grant`. Later reads use the grant. Answers with the account and
 /// the new reading once the prompt is answered.

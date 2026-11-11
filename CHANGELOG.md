@@ -8,6 +8,13 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Changed
+
+- Quark reads Claude Code and Codex quota itself; `quota-axi` is no longer needed and Setup no
+  longer lists it. The Claude read works when quarkd is started by QuarkBar at login, without
+  a Keychain prompt. Codex quota also comes through Pi's Codex sign-in when Codex itself is not
+  signed in. `quarkd quota claude` and `quarkd quota codex` print a reading.
+
 ### Fixed
 
 - Opening a newly installed Quark starts quarkd and puts QuarkBar in Login Items, also on a

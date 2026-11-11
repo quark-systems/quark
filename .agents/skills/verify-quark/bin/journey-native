@@ -179,7 +179,7 @@ else
   fail "coordinator: start_task failed: $(jq -c '.result // .error' "$ev/start_task.json")"
   finish
 fi
-# With no rules file and no quota-axi, dispatch leaves the pick to the
+# With no rules file, dispatch leaves the pick to the
 # coordinator, which names the agent with choose_profile.
 answer=$(jq -r '.result.content[0].text' "$ev/start_task.json")
 if [[ $answer == *"Pick with choose_profile for task "* ]]; then
