@@ -10,9 +10,11 @@ page lists every merged pull request.
 
 ### Fixed
 
-- quarkd starts at login again when another quarkd (a build from source, say) was answering
-  the first time Quark opened. QuarkBar used to give up on turning quarkd on for good; now it
-  turns it on at its next launch, and an install left without it gets it at the next login.
+- Opening a newly installed Quark starts quarkd and puts QuarkBar in Login Items, also on a
+  Mac that ran Quark from source before or where another quarkd was answering. QuarkBar
+  remembered that setup was done for any build, so it often never turned quarkd on. Now each
+  new build sets itself up once, or at the next login if another quarkd was running; Stop
+  quarkd still stays stopped until the next upgrade.
 
 ## 0.1.0-alpha.3
 

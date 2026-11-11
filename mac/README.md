@@ -32,10 +32,11 @@ something quarkd doesn't answer yet, add it to quarkd, not here.
   policy decides what's worth telling you.
 - **quarkd:** the quarkd bundled in QuarkBar.app runs as the LaunchAgent
   `systems.quark.quarkd`, through SMAppService. launchd keeps it running
-  whether or not QuarkBar is open. QuarkBar turns it on at its first launch,
-  or, while another quarkd is answering on port 7380, at the first launch
-  after that one has gone (such as the next login). Once on, it stays as
-  Start and Stop quarkd leave it. quarkd runs from a login
+  whether or not QuarkBar is open. Each new build of QuarkBar (a new install,
+  or a build from source) turns it on at its first launch, or, while another
+  quarkd is answering on port 7380, at the first launch after that one has
+  gone (such as the next login). After that it stays as Start and Stop
+  quarkd leave it. quarkd runs from a login
   shell, so it finds tmux, gh and the harness CLIs. Its output goes to
   `~/Library/Logs/Quark/quarkd.log`.
 - **Address:** QuarkBar talks to `QUARK_DAEMON` when that is set, as the
