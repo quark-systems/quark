@@ -30,6 +30,7 @@ The log keeps a `PromptRecord` (each layer's source, size and digest, never the 
 
 - Worker messages, inbound channel messages and rule outcomes follow the away policy (`docs/engine/triggers.md`): an occasion wakes the coordinator when the Project's route for it says so. By default that is a question, blocked, failed, done, an inbound message and a failed rule.
 - Dispatch decisions left to the coordinator: `dispatch.escalated` (pick an agent), `dispatch.spawn_failed` and `dispatch.host_unhealthy`.
+  An escalation recorded while the coordinator's own `start_task`, `choose_profile` or `relaunch` ran does not wake it: that call's result already asks it to pick. A waiting "pick an agent" item is dropped once `dispatch.chosen` records an agent for its task.
 - An explicit `Coordinator::request` (a rule's `wake` action, the API), recorded as `coordinator.requested`.
 - The user's answer to a decision the coordinator raised with `ask_user`, recorded as `coordinator.answered` (`events::record_answer`).
 

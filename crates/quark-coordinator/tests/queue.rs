@@ -358,6 +358,125 @@ async fn explicit_requests_and_dispatch_escalations_wake() {
     assert!(c.request(&p(), None, "  ", "x").await.is_err());
 }
 
+/// Hands whose dispatching calls escalate, the way the engine's do: the
+/// escalation lands in the log while the call runs, and the call's result
+/// tells the coordinator to pick.
+struct Escalating {
+    log: Arc<SqliteEventLog>,
+}
+
+#[async_trait]
+impl Hands for Escalating {
+    async fn run(&self, project: &ProjectId, call: &ToolCall) -> Result<String> {
+        let task = match call {
+            ToolCall::StartTask { .. } => TaskId::from("t7"),
+            ToolCall::ChooseProfile { task, .. } => task.clone(),
+            _ => return Ok("ok".into()),
+        };
+        self.log
+            .append(NewEvent::new(
+                HostId::from("h"),
+                project.clone(),
+                Some(task.clone()),
+                "dispatch.escalated",
+                json!({"type": "escalated", "reason": "tie"}),
+            ))
+            .await?;
+        Ok(format!(
+            "Created {task}, but dispatch left its agent to you: tie. Pick with choose_profile for task {task}."
+        ))
+    }
+}
+
+#[tokio::test]
+async fn an_escalation_a_tool_already_reported_does_not_wake() {
+    let rig = Rig::new();
+    let c = Coordinator::open(
+        rig.log.clone(),
+        HostId::from("h"),
+        Config::default(),
+        rig.rec.clone(),
+        Arc::new(Escalating {
+            log: rig.log.clone(),
+        }),
+    )
+    .await
+    .unwrap();
+    let start = ToolCall::StartTask {
+        title: "Fix it".into(),
+        brief: "fix".into(),
+        repo: None,
+        agent: None,
+        rule: None,
+    };
+    let told = c.call(&p(), start).await.unwrap();
+    assert!(told.contains("Pick with choose_profile"), "{told}");
+    let pick = ToolCall::ChooseProfile {
+        task: TaskId::from("t7"),
+        agent: None,
+        rule: Some("rule_1".into()),
+    };
+    c.call(&p(), pick).await.unwrap();
+    let report = c.tick(now()).await.unwrap();
+    assert_eq!(report.items, 0);
+    assert!(rig.rec.turns.lock().unwrap().is_empty());
+
+    // One that happens outside the coordinator's calls still wakes it.
+    rig.log
+        .append(NewEvent::new(
+            HostId::from("h"),
+            p(),
+            Some(TaskId::from("t8")),
+            "dispatch.escalated",
+            json!({"type": "escalated", "reason": "quota tie"}),
+        ))
+        .await
+        .unwrap();
+    c.tick(now()).await.unwrap();
+    let turns = rig.rec.turns.lock().unwrap().clone();
+    assert_eq!(turns.len(), 1);
+    let tasks: Vec<_> = turns[0].1.items.iter().map(|i| i.task.clone()).collect();
+    assert_eq!(tasks, [Some(TaskId::from("t8"))]);
+}
+
+#[tokio::test]
+async fn a_pick_made_before_the_wake_drops_the_waiting_item() {
+    let rig = Rig::new();
+    let c = rig.open().await;
+    for (task, kind, payload) in [
+        (
+            "t1",
+            "dispatch.escalated",
+            json!({"type": "escalated", "reason": "tie"}),
+        ),
+        (
+            "t2",
+            "dispatch.escalated",
+            json!({"type": "escalated", "reason": "tie"}),
+        ),
+        (
+            "t1",
+            "dispatch.chosen",
+            json!({"type": "chosen", "choice": {}}),
+        ),
+    ] {
+        rig.log
+            .append(NewEvent::new(
+                HostId::from("h"),
+                p(),
+                Some(TaskId::from(task)),
+                kind,
+                payload,
+            ))
+            .await
+            .unwrap();
+    }
+    c.tick(now()).await.unwrap();
+    let turns = rig.rec.turns.lock().unwrap().clone();
+    let tasks: Vec<_> = turns[0].1.items.iter().map(|i| i.task.clone()).collect();
+    assert_eq!(tasks, [Some(TaskId::from("t2"))]);
+}
+
 #[tokio::test]
 async fn prompts_are_recorded_on_change_and_serve_skills() {
     let rig = Rig::new();
