@@ -34,3 +34,6 @@ summary = "Grok turn-end hook; busy state from the screen"
 [keys]
 interrupt = ["C-c"]
 exit = "/exit"
+
+[quota]
+provider = "grok"

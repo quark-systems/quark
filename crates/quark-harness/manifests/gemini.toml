@@ -38,3 +38,6 @@ summary = "Gemini CLI hooks (BeforeAgent, AfterAgent)"
 [keys]
 interrupt = ["Escape"]
 exit = "/quit"
+
+[quota]
+provider = "gemini"

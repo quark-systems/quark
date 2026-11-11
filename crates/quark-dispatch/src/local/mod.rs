@@ -1,5 +1,5 @@
 //! quarkd's own quota readers, one per provider, each ported from the
-//! readers firstmate and quota-axi used:
+//! readers firstmate and quota-axi used (Gemini CLI's is quarkd's own):
 //!
 //! | provider | reader | reads |
 //! |---|---|---|
@@ -7,17 +7,32 @@
 //! | `codex` | [`codex`] | Codex's `auth.json` (or Pi's `openai-codex` login), then ChatGPT's usage endpoint |
 //! | `bob` | [`bob`] | IBM Bob's local ledger and live API (`fm-bob-quota.sh`) |
 //! | `kiro` | [`kiro`] | `kiro-cli /usage` (`fm-kiro-quota.sh`) |
+//! | `grok` | [`grok`] | the Grok CLI's `auth.json` (or Pi's `xai` login), then grok.com's credits call |
+//! | `kimi` | [`kimi`] | Kimi Code's credentials (or Pi's `kimi-coding` login), then Kimi Code's `/usages` |
+//! | `cursor` | [`cursor`] | Cursor's `state.vscdb` (`sqlite3`) or CLI login, then Cursor's dashboard service |
+//! | `agy` | [`agy`] | `agy -p /quota --output-format json` |
+//! | `muse` | [`muse`] | the Muse CLI's `auth.json`, Keychain item or `META_API_KEY`, then Meta's `/muse-code/key` |
+//! | `gemini` | [`gemini`] | Gemini CLI's `oauth_creds.json`, then Code Assist's `retrieveUserQuota` |
+//! | `copilot` | [`copilot`] | the Copilot CLI's, editors' or `gh`'s login, then GitHub's `copilot_internal/user` |
 //!
 //! Each reading is one schema-5 snapshot holding just its provider, so
 //! [`crate::LocalQuota`] puts them side by side and dispatch ranks them the
 //! same way. A reading never fails: anything it cannot read leaves the
 //! provider `unknown` with the reason in its state or in a disclosure object
-//! beside the row.
+//! beside the row. [`support`] holds what the readers share.
 
+pub mod agy;
 pub mod bob;
 pub mod claude;
 pub mod codex;
+pub mod copilot;
+pub mod cursor;
+pub mod gemini;
+pub mod grok;
+pub mod kimi;
 pub mod kiro;
+pub mod muse;
+pub mod support;
 pub mod windows;
 
 use std::time::Duration;
@@ -27,10 +42,17 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+pub use agy::AgyUsage;
 pub use bob::BobUsage;
 pub use claude::ClaudeUsage;
 pub use codex::CodexUsage;
+pub use copilot::CopilotUsage;
+pub use cursor::CursorUsage;
+pub use gemini::GeminiUsage;
+pub use grok::GrokUsage;
+pub use kimi::KimiUsage;
 pub use kiro::KiroUsage;
+pub use muse::MuseUsage;
 
 /// One provider's local quota reading.
 #[async_trait]
@@ -278,10 +300,14 @@ async fn curl_get(
     Ok((code.trim().parse().unwrap_or(0), body.to_string()))
 }
 
-/// RFC 3339 or epoch seconds, as providers spell a reset.
+/// RFC 3339 or epoch seconds (or milliseconds, also as a numeric string),
+/// as providers spell a reset.
 fn parse_time(v: &Value) -> Option<OffsetDateTime> {
     match v {
-        Value::String(s) => OffsetDateTime::parse(s, &Rfc3339).ok(),
+        Value::String(s) => OffsetDateTime::parse(s.trim(), &Rfc3339).ok().or_else(|| {
+            let n: f64 = s.trim().parse().ok()?;
+            parse_time(&serde_json::json!(n))
+        }),
         Value::Number(n) => {
             let secs = n.as_f64()?;
             // Some fields are milliseconds.

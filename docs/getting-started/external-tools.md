@@ -11,7 +11,7 @@ Small tools Quark inherited from firstmate. Each one is a candidate to port into
 | :--- | :--- | :--- | :--- | :--- |
 | `treehouse` 3.1.2+ ([kunchenguid/treehouse](https://github.com/kunchenguid/treehouse)) | Only as a fallback: quarkd's own native pool serves worktrees by default, on treehouse's pool format. `QUARK_WORKTREE_POOL=treehouse` uses treehouse instead (e.g. for a jj repository, the one setting the native pool refuses), and `QUARK_WORKTREE_POOL=shadow` runs it with the native pool compared | `crates/quark-worktree/src/treehouse.rs`, `crates/quarkd/src/native_worktrees.rs` | `selfhost/treehouse.sh` (pinned sha256); CI downloads it for the parity tests (`TREEHOUSE_BIN`) | No: only with `QUARK_WORKTREE_POOL=treehouse` or `shadow` |
 
-Account quota for Claude Code, Codex, IBM Bob and Kiro CLI is read by quarkd itself (`crates/quark-dispatch/src/local/`). `quota-axi` and `tasks-axi`, needed in the firstmate era, are no longer used.
+Account quota for every harness with a quota reader (Claude Code, Codex, IBM Bob, Kiro CLI, Grok, Kimi Code, Cursor, Antigravity, Muse, Gemini CLI and GitHub Copilot) is read by quarkd itself (`crates/quark-dispatch/src/local/`). `quota-axi` and `tasks-axi`, needed in the firstmate era, are no longer used.
 
 ## Core tools
 
@@ -19,10 +19,10 @@ Account quota for Claude Code, Codex, IBM Bob and Kiro CLI is read by quarkd its
 | :--- | :--- | :--- | :--- | :--- |
 | `git` | Repos, worktrees, branches, rebases and merges, Project memory | `crates/quark-worktree`, `crates/quark-verify`, `crates/quarkd` (`project_repo.rs`, `worktree.rs`, `gates.rs`, `memory.rs`) | System or Homebrew | Yes |
 | `tmux` 3.2+ | Coordinator terminals, over one shared server in control mode | `crates/quark-sessions/src/tmux/`, `crates/quark-runtime/src/tmux.rs` | `brew install tmux`; `--tmux` or `QUARKD_TMUX` picks the binary | Yes |
-| `gh` (GitHub CLI) | The PR center and merges (`gh api`), cloning, and the GitHub token for Beads sync (`gh auth token` when `GITHUB_TOKEN` is unset) | `crates/quarkd/src/forge.rs`, `crates/quark-verify/src/forge.rs`, `crates/quarkd/src/beads.rs` | `brew install gh`, then `gh auth login` | Yes |
+| `gh` (GitHub CLI) | The PR center and merges (`gh api`), cloning, the GitHub token for Beads sync (`gh auth token` when `GITHUB_TOKEN` is unset), and GitHub Copilot's quota when no other Copilot sign-in is found | `crates/quarkd/src/forge.rs`, `crates/quark-verify/src/forge.rs`, `crates/quarkd/src/beads.rs`, `crates/quark-dispatch/src/local/copilot.rs` | `brew install gh`, then `gh auth login` | Yes |
 | `bd` ([Beads](https://beads.gascity.com)) | The Issues tab, decisions and Beads memory; `quarkd triage` files issues with it | `crates/quarkd/src/beads.rs`, `crates/quarkd/src/beads/`, `crates/quarkd/src/triage.rs` | Latest bd from beads.gascity.com; `QUARKD_BD` picks the binary | Yes (Setup requires it for 0.1) |
 | `dolt` | The SQL server Beads runs each Project's database on (server mode) | `crates/quarkd/src/beads.rs` (checked before Beads starts) | [Dolt install](https://docs.dolthub.com/introduction/installation), e.g. `brew install dolt`; `BEADS_DOLT_BIN` overrides | With `bd` |
-| `curl` | Claude Code's, Codex's and IBM Bob's usage APIs, and the dispatch classifier's HTTP calls (System One or Ollama); the key goes on stdin, never argv | `crates/quark-dispatch/src/local/`, `crates/quark-dispatch/src/classify.rs` | System | For quota and the classifier |
+| `curl` | The providers' usage APIs (Claude Code, Codex, IBM Bob, Grok, Kimi Code, Cursor, Muse, Gemini CLI, GitHub Copilot), and the dispatch classifier's HTTP calls (System One or Ollama); the key goes on stdin, never argv | `crates/quark-dispatch/src/local/`, `crates/quark-dispatch/src/classify.rs` | System | For quota and the classifier |
 | `ssh` | Remote runtimes for SSH hosts | `crates/quark-runtime/src/exec.rs`, `crates/quark-runtime/src/ssh.rs` | System OpenSSH; `QUARK_SSH` overrides | For SSH hosts only |
 | `bash`, `sh` | Verification gate checks, trigger commands, login-shell PATH and quoting probes | `crates/quark-verify/src/pipeline.rs`, `crates/quark-triggers/src/commands.rs`, `crates/quark-runtime/src/quote.rs`, `app/src-tauri/src/release.rs` | System | Yes |
 
@@ -49,13 +49,16 @@ The coordinator and workers are CLI agents. Each has a manifest in `crates/quark
 
 A manifest's `models.list` command, if any, also runs to list models (`crates/quark-harness/src/catalog.rs`).
 
+Some quota readers also run a harness's own CLI (`crates/quark-dispatch/src/local/`): `agy -p /quota --output-format json` for Antigravity's quota (with stand-in `open` and `xdg-open` first on its `PATH`, so it never opens a browser), `grok models` to let the Grok CLI renew a rejected session, and `claude doctor` to let Claude Code renew an expired one. Gemini CLI is not run; its OAuth client is read from its installed `oauth2.js` to renew an expired token in memory.
+
 ## Operating system tools
 
 Shipped with the OS; listed so a port to a new platform knows what to replace.
 
 | Tool | What Quark uses it for | Where | Platform |
 | :--- | :--- | :--- | :--- |
-| `security` | Keychain: whether a harness login exists, Claude Code's login for its quota read, API keys for key accounts and default logins (Bob, Kiro), the classifier's `keychain:` credential | `crates/quark-harness/src/host.rs`, `crates/quarkd/src/secrets.rs`, `crates/quark-dispatch/src/classify.rs`, `crates/quark-dispatch/src/local/claude.rs` | macOS |
+| `security` | Keychain: whether a harness login exists, the Claude Code, Cursor CLI, Muse and Copilot CLI logins for their quota reads, API keys for key accounts and default logins (Bob, Kiro), the classifier's `keychain:` credential | `crates/quark-harness/src/host.rs`, `crates/quarkd/src/secrets.rs`, `crates/quark-dispatch/src/classify.rs`, `crates/quark-dispatch/src/local/` (`claude.rs`, `support.rs`) | macOS |
+| `sqlite3` | Cursor's sign-in from the editor's `state.vscdb`, for its quota read (opened read-only) | `crates/quark-dispatch/src/local/cursor.rs` | macOS (Linux: `apt install sqlite3`) |
 | `sandbox-exec` | Seatbelt isolation for sandboxed workers | `crates/quark-isolation/src/seatbelt.rs` | macOS |
 | `bwrap` (bubblewrap) | Sandbox isolation for workers, when installed | `crates/quark-isolation/src/bwrap.rs` | Linux (`apt install bubblewrap`) |
 | `sysctl` | Memory pressure for host health | `crates/quark-hosts/src/pressure.rs` | macOS (Linux reads `/proc/pressure`) |

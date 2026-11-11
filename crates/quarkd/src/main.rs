@@ -21,9 +21,10 @@ enum Command {
     Serve(ServeArgs),
     /// Print the OpenAPI document for the /v1 API.
     Openapi,
-    /// Read Claude Code's, Codex's, IBM Bob's or Kiro CLI's quota the way
-    /// dispatch and Accounts do, or anchor Bob's estimate with the "Monthly
-    /// Usage" figure its /status shows.
+    /// Read a harness's quota (Claude Code, Codex, IBM Bob, Kiro CLI, Grok,
+    /// Kimi Code, Cursor, Antigravity, Muse, Gemini CLI or GitHub Copilot)
+    /// the way dispatch and Accounts do, or anchor Bob's estimate with the
+    /// "Monthly Usage" figure its /status shows.
     Quota {
         /// Quark home directory [default: $QUARK_HOME or ~/.quark]
         #[arg(long)]
@@ -141,6 +142,34 @@ enum QuotaCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Grok's shared and per-product credits.
+    Grok(ReadArgs),
+    /// Kimi Code's session, weekly and monthly windows.
+    Kimi(ReadArgs),
+    /// Cursor's billing-cycle usage and Grok Bot allowance.
+    Cursor(ReadArgs),
+    /// Antigravity's Gemini and Claude/GPT windows (`agy /quota`).
+    Agy(ReadArgs),
+    /// Muse's session and weekly subscription windows.
+    Muse(ReadArgs),
+    /// Gemini CLI's daily per-model quota.
+    Gemini(ReadArgs),
+    /// GitHub Copilot's monthly allowances.
+    Copilot(ReadArgs),
+}
+
+/// How to read one provider's quota.
+#[derive(clap::Args)]
+struct ReadArgs {
+    /// Print the reading as JSON (schema 5).
+    #[arg(long)]
+    json: bool,
+    /// Another login's config directory, where the provider has one.
+    #[arg(long, value_name = "DIR")]
+    config_dir: Option<PathBuf>,
+    /// Wait for a macOS Keychain prompt instead of giving up on it.
+    #[arg(long)]
+    allow_keychain_prompt: bool,
 }
 
 #[derive(Subcommand)]
@@ -357,7 +386,10 @@ fn init_tracing(
 }
 
 async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result<()> {
-    use quark_dispatch::local::{bob, kiro, windows, ClaudeUsage, CodexUsage, LocalReading};
+    use quark_dispatch::local::{
+        agy, bob, copilot, cursor, gemini, grok, kimi, kiro, muse, windows, ClaudeUsage,
+        CodexUsage, LocalReading,
+    };
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
     let print = |v: serde_json::Value, json: bool| {
         if json {
@@ -412,6 +444,24 @@ async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result
             } else {
                 println!("{}", kiro::status_line(&v));
             }
+        }
+        other => {
+            let (reader, args): (Box<dyn LocalReading>, ReadArgs) = match other {
+                QuotaCommand::Grok(a) => (Box::new(grok::GrokUsage::from_env()), a),
+                QuotaCommand::Kimi(a) => (Box::new(kimi::KimiUsage::from_env()), a),
+                QuotaCommand::Cursor(a) => (Box::new(cursor::CursorUsage::from_env()), a),
+                QuotaCommand::Agy(a) => (Box::new(agy::AgyUsage::default()), a),
+                QuotaCommand::Muse(a) => (Box::new(muse::MuseUsage::from_env()), a),
+                QuotaCommand::Gemini(a) => (Box::new(gemini::GeminiUsage::from_env()), a),
+                QuotaCommand::Copilot(a) => (Box::new(copilot::CopilotUsage::from_env()), a),
+                _ => unreachable!("handled above"),
+            };
+            let name = reader.provider().to_string();
+            let v = reader
+                .read_account(args.config_dir.as_deref(), args.allow_keychain_prompt)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("{name} reads only its default login"))?;
+            print(v, args.json);
         }
     }
     Ok(())

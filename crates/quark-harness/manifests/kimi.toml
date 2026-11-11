@@ -29,3 +29,6 @@ summary = "Kimi turn-end hook; busy state from the screen"
 [keys]
 interrupt = ["Escape"]
 exit = "/exit"
+
+[quota]
+provider = "kimi"
