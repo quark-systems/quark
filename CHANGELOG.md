@@ -6,6 +6,14 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
+## Unreleased
+
+### Fixed
+
+- quarkd starts at login again when another quarkd (a build from source, say) was answering
+  the first time Quark opened. QuarkBar used to give up on turning quarkd on for good; now it
+  turns it on at its next launch, and an install left without it gets it at the next login.
+
 ## 0.1.0-alpha.3
 
 Installed the same way as alpha.2. After dragging Quark over the old one, run
