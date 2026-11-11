@@ -46,7 +46,7 @@ SOFTWARE.
 
 https://github.com/kunchenguid/quota-axi
 
-Adapted in Quark: how Claude Code's and Codex's logins are found (the Keychain service per config directory, credential files, Pi's Codex login), the usage endpoints and their window shapes, and the effective-availability, runway and spend-priority rules: `crates/quark-dispatch/src/local/` (`claude.rs`, `codex.rs`, `windows.rs`, `mod.rs`).
+Adapted in Quark: how each provider's login is found (Keychain items, credential files, Pi's logins), the usage endpoints and their window shapes, and the effective-availability, runway and spend-priority rules, for Claude Code, Codex, Grok, Kimi Code, Cursor, Antigravity, Muse and GitHub Copilot: `crates/quark-dispatch/src/local/` (`claude.rs`, `codex.rs`, `grok.rs`, `kimi.rs`, `cursor.rs`, `agy.rs`, `muse.rs`, `copilot.rs`, `support.rs`, `windows.rs`, `mod.rs`).
 
 ```
 MIT License

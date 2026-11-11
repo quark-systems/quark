@@ -352,7 +352,9 @@ const FAMILIES: &[(&str, &str)] = &[
     ("kimi", "kimi"),
     ("cursor", "cursor"),
     ("agy", "agy"),
-    ("muse", "meta"),
+    ("muse", "muse"),
+    ("gemini", "gemini"),
+    ("copilot", "copilot"),
     ("kiro", "kiro"),
     ("bob", "bob"),
 ];
@@ -423,7 +425,7 @@ mod tests {
     #[test]
     fn families_follow_aliases() {
         let f = ProviderFamilies::builtin();
-        assert_eq!(f.get("muse"), Some("meta"));
+        assert_eq!(f.get("muse"), Some("muse"));
         assert_eq!(f.get("bob"), Some("bob"));
         assert_eq!(f.get("pi"), None);
     }

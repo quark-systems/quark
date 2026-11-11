@@ -14,6 +14,10 @@ page lists every merged pull request.
   longer lists it. The Claude read works when quarkd is started by QuarkBar at login, without
   a Keychain prompt. Codex quota also comes through Pi's Codex sign-in when Codex itself is not
   signed in. `quarkd quota claude` and `quarkd quota codex` print a reading.
+- Quark also reads quota itself for Grok, Kimi Code, Cursor, Antigravity and Muse (which
+  quota-axi covered) and, new, Gemini CLI and GitHub Copilot. Accounts shows their quota and
+  dispatch ranks them; `quarkd quota <provider>` prints a reading. Cursor's editor sign-in is
+  read with `sqlite3`.
 
 ### Fixed
 

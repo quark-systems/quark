@@ -32,3 +32,6 @@ summary = "Muse session event log"
 [keys]
 interrupt = ["Escape", "C-u"]
 exit = "/exit"
+
+[quota]
+provider = "muse"

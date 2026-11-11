@@ -27,3 +27,6 @@ summary = "terminal screen"
 [keys]
 interrupt = ["Escape"]
 exit = "/quit"
+
+[quota]
+provider = "agy"

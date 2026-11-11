@@ -32,3 +32,6 @@ summary = "Cursor conversation transcript"
 [keys]
 interrupt = ["Escape"]
 exit = "/exit"
+
+[quota]
+provider = "cursor"
