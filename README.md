@@ -37,7 +37,7 @@ The current build is **0.1.0-alpha.1**, for Apple silicon Macs. It is not signed
 
 1. Download `Quark_0.1.0-alpha.1_aarch64.dmg` from the [latest release](https://github.com/quark-systems/quark/releases) and drag Quark to Applications.
 2. The first time, right-click Quark and choose Open (or run `xattr -dr com.apple.quarantine /Applications/Quark.app`), since the build is only ad-hoc signed.
-3. Opening Quark starts the menu bar app, which runs quarkd as a login item. The **Setup** page opens on first run and lists what this Mac still needs: git, tmux 3.2+, the [GitHub CLI](https://cli.github.com) signed in, [Beads](https://github.com/gastownhall/beads) (`bd` and `dolt`), and a coordinator harness signed in ([Claude Code](https://docs.claude.com/en/docs/claude-code) by default, Codex or Pi). It installs what it can with one button and gives you the command for sign-ins.
+3. Opening Quark starts the menu bar app, which runs quarkd as a login item. The **Setup** page opens on first run and lists what this Mac still needs: git, tmux 3.2+, the [GitHub CLI](https://cli.github.com) signed in, SSH to GitHub working, [Beads](https://github.com/gastownhall/beads) (`bd` and `dolt`), and a coordinator harness signed in ([Claude Code](https://docs.claude.com/en/docs/claude-code) by default, Codex or Pi). It installs what it can with one button and gives you the command for sign-ins.
 
 Then click **New project**, give it a name, a goal and a repository, and pick the default agent. The coordinator starts in the Project's Conversation tab; tell it what to do.
 

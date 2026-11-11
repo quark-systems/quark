@@ -1,15 +1,16 @@
 //! First-run setup: what this machine needs before Quark can run a Project,
 //! and the fixes Quark can make for it.
 //!
-//! [`check`] looks at the tools quarkd runs (git, tmux 3.2+, gh signed in, a
-//! coordinator harness signed in, Beads and Dolt) and the optional ones
+//! [`check`] looks at the tools quarkd runs (git, tmux 3.2+, gh signed in, SSH
+//! to GitHub working, a coordinator harness signed in, Beads and Dolt) and the optional ones
 //! (treehouse, only when `QUARK_WORKTREE_POOL` asks for it), plus the home itself (writable,
 //! format, free disk). `quarkd doctor` prints it; `GET /v1/setup` serves it
 //! to the app's setup screen.
 //!
 //! A check that fails may carry a [`Fix`]. A fix with `runnable` is one
 //! quarkd can do itself without admin rights or a prompt: a Homebrew or npm
-//! install, or the pinned treehouse download. Only `POST /v1/setup/<id>`
+//! install, the pinned treehouse download, or GitHub's published SSH host
+//! keys added to ~/.ssh/known_hosts. Only `POST /v1/setup/<id>`
 //! (the person pressing the button) runs it; nothing installs silently.
 //! Sign-ins are interactive, so their fix is the command to run in a
 //! terminal.
@@ -34,6 +35,19 @@ pub const LOW_DISK_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a fix may take.
 const FIX_TIMEOUT: Duration = Duration::from_secs(600);
+/// `ssh -T git@github.com`, without a prompt: GitHub answers a working key
+/// with a greeting, and ssh says which part is missing otherwise.
+const GITHUB_SSH_PROBE: &[&str] = &[
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=5",
+    "git@github.com",
+];
+/// What the `github_ssh` fix does, shown on its button.
+const GITHUB_HOST_KEYS_FIX: &str =
+    "add GitHub's published SSH host keys (gh api meta, over HTTPS) to ~/.ssh/known_hosts";
 /// The pinned treehouse installer, the same one self-hosting runs.
 const TREEHOUSE_SH: &str = include_str!("../../../selfhost/treehouse.sh");
 
@@ -130,6 +144,10 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
         version_of(env, "bd", &["--version"]),
         version_of(env, "dolt", &["version"]),
     );
+    let github_ssh = match env.which("ssh") {
+        Some(ssh) => Some(run(&ssh, GITHUB_SSH_PROBE).await),
+        None => None,
+    };
     let gh_auth = match &gh {
         Some((path, _)) => Some(run(path, &["auth", "status"]).await),
         None => None,
@@ -216,6 +234,7 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
             }),
         },
     });
+    checks.push(github_ssh_check(github_ssh.as_ref(), gh.is_some()));
     checks.push(coordinator_check(&infos, npm.is_some()));
     if treehouse_needed {
         let tree_old = treehouse
@@ -269,6 +288,104 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
     ));
     checks.extend(home_checks(home));
     SetupReport::new(checks)
+}
+
+/// Cloning a GitHub repo: Quark clones over SSH (`git@github.com:…`), and
+/// quarkd has no terminal for ssh to ask whether to trust github.com, so a
+/// Mac that never connected to it before fails with "Host key verification
+/// failed". `probe` is [`GITHUB_SSH_PROBE`]'s result.
+fn github_ssh_check(probe: Option<&Ran>, gh: bool) -> Check {
+    let check = |status, detail: String, fix| Check {
+        id: "github_ssh".into(),
+        title: "SSH to GitHub".into(),
+        status,
+        required: true,
+        detail,
+        why: "Quark clones GitHub repos over SSH (git@github.com).".into(),
+        fix,
+    };
+    let Some(r) = probe else {
+        return check(CheckStatus::Missing, "ssh not found".into(), None);
+    };
+    if r.output.contains("successfully authenticated") {
+        let who = first_line_with(&r.output, "Hi ")
+            .and_then(|l| {
+                l.split('!')
+                    .next()
+                    .map(|h| h.trim_start_matches("Hi ").to_string())
+            })
+            .unwrap_or_default();
+        let detail = if who.is_empty() {
+            "works".into()
+        } else {
+            format!("works as {who}")
+        };
+        return check(CheckStatus::Ok, detail, None);
+    }
+    if r.output.contains("Host key verification failed") {
+        return check(
+            CheckStatus::Missing,
+            "github.com is not in known_hosts yet".into(),
+            Some(Fix {
+                label: "Trust GitHub's host keys".into(),
+                command: GITHUB_HOST_KEYS_FIX.into(),
+                runnable: gh,
+            }),
+        );
+    }
+    if r.output.contains("Permission denied") {
+        return check(
+            CheckStatus::Missing,
+            "GitHub does not know this Mac's SSH key".into(),
+            Some(Fix {
+                label: "Add an SSH key".into(),
+                command: "gh auth login (choose SSH, and let it upload a key), or gh ssh-key add ~/.ssh/id_ed25519.pub".into(),
+                runnable: false,
+            }),
+        );
+    }
+    let why = r.output.lines().map(str::trim).find(|l| !l.is_empty());
+    check(
+        CheckStatus::Warn,
+        why.map_or("could not reach github.com over SSH".into(), |l| {
+            format!("could not check: {l}")
+        }),
+        None,
+    )
+}
+
+/// GitHub's SSH host keys from `gh api meta` as known_hosts lines, added to
+/// `known_hosts` unless already there. Returns what was added.
+fn add_github_host_keys(known_hosts: &Path, meta_keys: &str) -> std::io::Result<Vec<String>> {
+    let have = std::fs::read_to_string(known_hosts).unwrap_or_default();
+    let added: Vec<String> = meta_keys
+        .lines()
+        .map(str::trim)
+        .filter(|k| k.starts_with("ssh-") || k.starts_with("ecdsa-"))
+        .map(|k| format!("github.com {k}"))
+        .filter(|line| !have.lines().any(|h| h.trim() == line))
+        .collect();
+    if added.is_empty() {
+        return Ok(added);
+    }
+    if let Some(dir) = known_hosts.parent() {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    let mut text = have;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    for line in &added {
+        text.push_str(line);
+        text.push('\n');
+    }
+    std::fs::write(known_hosts, text)?;
+    Ok(added)
 }
 
 /// The checks on the home itself: writable, its format, free disk.
@@ -535,7 +652,35 @@ pub async fn fix(home: &Path, harnesses: &HarnessRegistry, id: &str) -> Result<F
         return Err(format!("{} has no fix Quark can run", c.title));
     };
     let env = harnesses.env();
-    let ran = if id == "treehouse" {
+    let ran = if id == "github_ssh" {
+        let Some(gh) = env.which("gh") else {
+            return Err("gh is not on PATH".into());
+        };
+        let Some(known_hosts) = env.home_join(".ssh/known_hosts") else {
+            return Err("no home directory".into());
+        };
+        let mut cmd = tokio::process::Command::new(gh);
+        cmd.args(["api", "meta", "--jq", ".ssh_keys[]"]);
+        let meta = run_with(&mut cmd, PROBE_TIMEOUT).await;
+        if !meta.ok {
+            meta
+        } else {
+            match add_github_host_keys(&known_hosts, &meta.output) {
+                Ok(added) if added.is_empty() => Ran {
+                    ok: true,
+                    output: format!("{} already has GitHub's host keys", known_hosts.display()),
+                },
+                Ok(added) => Ran {
+                    ok: true,
+                    output: format!("added to {}:\n{}", known_hosts.display(), added.join("\n")),
+                },
+                Err(e) => Ran {
+                    ok: false,
+                    output: format!("could not write {}: {e}", known_hosts.display()),
+                },
+            }
+        }
+    } else if id == "treehouse" {
         let mut cmd = tokio::process::Command::new("bash");
         cmd.args(["-c", TREEHOUSE_SH, "treehouse.sh"]);
         run_with(&mut cmd, FIX_TIMEOUT).await
@@ -624,6 +769,76 @@ pub fn render(report: &SetupReport) -> String {
 mod tests {
     use super::*;
 
+    fn ran(output: &str) -> Ran {
+        Ran {
+            ok: false,
+            output: output.into(),
+        }
+    }
+
+    #[test]
+    fn github_ssh_reads_what_ssh_said() {
+        let ok = github_ssh_check(
+            Some(&ran("Hi octo! You've successfully authenticated, but GitHub does not provide shell access.")),
+            true,
+        );
+        assert_eq!(
+            (ok.status, ok.detail.as_str()),
+            (CheckStatus::Ok, "works as octo")
+        );
+        assert!(ok.fix.is_none());
+
+        let hk = github_ssh_check(Some(&ran("Host key verification failed.\r\n")), true);
+        assert_eq!(hk.status, CheckStatus::Missing);
+        assert!(hk.required);
+        assert!(hk.fix.as_ref().unwrap().runnable);
+        // Without gh there is nothing to fetch the keys with.
+        let hk = github_ssh_check(Some(&ran("Host key verification failed.")), false);
+        assert!(!hk.fix.unwrap().runnable);
+
+        let key = github_ssh_check(
+            Some(&ran("git@github.com: Permission denied (publickey).")),
+            true,
+        );
+        assert_eq!(key.status, CheckStatus::Missing);
+        assert!(!key.fix.unwrap().runnable);
+
+        let net = github_ssh_check(
+            Some(&ran(
+                "ssh: connect to host github.com port 22: Operation timed out",
+            )),
+            true,
+        );
+        assert_eq!(net.status, CheckStatus::Warn);
+        assert!(net.detail.contains("Operation timed out"));
+
+        assert_eq!(github_ssh_check(None, true).status, CheckStatus::Missing);
+    }
+
+    #[test]
+    fn github_host_keys_are_added_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join(".ssh/known_hosts");
+        let meta = "ssh-ed25519 AAAAed\necdsa-sha2-nistp256 AAAAec\nnot a key\n";
+        let added = add_github_host_keys(&kh, meta).unwrap();
+        assert_eq!(
+            added,
+            [
+                "github.com ssh-ed25519 AAAAed",
+                "github.com ecdsa-sha2-nistp256 AAAAec"
+            ]
+        );
+        assert!(
+            add_github_host_keys(&kh, meta).unwrap().is_empty(),
+            "already there"
+        );
+        // Existing entries stay, and a missing newline is added before ours.
+        std::fs::write(&kh, "example.com ssh-ed25519 AAAAx").unwrap();
+        add_github_host_keys(&kh, meta).unwrap();
+        let text = std::fs::read_to_string(&kh).unwrap();
+        assert!(text.starts_with("example.com ssh-ed25519 AAAAx\ngithub.com ssh-ed25519 AAAAed\n"));
+    }
+
     #[test]
     fn versions_parse_from_tool_output() {
         assert_eq!(parse_version("tmux 3.4"), Some((3, 4, 0)));
@@ -681,7 +896,16 @@ mod tests {
         let reg = HarnessRegistry::new(crate::harness::builtin(), env);
         let r = check(home.path(), &reg).await;
         assert!(!r.ready);
-        for id in ["git", "tmux", "gh", "gh_auth", "coordinator", "bd", "dolt"] {
+        for id in [
+            "git",
+            "tmux",
+            "gh",
+            "gh_auth",
+            "github_ssh",
+            "coordinator",
+            "bd",
+            "dolt",
+        ] {
             assert_eq!(r.get(id).unwrap().status, CheckStatus::Missing, "{id}");
         }
         assert!(r.get("bd").unwrap().required && r.get("dolt").unwrap().required);
