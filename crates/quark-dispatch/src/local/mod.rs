@@ -1,15 +1,24 @@
-//! Quota readings for providers `quota-axi` does not report: IBM Bob
-//! ([`bob`]) and Kiro CLI ([`kiro`]), ported from firstmate's
-//! `fm-bob-quota.sh` and `fm-kiro-quota.sh`.
+//! quarkd's own quota readers, one per provider, each ported from the
+//! readers firstmate and quota-axi used:
 //!
-//! Each reading is one schema-5 snapshot holding just its provider, the
-//! shape `quota-axi --json` prints, so [`crate::QuotaAxi`] merges it like any
-//! other provider and dispatch ranks it the same way. A reading never fails:
-//! anything it cannot read leaves the provider `unknown` with the reason in
-//! a disclosure object beside the row.
+//! | provider | reader | reads |
+//! |---|---|---|
+//! | `claude` | [`claude`] | Claude Code's OAuth login (Keychain or `.credentials.json`), then Anthropic's usage endpoint |
+//! | `codex` | [`codex`] | Codex's `auth.json` (or Pi's `openai-codex` login), then ChatGPT's usage endpoint |
+//! | `bob` | [`bob`] | IBM Bob's local ledger and live API (`fm-bob-quota.sh`) |
+//! | `kiro` | [`kiro`] | `kiro-cli /usage` (`fm-kiro-quota.sh`) |
+//!
+//! Each reading is one schema-5 snapshot holding just its provider, so
+//! [`crate::LocalQuota`] puts them side by side and dispatch ranks them the
+//! same way. A reading never fails: anything it cannot read leaves the
+//! provider `unknown` with the reason in its state or in a disclosure object
+//! beside the row.
 
 pub mod bob;
+pub mod claude;
+pub mod codex;
 pub mod kiro;
+pub mod windows;
 
 use std::time::Duration;
 
@@ -19,6 +28,8 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 pub use bob::BobUsage;
+pub use claude::ClaudeUsage;
+pub use codex::CodexUsage;
 pub use kiro::KiroUsage;
 
 /// One provider's local quota reading.
@@ -33,10 +44,25 @@ pub trait LocalReading: Send + Sync {
     async fn read_with_key(&self, _key: &str) -> Option<Value> {
         None
     }
+    /// The reading for the account whose config directory is `config_dir`
+    /// (`None` for the default login), or `None` when the provider has only
+    /// its default login. `grant` lets the read wait on a macOS Keychain
+    /// prompt the person answers ("Always Allow"), where a background read
+    /// gives up on one.
+    async fn read_account(
+        &self,
+        config_dir: Option<&std::path::Path>,
+        _grant: bool,
+    ) -> Option<Value> {
+        match config_dir {
+            None => Some(self.read().await),
+            Some(_) => None,
+        }
+    }
 }
 
-/// The longest quota-axi lets a window run before its reset and still
-/// measures its pace.
+/// The least of a window's time that may remain before its reset and still
+/// have its pace measured (as quota-axi did).
 const MIN_TIME_REMAINING_PERCENT: f64 = 0.01;
 const SELECTION_CLAMP: f64 = 100.0;
 
@@ -195,6 +221,75 @@ async fn run_with(
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     Ok((out.status.success(), text))
+}
+
+/// GET `url` with curl, the bearer token in a config line on curl's stdin
+/// so it never shows in the process list. The status code and body, or why
+/// curl did not answer.
+async fn curl_get(
+    curl: &str,
+    url: &str,
+    bearer: &str,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+) -> Result<(u16, String), String> {
+    use tokio::io::AsyncWriteExt;
+    let mut cmd = tokio::process::Command::new(curl);
+    cmd.args(["-sS", "--max-time"])
+        .arg(timeout.as_secs().max(1).to_string())
+        .args(["-w", "\n%{http_code}", "-H", "Accept: application/json"]);
+    for (k, v) in headers {
+        cmd.arg("-H").arg(format!("{k}: {v}"));
+    }
+    let mut child = cmd
+        .args(["-K", "-"])
+        .arg(url)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("{curl}: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("curl stdin")?;
+    let token: String = bearer
+        .chars()
+        .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
+        .collect();
+    stdin
+        .write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    drop(stdin);
+    let out = tokio::time::timeout(timeout + Duration::from_secs(5), child.wait_with_output())
+        .await
+        .map_err(|_| format!("no answer within {}s", timeout.as_secs()))?
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let line = err.lines().next().unwrap_or("").trim();
+        return Err(if line.is_empty() {
+            format!("curl exited {}", out.status)
+        } else {
+            line.to_string()
+        });
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+    Ok((code.trim().parse().unwrap_or(0), body.to_string()))
+}
+
+/// RFC 3339 or epoch seconds, as providers spell a reset.
+fn parse_time(v: &Value) -> Option<OffsetDateTime> {
+    match v {
+        Value::String(s) => OffsetDateTime::parse(s, &Rfc3339).ok(),
+        Value::Number(n) => {
+            let secs = n.as_f64()?;
+            // Some fields are milliseconds.
+            let secs = if secs > 1e11 { secs / 1000.0 } else { secs };
+            OffsetDateTime::from_unix_timestamp(secs as i64).ok()
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

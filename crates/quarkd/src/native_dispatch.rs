@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use quark_core::host::{Capacity, Health, Host, HostRegistry, Platform, RuntimeKind};
 use quark_core::EventLog;
-use quark_dispatch::local::{BobUsage, KiroUsage, LocalReading};
-use quark_dispatch::{ProviderFamilies, QuotaAxi};
+use quark_dispatch::local::{BobUsage, ClaudeUsage, CodexUsage, KiroUsage, LocalReading};
+use quark_dispatch::{LocalQuota, ProviderFamilies};
 use quark_hosts::{EventHosts, HostSampler, Probe, SamplerConfig, SystemProbe, Workloads};
 
 use crate::config::Config;
@@ -34,19 +34,21 @@ pub fn families(config: &Config) -> ProviderFamilies {
     )
 }
 
-/// Native dispatch's quota evidence: `quota-axi --json`, plus IBM Bob's and
-/// Kiro CLI's own readings, which quota-axi does not report. Their settings
-/// live in `<home>/quota` (`docs/engine/dispatch.md`).
-pub fn quota(config: &Config) -> QuotaAxi {
+/// Native dispatch's quota evidence: quarkd's own readers for Claude Code,
+/// Codex, IBM Bob and Kiro CLI. Bob's and Kiro's settings live in
+/// `<home>/quota` (`docs/engine/dispatch.md`).
+pub fn quota(config: &Config) -> LocalQuota {
     local_readings(config)
         .into_iter()
-        .fold(QuotaAxi::new(&config.quota_axi), QuotaAxi::with_reading)
+        .fold(LocalQuota::new(), LocalQuota::with_reading)
 }
 
-/// quarkd's own quota readings: IBM Bob and Kiro CLI.
+/// quarkd's own quota readers: Claude Code, Codex, IBM Bob and Kiro CLI.
 pub fn local_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
     vec![
+        Arc::new(ClaudeUsage::from_env()),
+        Arc::new(CodexUsage::from_env()),
         Arc::new(BobUsage::for_home(&config.home, user_home.as_deref())),
         Arc::new(kiro_usage(&config.home)),
     ]

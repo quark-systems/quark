@@ -95,7 +95,7 @@ pub struct DispatchParts {
 }
 
 impl DispatchParts {
-    /// The daemon's: System One, `quota-axi` with the Bob and Kiro readers,
+    /// The daemon's: System One, quarkd's own quota readers,
     /// the host registry in the
     /// event log, and the harness manifests in `<home>/harnesses`.
     pub fn for_daemon(config: &crate::config::Config, log: Arc<dyn EventLog>) -> Self {

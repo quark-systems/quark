@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | the Project's rules | [`rules`] | `config/crew-dispatch.json` |
 //! | which rule fits the task | [`classify`] | the System-1 call in `fm-dispatch-resolve.sh` |
-//! | quota evidence | [`quota`], [`local`] | `quota-axi --json` plus `fm-bob-quota.sh` and `fm-kiro-quota.sh` |
+//! | quota evidence | [`quota`], [`local`] | `quota-axi --json` plus `fm-bob-quota.sh` and `fm-kiro-quota.sh` (all now read natively) |
 //! | which profile runs it | [`resolve`] | the `jq` selection in `fm-dispatch-resolve.sh` |
 //! | which account | [`pools`] | quarkd's account leases |
 //! | which host, or wait | [`admission`] | nothing: firstmate has no admission control |
@@ -37,7 +37,7 @@ pub use dispatcher::{
 };
 pub use events::{Choice, Decider, DispatchEvent, Request};
 pub use pools::{Accounts, NoAccounts, PoolAccount, StaticAccounts};
-pub use quota::{FixedQuota, ProviderFamilies, QuotaAxi, QuotaSnapshot, QuotaSource};
+pub use quota::{FixedQuota, LocalQuota, ProviderFamilies, QuotaSnapshot, QuotaSource};
 pub use resolve::{
     resolve, resolve_rule, Resolution, Status, CLASSIFIER_ESCALATED, COORDINATOR_MATCHED,
     ONLY_DEFAULT,

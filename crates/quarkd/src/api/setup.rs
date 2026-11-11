@@ -9,7 +9,7 @@ use crate::setup::{self, FixOutcome, SetupReport};
 
 /// What this machine still needs before Quark can run a Project: tools
 /// (git, tmux 3.2+, gh signed in, a coordinator agent signed in,
-/// treehouse), optional ones (Beads, Dolt, quota-axi) and the home. Each
+/// treehouse), optional ones (Beads, Dolt) and the home. Each
 /// missing check may carry a fix.
 #[utoipa::path(
     get,

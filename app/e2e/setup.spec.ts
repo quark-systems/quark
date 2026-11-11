@@ -12,7 +12,7 @@ test("opens Setup on first run when something is missing, fixes it, then continu
       check("git", "git", "ok", true),
       check("tmux", "tmux 3.2 or later", tmux, true, tmux === "ok" ? undefined : { label: "Install with Homebrew", command: "brew install tmux", runnable: true }),
       check("gh_auth", "Signed in to GitHub", "ok", true),
-      check("quota_axi", "quota-axi", "missing", false, { label: "Install with npm", command: "npm install -g quota-axi", runnable: false }),
+      check("treehouse", "treehouse", "missing", false, { label: "How to install", command: "selfhost/treehouse.sh", runnable: false }),
     ];
     return { ready: checks.every((c) => !c.required || c.status !== "missing"), checks };
   };
@@ -23,7 +23,7 @@ test("opens Setup on first run when something is missing, fixes it, then continu
   await expect(page).toHaveURL(/#\/setup/);
   await expect(page.getByTestId("setup-summary")).toContainText("Quark needs the items marked below");
   await expect(page.getByTestId("setup-tmux")).toHaveAttribute("data-status", "missing");
-  await expect(page.getByTestId("setup-quota_axi")).toContainText("npm install -g quota-axi");
+  await expect(page.getByTestId("setup-treehouse")).toContainText("selfhost/treehouse.sh");
 
   await page.getByTestId("setup-tmux").getByRole("button", { name: "Install with Homebrew" }).click();
   await expect(page.getByTestId("setup-tmux")).toHaveAttribute("data-status", "ok");

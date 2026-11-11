@@ -20,12 +20,11 @@ macOS is the main target. Linux runs the daemon and the app's web build; the des
 Optional:
 
 - treehouse 3.1.2+ only to run the worktree pool on treehouse instead of quarkd's own (`QUARK_WORKTREE_POOL=treehouse`; `selfhost/treehouse.sh` installs it).
-- `quota-axi` for account quota in the app (`--quota-axi` or `QUARKD_QUOTA_AXI` picks the binary).
 - Any other harness you want workers to use (Codex, Cursor, Gemini, OpenCode, Pi, Kiro and more), installed and signed in. The app detects what is installed.
 
 ## Check this Mac
 
-`cargo run -p quarkd -- doctor` lists what Quark needs (git, tmux 3.2+, gh signed in, a coordinator harness signed in, Beads and Dolt) and the optional quota-axi (plus treehouse, only when `QUARK_WORKTREE_POOL=treehouse` asks for it), with the command that fixes each, and exits 1 while something required is missing. The app's **Setup** page (left list footer) shows the same checks from `GET /v1/setup`, opens on its own the first time something is missing, and can run the installs that need no prompt (Homebrew, npm) when you press their button. Sign-ins stay in your terminal.
+`cargo run -p quarkd -- doctor` lists what Quark needs (git, tmux 3.2+, gh signed in, a coordinator harness signed in, Beads and Dolt) and, only when `QUARK_WORKTREE_POOL=treehouse` asks for it, treehouse, with the command that fixes each, and exits 1 while something required is missing. The app's **Setup** page (left list footer) shows the same checks from `GET /v1/setup`, opens on its own the first time something is missing, and can run the installs that need no prompt (Homebrew, npm) when you press their button. Sign-ins stay in your terminal.
 
 ## Build and run the daemon
 

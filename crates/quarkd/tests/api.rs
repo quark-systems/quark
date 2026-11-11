@@ -502,7 +502,7 @@ async fn without_a_classifier_the_coordinator_picked() {
     h.engine
         .set_spawn("fix-login", spawn_now("s1", "claude", None));
     h.engine
-        .set_resolution("fix-login", Err("quota-axi --json failed".into()));
+        .set_resolution("fix-login", Err("quota reading failed".into()));
     let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
     h.projector.refresh_all().await.unwrap();
     let (_, records) = call(&h.app, "GET", &format!("/v1/tasks/{tid}/dispatch"), None).await;

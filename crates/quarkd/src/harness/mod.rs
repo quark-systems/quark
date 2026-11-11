@@ -185,8 +185,8 @@ pub trait Harness: Send + Sync {
         None
     }
 
-    /// The `quota-axi --provider` name that reads one account's quota with
-    /// its config directory, when quota-axi supports the harness.
+    /// The quota provider (`claude`, `codex`, ...) that reads one account's
+    /// quota with its config directory, when Quark has a reader for it.
     fn quota_provider(&self) -> Option<&str> {
         None
     }

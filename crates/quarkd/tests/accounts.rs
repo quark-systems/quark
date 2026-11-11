@@ -133,7 +133,7 @@ async fn add(s: &Setup, body: Value) -> Value {
     account
 }
 
-/// quota-axi's `--json` report with one window.
+/// A schema-5 report with one window.
 fn reading(provider: &str, remaining: f64) -> Result<String, String> {
     Ok(json!({
         "schemaVersion": 5,
@@ -365,8 +365,10 @@ async fn quota_is_read_once_per_account_and_changes_stream() {
     s.accounts.refresh_quota(None).await.unwrap();
     assert_eq!(quota_events(&s.store).len(), 2);
     s.quota.set(&work, reading("claude", 0.0));
-    s.quota
-        .set(&default_dir, Err("quota-axi timed out after 60s".into()));
+    s.quota.set(
+        &default_dir,
+        Err("the claude quota read timed out after 60s".into()),
+    );
     s.accounts.refresh_quota(None).await.unwrap();
     let events = quota_events(&s.store);
     assert_eq!(events.len(), 4);
@@ -376,7 +378,7 @@ async fn quota_is_read_once_per_account_and_changes_stream() {
     assert_eq!(events[2]["quota"]["remaining_percent"], 40.0);
     assert_eq!(
         events[2]["quota"]["detail"],
-        "Showing the last reading; the latest read failed: quota-axi timed out after 60s"
+        "Showing the last reading; the latest read failed: the claude quota read timed out after 60s"
     );
     assert_eq!(events[3]["quota"]["remaining_percent"], 0.0);
 }

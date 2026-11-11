@@ -980,6 +980,8 @@ name = "quark-dispatch"
 version = "0.1.0-alpha.3"
 dependencies = [
  "async-trait",
+ "base64",
+ "futures-util",
  "quark-core",
  "quark-hosts",
  "quark-supervisor",
@@ -987,6 +989,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "time",
  "tokio",

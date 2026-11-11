@@ -1084,7 +1084,7 @@ mod tests {
             &config(RULES),
             &settings(),
             Some(&answered("rule_1", 0.9)),
-            Err("quota-axi --json failed"),
+            Err("quota reading failed"),
             &f,
         );
         assert_eq!(r.status, Status::Error);

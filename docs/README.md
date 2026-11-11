@@ -7,7 +7,7 @@ Each section below is a folder; add new pages to the folder they belong in and l
 
 - [Install](../README.md#install): the Mac app (Apple silicon) and the Setup page that checks this Mac.
 - [Build from source](getting-started/build-from-source.md): prerequisites, `quarkd doctor`, building and running quarkd and the app, your first Project, where data lives, upgrading `~/.quark`.
-- [External tools](getting-started/external-tools.md): every program Quark runs (tmux, gh, bd and Dolt, quota-axi, and treehouse as an optional fallback), what for, and how to install it.
+- [External tools](getting-started/external-tools.md): every program Quark runs (tmux, gh, bd and Dolt, and treehouse as an optional fallback), what for, and how to install it.
 - [Releasing](development/releasing.md): cutting a release, the Mac build, signing, and the Windows build (off for now).
 - [Self-hosting](../selfhost/README.md): run Quark's own development as a Quark Project, and set up any Project from a directory.
 

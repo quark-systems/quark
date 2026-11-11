@@ -253,7 +253,7 @@
   <div class="diagram-container">
     <svg class="diagram" viewBox="0 0 1000 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="quarkd-tools-title quarkd-tools-desc">
       <title id="quarkd-tools-title">External tools quarkd runs</title>
-      <desc id="quarkd-tools-desc">quarkd runs git, gh and optionally treehouse for code and pull requests; bd with dolt, quota-axi and kiro-cli for tracking and quota; and the macOS Keychain tool, an optional worker sandbox, and curl for the optional Bob admin API and classifier; gh and curl reach the network.</desc>
+      <desc id="quarkd-tools-desc">quarkd runs git, gh and optionally treehouse for code and pull requests; bd with dolt for tracking, kiro-cli for Kiro quota; and the macOS Keychain tool, an optional worker sandbox, and curl for the optional Bob admin API and classifier; gh and curl reach the network.</desc>
       <defs>
         <marker id="t-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#959699"/></marker>
         <marker id="t-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7dd3fc"/></marker>
@@ -320,7 +320,7 @@
 
       <rect x="764" y="72" width="176" height="64" rx="6" fill="#131416"/>
       <rect x="764" y="72" width="176" height="64" rx="6" fill="#1c1d20" stroke="rgba(228,228,231,0.6)" stroke-width="1"/>
-      <text x="852" y="100" fill="#e4e4e7" font-size="12" font-weight="600" font-family="system-ui, -apple-system, sans-serif" text-anchor="middle">quota-axi · kiro-cli</text>
+      <text x="852" y="100" fill="#e4e4e7" font-size="12" font-weight="600" font-family="system-ui, -apple-system, sans-serif" text-anchor="middle">kiro-cli · curl</text>
       <text x="852" y="116" fill="#959699" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">quota per account</text>
 
       <!-- Zone C nodes -->
@@ -359,7 +359,7 @@
         <li><b>git</b>: the native worktree pool (a Rust port of treehouse 3.1.2 working on treehouse's own pool state), rebasing and re-verifying before a merge, Project repo setup.</li>
         <li><b>gh</b>: <code>GhForge</code> uses whatever account <code>gh</code> is signed in to, for PRs, checks, merges and repo lists. Verify also pushes rebased heads through it.</li>
         <li><b>bd / dolt</b>: one Beads database per Project, set up on its own and watched. Coordinators reach it through <code>bd</code> with <code>BEADS_DIR</code>.</li>
-        <li><b>quota-axi</b>: account quota snapshots. quota-axi doesn't cover Bob or Kiro, so quarkd reads those itself: <code>kiro-cli chat --v2 --no-interactive /usage</code>, and Bob's admin API through <code>curl</code> (key on stdin) or <code>~/.bob/db/bob.db</code>.</li>
+        <li><b>Quota</b>: quarkd reads every account's quota itself: Claude Code's and Codex's usage APIs with their own logins (Claude Code's from the Keychain with <code>security</code>) through <code>curl</code>, <code>kiro-cli chat --v2 --no-interactive /usage</code>, and Bob's admin API through <code>curl</code> (key on stdin) or <code>~/.bob/db/bob.db</code>.</li>
         <li><b>security</b>: account API keys and the classifier key live in the login Keychain, written through <code>security -i</code> on stdin.</li>
       </ul>
     </div>
@@ -370,7 +370,7 @@
         <li>Agent CLIs from 15 harness manifests (claude-code, codex, kiro, bob, pi, gemini, opencode, cursor-agent, …), which ptyd runs. quarkd itself only runs their <code>-V</code> and model-list probes.</li>
         <li>Repo gate commands through <code>bash</code>, and trigger commands from channels.</li>
         <li>Host probes: <code>sysctl</code>, <code>df</code>, <code>ps</code>, <code>hostname</code>.</li>
-        <li>Subcommands that run without the daemon: <code>doctor</code>, <code>diagnose</code>, <code>triage</code> (files bugs with <code>bd</code>), <code>quota bob|kiro</code>, <code>openapi</code>, <code>import firstmate</code>.</li>
+        <li>Subcommands that run without the daemon: <code>doctor</code>, <code>diagnose</code>, <code>triage</code> (files bugs with <code>bd</code>), <code>quota claude|codex|bob|kiro</code>, <code>openapi</code>, <code>import firstmate</code>.</li>
       </ul>
     </div>
   </div>
