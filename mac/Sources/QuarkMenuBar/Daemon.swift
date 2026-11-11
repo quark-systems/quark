@@ -48,21 +48,32 @@ final class Daemon: ObservableObject {
         return FileManager.default.fileExists(atPath: plist.path)
     }
 
-    /// The first time QuarkBar.app runs, it starts quarkd unless one is
-    /// already answering (started some other way), and opens itself at login.
-    /// Quark.app opens the QuarkBar inside it on every launch, so installing
-    /// Quark and opening it once sets up all three.
+    /// Set once QuarkBar has turned the LaunchAgent on, so that afterwards an
+    /// agent that is off was turned off on purpose (Stop quarkd) and stays
+    /// off. Not the old "quarkdSetUp" key: that one was also set when another
+    /// quarkd was answering, which left the agent off for good and nothing
+    /// started quarkd at the next login.
+    private static let agentKey = "quarkdAgentOn"
+
+    /// Each time QuarkBar.app runs, it turns quarkd's LaunchAgent on unless it
+    /// has done so before or a quarkd is already answering (started some other
+    /// way, e.g. a dev build); in that case it looks again at its next launch,
+    /// which is the next login. Its first run also opens it at login. Quark.app
+    /// opens the QuarkBar inside it on every launch, so installing Quark and
+    /// opening it once sets up all three.
     func startIfFirstRun() {
         let loginKey = "loginItemSetUp"
         if state != .notBundled, !UserDefaults.standard.bool(forKey: loginKey) {
             UserDefaults.standard.set(true, forKey: loginKey)
             if !launchesAtLogin { setLaunchesAtLogin(true) }
         }
-        let key = "quarkdSetUp"
-        guard state == .off, !UserDefaults.standard.bool(forKey: key) else { return }
+        // Installs from before the key existed: an agent already on counts.
+        if state == .managed || state == .needsApproval {
+            UserDefaults.standard.set(true, forKey: Daemon.agentKey)
+        }
+        guard state == .off, !UserDefaults.standard.bool(forKey: Daemon.agentKey) else { return }
         Task {
             await store.load()
-            UserDefaults.standard.set(true, forKey: key)
             if !store.isConnected { start() }
         }
     }
@@ -70,6 +81,7 @@ final class Daemon: ObservableObject {
     func start() {
         do {
             try agent.register()
+            UserDefaults.standard.set(true, forKey: Daemon.agentKey)
             lastError = nil
         } catch {
             lastError = error.localizedDescription
