@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use quark_core::{CoreError, Event, EventId, EventLog, HostId, NewEvent, ProjectId, Result, Seq};
+use quark_core::{
+    CoreError, Event, EventId, EventLog, HostId, NewEvent, ProjectId, Result, Seq, TaskId,
+};
 use quark_triggers::away::AwayState;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::Mutex;
@@ -12,7 +14,7 @@ use tokio::sync::Mutex;
 use crate::events::{CoordinatorEvent, TurnEnd, Usage, PREFIX};
 use crate::prompt::{self, LayeredPrompt};
 use crate::tools::{Hands, ToolCall};
-use crate::wake::{judgment, WakeItem};
+use crate::wake::{judgment, Need, WakeItem};
 
 /// Tunables.
 #[derive(Debug, Clone, Copy)]
@@ -148,12 +150,27 @@ struct State {
     tools_open: BTreeMap<String, ProjectId>,
     /// The `ask_user` calls among them.
     asks_open: BTreeSet<String>,
+    /// The calls among them that dispatch a task (`start_task`,
+    /// `choose_profile`, `relaunch`), with the task they name, if any.
+    dispatching: BTreeMap<String, (ProjectId, Option<TaskId>)>,
+    /// Escalations dispatch made inside one of those calls. The call's own
+    /// result already hands the pick to the coordinator, so a wake for one
+    /// would arrive after it has picked and read as stale.
+    told: BTreeSet<(ProjectId, Seq)>,
 }
 
 impl State {
     fn apply(&mut self, e: &Event) {
         self.applied = e.seq;
         self.away.apply(e);
+        if e.kind.as_str() == ESCALATED {
+            let inside = self.dispatching.values().any(|(project, task)| {
+                *project == e.project && (task.is_none() || task.as_ref() == e.task.as_ref())
+            });
+            if inside {
+                self.told.insert((e.project.clone(), e.seq));
+            }
+        }
         if e.kind.prefix() != PREFIX {
             return;
         }
@@ -207,6 +224,17 @@ impl State {
                 if matches!(call, ToolCall::AskUser { .. }) {
                     self.asks_open.insert(id.clone());
                 }
+                let dispatches = match &call {
+                    ToolCall::StartTask { .. } => Some(None),
+                    ToolCall::ChooseProfile { task, .. } | ToolCall::Relaunch { task, .. } => {
+                        Some(Some(task.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some(task) = dispatches {
+                    self.dispatching
+                        .insert(id.clone(), (e.project.clone(), task));
+                }
                 self.tools_open.insert(id, e.project.clone());
             }
             CoordinatorEvent::ToolDone { id, ok, .. } => {
@@ -214,10 +242,12 @@ impl State {
                     p.asked = true;
                 }
                 self.tools_open.remove(&id);
+                self.dispatching.remove(&id);
             }
             CoordinatorEvent::Cursor { through } => {
                 self.cursor = through;
                 self.covered.retain(|(_, s)| *s > through);
+                self.told.retain(|(_, s)| *s > through);
             }
             CoordinatorEvent::Requested { .. } | CoordinatorEvent::Answered { .. } => {}
         }
@@ -245,6 +275,11 @@ pub struct Coordinator {
 }
 
 const BATCH: usize = 512;
+
+/// Dispatch could not pick an agent (`quark_dispatch`'s escalation).
+const ESCALATED: &str = "dispatch.escalated";
+/// Dispatch picked an agent, by its rules or someone's pick.
+const CHOSEN: &str = "dispatch.chosen";
 
 impl Coordinator {
     /// Replay the log and recover. A tool call recorded with no outcome (a
@@ -419,10 +454,22 @@ impl Coordinator {
                     continue;
                 }
                 report.evaluated += 1;
+                if e.kind.as_str() == CHOSEN {
+                    // An agent was picked: a waiting "pick an agent" for
+                    // the task no longer needs anyone.
+                    if let (Some(p), Some(task)) = (st.projects.get_mut(&e.project), &e.task) {
+                        p.pending.retain(|x| {
+                            x.need != Need::DispatchEscalated || x.task.as_ref() != Some(task)
+                        });
+                    }
+                    continue;
+                }
                 let Some(item) = judgment(e, &st.away) else {
                     continue;
                 };
-                if st.covered.contains(&(e.project.clone(), item.source)) {
+                if st.covered.contains(&(e.project.clone(), item.source))
+                    || st.told.contains(&(e.project.clone(), item.source))
+                {
                     continue;
                 }
                 let p = st.projects.entry(e.project.clone()).or_default();
@@ -679,7 +726,6 @@ fn summary(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wake::Need;
 
     #[test]
     fn nothing_inside_an_item_starts_a_line_at_the_margin() {
