@@ -708,6 +708,49 @@ impl Accounts {
         }))
     }
 
+    /// The environment a Project's coordinator starts with: `lease_env` (its
+    /// own account's), plus the API key Quark keeps for every other harness
+    /// that signs in with one (the default account's, else the first key
+    /// account's), so the CLIs workers run, such as `kiro-cli`, are signed
+    /// in in the coordinator's shell too. Secret references are read from
+    /// the store here, since a coordinator's window is not started by the
+    /// supervisor; a key that cannot be read is left out, with a warning.
+    pub async fn coordinator_env(
+        &self,
+        lease_env: Vec<(String, String)>,
+    ) -> Result<Vec<(String, String)>> {
+        use quark_supervisor::secrets::PREFIX;
+        let accounts = self.list().await?;
+        let mut env = lease_env;
+        for h in self.harnesses.all() {
+            let Some(key_env) = h.key_env() else {
+                continue;
+            };
+            let secret_var = format!("{PREFIX}{key_env}");
+            if env.iter().any(|(k, _)| k == key_env || *k == secret_var) {
+                continue;
+            }
+            if let Some(a) = accounts.iter().find(|a| a.harness == h.id() && a.api_key) {
+                env.extend(env_of(h.as_ref(), a));
+            }
+        }
+        let mut out = Vec::with_capacity(env.len());
+        for (k, v) in env {
+            if !k.starts_with(PREFIX) {
+                out.push((k, v));
+                continue;
+            }
+            let one = std::collections::BTreeMap::from([(k.clone(), v)]);
+            match quark_supervisor::secrets::resolve(one, Some(self.secrets.as_ref())).await {
+                Ok(resolved) => out.extend(resolved),
+                Err(e) => {
+                    tracing::warn!(var = %k, error = %e, "the coordinator starts without a kept key")
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// The accounts of `harness` (its id or engine name) as native dispatch
     /// chooses among them, default first. Empty for a harness without
     /// accounts listed. Nothing is leased.

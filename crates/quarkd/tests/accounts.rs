@@ -16,7 +16,7 @@ use quarkd::engine::{EngineTask, FleetSnapshot, StubEngine, StubWrite, TaskContr
 use quarkd::harness::{HarnessRegistry, HostEnv};
 use quarkd::projector::Projector;
 use quarkd::provision::Layout;
-use quarkd::secrets::MemorySecrets;
+use quarkd::secrets::{MemorySecrets, SecretStore};
 use quarkd::store::Store;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -1006,4 +1006,73 @@ async fn a_default_account_signs_in_with_a_kept_key() {
     assert_eq!(status, StatusCode::OK, "{account}");
     assert_eq!(account["api_key"], false);
     assert!(s.secrets.services().is_empty());
+}
+
+#[tokio::test]
+async fn a_coordinator_shell_gets_every_kept_key() {
+    let s = setup_with(&[
+        "CLAUDE_CONFIG_DIR",
+        "QUARK_SECRET_KIRO_API_KEY",
+        "QUARK_SECRET_BOB_API_KEY",
+        "BOB_TEAM_ID",
+    ]);
+    exe(&s.dir.path().join("bin/kiro-cli"), "echo 1.20.0");
+    exe(&s.dir.path().join("bin/bob"), "echo 2.0.8");
+
+    // Nothing kept: the coordinator's own account's environment only.
+    let own = vec![("CLAUDE_CONFIG_DIR".to_string(), "/c".to_string())];
+    assert_eq!(s.accounts.coordinator_env(own.clone()).await.unwrap(), own);
+
+    let (status, _) = call(
+        &s.app,
+        "PUT",
+        "/v1/accounts/default-kiro/key",
+        Some(json!({"api_key": "ksk_kiro1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let bob = add(
+        &s,
+        json!({"harness": "bob", "api_key": "bob_ak_bob1", "team_id": "team-7"}),
+    )
+    .await;
+
+    // Each kept key is read into the variable its CLI signs in with.
+    let mut env = s.accounts.coordinator_env(own.clone()).await.unwrap();
+    env.sort();
+    assert_eq!(
+        env,
+        [
+            ("BOB_API_KEY".to_string(), "bob_ak_bob1".to_string()),
+            ("BOB_TEAM_ID".to_string(), "team-7".to_string()),
+            ("CLAUDE_CONFIG_DIR".to_string(), "/c".to_string()),
+            ("KIRO_API_KEY".to_string(), "ksk_kiro1".to_string()),
+        ]
+    );
+
+    // A coordinator running on a key account keeps its own account's key.
+    let own = vec![(
+        "QUARK_SECRET_BOB_API_KEY".to_string(),
+        format!("keychain:quark/accounts/{}", bob["id"].as_str().unwrap()),
+    )];
+    let env = s.accounts.coordinator_env(own).await.unwrap();
+    assert!(env.contains(&("BOB_API_KEY".to_string(), "bob_ak_bob1".to_string())));
+    assert_eq!(
+        env.iter()
+            .filter(|(k, _)| k.contains("BOB_API_KEY"))
+            .count(),
+        1
+    );
+    assert!(
+        !env.iter().any(|(k, _)| k == "BOB_TEAM_ID"),
+        "the lease names its own team"
+    );
+
+    // A key that cannot be read is left out.
+    s.secrets
+        .delete("quark/accounts/default-kiro")
+        .await
+        .unwrap();
+    let env = s.accounts.coordinator_env(Vec::new()).await.unwrap();
+    assert!(env.iter().all(|(k, _)| !k.contains("KIRO")), "{env:?}");
 }

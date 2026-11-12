@@ -1303,7 +1303,9 @@ esac
         let stdin = std::fs::read_to_string(dir.join("curl.stdin")).unwrap();
         assert_eq!(stdin, "header = \"Authorization: Apikey sekret\"\n");
 
-        std::fs::write(&curl, "#!/bin/sh\nprintf 'denied\\n401'\n").unwrap();
+        // Like curl, it reads its config from stdin before answering;
+        // exiting first would race the key's write into a broken pipe.
+        std::fs::write(&curl, "#!/bin/sh\ncat >/dev/null\nprintf 'denied\\n401'\n").unwrap();
         let v = r.reading_at(at("2026-10-16T00:00:00Z")).await;
         assert_eq!(parse(&v).status, "partial");
         assert_eq!(

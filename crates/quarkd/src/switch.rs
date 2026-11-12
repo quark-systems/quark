@@ -257,7 +257,11 @@ impl Switches {
             .lease(&Holder::Coordinator(project.id.clone()), agent)
             .await
             .map_err(|e| format!("choosing an account: {e}"))?;
-        let mut env = lease.map(|l| l.env).unwrap_or_default();
+        let mut env = self
+            .accounts
+            .coordinator_env(lease.map(|l| l.env).unwrap_or_default())
+            .await
+            .map_err(|e| format!("choosing an account: {e}"))?;
         env.push(crate::beads::agent_env(&self.home, &project.id));
         if s.kind == SwitchKind::Resume {
             match self
