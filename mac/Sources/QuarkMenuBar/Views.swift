@@ -46,7 +46,8 @@ struct HeaderView: View {
         switch store.connection {
         case .connecting: return "Connecting to quarkd…"
         case .unreachable: return "quarkd isn't running"
-        case .connected:
+        case let .connected(h):
+            if let mismatch = h.apiMismatch { return mismatch }
             guard let s = store.status else { return "Reading…" }
             if s.projects.isEmpty { return "No projects yet" }
             let counts = s.counts.summary

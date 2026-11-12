@@ -39,6 +39,11 @@ pub async fn health(State(state): State<AppState>) -> Result<Json<Health>, ApiEr
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         api_version: quark_systems::API_CONTRACT,
+        api_min: quark_systems::API_CONTRACT_MIN,
+        features: quark_systems::FEATURES
+            .iter()
+            .map(|f| f.to_string())
+            .collect(),
         engine: state.engine.name().into(),
         last_seq,
     }))

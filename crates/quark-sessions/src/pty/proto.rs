@@ -5,11 +5,20 @@
 //! times as it likes. After a successful `attach` the connection carries
 //! only [`Frame`]s, one per output chunk, until the session ends or either
 //! side closes. Bytes travel as base64.
+//!
+//! The supervisor outlives quarkd, so a newer quarkd can meet an older
+//! supervisor after an update. `hello` says which [`PROTOCOL`] a supervisor
+//! speaks; one that answers `hello` with an `invalid` error predates it and
+//! speaks protocol 1.
 
 use base64::Engine as _;
 use quark_core::session::{Output, SessionId, SessionInfo, SessionSpec, Snapshot, TermSize};
 use quark_core::CoreError;
 use serde::{Deserialize, Serialize};
+
+/// The protocol this build's supervisor speaks. Bump it on a change an older
+/// quarkd or supervisor can't handle; 1 is the protocol before `hello`.
+pub const PROTOCOL: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -21,6 +30,7 @@ pub enum Request {
     Snapshot { id: SessionId },
     Kill { id: SessionId },
     List,
+    Hello,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,6 +40,7 @@ pub enum Response {
     Session(SessionInfo),
     Sessions(Vec<SessionInfo>),
     Snapshot { size: TermSize, data: String },
+    Hello { protocol: u32, version: String },
     Error { kind: ErrorKind, message: String },
 }
 

@@ -19,6 +19,15 @@ use super::proto::{decode, encode, error, Frame, Request, Response};
 /// How long [`PtyClient::start`] waits for a fresh `quark-ptyd` to listen.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What a supervisor says about itself ([`PtyClient::hello`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PtydHello {
+    /// Its wire protocol ([`super::proto::PROTOCOL`] for this build's).
+    pub protocol: u32,
+    /// Its release version; `None` for a supervisor from before `hello`.
+    pub version: Option<String>,
+}
+
 /// A [`SessionBackend`] for the `quark-ptyd` listening on one socket. Every
 /// call opens its own connection, so the client recovers by itself when
 /// `quark-ptyd` restarts. Cheap to clone.
@@ -83,6 +92,24 @@ impl PtyClient {
 
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// Which protocol the supervisor at this socket speaks, and its build.
+    /// One that predates `hello` answers it as an invalid request: it speaks
+    /// protocol 1 and doesn't say its version.
+    pub async fn hello(&self) -> Result<PtydHello> {
+        match self.request(&Request::Hello).await {
+            Ok(Response::Hello { protocol, version }) => Ok(PtydHello {
+                protocol,
+                version: Some(version),
+            }),
+            Ok(r) => Err(unexpected(r)),
+            Err(CoreError::Invalid(_)) => Ok(PtydHello {
+                protocol: 1,
+                version: None,
+            }),
+            Err(e) => Err(e),
+        }
     }
 
     async fn connect(&self) -> Result<UnixStream> {

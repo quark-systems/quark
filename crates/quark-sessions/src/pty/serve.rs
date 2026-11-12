@@ -74,6 +74,10 @@ async fn handle(sup: &PtySupervisor, request: Request) -> Result<Response> {
             Response::Done
         }
         Request::List => Response::Sessions(sup.list().await?),
+        Request::Hello => Response::Hello {
+            protocol: super::proto::PROTOCOL,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
         Request::Attach { .. } => unreachable!("handled by the connection"),
     })
 }

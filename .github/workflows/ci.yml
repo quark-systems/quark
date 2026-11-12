@@ -47,6 +47,8 @@ jobs:
       - run: npm test
       - name: Release packaging scripts
         run: node --test ../packaging/*.test.mjs
+      - name: /v1 API compatible with the last release
+        run: ../packaging/api-compat.sh
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
       - name: Tauri system dependencies

@@ -98,11 +98,15 @@ describe("dispatch test", () => {
 
 describe("api version", () => {
   it("accepts a daemon on the same contract, and one from before api_version existed", () => {
-    expect(apiMismatch(API_VERSION, "0.1.0")).toBeNull();
-    expect(apiMismatch(undefined, "0.0.1")).toBeNull();
+    expect(apiMismatch(API_VERSION, API_VERSION, "0.1.0")).toBeNull();
+    expect(apiMismatch(API_VERSION, undefined, "0.1.0")).toBeNull();
+    expect(apiMismatch(undefined, undefined, "0.0.1")).toBeNull();
+  });
+  it("accepts a newer daemon that still serves this app's contract", () => {
+    expect(apiMismatch(API_VERSION + 1, API_VERSION, "0.3.0")).toBeNull();
   });
   it("says which side to update", () => {
-    expect(apiMismatch(API_VERSION + 1, "0.3.0")).toMatch(/newer than this app/);
-    expect(apiMismatch(0, "0.0.1")).toMatch(/older than this app/);
+    expect(apiMismatch(API_VERSION + 1, API_VERSION + 1, "0.3.0")).toMatch(/newer than this app/);
+    expect(apiMismatch(API_VERSION - 1, API_VERSION - 1, "0.0.1")).toMatch(/older than this app/);
   });
 });

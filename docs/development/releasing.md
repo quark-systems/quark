@@ -62,9 +62,28 @@ release.
 
 ## Compatibility
 
-`GET /v1/health` reports `api_version` (`quark_systems::API_CONTRACT`). The app compares
-it with `API_VERSION` in `app/src/api/client.ts` and says which side to update when they
-differ. Bump both on a change an older client can't handle.
+The desktop app, QuarkBar and quarkd ship together, but can still run different builds:
+during an update, after a rollback, or with a quarkd built from source. Each interface
+says what it speaks:
+
+- **`/v1` API.** `GET /v1/health` reports `api_version` (`API_CONTRACT`, the newest
+  contract served), `api_min` (`API_CONTRACT_MIN`, the oldest still served) and
+  `features` (`FEATURES`), all in `crates/quark-systems/src/service.rs`. A client built
+  for contract `c` works when `api_min <= c <= api_version`: the app checks with
+  `apiMismatch` (`app/src/api/client.ts`), QuarkBar with `Health.apiMismatch`
+  (`mac/Sources/QuarkKit/Models.swift`), and each says which side to update. Add fields
+  and endpoints freely. A change an older client can't handle bumps `API_CONTRACT` (and
+  `API_VERSION` / `Health.apiContract` in the clients); quarkd keeps serving the old shape
+  for one minor release, then `API_CONTRACT_MIN` moves up. CI's `packaging/api-compat.sh`
+  compares `api/openapi.json` with the newest release tag's and fails on a breaking change
+  without a bump.
+- **Features.** A client that needs an optional capability checks `features`, not the
+  release version. Add a name when one is needed; never remove one that is still served.
+- **PTY supervisor.** `quark-ptyd` outlives quarkd, so a new quarkd can meet an old one.
+  Its `hello` request reports `PROTOCOL` (`crates/quark-sessions/src/pty/proto.rs`) and its
+  version; one from before `hello` (0.1.0) speaks protocol 1.
+- **Data.** `quarkd compat --json` prints the home format and database schemas a build
+  writes; the update feed carries it.
 
 ## Signing (repository secrets)
 

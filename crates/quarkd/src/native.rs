@@ -65,6 +65,17 @@ impl NativeSupervision {
         let sessions = PtyClient::start_with(&socket, &ptyd, &args)
             .await
             .with_context(|| format!("starting the PTY supervisor ({})", ptyd.display()))?;
+        // The supervisor may be one an older quarkd started before an update.
+        match sessions.hello().await {
+            Ok(h) if h.protocol == quark_sessions::pty::PROTOCOL => {}
+            Ok(h) => tracing::info!(
+                protocol = h.protocol,
+                ours = quark_sessions::pty::PROTOCOL,
+                version = h.version.as_deref().unwrap_or("before 0.1.1"),
+                "the PTY supervisor is from another build"
+            ),
+            Err(e) => tracing::warn!(error = %e, "the PTY supervisor did not answer hello"),
+        }
         let pool = crate::native_worktrees::pool(log.clone(), host.clone()).await;
         let worktrees: Arc<dyn WorktreeProvider> =
             Arc::new(TreehouseProvider::new(pool).with_events(log.clone(), host.clone()));

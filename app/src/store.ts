@@ -484,7 +484,7 @@ function connect(cursor: number | null) {
       api.health().then((health) => {
         if (gen !== generation) return;
         set({ health });
-        const mismatch = apiMismatch(health.api_version, health.version);
+        const mismatch = apiMismatch(health.api_version, health.api_min, health.version);
         if (mismatch) set({ error: mismatch });
       }).catch(() => {});
       refreshSnapshots().catch((err) => set({ error: String(err.message ?? err) }));
@@ -508,7 +508,7 @@ export async function start() {
     const health = await api.health();
     set({ health });
     cursor = health.last_seq;
-    const mismatch = apiMismatch(health.api_version, health.version);
+    const mismatch = apiMismatch(health.api_version, health.api_min, health.version);
     if (mismatch) set({ error: mismatch });
   } catch (e) {
     set({ error: `Cannot reach the daemon: ${String((e as Error).message ?? e)}` });
