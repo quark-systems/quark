@@ -3,7 +3,10 @@
 //! `message`; everything else (attachments, summaries, snapshots, queue
 //! operations) is bookkeeping. Sidechain lines belong to subagents and meta
 //! lines are harness-injected context, so both are skipped, and so is the
-//! summary a compaction leaves in place of the earlier conversation. The
+//! summary a compaction leaves in place of the earlier conversation, and so
+//! are queued notices Claude Code writes to the log without running a turn
+//! on them (`queueTranscriptOnly`, such as a resumed session's note that a
+//! background command from the previous session never finished). The
 //! compaction itself (a `system` `compact_boundary` line) is one
 //! [`TranscriptRole::Compaction`] entry, and the `/compact` command that
 //! asked for it is left out. Text the person
@@ -25,7 +28,13 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
     let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
     // A compaction writes its summary of the earlier conversation as a user
     // line: the harness's note to itself, not something anyone sent.
-    if flag("isSidechain") || flag("isMeta") || flag("isCompactSummary") {
+    // A queued notice written only to the log opened no turn: kept, it would
+    // read as a prompt still waiting for its answer.
+    if flag("isSidechain")
+        || flag("isMeta")
+        || flag("isCompactSummary")
+        || flag("queueTranscriptOnly")
+    {
         return Vec::new();
     }
     let ts = str_at(v, "timestamp");
@@ -152,6 +161,18 @@ mod tests {
             .unwrap()
         };
         assert!(parse(&line(r#","isCompactSummary":true"#)).is_empty());
+        assert_eq!(parse(&line("")).len(), 1);
+    }
+
+    #[test]
+    fn a_notice_written_only_to_the_log_is_not_a_prompt() {
+        let line = |extra: &str| {
+            serde_json::from_str::<Value>(&format!(
+                r#"{{"type":"user"{extra},"origin":{{"kind":"task-notification"}},"promptSource":"system","timestamp":"2026-11-12T22:57:10Z","message":{{"role":"user","content":"<task-notification>\n<status>stopped</status>\n<summary>Background shell command didn't finish before the previous session ended</summary>\n</task-notification>"}}}}"#
+            ))
+            .unwrap()
+        };
+        assert!(parse(&line(r#","queueTranscriptOnly":true"#)).is_empty());
         assert_eq!(parse(&line("")).len(), 1);
     }
 
