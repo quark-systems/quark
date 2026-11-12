@@ -8,12 +8,34 @@ page lists every merged pull request.
 
 ## Unreleased
 
+## 0.1.0
+
+The first stable Quark: the Mac app for Apple silicon, still unsigned (see Install). It is
+alpha.3 plus the fixes below, which came out of testing a clean install in a macOS VM.
+
+### Install
+
+Download `Quark_0.1.0_aarch64.dmg` and drag Quark to Applications. The build is not signed
+or notarized yet, so before the first launch run
+`xattr -dr com.apple.quarantine /Applications/Quark.app` (or right-click Quark and choose
+Open). Opening Quark starts its menu bar app and quarkd, and Setup lists anything missing.
+Upgrading from an alpha: quit Quark, drag the new one over it, clear the quarantine flag the
+same way, open Quark, and choose Restart quarkd in the menu bar so the new quarkd runs.
+
 ### Fixed
 
+- Opening a newly installed Quark starts quarkd and puts QuarkBar in Login Items, also on a
+  Mac that ran Quark from source before or where another quarkd was answering. QuarkBar
+  remembered that setup was done for any build, so it often never turned quarkd on. Now each
+  new build sets itself up once, or at the next login if another quarkd was running; Stop
+  quarkd still stays stopped until the next upgrade.
 - Creating a project on a Mac that never connected to GitHub over SSH failed with "Host key
   verification failed". Setup has a new **SSH to GitHub** check: it adds GitHub's published host
   keys to `~/.ssh/known_hosts` with one button, or says when GitHub doesn't know this Mac's SSH
   key. A clone that fails this way points at the check.
+- Quark notifications show the Quark icon, not the old placeholder.
+- A notice about a task links to that task.
+- The coordinator is no longer woken to pick an agent it was already asked to pick.
 
 ### Changed
 
@@ -25,14 +47,9 @@ page lists every merged pull request.
   quota-axi covered) and, new, Gemini CLI and GitHub Copilot. Accounts shows their quota and
   dispatch ranks them; `quarkd quota <provider>` prints a reading. Cursor's editor sign-in is
   read with `sqlite3`.
-
-### Fixed
-
-- Opening a newly installed Quark starts quarkd and puts QuarkBar in Login Items, also on a
-  Mac that ran Quark from source before or where another quarkd was answering. QuarkBar
-  remembered that setup was done for any build, so it often never turned quarkd on. Now each
-  new build sets itself up once, or at the next login if another quarkd was running; Stop
-  quarkd still stays stopped until the next upgrade.
+- A permission prompt on a worker's screen reaches the coordinator as a worker question it
+  can answer.
+- After a merge, a Project's local clones move to origin's default branch.
 
 ## 0.1.0-alpha.3
 
