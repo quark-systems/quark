@@ -31,6 +31,13 @@ enum Command {
         #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
         label: String,
     },
+    /// Install the update or rollback `/v1/update` prepared in
+    /// `<home>/updates/intent.json` (run as quark-updater, a copy of quarkd).
+    #[command(hide = true)]
+    UpdateInstall {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
     /// Print what this build is compatible with: its API contract and the
     /// home and database formats it writes. The release workflow puts it in
     /// the update feed.
@@ -345,6 +352,14 @@ async fn main() -> anyhow::Result<()> {
         Command::Backup { home, label } => {
             let home = home.unwrap_or_else(config::default_home);
             println!("{}", quarkd::backup::snapshot(&home, &label)?.display());
+            Ok(())
+        }
+        Command::UpdateInstall { home } => {
+            let home = home.unwrap_or_else(config::default_home);
+            let host = quarkd::update_install::Mac;
+            let done =
+                quarkd::update_install::run(&home, &host, quarkd::update_install::HEALTH_GATE)?;
+            println!("{:?}: Quark {}", done.phase, done.to);
             Ok(())
         }
         Command::Compat { json } => {

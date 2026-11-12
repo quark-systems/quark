@@ -24,14 +24,10 @@ if (target === "macos") {
 }
 const pubkey = process.env.TAURI_UPDATER_PUBKEY?.trim();
 if (pubkey) {
+  // Signed Quark.app.tar.gz and latest.json for quarkd's updater (crates/quarkd/src/update.rs),
+  // which installs them; the app has no updater of its own since 0.2. The plugin entry only
+  // names the key Tauri signs for.
   config.bundle.createUpdaterArtifacts = true;
-  config.plugins = {
-    updater: {
-      pubkey,
-      // The newest published (non-draft, non-prerelease) release's manifest, which the
-      // release workflow attaches.
-      endpoints: ["https://github.com/quark-systems/quark/releases/latest/download/latest.json"],
-    },
-  };
+  config.plugins = { updater: { pubkey, endpoints: [] } };
 }
 process.stdout.write(JSON.stringify(config, null, 2) + "\n");

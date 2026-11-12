@@ -70,6 +70,20 @@ the result. Settings (channel, checking, automatic download, install when idle) 
 `~/.quark/update.json`, set with `PUT /v1/update/settings`. To try a feed of your own,
 point `QUARK_UPDATE_FEED` at it (`{channel}` is replaced, `file://` works).
 
+`POST /v1/update/install` installs a ready download: quarkd backs up the home, copies
+itself to `~/.quark/updates/quark-updater` and starts it in its own process group with
+the plan in `~/.quark/updates/intent.json` (`crates/quarkd/src/update_install.rs`). The
+updater unpacks the bundle beside Quark.app, quits Quark and QuarkBar, swaps the app
+(keeping the old one as `.Quark-previous.app` beside it), restarts quarkd with
+`launchctl kickstart -k` and waits up to two minutes for `/v1/health` to report the new
+version. If it doesn't, the old app goes back, the backup is restored at the next quarkd
+start when the old build can't read the new data, and the old quarkd is restarted. Either
+way QuarkBar (and Quark, if it was open) reopen. `POST /v1/update/rollback` does the same
+back to the kept app; `last_install` and `can_roll_back` on `GET /v1/update` report both.
+Its log is `~/.quark/logs/updater.log`. Workers keep running throughout: their ptyd
+outlives quarkd. Quark 0.1.0 still updates itself through Tauri's updater; later builds
+leave that to quarkd.
+
 ## Compatibility
 
 The desktop app, QuarkBar and quarkd ship together, but can still run different builds:

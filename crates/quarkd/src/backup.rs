@@ -5,7 +5,8 @@
 //! clones and logs are left out; they don't change format and are large. Only
 //! the newest [`KEEP`] backups stay. Restoring is for a rollback to a quarkd
 //! that can't read the migrated home ([`crate::compat::Compat::readable_by`]):
-//! with quarkd stopped, copy the files back over the home's.
+//! the updater asks for it with [`request_restore`], and the next quarkd to
+//! start copies the files back before it opens anything ([`restore_pending`]).
 
 use std::path::{Path, PathBuf};
 
@@ -55,6 +56,52 @@ pub fn snapshot(home: &Path, label: &str) -> anyhow::Result<PathBuf> {
     std::fs::rename(&tmp, &dest).with_context(|| format!("writing {}", dest.display()))?;
     prune(&root, &dest)?;
     Ok(dest)
+}
+
+/// Names the backup the next quarkd start restores (`<home>/backups/restore`).
+pub fn request_restore(home: &Path, backup: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(backup.is_dir(), "no backup at {}", backup.display());
+    let root = home.join(DIR);
+    std::fs::create_dir_all(&root)?;
+    std::fs::write(root.join(RESTORE), backup.to_string_lossy().as_bytes())?;
+    Ok(())
+}
+
+const RESTORE: &str = "restore";
+
+/// Restores the backup [`request_restore`] named, if any, over the home's
+/// databases and format file. Runs at quarkd start, before anything in the
+/// home is opened. Returns the backup restored.
+pub fn restore_pending(home: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let marker = home.join(DIR).join(RESTORE);
+    let Ok(named) = std::fs::read_to_string(&marker) else {
+        return Ok(None);
+    };
+    let backup = PathBuf::from(named.trim());
+    anyhow::ensure!(
+        backup.starts_with(home.join(DIR)) && backup.is_dir(),
+        "restore names {}, which is not a backup in this home",
+        backup.display()
+    );
+    for name in DATABASES {
+        let src = backup.join(name);
+        if !src.exists() {
+            continue;
+        }
+        let dest = home.join(name);
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(home.join(format!("{name}{suffix}")));
+        }
+        let tmp = home.join(format!("{name}.restore"));
+        std::fs::copy(&src, &tmp).with_context(|| format!("copying {}", src.display()))?;
+        std::fs::rename(&tmp, &dest)?;
+    }
+    let format = backup.join(crate::home_format::FILE);
+    if format.exists() {
+        std::fs::copy(&format, home.join(crate::home_format::FILE))?;
+    }
+    std::fs::remove_file(&marker)?;
+    Ok(Some(backup))
 }
 
 /// Removes all but the newest [`KEEP`] `pre-*` backups; `keep` always stays.
@@ -114,5 +161,30 @@ mod tests {
         snapshot(home.path(), "0.1.4").unwrap();
         assert!(home.path().join("backups/firstmate").exists());
         assert!(snapshot(home.path(), "../x").is_err());
+    }
+
+    #[test]
+    fn restores_a_requested_backup_once() {
+        let home = tempfile::tempdir().unwrap();
+        let db = home.path().join("quark.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE t(v); INSERT INTO t VALUES ('before');")
+            .unwrap();
+        let backup = snapshot(home.path(), "0.2.0").unwrap();
+        conn.execute_batch("UPDATE t SET v = 'after'").unwrap();
+        drop(conn);
+
+        assert_eq!(restore_pending(home.path()).unwrap(), None);
+        request_restore(home.path(), &backup).unwrap();
+        assert_eq!(restore_pending(home.path()).unwrap(), Some(backup));
+        let v: String = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row("SELECT v FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, "before");
+        assert_eq!(restore_pending(home.path()).unwrap(), None, "only once");
+
+        std::fs::write(home.path().join("backups/restore"), "/etc").unwrap();
+        assert!(restore_pending(home.path()).is_err(), "outside the home");
     }
 }

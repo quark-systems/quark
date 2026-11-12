@@ -134,7 +134,6 @@ pub fn run() {
         .setup(|app| {
             use tauri_plugin_deep_link::DeepLinkExt;
             release::start_quarkbar(app.handle());
-            release::offer_update(app.handle())?;
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
