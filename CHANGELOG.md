@@ -8,6 +8,35 @@ page lists every merged pull request.
 
 ## Unreleased
 
+## 0.2.0-beta.1
+
+The first build that updates itself. A pre-release: it reaches people on the beta channel,
+and is how the update path from here on gets tested before 0.2.0.
+
+### Install
+
+Same as 0.1.0: download `Quark_0.2.0-beta.1_aarch64.dmg`, drag Quark to Applications, and
+run `xattr -dr com.apple.quarantine /Applications/Quark.app` before the first launch. Quark
+0.1.0 doesn't offer this build (it only follows full releases), so install it by hand once;
+from here on Quark updates itself.
+
+### Added
+
+- Automatic updates. quarkd checks for a new Quark every six hours and on Check for
+  Updates… (in the Quark menu and the menu bar), downloads it and verifies its signature.
+  Install and restart swaps Quark.app, restarts quarkd and reopens the apps; running
+  workers carry on. If the new version doesn't start within two minutes, the old one comes
+  back by itself, and Roll back returns to it by hand. Updates (in the sidebar) picks the channel
+  (stable or beta) and whether to download on its own.
+- quarkd backs up its databases before an update, and `quarkd backup` takes one any time.
+- The app and menu bar say when quarkd is too new or too old for them, by API contract
+  instead of version number.
+
+### Changed
+
+- Releases publish themselves once their downloads check out, and the update feed follows.
+- The desktop app no longer runs its own updater; quarkd updates the whole bundle.
+
 ## 0.1.0
 
 The first stable Quark: the Mac app for Apple silicon, still unsigned (see Install). It is
