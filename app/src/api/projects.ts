@@ -32,6 +32,10 @@ export interface Health {
   status: string; version: string; engine: string; last_seq: number;
   /** The `/v1` contract version; daemons from before it existed speak 1. */
   api_version?: number;
+  /** The oldest contract it still serves; daemons from before it existed serve only 1. */
+  api_min?: number;
+  /** Optional capabilities (quark_systems::FEATURES); missing on daemons before 0.1.1. */
+  features?: string[];
 }
 
 export const projectsApi = {

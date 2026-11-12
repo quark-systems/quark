@@ -36,7 +36,8 @@ use rustix::process::{kill_process_group, Pid, Signal};
 use tokio::sync::broadcast;
 
 use crate::stream::{Chunk, Viewer, CHANNEL};
-pub use client::PtyClient;
+pub use client::{PtyClient, PtydHello};
+pub use proto::PROTOCOL;
 pub use serve::serve;
 
 use std::os::unix::fs::PermissionsExt as _;

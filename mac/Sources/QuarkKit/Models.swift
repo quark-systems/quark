@@ -11,6 +11,28 @@ public struct Health: Codable, Equatable, Sendable {
     public var version: String
     public var engine: String
     public var lastSeq: Int64
+    /// The newest `/v1` contract quarkd serves; daemons from before it existed serve 1.
+    public var apiVersion: Int?
+    /// The oldest contract it still serves.
+    public var apiMin: Int?
+    /// Optional capabilities (quark_systems::FEATURES).
+    public var features: [String]?
+
+    /// The `/v1` contract this QuarkBar is built for (quark_systems::API_CONTRACT).
+    public static let apiContract = 1
+
+    /// Why this QuarkBar can't use this quarkd, or nil when it can. Mirrors the desktop
+    /// app's `apiMismatch` (app/src/api/client.ts).
+    public var apiMismatch: String? {
+        let newest = apiVersion ?? 1
+        let oldest = apiMin ?? min(newest, 1)
+        if oldest <= Health.apiContract && Health.apiContract <= newest { return nil }
+        return Health.apiContract < oldest
+            ? "quarkd \(version) is newer than this QuarkBar. Update Quark."
+            : "quarkd \(version) is older than this QuarkBar. Restart quarkd."
+    }
+
+    public func has(_ feature: String) -> Bool { features?.contains(feature) ?? false }
 }
 
 // MARK: Status

@@ -9299,6 +9299,12 @@
           "last_seq"
         ],
         "properties": {
+          "api_min": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The oldest contract still served, [`API_CONTRACT_MIN`].",
+            "minimum": 0
+          },
           "api_version": {
             "type": "integer",
             "format": "int32",
@@ -9308,6 +9314,13 @@
           "engine": {
             "type": "string",
             "description": "Name of the engine adapter in use."
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional capabilities, [`FEATURES`]."
           },
           "last_seq": {
             "type": "integer",

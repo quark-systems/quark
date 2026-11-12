@@ -15,6 +15,8 @@ pub struct Compat {
     pub version: String,
     /// The `/v1` contract it serves (`quark_systems::API_CONTRACT`).
     pub api_version: u32,
+    /// The oldest contract it still serves (`quark_systems::API_CONTRACT_MIN`).
+    pub api_min: u32,
     /// The `~/.quark` layout it writes (`format.json`).
     pub home_format: u32,
     /// The store database schema (`user_version`).
@@ -28,6 +30,7 @@ impl Compat {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             api_version: quark_systems::API_CONTRACT,
+            api_min: quark_systems::API_CONTRACT_MIN,
             home_format: crate::home_format::CURRENT,
             store_schema: crate::store::SCHEMA_VERSION,
             eventlog_schema: quark_eventlog::SCHEMA_VERSION,
@@ -39,6 +42,7 @@ impl fmt::Display for Compat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "version          {}", self.version)?;
         writeln!(f, "api_version      {}", self.api_version)?;
+        writeln!(f, "api_min          {}", self.api_min)?;
         writeln!(f, "home_format      {}", self.home_format)?;
         writeln!(f, "store_schema     {}", self.store_schema)?;
         writeln!(f, "eventlog_schema  {}", self.eventlog_schema)
@@ -58,6 +62,7 @@ mod tests {
         for key in [
             "version",
             "api_version",
+            "api_min",
             "home_format",
             "store_schema",
             "eventlog_schema",

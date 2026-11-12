@@ -27,6 +27,26 @@ final class QuarkKitTests: XCTestCase {
         XCTAssertEqual(lowestRemaining(accounts), 38)
     }
 
+    func testHealthContract() throws {
+        func health(_ json: String) throws -> Health {
+            try JSONDecoder.quark.decode(Health.self, from: Data(json.utf8))
+        }
+        let base = #"{"status":"ok","version":"0.1.0","engine":"native","last_seq":1"#
+        // A daemon from before api_version: contract 1, no features.
+        let old = try health(base + "}")
+        XCTAssertNil(old.apiMismatch)
+        XCTAssertFalse(old.has("compat"))
+        let current = try health(base + #","api_version":1,"api_min":1,"features":["compat"]}"#)
+        XCTAssertNil(current.apiMismatch)
+        XCTAssertTrue(current.has("compat"))
+        // Newer, still serving ours.
+        XCTAssertNil(try health(base + #","api_version":2,"api_min":1}"#).apiMismatch)
+        // Newer, dropped ours.
+        XCTAssertEqual(
+            try health(base + #","api_version":3,"api_min":2}"#).apiMismatch,
+            "quarkd 0.1.0 is newer than this QuarkBar. Update Quark.")
+    }
+
     func testDecodesHosts() throws {
         let view = try JSONDecoder.quark.decode(HostsView.self, from: fixture("hosts"))
         XCTAssertEqual(view.hosts.map(\.runtime), [.local, .privateCloud])

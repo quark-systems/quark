@@ -110,3 +110,42 @@ async fn refuses_a_second_supervisor_and_reports_absence() {
     // The first one is still serving.
     assert!(PtyClient::new(&socket).list().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn hello_names_the_protocol() {
+    let dir = short_dir();
+    let socket = dir.path().join("run").join("ptyd.sock");
+    let _stop = Stop(&socket);
+
+    let client = PtyClient::start(&socket, Path::new(PTYD)).await.unwrap();
+    let hello = client.hello().await.unwrap();
+    assert_eq!(hello.protocol, quark_sessions::pty::PROTOCOL);
+    assert_eq!(hello.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+}
+
+#[tokio::test]
+async fn a_supervisor_from_before_hello_speaks_protocol_1() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+
+    // Answers every request the way a 0.1.0 supervisor answers one it
+    // can't parse.
+    let dir = short_dir();
+    let socket = dir.path().join("old.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let (read, mut write) = stream.into_split();
+            let mut lines = BufReader::new(read).lines();
+            while let Ok(Some(_)) = lines.next_line().await {
+                let reply =
+                    "{\"error\":{\"kind\":\"invalid\",\"message\":\"unknown variant `hello`\"}}\n";
+                let _ = write.write_all(reply.as_bytes()).await;
+            }
+        }
+    });
+
+    let hello = PtyClient::new(&socket).hello().await.unwrap();
+    assert_eq!(hello.protocol, 1);
+    assert_eq!(hello.version, None);
+}
