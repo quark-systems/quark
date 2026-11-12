@@ -8,9 +8,14 @@ export const healthMeta: Record<AuthState, { label: string; cls: string }> = {
 };
 
 /** One short line for an account's quota, e.g. "62% left". */
-export function quotaText(q: AccountQuota): string {
+type Reading = Pick<AccountQuota, "state" | "remaining_percent" | "providers">;
+
+export function quotaText(q: Reading): string {
+  const n = q.providers?.length ?? 0;
   switch (q.state) {
-    case "known": return q.remaining_percent != null ? `${Math.round(q.remaining_percent)}% left` : "Known";
+    case "known":
+      if (q.remaining_percent != null) return `${Math.round(q.remaining_percent)}% left`;
+      return n ? `${n} provider${n === 1 ? "" : "s"}` : "Known";
     case "pending": return "Reading quota…";
     case "unavailable": return "No quota reading";
     case "error": return "Quota read failed";
@@ -29,7 +34,7 @@ export function usageText(w: QuotaWindow): string {
 }
 
 /** Pill colour for the quota: plenty, getting low, out, or no reading. */
-export function quotaCls(q: AccountQuota): string {
+export function quotaCls(q: Reading): string {
   if (q.state === "error") return "red";
   if (q.state !== "known" || q.remaining_percent == null) return "";
   if (q.remaining_percent <= 0) return "red";

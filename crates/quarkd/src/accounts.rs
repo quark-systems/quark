@@ -34,8 +34,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use quark_dispatch::local::LocalReading;
 use quark_systems::{
-    Account, AccountQuota, AgentConfig, AuthState, CreateAccount, QuotaState, QuotaWindow,
-    UpdateAccount,
+    Account, AccountQuota, AgentConfig, AuthState, CreateAccount, ProviderQuota, QuotaState,
+    QuotaWindow, UpdateAccount,
 };
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
@@ -1203,16 +1203,60 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
             )
         }
     };
-    let Some(p) = report
-        .providers
-        .into_iter()
-        .find(|p| p.provider == provider)
-    else {
+    let label = |p: &ProviderReport| {
+        p.rest
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    let mut providers = report.providers;
+    if let Some(i) = providers.iter().position(|p| p.provider == provider) {
+        return provider_quota(provider, providers.swap_remove(i));
+    }
+    // A multi-provider login (Pi, OpenCode): one labelled row per provider.
+    providers.retain(|p| label(p).is_some());
+    if providers.is_empty() {
         return AccountQuota::empty(
             QuotaState::Unavailable,
             Some(format!("the reader reported nothing for {provider}")),
         );
-    };
+    }
+    let rows: Vec<ProviderQuota> = providers
+        .into_iter()
+        .map(|p| {
+            let (id, name) = (p.provider.clone(), label(&p).unwrap_or_default());
+            let q = provider_quota(&id, p);
+            ProviderQuota {
+                provider: id,
+                label: name,
+                state: q.state,
+                remaining_percent: q.remaining_percent,
+                plan: q.plan,
+                windows: q.windows,
+                detail: q.detail,
+            }
+        })
+        .collect();
+    let known = rows.iter().filter(|r| r.state == QuotaState::Known).count();
+    let n = rows.len();
+    AccountQuota {
+        state: if known > 0 {
+            QuotaState::Known
+        } else {
+            QuotaState::Unavailable
+        },
+        detail: Some(match (known, n) {
+            (_, 1) => "1 provider login".into(),
+            (k, n) if k == n => format!("{n} provider logins"),
+            (k, n) => format!("{n} provider logins, {k} measured"),
+        }),
+        providers: rows,
+        ..AccountQuota::empty(QuotaState::Unavailable, None)
+    }
+}
+
+/// One provider's reading from its row of a schema-5 report.
+fn provider_quota(provider: &str, p: ProviderReport) -> AccountQuota {
     let local: LocalDetail = p
         .rest
         .get(provider)
@@ -1307,6 +1351,7 @@ pub fn parse_quota(provider: &str, json: &str) -> AccountQuota {
         detail,
         checked_at: None,
         keychain_grant: keychain_grant && remaining.is_none(),
+        providers: Vec::new(),
     }
 }
 
@@ -1319,6 +1364,31 @@ mod tests {
                    {"id":"weekly","label":"week","kind":"weekly","resetsAt":"2026-10-09T21:22:10.000Z","percentRemaining":64.5}],
         "state":{"status":"fresh","stale":false},
         "quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":64.5}]}}]}"#;
+
+    #[test]
+    fn parses_a_login_per_provider() {
+        let json = r#"{"schemaVersion":5,"providers":[
+            {"provider":"openrouter","label":"OpenRouter","plan":"$4.00 of $10.00 key cap left",
+             "windows":[{"id":"key_limit","label":"key cap","kind":"credits","percentRemaining":40}],
+             "state":{"status":"fresh"},
+             "quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":40}]}},
+            {"provider":"claude","label":"Claude","windows":[],
+             "state":{"status":"auth_required","error":"Pi's Claude sign-in expired"}}]}"#;
+        let q = parse_quota("pi", json);
+        assert_eq!(q.state, QuotaState::Known);
+        assert_eq!(q.remaining_percent, None);
+        assert_eq!(q.detail.as_deref(), Some("2 provider logins, 1 measured"));
+        assert_eq!(q.providers.len(), 2);
+        assert_eq!(q.providers[0].label, "OpenRouter");
+        assert_eq!(q.providers[0].remaining_percent, Some(40.0));
+        assert_eq!(q.providers[1].state, QuotaState::Unavailable);
+        assert!(q.providers[1]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("expired"));
+        assert_eq!(parse_quota("pi", CODEX).state, QuotaState::Unavailable);
+    }
 
     #[test]
     fn parses_a_reading() {

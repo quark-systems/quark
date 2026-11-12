@@ -172,6 +172,29 @@ impl CodexUsage {
             }
             Login::Invalid(e) => return fail("unavailable", &e),
         };
+        self.fetch(&creds, now).await
+    }
+
+    /// The reading for a ChatGPT access token from another tool's login
+    /// (Pi's `openai-codex` or OpenCode's `openai` entry). The account id
+    /// is taken from the token's claims when not given.
+    pub async fn read_token(&self, token: &str, account_id: Option<&str>) -> Value {
+        let account_id = account_id.map(str::to_string).or_else(|| {
+            jwt_claims(token)?
+                .get("https://api.openai.com/auth")?
+                .get("chatgpt_account_id")?
+                .as_str()
+                .map(str::to_string)
+        });
+        let creds = Credentials {
+            token: token.to_string(),
+            account_id,
+        };
+        self.fetch(&creds, OffsetDateTime::now_utc()).await
+    }
+
+    async fn fetch(&self, creds: &Credentials, now: OffsetDateTime) -> Value {
+        let fail = |status: &str, error: &str| failure(PROVIDER, SOURCE, now, status, error, None);
         let mut rejected = false;
         let mut last = "Codex quota unavailable".to_string();
         for url in &self.urls {

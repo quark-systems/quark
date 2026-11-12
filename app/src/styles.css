@@ -552,6 +552,8 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 .quota-bar > .yellow { background: var(--yellow); }
 .quota-bar > .red { background: var(--red); }
 .quota-windows { display: flex; gap: 8px; flex-wrap: wrap; font: 11px var(--mono); }
+.quota-providers { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.quota-provider { border-left: 2px solid var(--line); padding-left: 8px; }
 .account-pools { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; font-size: 12px; min-width: 0; }
 .pool-form { display: flex; gap: 4px; min-width: 0; }
 .pool-form input { min-width: 0; flex: 1; background: var(--bg-1); color: var(--fg); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 6px; font: 12px var(--mono); }

@@ -159,6 +159,27 @@ function AccountRow({ account: a, onError, keyEnv }: {
           </div>
         )}
         {q.state !== "known" && q.detail && <div className="faint ellipsis">{q.detail}</div>}
+        {!!q.providers?.length && (
+          <div className="quota-providers">
+            {q.providers.map((p) => (
+              <div key={p.provider} className="quota-provider" data-testid="quota-provider" title={p.detail ?? undefined}>
+                <div className="quota-line">
+                  <b>{p.label}</b>
+                  <span className={"pill " + quotaCls(p)}>{quotaText(p)}</span>
+                  {p.plan && <span className="faint">{p.plan}</span>}
+                </div>
+                {p.windows.length > 0 && (
+                  <div className="faint quota-windows">
+                    {p.windows.map((w) => (
+                      <span key={w.id}>{w.label} {w.percent_remaining != null ? `${Math.round(w.percent_remaining)}%` : "?"}{usageText(w) && ` · ${usageText(w)}`}</span>
+                    ))}
+                  </div>
+                )}
+                {p.state !== "known" && p.detail && <div className="faint ellipsis">{p.detail}</div>}
+              </div>
+            ))}
+          </div>
+        )}
         {q.keychain_grant && (
           <button className="btn small" onClick={grant} disabled={busy} data-testid="keychain-grant"
             title="macOS asks once for this login's Keychain item; choose Always Allow">

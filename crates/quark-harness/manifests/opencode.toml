@@ -22,6 +22,12 @@ config_dir = ".local/share/opencode"
 # `opencode auth login` writes every provider's login here.
 auth_files = ["auth.json"]
 
+# Many providers, one login each: Accounts reads them all; dispatch needs
+# `provider` on the profile.
+[quota]
+provider = "none"
+logins = true
+
 [turn_signals]
 busy = "extension"
 turn_end = "extension"

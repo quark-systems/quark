@@ -202,7 +202,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         &config.home.join("harnesses"),
     ));
     let quota_readers = accounts::LocalReaders {
-        readers: native_dispatch::local_readings(&config),
+        readers: native_dispatch::account_readings(&config),
     };
     let accounts = Arc::new(accounts::Accounts::new(
         store.clone(),

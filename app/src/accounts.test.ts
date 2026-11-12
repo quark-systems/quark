@@ -25,6 +25,8 @@ describe("quota labels", () => {
     expect(quotaText(quota({ state: "pending", remaining_percent: null }))).toBe("Reading quota…");
     expect(quotaText(quota({ state: "error", remaining_percent: null }))).toBe("Quota read failed");
     expect(quotaText(quota({ state: "unsupported", remaining_percent: null }))).toBe("Quota not tracked");
+    const login = { provider: "claude", label: "Claude", state: "known" as const, remaining_percent: 40, windows: [] };
+    expect(quotaText(quota({ remaining_percent: null, providers: [login, { ...login, provider: "kimi" }] }))).toBe("2 providers");
   });
   it("colours plenty, low and out", () => {
     expect(quotaCls(quota())).toBe("green");
