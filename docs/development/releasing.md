@@ -84,7 +84,7 @@ version. If it doesn't, the old app goes back, the backup is restored at the nex
 start when the old build can't read the new data, and the old quarkd is restarted. Either
 way QuarkBar (and Quark, if it was open) reopen. `POST /v1/update/rollback` does the same
 back to the kept app; `last_install` and `can_roll_back` on `GET /v1/update` report both.
-Its log is `~/.quark/logs/updater.log`. Workers keep running throughout: their ptyd
+Its log is `~/.quark/logs/updater.log`. The app shows all of this on Updates (Check for Updates… in the Quark menu opens it and checks), with a banner over every screen while an update is ready or after one failed; QuarkBar's menu has Check for Updates…, Install and Restart, Roll Back, and a notification when a download is ready. Workers keep running throughout: their ptyd
 outlives quarkd. Quark 0.1.0 still updates itself through Tauri's updater; later builds
 leave that to quarkd.
 

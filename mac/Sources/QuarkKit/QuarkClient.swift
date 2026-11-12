@@ -51,6 +51,26 @@ public struct QuarkClient: Sendable {
         try await get("/v1/hosts", query: [URLQueryItem(name: "hours", value: String(hours))])
     }
 
+    /// What quarkd's updater last found.
+    public func update() async throws -> UpdateStatus {
+        try await get("/v1/update")
+    }
+
+    /// Checks the update feed now (Check for Updates…).
+    public func checkUpdate() async throws -> UpdateStatus {
+        try await send("POST", "/v1/update/check", timeout: 120)
+    }
+
+    /// Installs the downloaded update; quarkd and both apps restart.
+    public func installUpdate() async throws -> UpdateStatus {
+        try await send("POST", "/v1/update/install", timeout: 120)
+    }
+
+    /// Goes back to the Quark the last update replaced.
+    public func rollBackUpdate() async throws -> UpdateStatus {
+        try await send("POST", "/v1/update/rollback", timeout: 60)
+    }
+
     /// The WebSocket URL of the event stream, replaying after `cursor` when given.
     public func eventsURL(cursor: Int64?) -> URL {
         var c = URLComponents(url: base.appendingPathComponent("v1/events"), resolvingAgainstBaseURL: false)!
@@ -60,9 +80,14 @@ public struct QuarkClient: Sendable {
     }
 
     func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], timeout: TimeInterval = 30) async throws -> T {
+        try await send("GET", path, query: query, timeout: timeout)
+    }
+
+    func send<T: Decodable>(_ method: String, _ path: String, query: [URLQueryItem] = [], timeout: TimeInterval = 30) async throws -> T {
         var c = URLComponents(url: base.appendingPathComponent(String(path.dropFirst())), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { c.queryItems = query }
         var req = URLRequest(url: c.url!)
+        req.httpMethod = method
         req.timeoutInterval = timeout
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw QuarkError.notHTTP }

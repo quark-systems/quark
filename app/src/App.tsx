@@ -8,6 +8,9 @@ import { goNextAttention, useAttention } from "./shell/NextAttention";
 import { parseRoute, useRoute } from "./nav";
 import { Palette } from "./Palette";
 import { checkFirstRun } from "./firstRun";
+import { api } from "./api";
+import { markInstallSeen, seenInstall, setUpdateStatus, updateBanner, useUpdateStatus } from "./appUpdate";
+import { UpdateBannerView } from "./screens/Updates";
 
 
 export function App() {
@@ -48,6 +51,7 @@ export function App() {
     <div className="app">
       <LeftList mod={MOD} />
       <main className="main">
+        <UpdateBar />
         <RouteView />
         {hasDock && <Dock ref={dock} mod={MOD} />}
       </main>
@@ -55,6 +59,19 @@ export function App() {
       {palette && <Palette onClose={() => setPalette(false)} />}
     </div>
   );
+}
+
+/** Quark updates, above every screen but Updates itself. */
+function UpdateBar() {
+  const route = useRoute();
+  const status = useUpdateStatus();
+  const [seen, setSeen] = useState(seenInstall());
+  const banner = route.name === "updates" ? null : updateBanner(status, seen);
+  if (!banner) return null;
+  const last = status?.last_install;
+  const dismiss = banner.action === "open" && last ? () => { markInstallSeen(last.started_at); setSeen(last.started_at); } : undefined;
+  return <UpdateBannerView banner={banner} onDismiss={dismiss}
+    onInstall={() => { api.installUpdate().then(setUpdateStatus, () => { location.hash = "#/updates"; }); }} />;
 }
 
 function StatusBar() {

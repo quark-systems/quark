@@ -35,6 +35,65 @@ public struct Health: Codable, Equatable, Sendable {
     public func has(_ feature: String) -> Bool { features?.contains(feature) ?? false }
 }
 
+// MARK: Updates
+
+/// `GET /v1/update`: what quarkd's updater found, and the last install
+/// (crates/quarkd/src/update.rs). QuarkBar shows it and asks quarkd to act.
+public struct UpdateStatus: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case disabled, idle, checking, upToDate = "up_to_date", available, downloading, ready, failed, installing, unknown
+        public init(from decoder: Decoder) throws {
+            self = State(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+    public struct Offer: Codable, Equatable, Sendable {
+        public var version: String
+        public var notes: String?
+        public var replacesPulled: Bool?
+        public var rollbackNeedsRestore: Bool?
+    }
+    public struct Install: Codable, Equatable, Sendable {
+        public var from: String
+        public var to: String
+        public var rollback: Bool?
+        public var phase: String
+        public var startedAt: String
+        public var error: String?
+    }
+    public var state: State
+    public var currentVersion: String
+    public var disabledReason: String?
+    public var offer: Offer?
+    public var blocked: String?
+    public var error: String?
+    public var lastInstall: Install?
+    public var canRollBack: Bool?
+
+    public init(state: State, currentVersion: String, offer: Offer? = nil, lastInstall: Install? = nil, canRollBack: Bool? = nil) {
+        self.state = state
+        self.currentVersion = currentVersion
+        self.offer = offer
+        self.lastInstall = lastInstall
+        self.canRollBack = canRollBack
+    }
+
+    /// The menu's line about updates, or nil when there's nothing to say.
+    public var menuLine: String? {
+        switch state {
+        case .ready: return offer.map { "Quark \($0.version) is ready to install" }
+        case .available: return offer.map { "Quark \($0.version) is available" }
+        case .downloading: return offer.map { "Downloading Quark \($0.version)…" }
+        case .installing: return "Installing Quark \(lastInstall?.to ?? offer?.version ?? "")…"
+        default:
+            if let l = lastInstall, l.phase == "rolled_back", l.rollback != true {
+                return "Quark \(l.to) didn't start; back on \(l.from)"
+            }
+            if let l = lastInstall, l.phase == "failed" { return "The update to Quark \(l.to) failed" }
+            return nil
+        }
+    }
+}
+
 // MARK: Status
 
 /// `GET /v1/status`: what needs you and how every Project and its agents are doing.

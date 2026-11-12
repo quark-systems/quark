@@ -10,6 +10,8 @@ public enum DeskLink {
     case pullRequest(String)
     case accounts
     case hosts
+    /// Updates, checking as it opens.
+    case checkForUpdates
 
     public var path: String {
         switch self {
@@ -20,6 +22,7 @@ public enum DeskLink {
         case let .pullRequest(id): return "pr/\(escape(id))"
         case .accounts: return "accounts"
         case .hosts: return "hosts"
+        case .checkForUpdates: return "updates/check"
         }
     }
 

@@ -108,6 +108,23 @@ final class QuarkKitTests: XCTestCase {
         XCTAssertNil(DeskLink.deskURL(fromBar: DeskLink.home.url))
     }
 
+    func testDecodesUpdate() throws {
+        let json = #"{"state":"ready","current_version":"0.2.0","offer":{"version":"0.3.0","replaces_pulled":false},"can_roll_back":false,"settings":{"channel":"stable","check":true,"auto_download":true,"install_when_idle":false}}"#
+        let u = try JSONDecoder.quark.decode(UpdateStatus.self, from: Data(json.utf8))
+        XCTAssertEqual(u.state, .ready)
+        XCTAssertEqual(u.offer?.version, "0.3.0")
+        XCTAssertEqual(u.menuLine, "Quark 0.3.0 is ready to install")
+        // A state from a newer quarkd decodes as unknown.
+        let newer = try JSONDecoder.quark.decode(UpdateStatus.self, from: Data(#"{"state":"staging","current_version":"0.2.0"}"#.utf8))
+        XCTAssertEqual(newer.state, .unknown)
+        XCTAssertNil(newer.menuLine)
+        let undone = UpdateStatus(
+            state: .upToDate, currentVersion: "0.2.0",
+            lastInstall: .init(from: "0.2.0", to: "0.3.0", rollback: false, phase: "rolled_back", startedAt: "t", error: "timeout"))
+        XCTAssertEqual(undone.menuLine, "Quark 0.3.0 didn't start; back on 0.2.0")
+        XCTAssertEqual(DeskLink.checkForUpdates.url.absoluteString, "quark://open/updates/check")
+    }
+
     func testClientURLs() {
         let client = QuarkClient(base: URL(string: "http://127.0.0.1:7380")!)
         XCTAssertEqual(client.eventsURL(cursor: 7).absoluteString, "ws://127.0.0.1:7380/v1/events?cursor=7")
