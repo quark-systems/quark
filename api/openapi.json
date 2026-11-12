@@ -5959,6 +5959,52 @@
         }
       }
     },
+    "/v1/update/install": {
+      "post": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Installs the downloaded update (Install and restart): backs up the home\nand starts quark-updater, which swaps Quark.app, restarts quarkd and\nrolls back if the new version doesn't come up. Answers before quarkd\nrestarts; `state` is `installing` until it has.",
+        "operationId": "install",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing to install, or not an installed app"
+          }
+        }
+      }
+    },
+    "/v1/update/rollback": {
+      "post": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Goes back to the Quark the last update replaced (Roll back), restoring\nthe pre-update backup when that version can't read the newer data.",
+        "operationId": "rollback",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No earlier Quark is kept"
+          }
+        }
+      }
+    },
     "/v1/update/settings": {
       "put": {
         "tags": [
@@ -9999,6 +10045,74 @@
           }
         }
       },
+      "Intent": {
+        "type": "object",
+        "description": "One install or rollback, written before the updater starts and updated by\neach of its steps.",
+        "required": [
+          "from",
+          "to",
+          "app",
+          "health_url",
+          "phase",
+          "started_at"
+        ],
+        "properties": {
+          "app": {
+            "type": "string",
+            "description": "The installed Quark.app."
+          },
+          "backup": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pre-update backup of the home."
+          },
+          "bundle": {
+            "type": "string",
+            "description": "The verified update bundle (`.app.tar.gz`); empty for a rollback."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from": {
+            "type": "string",
+            "description": "The version being replaced."
+          },
+          "health_url": {
+            "type": "string",
+            "description": "quarkd's health endpoint."
+          },
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "restore_on_rollback": {
+            "type": "boolean",
+            "description": "Going back needs [`Self::backup`] restored: the version going back to\ncan't read the data the other one writes."
+          },
+          "rollback": {
+            "type": "boolean",
+            "description": "A rollback to the app kept aside, rather than an update."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "to": {
+            "type": "string",
+            "description": "The version being installed (for a rollback, the one going back to)."
+          }
+        }
+      },
       "Interventions": {
         "type": "object",
         "description": "Times work stopped for someone: a worker asking for a decision or\nreporting it is stuck.",
@@ -11073,6 +11187,17 @@
             }
           }
         }
+      },
+      "Phase": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "staged",
+          "swapped",
+          "done",
+          "rolled_back",
+          "failed"
+        ]
       },
       "PrComment": {
         "type": "object",
@@ -12830,7 +12955,8 @@
           "available",
           "downloading",
           "ready",
-          "failed"
+          "failed",
+          "installing"
         ]
       },
       "StatusCounts": {
@@ -14171,6 +14297,7 @@
         "required": [
           "state",
           "current_version",
+          "can_roll_back",
           "settings"
         ],
         "properties": {
@@ -14187,6 +14314,10 @@
               "null"
             ],
             "description": "The verified bundle, once `state` is `ready`."
+          },
+          "can_roll_back": {
+            "type": "boolean",
+            "description": "Roll back is possible: an earlier Quark is kept beside this one."
           },
           "checked_at": {
             "type": [
@@ -14211,6 +14342,17 @@
               "null"
             ],
             "description": "The last check or download's failure."
+          },
+          "last_install": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Intent",
+                "description": "The last install or rollback, or the one under way."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "offer": {
             "oneOf": [

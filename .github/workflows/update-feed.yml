@@ -1,8 +1,8 @@
 name: Update feed
 
 # Rebuilds the channel manifests quarkd's updater reads (stable.json and beta.json on the
-# `update-feed` release) whenever a release is published, edited or deleted, or by hand
-# after changing packaging/update-policy.json (min_from, pulled). See
+# `update-feed` release) whenever a release is published (release.yml calls it), edited or
+# deleted, or by hand after changing packaging/update-policy.json (min_from, pulled). See
 # docs/development/releasing.md, Updates.
 #
 # The `update-feed` release is a pre-release so it never becomes the repository's "latest"
@@ -10,6 +10,8 @@ name: Update feed
 on:
   release:
     types: [published, edited, deleted]
+  # From release.yml, whose own publish doesn't fire the release event.
+  workflow_call:
   workflow_dispatch:
 
 concurrency:

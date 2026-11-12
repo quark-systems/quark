@@ -1,7 +1,7 @@
-// What only an installed (bundled) app does: start QuarkBar and quarkd, and update itself.
-// `npm run tauri dev` does neither: no QuarkBar sits inside its bundle and the updater is
-// configured only by the release workflow (.github/workflows/release.yml), so development
-// keeps running a daemon by hand.
+// What only an installed (bundled) app does: start QuarkBar and quarkd. `npm run tauri dev`
+// doesn't: no QuarkBar sits inside its bundle, so development keeps running a daemon by hand.
+// Updates are quarkd's (crates/quarkd/src/update.rs): it replaces this whole bundle, and the
+// app only shows what `/v1/update` reports.
 //
 // On macOS, Quark.app carries QuarkBar.app (the menubar app, built by
 // mac/scripts/package.sh) in Contents/Library/LoginItems, and QuarkBar carries quarkd.
@@ -38,55 +38,6 @@ pub fn start_quarkbar(_app: &AppHandle) {
     {
         eprintln!("could not open QuarkBar: {e}");
     }
-}
-
-/// Looks for an update once, and offers to install it and restart. Only when the release
-/// build configured the updater (`plugins.updater` in tauri.conf.json).
-pub fn offer_update(app: &AppHandle) -> tauri::Result<()> {
-    if !app.config().plugins.0.contains_key("updater") {
-        return Ok(());
-    }
-    app.plugin(tauri_plugin_updater::Builder::new().build())?;
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-        use tauri_plugin_updater::UpdaterExt;
-        let update = match app.updater() {
-            Ok(updater) => updater.check().await,
-            Err(e) => Err(e),
-        };
-        let update = match update {
-            Ok(Some(update)) => update,
-            Ok(None) => return,
-            Err(e) => {
-                eprintln!("update check failed: {e}");
-                return;
-            }
-        };
-        let current = app.package_info().version.to_string();
-        let dialog = app
-            .dialog()
-            .message(format!(
-                "Quark {} is available (you have {current}). Install it and restart? \
-                 Running workers carry on; quarkd restarts on its own.",
-                update.version
-            ))
-            .title("Update Quark")
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Install and restart".into(),
-                "Later".into(),
-            ));
-        // The answer waits for the person; keep that wait off the async workers.
-        let yes = tauri::async_runtime::spawn_blocking(move || dialog.blocking_show()).await;
-        if !matches!(yes, Ok(true)) {
-            return;
-        }
-        match update.download_and_install(|_, _| {}, || {}).await {
-            Ok(()) => app.restart(),
-            Err(e) => eprintln!("update failed: {e}"),
-        }
-    });
-    Ok(())
 }
 
 #[cfg(test)]

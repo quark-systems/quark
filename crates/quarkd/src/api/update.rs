@@ -34,6 +34,36 @@ pub async fn download(State(state): State<AppState>) -> Json<UpdateStatus> {
     Json(updater(&state).download().await)
 }
 
+/// Installs the downloaded update (Install and restart): backs up the home
+/// and starts quark-updater, which swaps Quark.app, restarts quarkd and
+/// rolls back if the new version doesn't come up. Answers before quarkd
+/// restarts; `state` is `installing` until it has.
+#[utoipa::path(post, path = "/v1/update/install", tag = "daemon",
+    responses((status = 200, body = UpdateStatus),
+              (status = 400, description = "Nothing to install, or not an installed app")))]
+pub async fn install(State(state): State<AppState>) -> Result<Json<UpdateStatus>, ApiError> {
+    let u = updater(&state);
+    tokio::task::spawn_blocking(move || u.install())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map(Json)
+        .map_err(|e| ApiError::invalid(format!("{e:#}")))
+}
+
+/// Goes back to the Quark the last update replaced (Roll back), restoring
+/// the pre-update backup when that version can't read the newer data.
+#[utoipa::path(post, path = "/v1/update/rollback", tag = "daemon",
+    responses((status = 200, body = UpdateStatus),
+              (status = 400, description = "No earlier Quark is kept")))]
+pub async fn rollback(State(state): State<AppState>) -> Result<Json<UpdateStatus>, ApiError> {
+    let u = updater(&state);
+    tokio::task::spawn_blocking(move || u.roll_back())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map(Json)
+        .map_err(|e| ApiError::invalid(format!("{e:#}")))
+}
+
 /// Replaces the update settings.
 #[utoipa::path(put, path = "/v1/update/settings", tag = "daemon",
     request_body = Settings,
@@ -51,7 +81,7 @@ pub async fn put_settings(
 /// This module's endpoints, merged into the served document by
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(get, check, download, put_settings))]
+#[openapi(paths(get, check, download, install, rollback, put_settings))]
 pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.
@@ -61,5 +91,7 @@ pub(super) fn router() -> axum::Router<AppState> {
         .route("/v1/update", get(self::get))
         .route("/v1/update/check", post(check))
         .route("/v1/update/download", post(download))
+        .route("/v1/update/install", post(install))
+        .route("/v1/update/rollback", post(rollback))
         .route("/v1/update/settings", put(put_settings))
 }

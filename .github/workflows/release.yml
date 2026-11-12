@@ -1,7 +1,7 @@
 name: Release
 
 # Builds Quark for Mac (Apple silicon) and Windows, and quarkd for Linux (which Windows runs
-# in WSL). A `v*` tag publishes a draft GitHub Release with them; a pull request that
+# in WSL). A `v*` tag publishes a GitHub Release with them once its assets check out; a pull request that
 # changes the release files, or a manual run, builds them as a dry run (artifacts only).
 #
 # Signing is used when its secrets exist, so unsigned dry runs work without any:
@@ -12,8 +12,9 @@ name: Release
 # - Windows: not yet; installers are unsigned (SmartScreen warns).
 #
 # 0.1 ships for Mac only: the Windows job runs only when the RELEASE_WINDOWS variable is
-# "true". The release notes are the version's section of CHANGELOG.md. Publishing the draft
-# refreshes the update feed (update-feed.yml).
+# "true". The release notes are the version's section of CHANGELOG.md. Publishing refreshes
+# the update feed (update-feed.yml, called below: a release published with the workflow's own
+# token doesn't trigger other workflows).
 on:
   push:
     tags: ["v*"]
@@ -230,10 +231,31 @@ jobs:
           mv -f dist/notes.md notes.md
           node packaging/latest-json.mjs "${{ needs.version.outputs.version }}" dist
           (cd dist && sha256sum -- * > SHA256SUMS)
+      - name: Check the assets
+        env:
+          UPDATER: ${{ vars.TAURI_UPDATER_PUBKEY }}
+        run: |
+          ls -l dist
+          compgen -G 'dist/*.dmg' >/dev/null || { echo "::error::no dmg"; exit 1; }
+          test -s dist/quarkd-x86_64-unknown-linux-gnu.tar.gz || { echo "::error::no Linux quarkd"; exit 1; }
+          if [ -n "$UPDATER" ]; then
+            # Updates need the signed bundle, and latest.json listing it for Apple silicon.
+            test -s dist/Quark.app.tar.gz && test -s dist/Quark.app.tar.gz.sig || { echo "::error::no signed update bundle"; exit 1; }
+            jq -e '.platforms["darwin-aarch64"] | (.signature | length > 0) and (.url | endswith("/Quark.app.tar.gz"))' dist/latest.json \
+              || { echo "::error::latest.json has no darwin-aarch64 update"; exit 1; }
+            test -s dist/compat.json || { echo "::error::no compat.json"; exit 1; }
+          fi
       - uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          draft: false
           prerelease: ${{ contains(needs.version.outputs.version, '-') }}
           body_path: notes.md
           generate_release_notes: true
           files: dist/*
+
+  feed:
+    # Rebuilds the update feed for the release just published.
+    needs: publish
+    permissions:
+      contents: write
+    uses: ./.github/workflows/update-feed.yml

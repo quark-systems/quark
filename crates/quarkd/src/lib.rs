@@ -59,6 +59,7 @@ pub mod task_brief;
 pub mod transcripts;
 pub mod triage;
 pub mod update;
+pub mod update_install;
 pub mod usage;
 pub mod worktree;
 
@@ -98,8 +99,11 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             config.listen
         );
     }
-    // Before anything is opened in the home: an older home is brought
-    // forward, a newer one refused.
+    // Before anything is opened in the home: a rollback's restore, then an
+    // older home is brought forward, a newer one refused.
+    if let Some(b) = backup::restore_pending(&config.home)? {
+        tracing::warn!(backup = %b.display(), "restored the home from a backup for a rollback");
+    }
     let migrated = home_format::migrate(&config.home)?;
     if migrated.from != Some(migrated.to) {
         tracing::info!(
@@ -392,7 +396,9 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         async move { beads.setup_missing(store, home).await }
     });
     // Off in builds without an update signing key (dev builds and tests).
-    tokio::spawn(update::Updater::for_home(&layout.home).run());
+    let updater = update::Updater::for_home(&layout.home);
+    updater.set_listen(config.listen);
+    tokio::spawn(updater.run());
 
     let state = AppState {
         store,

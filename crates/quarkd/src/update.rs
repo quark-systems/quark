@@ -24,6 +24,10 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::compat::Compat;
+use crate::update_install::{Intent, Phase};
+
+/// An install that hasn't finished after this long has stopped.
+const STALE: time::Duration = time::Duration::minutes(10);
 
 /// Where the channel manifests are published; `{channel}` is `stable` or `beta`.
 pub const FEED: &str =
@@ -243,6 +247,8 @@ pub enum State {
     /// Downloaded and verified; ready to install.
     Ready,
     Failed,
+    /// quark-updater is swapping the bundle; quarkd restarts shortly.
+    Installing,
 }
 
 /// `GET /v1/update`.
@@ -267,6 +273,11 @@ pub struct UpdateStatus {
     /// The verified bundle, once `state` is `ready`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle: Option<String>,
+    /// The last install or rollback, or the one under way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_install: Option<crate::update_install::Intent>,
+    /// Roll back is possible: an earlier Quark is kept beside this one.
+    pub can_roll_back: bool,
     pub settings: Settings,
 }
 
@@ -277,6 +288,8 @@ pub struct Updater {
     pubkey: Option<String>,
     platform: Option<String>,
     current: String,
+    /// quarkd's `/v1/health`, for the updater's health check.
+    health_url: Mutex<String>,
     inner: Mutex<Inner>,
     /// One check or download at a time.
     busy: tokio::sync::Mutex<()>,
@@ -306,6 +319,7 @@ impl Updater {
             pubkey,
             platform,
             current,
+            health_url: Mutex::new("http://127.0.0.1:7380/v1/health".into()),
             inner: Mutex::new(Inner::default()),
             busy: tokio::sync::Mutex::new(()),
         }
@@ -338,6 +352,142 @@ impl Updater {
         }
     }
 
+    /// Where quarkd serves `/v1/health`, from its listen address.
+    pub fn set_listen(&self, listen: std::net::SocketAddr) {
+        *self.health_url.lock().unwrap() = format!("http://{listen}/v1/health");
+    }
+
+    /// The last install's record. One that never finished (the updater was
+    /// killed, or the Mac restarted) reads as failed after [`STALE`].
+    fn last_install(&self) -> Option<Intent> {
+        let mut i = Intent::load(&self.home)?;
+        let started = time::OffsetDateTime::parse(
+            &i.started_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()?;
+        if i.in_progress() && OffsetDateTime::now_utc() - started > STALE {
+            i.error = Some(format!(
+                "the update stopped while {:?}; this is Quark {}",
+                i.phase, self.current
+            ));
+            i.phase = Phase::Failed;
+        }
+        Some(i)
+    }
+
+    /// The installed Quark.app, when quarkd runs from one.
+    fn app(&self) -> Option<PathBuf> {
+        crate::update_install::installed_app(&std::env::current_exe().ok()?)
+    }
+
+    fn can_roll_back(&self, last: Option<&Intent>) -> bool {
+        let Some(last) = last else { return false };
+        !last.rollback
+            && last.phase == Phase::Done
+            && last.to == self.current
+            && last
+                .app
+                .parent()
+                .is_some_and(|p| p.join(crate::update_install::PREVIOUS).is_dir())
+    }
+
+    /// Installs the downloaded update: backs up the home, then starts
+    /// quark-updater ([`crate::update_install`]), which restarts quarkd.
+    pub fn install(&self) -> anyhow::Result<UpdateStatus> {
+        let (offer, bundle) = {
+            let i = self.inner.lock().unwrap();
+            match (&i.state, &i.offer, &i.bundle) {
+                (Some(State::Ready), Some(o), Some(b)) => (o.clone(), b.clone()),
+                _ => bail!("no update is downloaded and ready to install"),
+            }
+        };
+        let app = self
+            .app()
+            .ok_or_else(|| anyhow!("only quarkd inside an installed Quark.app can update it"))?;
+        self.start(Intent {
+            from: self.current.clone(),
+            to: offer.version.clone(),
+            rollback: false,
+            app,
+            bundle,
+            backup: None,
+            // Unknown means restore: losing minutes of data beats a quarkd
+            // that can't open its home.
+            restore_on_rollback: offer.rollback_needs_restore.unwrap_or(true),
+            health_url: self.health_url.lock().unwrap().clone(),
+            phase: Phase::Pending,
+            started_at: crate::update_install::now(),
+            finished_at: None,
+            error: None,
+        })
+    }
+
+    /// Goes back to the Quark kept aside by the last update.
+    pub fn roll_back(&self) -> anyhow::Result<UpdateStatus> {
+        let last = self.last_install();
+        anyhow::ensure!(
+            self.can_roll_back(last.as_ref()),
+            "there is no earlier Quark to roll back to"
+        );
+        let last = last.unwrap();
+        self.start(Intent {
+            from: self.current.clone(),
+            to: last.from.clone(),
+            rollback: true,
+            app: last.app.clone(),
+            bundle: PathBuf::new(),
+            backup: last.backup.clone(),
+            restore_on_rollback: last.restore_on_rollback,
+            health_url: self.health_url.lock().unwrap().clone(),
+            phase: Phase::Pending,
+            started_at: crate::update_install::now(),
+            finished_at: None,
+            error: None,
+        })
+    }
+
+    fn start(&self, mut intent: Intent) -> anyhow::Result<UpdateStatus> {
+        if let Some(l) = self.last_install() {
+            anyhow::ensure!(!l.in_progress(), "an update is already being installed");
+        }
+        if !intent.rollback {
+            intent.backup = Some(
+                crate::backup::snapshot(&self.home, &intent.to).context("backing up the home")?,
+            );
+        }
+        let updater = self.home.join("updates").join("quark-updater");
+        std::fs::create_dir_all(updater.parent().unwrap())?;
+        let _ = std::fs::remove_file(&updater);
+        std::fs::copy(std::env::current_exe()?, &updater).context("copying quark-updater")?;
+        intent.save(&self.home)?;
+        let log = self.home.join("logs").join("updater.log");
+        std::fs::create_dir_all(log.parent().unwrap())?;
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)?;
+        use std::os::unix::process::CommandExt;
+        let spawned = std::process::Command::new(&updater)
+            .arg("update-install")
+            .arg("--home")
+            .arg(&self.home)
+            .stdin(std::process::Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log)
+            // Its own process group, so launchd stopping quarkd leaves it be.
+            .process_group(0)
+            .spawn();
+        if let Err(e) = spawned {
+            intent.phase = Phase::Failed;
+            intent.error = Some(format!("starting quark-updater: {e}"));
+            intent.finished_at = Some(crate::update_install::now());
+            intent.save(&self.home)?;
+            bail!("starting quark-updater: {e}");
+        }
+        Ok(self.status())
+    }
+
     pub fn settings(&self) -> Settings {
         Settings::load(&self.home)
     }
@@ -348,9 +498,12 @@ impl Updater {
 
     pub fn status(&self) -> UpdateStatus {
         let disabled_reason = self.disabled_reason();
+        let last = self.last_install();
         let i = self.inner.lock().unwrap();
         let state = if disabled_reason.is_some() {
             State::Disabled
+        } else if last.as_ref().is_some_and(|l| l.in_progress()) {
+            State::Installing
         } else {
             i.state.unwrap_or(State::Idle)
         };
@@ -366,6 +519,8 @@ impl Updater {
                     .ok()
             }),
             bundle: i.bundle.as_ref().map(|p| p.display().to_string()),
+            last_install: last.clone(),
+            can_roll_back: self.can_roll_back(last.as_ref()),
             settings: self.settings(),
         }
     }
