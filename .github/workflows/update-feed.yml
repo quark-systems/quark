@@ -1,0 +1,51 @@
+name: Update feed
+
+# Rebuilds the channel manifests quarkd's updater reads (stable.json and beta.json on the
+# `update-feed` release) whenever a release is published, edited or deleted, or by hand
+# after changing packaging/update-policy.json (min_from, pulled). See
+# docs/development/releasing.md, Updates.
+#
+# The `update-feed` release is a pre-release so it never becomes the repository's "latest"
+# release, which Quark 0.1.0's own updater still reads (releases/latest/download/latest.json).
+on:
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+
+concurrency:
+  group: update-feed
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    if: github.event_name != 'release' || github.event.release.tag_name != 'update-feed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Release manifests
+        run: |
+          gh release list --limit 100 --json tagName,isDraft,isPrerelease,publishedAt > releases.json
+          for tag in $(jq -r '.[] | select(.isDraft | not) | .tagName | select(startswith("v"))' releases.json); do
+            mkdir -p "assets/$tag"
+            gh release download "$tag" --dir "assets/$tag" --pattern latest.json --pattern compat.json || true
+          done
+          node packaging/update-feed.mjs releases.json assets feed
+      - name: Publish to the update-feed release
+        run: |
+          shopt -s nullglob
+          files=(feed/*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no published release with signed update bundles yet"
+            exit 0
+          fi
+          if ! gh release view update-feed >/dev/null 2>&1; then
+            gh release create update-feed --prerelease --latest=false --title "Update feed" \
+              --notes "Channel manifests for Quark's updater (stable.json, beta.json). Rebuilt by .github/workflows/update-feed.yml; not a release."
+          fi
+          gh release upload update-feed "${files[@]}" --clobber

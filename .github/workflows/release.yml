@@ -12,7 +12,8 @@ name: Release
 # - Windows: not yet; installers are unsigned (SmartScreen warns).
 #
 # 0.1 ships for Mac only: the Windows job runs only when the RELEASE_WINDOWS variable is
-# "true". The release notes are the version's section of CHANGELOG.md.
+# "true". The release notes are the version's section of CHANGELOG.md. Publishing the draft
+# refreshes the update feed (update-feed.yml).
 on:
   push:
     tags: ["v*"]
@@ -165,6 +166,8 @@ jobs:
           bundle=app/src-tauri/target/aarch64-apple-darwin/release/bundle
           cp -f "$bundle"/dmg/*.dmg dist/
           cp -f "$bundle"/macos/*.app.tar.gz* dist/ 2>/dev/null || true
+          # What this build serves and writes, for the update feed (packaging/update-feed.mjs).
+          "$(ls -d "$bundle"/macos/*.app)/Contents/Library/LoginItems/QuarkBar.app/Contents/MacOS/quarkd" compat --json > dist/compat.json
       - uses: actions/upload-artifact@v4
         with:
           name: mac

@@ -21,6 +21,14 @@ enum Command {
     Serve(ServeArgs),
     /// Print the OpenAPI document for the /v1 API.
     Openapi,
+    /// Print what this build is compatible with: its API contract and the
+    /// home and database formats it writes. The release workflow puts it in
+    /// the update feed.
+    Compat {
+        /// Print as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read a harness's quota (Claude Code, Codex, IBM Bob, Kiro CLI, Grok,
     /// Kimi Code, Cursor, Antigravity, Muse, Gemini CLI or GitHub Copilot)
     /// the way dispatch and Accounts do, or anchor Bob's estimate with the
@@ -322,6 +330,15 @@ async fn main() -> anyhow::Result<()> {
         Command::Import { source } => import(source).await,
         Command::Openapi => {
             print!("{}", quarkd::api::ApiDoc::json());
+            Ok(())
+        }
+        Command::Compat { json } => {
+            let compat = quarkd::compat::Compat::current();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&compat)?);
+            } else {
+                print!("{compat}");
+            }
             Ok(())
         }
         Command::Serve(args) => {
