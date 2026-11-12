@@ -33,6 +33,33 @@ the release; it installs quarkd, tmux and git, and runs quarkd as a systemd
 user service on `127.0.0.1:7380`, which the app reaches through WSL's localhost
 forwarding. Running it again upgrades quarkd.
 
+## Updates
+
+The updater key (`TAURI_SIGNING_PRIVATE_KEY` and its password as secrets, the public key
+as the variable `TAURI_UPDATER_PUBKEY`) makes the Mac build sign `Quark.app.tar.gz` and
+list it in `latest.json`. The public key is built into each release, so a build made
+without it can't update itself.
+
+Publishing a release runs `.github/workflows/update-feed.yml`, which rebuilds the channel
+manifests on the `update-feed` release (a pre-release, so it never becomes "latest"):
+
+- `stable.json`: the newest published full release.
+- `beta.json`: the newest published release, pre-releases included.
+
+Each is that release's `latest.json` plus `compat` (the release's `compat.json`, from
+`quarkd compat --json`: API contract, home format, database schemas) and the policy in
+`packaging/update-policy.json`:
+
+- `min_from`: the oldest version that may update straight to this one. Raise it when an
+  upgrade needs an intermediate release.
+- `pulled`: versions withdrawn after release. They are never served, and an updater
+  running one is offered the newest release that isn't pulled.
+
+To pull a release or change `min_from`, edit the policy on `main` and run the Update
+feed workflow by hand. Quark 0.1.0's desktop app still checks
+`releases/latest/download/latest.json` itself, so keep attaching `latest.json` to each
+release.
+
 ## Compatibility
 
 `GET /v1/health` reports `api_version` (`quark_systems::API_CONTRACT`). The app compares
@@ -55,4 +82,5 @@ the app has no updater.
 
 - WSL setup from the Windows app.
 - Windows code signing; Homebrew cask and winget.
-- A beta update channel.
+- quarkd's updater, which reads the channel manifests (the desktop app's own check reads
+  only the latest full release).

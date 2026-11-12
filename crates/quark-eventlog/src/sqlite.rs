@@ -33,7 +33,8 @@ use time::OffsetDateTime;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 1;
+/// The event log schema this build writes (SQLite `user_version`).
+pub const SCHEMA_VERSION: i64 = 1;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS events (
