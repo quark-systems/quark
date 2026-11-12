@@ -10,7 +10,7 @@ release plan; what is not here yet is listed at the end.
    to `CHANGELOG.md`: it becomes the release notes, and the workflow fails without it.
    Commit both to `main`.
 2. Tag the commit `v0.1.0-beta.1` and push the tag.
-3. `.github/workflows/release.yml` builds and attaches to a **draft** GitHub Release:
+3. `.github/workflows/release.yml` builds these and publishes them as a GitHub Release:
    - `Quark_<version>_aarch64.dmg`: Quark.app for Apple silicon. It carries QuarkBar.app
      (the menubar app and widgets, from `mac/scripts/package.sh`) in
      `Contents/Library/LoginItems`, and QuarkBar carries quarkd. Opening Quark opens
@@ -20,9 +20,13 @@ release plan; what is not here yet is listed at the end.
    - `Quark_<version>_x64-setup.exe`: the Windows app (quarkd runs in WSL), only when the
      repository variable `RELEASE_WINDOWS` is `true`. 0.1 is Mac only, so it is off.
    - `quarkd-x86_64-unknown-linux-gnu.tar.gz` and `install-wsl.sh`: quarkd for WSL and Linux.
-   - `latest.json` (the updater manifest) and `SHA256SUMS`.
-4. Publish the draft. A version with a `-` suffix is marked a pre-release, which the
-   updater skips (it reads the latest full release).
+   - `latest.json` (the updater manifest), `compat.json` and `SHA256SUMS`.
+4. Before publishing, the workflow checks the assets: the dmg and Linux quarkd are there
+   and, with the updater key set, the signed `Quark.app.tar.gz` and a `latest.json` that
+   lists it for darwin-aarch64. Anything missing fails the run and nothing is published.
+   Then it rebuilds the update feed. A version with a `-` suffix is marked a pre-release,
+   which only the beta channel offers. To withdraw a bad release, add it to `pulled` in
+   `packaging/update-policy.json` (see Updates).
 
 Pull requests that change the workflow or `packaging/` run the same builds as a dry run.
 
