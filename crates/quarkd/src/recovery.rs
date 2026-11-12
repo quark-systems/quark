@@ -257,13 +257,20 @@ impl CoordinatorRecovery {
             tracing::warn!(project = %project.id, %target, "coordinator window is gone; starting the coordinator again");
         }
         // The lease the coordinator already holds, so it keeps its account.
-        let env = match self
+        let lease = match self
             .accounts
             .lease(&Holder::Coordinator(project.id.clone()), agent)
             .await
         {
             Ok(lease) => {
-                let mut env = lease.map(|l| l.env).unwrap_or_default();
+                self.accounts
+                    .coordinator_env(lease.map(|l| l.env).unwrap_or_default())
+                    .await
+            }
+            Err(e) => Err(e),
+        };
+        let env = match lease {
+            Ok(mut env) => {
                 env.push(crate::beads::agent_env(&self.home, &project.id));
                 env
             }

@@ -141,6 +141,8 @@ quarkd runs the coordinator for every Project on a timer, in `crates/quarkd/src/
 | Harness wiring | `coordinator_http::install`, `codex_overrides` | How each coordinator harness reaches its tools and turn end, below. |
 | Claude Code | `coordinator_http::install_claude` | Native only: writes the MCP server into the workspace's `.mcp.json` (approved in `.claude/settings.local.json`) a `Stop` hook that POSTs the turn end and prints the answer as the hook's decision, and a `SessionStart` hook that runs `bd prime --memories-only` so the Project's Beads memories (standing rules among them) are injected when the session starts, resumes or is compacted. Everything else in both files is kept. How a coordinator uses Beads (issues, the decision log, memory) is in the built-in prompt's Beads section; it reads through the `bd` CLI and `BEADS_DIR`. |
 
+| Environment | `Accounts::coordinator_env` | The coordinator's window starts with its own account's environment plus the API key Quark keeps for every other harness that signs in with one (`HarnessInfo.key_env`: the default account's kept key, else the first key account's, with its team), read from the Keychain at start since the supervisor does not start this window. So `kiro-cli` or `bob` in the coordinator's shell signs in as workers do. Called by provisioning, coordinator switches and recovery; a key changed in Quark reaches the coordinator at its next start. A key that cannot be read is left out with a warning. |
+
 Each Project's token is minted once into `<home>/coordinators/<project>.token` (mode 0600); a wrong token is `404`.
 ### Coordinator harnesses
 
