@@ -5898,6 +5898,96 @@
           }
         }
       }
+    },
+    "/v1/update": {
+      "get": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "What the updater last found: the offered release, a download that is\nready to install, or why updates are off.",
+        "operationId": "get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/update/check": {
+      "post": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Checks the update feed now (Check for Updates…), and downloads what it\noffers when the settings say to.",
+        "operationId": "check",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/update/download": {
+      "post": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Downloads and verifies the offered update.",
+        "operationId": "download",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/update/settings": {
+      "put": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Replaces the update settings.",
+        "operationId": "put_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6699,6 +6789,13 @@
             "$ref": "#/components/schemas/FileChangeStatus"
           }
         }
+      },
+      "Channel": {
+        "type": "string",
+        "enum": [
+          "stable",
+          "beta"
+        ]
       },
       "Check": {
         "type": "object",
@@ -10764,6 +10861,42 @@
           "return"
         ]
       },
+      "Offer": {
+        "type": "object",
+        "description": "An update this quarkd may install.",
+        "required": [
+          "version",
+          "replaces_pulled"
+        ],
+        "properties": {
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pub_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replaces_pulled": {
+            "type": "boolean",
+            "description": "This build was withdrawn, so the update is a fix, not just newer."
+          },
+          "rollback_needs_restore": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Rolling back after this update needs the pre-update backup, because\nthis build can't read the data the update writes. `None` when the\nmanifest doesn't say."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "OverviewDigest": {
         "type": "object",
         "description": "What changed in a Project after `since`.",
@@ -12484,6 +12617,32 @@
           }
         }
       },
+      "Settings": {
+        "type": "object",
+        "description": "The user's update settings (`<home>/update.json`).",
+        "properties": {
+          "auto_download": {
+            "type": "boolean",
+            "description": "Download an update as soon as one is found.",
+            "default": true
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel",
+            "description": "Which releases to follow: full releases, or pre-releases too.",
+            "default": "stable"
+          },
+          "check": {
+            "type": "boolean",
+            "description": "Check the feed every six hours.",
+            "default": true
+          },
+          "install_when_idle": {
+            "type": "boolean",
+            "description": "Install a downloaded update by itself once no worker is running.",
+            "default": false
+          }
+        }
+      },
       "SetupReport": {
         "type": "object",
         "required": [
@@ -12660,6 +12819,19 @@
             "description": "What the rule allows, in the answerer's words."
           }
         }
+      },
+      "State": {
+        "type": "string",
+        "enum": [
+          "disabled",
+          "idle",
+          "checking",
+          "up_to_date",
+          "available",
+          "downloading",
+          "ready",
+          "failed"
+        ]
       },
       "StatusCounts": {
         "type": "object",
@@ -13990,6 +14162,71 @@
               "null"
             ],
             "description": "Turn standing approval on or off."
+          }
+        }
+      },
+      "UpdateStatus": {
+        "type": "object",
+        "description": "`GET /v1/update`.",
+        "required": [
+          "state",
+          "current_version",
+          "settings"
+        ],
+        "properties": {
+          "blocked": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A newer release this one can't update to directly, and why."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The verified bundle, once `state` is `ready`."
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "current_version": {
+            "type": "string"
+          },
+          "disabled_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why updates are off, when `state` is `disabled`."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last check or download's failure."
+          },
+          "offer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Offer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "state": {
+            "$ref": "#/components/schemas/State"
           }
         }
       },

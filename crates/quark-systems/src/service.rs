@@ -18,7 +18,7 @@ pub const API_CONTRACT_MIN: u32 = 1;
 /// Optional capabilities this daemon has, which clients check before showing what needs
 /// them, instead of reading a release version. Add a name when a client must tell a
 /// daemon with a feature from one without it; never remove one while it's served.
-pub const FEATURES: &[&str] = &["compat"];
+pub const FEATURES: &[&str] = &["compat", "update"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Health {

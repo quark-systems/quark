@@ -27,6 +27,7 @@ mod routes;
 mod setup;
 mod status;
 mod terminals;
+mod update;
 
 use std::sync::Arc;
 
@@ -179,6 +180,10 @@ const MODULES: &[Module] = &[
     Module {
         router: attachments::router,
         openapi: <attachments::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: update::router,
+        openapi: <update::Api as OpenApi>::openapi,
     },
 ];
 

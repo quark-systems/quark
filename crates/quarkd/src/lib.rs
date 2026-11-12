@@ -58,6 +58,7 @@ pub mod switch;
 pub mod task_brief;
 pub mod transcripts;
 pub mod triage;
+pub mod update;
 pub mod usage;
 pub mod worktree;
 
@@ -390,6 +391,8 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         let (beads, store, home) = (beads.clone(), store.clone(), layout.home.clone());
         async move { beads.setup_missing(store, home).await }
     });
+    // Off in builds without an update signing key (dev builds and tests).
+    tokio::spawn(update::Updater::for_home(&layout.home).run());
 
     let state = AppState {
         store,
