@@ -83,7 +83,7 @@ export function Transcript({ items, agent, actions = false, project, children, e
           );
         })}
         {children}
-        {!turns.length && !children && empty}
+        {!turns.length && !React.Children.toArray(children).length && empty}
         {unseen && (
           <button className="tx-jump" onClick={jump}>
             <Icon kind="arrow-down" /> New activity

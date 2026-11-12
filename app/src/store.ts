@@ -417,7 +417,11 @@ export function setAccounts(list: Account[]) {
 /** Loads a Project's Beads status; `beads.status` events keep it current. */
 export async function loadBeads(pid: string): Promise<"ok" | "unavailable"> {
   try {
-    setBeads(await api.beads(pid));
+    const before = state.beads[pid];
+    const b = await api.beads(pid);
+    // A `beads.status` event that arrived while this was in flight is newer than the answer:
+    // a project's Beads set up while the page loaded would otherwise stay "setting up".
+    if (state.beads[pid] === before) setBeads(b);
     return "ok";
   } catch (e) {
     if (e instanceof NotAvailable) return "unavailable";

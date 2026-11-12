@@ -39,7 +39,17 @@ test("creates a project and lands on its board", async ({ page }) => {
   await expect(page).toHaveURL(/#\/p\//);
   await expect(page.getByTestId("provision-bar")).toContainText("Cloning repositories");
   await expect(page.getByTestId("provision-bar")).toBeHidden();
-  await expect(page.getByTestId("coordinator-chat")).toContainText("Workspace ready with quark");
+  // A new project's empty conversation opens on the welcome, with what the coordinator has to work with.
+  const welcome = page.getByTestId("welcome");
+  await expect(welcome).toContainText("Welcome to Parser rewrite");
+  await expect(welcome.getByTestId("welcome-sources")).toContainText("quark");
+  await expect(welcome.getByTestId("welcome-sources")).toContainText("/Users/matt/work/parser");
+  await welcome.getByRole("button", { name: "Get your bearings" }).click();
+  const box = page.getByTestId("coordinator-chat").getByLabel("Message the coordinator");
+  await expect(box).toHaveValue(/Look over this project's repositories/);
+  await expect(box).toBeFocused();
+  await box.press("Enter");
+  await expect(welcome).toBeHidden();
   await expect(page.getByTestId("project-header")).toContainText("Parser rewrite");
   await page.getByTestId("nav-work").click();
   await expect(page.getByTestId("col-queued")).toBeVisible();

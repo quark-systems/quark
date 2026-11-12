@@ -1418,7 +1418,6 @@ function provision(proj) {
   setTimeout(() => {
     proj.status = "ready"; proj.status_detail = null; proj.updated_at = now();
     emit("project.updated", { ...proj }, proj.id);
-    chat(proj.id, "assistant", `Workspace ready${proj.repos.length ? ` with ${proj.repos.map((r) => r.name).join(", ")}` : ""}. What should we work on first?`);
   }, QUIET ? 200 : 1500);
 }
 
