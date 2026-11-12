@@ -8,6 +8,15 @@ page lists every merged pull request.
 
 ## Unreleased
 
+## 0.2.0-beta.2
+
+A beta to test updating from 0.2.0-beta.1: Quark on the beta channel offers it on its own.
+
+### Changed
+
+- quarkd's log records each update check (its result and any offer), each download, and
+  each install or rollback it starts.
+
 ## 0.2.0-beta.1
 
 The first build that updates itself. A pre-release: it reaches people on the beta channel,

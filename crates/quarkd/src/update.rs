@@ -461,6 +461,7 @@ impl Updater {
         let _ = std::fs::remove_file(&updater);
         std::fs::copy(std::env::current_exe()?, &updater).context("copying quark-updater")?;
         intent.save(&self.home)?;
+        tracing::info!(from = %intent.from, to = %intent.to, rollback = intent.rollback, "update install starting");
         let log = self.home.join("logs").join("updater.log");
         std::fs::create_dir_all(log.parent().unwrap())?;
         let log = std::fs::OpenOptions::new()
@@ -611,6 +612,13 @@ impl Updater {
         if offer.is_none() {
             i.bundle = None;
         }
+        tracing::info!(
+            state = ?state,
+            current = %self.current,
+            offer = offer.as_ref().map(|o| o.version.as_str()).unwrap_or("-"),
+            blocked = i.blocked.as_deref().unwrap_or("-"),
+            "update check"
+        );
         i.state = Some(state);
         i.offer = offer;
     }
@@ -623,6 +631,7 @@ impl Updater {
         self.set_state(State::Downloading);
         match download(&self.home, &offer, &pubkey).await {
             Ok(path) => {
+                tracing::info!(version = %offer.version, bundle = %path.display(), "update downloaded");
                 let mut i = self.inner.lock().unwrap();
                 i.state = Some(State::Ready);
                 i.error = None;
