@@ -16,6 +16,9 @@ page lists every merged pull request.
 
 ### Fixed
 
+- Setup's "Signed in to GitHub" check judges each `gh` account on its own: only the active
+  github.com account decides it, so a second account or a GitHub Enterprise host that is down
+  or timing out no longer reports "not signed in". Broken accounts are named in the detail.
 - After an update is undone because the new version didn't start, the updater's log names
   the version that is back in place, not the one that failed.
 - The health-check error now says the new quarkd didn't stay up when it answered and then

@@ -149,7 +149,7 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
         None => None,
     };
     let gh_auth = match &gh {
-        Some((path, _)) => Some(run(path, &["auth", "status"]).await),
+        Some((path, _)) => Some(gh_auth_probe(path).await),
         None => None,
     };
     let infos = harnesses.list(true).await;
@@ -202,38 +202,7 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
         None,
         Some(brew_fix("gh")),
     ));
-    checks.push(match gh_auth {
-        None => Check {
-            id: "gh_auth".into(),
-            title: "Signed in to GitHub".into(),
-            status: CheckStatus::Missing,
-            required: true,
-            detail: "needs the GitHub CLI first".into(),
-            why: "Quark reads and merges pull requests as you.".into(),
-            fix: None,
-        },
-        Some(r) => Check {
-            id: "gh_auth".into(),
-            title: "Signed in to GitHub".into(),
-            status: if r.ok {
-                CheckStatus::Ok
-            } else {
-                CheckStatus::Missing
-            },
-            required: true,
-            detail: if r.ok {
-                first_line_with(&r.output, "Logged in").unwrap_or_else(|| "signed in".into())
-            } else {
-                "not signed in".into()
-            },
-            why: "Quark reads and merges pull requests as you.".into(),
-            fix: (!r.ok).then(|| Fix {
-                label: "Sign in".into(),
-                command: "gh auth login".into(),
-                runnable: false,
-            }),
-        },
-    });
+    checks.push(gh_auth_check(gh_auth.as_ref()));
     checks.push(github_ssh_check(github_ssh.as_ref(), gh.is_some()));
     checks.push(coordinator_check(&infos, npm.is_some()));
     if treehouse_needed {
@@ -288,6 +257,195 @@ pub async fn check(home: &Path, harnesses: &HarnessRegistry) -> SetupReport {
     ));
     checks.extend(home_checks(home));
     SetupReport::new(checks)
+}
+
+/// The host Quark's PR center and clones talk to.
+const GITHUB_HOST: &str = "github.com";
+
+/// One account `gh auth status --json hosts` lists.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+struct GhAccount {
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    login: String,
+    #[serde(default)]
+    active: bool,
+    /// `success`, `error` or `timeout`.
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct GhStatus {
+    #[serde(default)]
+    hosts: std::collections::BTreeMap<String, Vec<GhAccount>>,
+}
+
+/// What `gh` says about signing in to github.com.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GhAuth {
+    /// Every account gh knows, on every host (`--json hosts`).
+    Accounts(Vec<GhAccount>),
+    /// An older gh: `gh auth status --hostname github.com`.
+    Plain(Ran),
+}
+
+/// Asks gh about each account. Plain `gh auth status` exits 1 when any
+/// account on any host has a problem (a GitHub Enterprise host that is down,
+/// a second, expired account), which said "not signed in" while the account
+/// gh uses for github.com worked. `--json` always exits 0 and reports each
+/// account. github.com is asked on its own so a host that hangs until the
+/// probe times out cannot hide it; the full listing only names other
+/// accounts.
+async fn gh_auth_probe(gh: &Path) -> GhAuth {
+    let (github, all) = tokio::join!(
+        run(
+            gh,
+            &[
+                "auth",
+                "status",
+                "--hostname",
+                GITHUB_HOST,
+                "--json",
+                "hosts"
+            ]
+        ),
+        run(gh, &["auth", "status", "--json", "hosts"]),
+    );
+    let Some(mut accounts) = parse_gh_status(&github.output) else {
+        return GhAuth::Plain(run(gh, &["auth", "status", "--hostname", GITHUB_HOST]).await);
+    };
+    accounts.extend(
+        parse_gh_status(&all.output)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.host != GITHUB_HOST),
+    );
+    GhAuth::Accounts(accounts)
+}
+
+/// Every account from `gh auth status --json hosts`, or `None` when the
+/// output is not that JSON (a gh without `--json`).
+fn parse_gh_status(out: &str) -> Option<Vec<GhAccount>> {
+    let json = &out[out.find('{')?..];
+    let mut stream = serde_json::Deserializer::from_str(json).into_iter::<GhStatus>();
+    let status = stream.next()?.ok()?;
+    Some(
+        status
+            .hosts
+            .into_iter()
+            .flat_map(|(host, accounts)| {
+                accounts.into_iter().map(move |mut a| {
+                    if a.host.is_empty() {
+                        a.host = host.clone();
+                    }
+                    a
+                })
+            })
+            .collect(),
+    )
+}
+
+fn gh_auth_check(probe: Option<&GhAuth>) -> Check {
+    let check = |status, detail: String, fix| Check {
+        id: "gh_auth".into(),
+        title: "Signed in to GitHub".into(),
+        status,
+        required: true,
+        detail,
+        why: "Quark reads and merges pull requests as you.".into(),
+        fix,
+    };
+    let login = || {
+        Some(Fix {
+            label: "Sign in".into(),
+            command: "gh auth login".into(),
+            runnable: false,
+        })
+    };
+    let accounts = match probe {
+        None => {
+            return check(
+                CheckStatus::Missing,
+                "needs the GitHub CLI first".into(),
+                None,
+            )
+        }
+        Some(GhAuth::Plain(r)) if r.ok => {
+            let detail =
+                first_line_with(&r.output, "Logged in").unwrap_or_else(|| "signed in".into());
+            return check(CheckStatus::Ok, detail, None);
+        }
+        Some(GhAuth::Plain(r)) => {
+            let why = r
+                .output
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with(GITHUB_HOST))
+                .map(|l| {
+                    l.trim_start_matches(|c: char| !c.is_alphanumeric())
+                        .to_string()
+                });
+            let detail = why.map_or("not signed in".into(), |w| format!("not signed in: {w}"));
+            return check(CheckStatus::Missing, detail, login());
+        }
+        Some(GhAuth::Accounts(a)) => a,
+    };
+    // Each account on its own: only github.com's active account (the one gh
+    // uses) decides the check; a broken account elsewhere is only named.
+    let works = |a: &GhAccount| a.state == "success";
+    let why = |a: &GhAccount| {
+        let e = a.error.as_deref().map(str::trim).filter(|e| !e.is_empty());
+        e.map_or_else(|| a.state.clone(), str::to_string)
+    };
+    let github: Vec<&GhAccount> = accounts.iter().filter(|a| a.host == GITHUB_HOST).collect();
+    let broken: Vec<String> = accounts
+        .iter()
+        .filter(|a| !works(a) && !(a.host == GITHUB_HOST && a.active))
+        .map(|a| format!("{} on {} ({})", a.login, a.host, a.state))
+        .collect();
+    let also = if broken.is_empty() {
+        String::new()
+    } else {
+        format!("; not working, not used: {}", broken.join(", "))
+    };
+    match github.iter().find(|a| a.active) {
+        Some(a) if works(a) => check(
+            CheckStatus::Ok,
+            format!("{GITHUB_HOST} as {}{also}", a.login),
+            None,
+        ),
+        Some(a) => {
+            let detail = format!(
+                "{GITHUB_HOST} account {} does not work: {}",
+                a.login,
+                why(a)
+            );
+            match github.iter().find(|o| !o.active && works(o)) {
+                Some(o) => check(
+                    CheckStatus::Missing,
+                    format!("{detail}; {} works", o.login),
+                    Some(Fix {
+                        label: "Switch account".into(),
+                        command: format!(
+                            "gh auth switch --hostname {GITHUB_HOST} --user {}",
+                            o.login
+                        ),
+                        runnable: false,
+                    }),
+                ),
+                None => check(CheckStatus::Missing, detail, login()),
+            }
+        }
+        None => check(
+            CheckStatus::Missing,
+            format!("not signed in to {GITHUB_HOST}{also}"),
+            login(),
+        ),
+    }
 }
 
 /// Cloning a GitHub repo: Quark clones over SSH (`git@github.com:…`), and
@@ -611,6 +769,7 @@ fn first_line_with(text: &str, needle: &str) -> Option<String> {
         })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Ran {
     ok: bool,
     output: String,
@@ -774,6 +933,84 @@ mod tests {
             ok: false,
             output: output.into(),
         }
+    }
+
+    fn acct(host: &str, login: &str, active: bool, state: &str) -> GhAccount {
+        GhAccount {
+            host: host.into(),
+            login: login.into(),
+            active,
+            state: state.into(),
+            error: (state != "success").then(|| format!("{state} on {host}")),
+        }
+    }
+
+    #[test]
+    fn gh_auth_parses_json_status() {
+        let out = r#"{"hosts":{"github.ibm.com":[{"state":"timeout","error":"timed out","active":true,"host":"github.ibm.com","login":"matt"}],"github.com":[{"state":"success","active":true,"host":"github.com","login":"matt"}]}}"#;
+        let a = parse_gh_status(out).unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(a
+            .iter()
+            .any(|a| a.host == "github.ibm.com" && a.state == "timeout"));
+        assert!(parse_gh_status("unknown flag: --json").is_none());
+    }
+
+    #[test]
+    fn gh_auth_judges_github_com_active_account_only() {
+        // Another host timing out does not fail the check.
+        let c = gh_auth_check(Some(&GhAuth::Accounts(vec![
+            acct("github.ibm.com", "matt", true, "timeout"),
+            acct("github.com", "matt", true, "success"),
+        ])));
+        assert_eq!(c.status, CheckStatus::Ok);
+        assert!(c.detail.starts_with("github.com as matt"), "{}", c.detail);
+        assert!(
+            c.detail.contains("matt on github.ibm.com (timeout)"),
+            "{}",
+            c.detail
+        );
+
+        // Nor does a second, broken github.com account that is not active.
+        let c = gh_auth_check(Some(&GhAuth::Accounts(vec![
+            acct("github.com", "work", false, "error"),
+            acct("github.com", "matt", true, "success"),
+        ])));
+        assert_eq!(c.status, CheckStatus::Ok);
+
+        // A broken active account with a working one points at gh auth switch.
+        let c = gh_auth_check(Some(&GhAuth::Accounts(vec![
+            acct("github.com", "work", true, "error"),
+            acct("github.com", "matt", false, "success"),
+        ])));
+        assert_eq!(c.status, CheckStatus::Missing);
+        assert_eq!(
+            c.fix.unwrap().command,
+            "gh auth switch --hostname github.com --user matt"
+        );
+
+        // Only another host: not signed in to github.com.
+        let c = gh_auth_check(Some(&GhAuth::Accounts(vec![acct(
+            "github.ibm.com",
+            "matt",
+            true,
+            "success",
+        )])));
+        assert_eq!(c.status, CheckStatus::Missing);
+        assert_eq!(c.fix.unwrap().command, "gh auth login");
+    }
+
+    #[test]
+    fn gh_auth_falls_back_to_exit_code() {
+        let ok = Ran {
+            ok: true,
+            output: "github.com\n  ✓ Logged in to github.com as matt (keyring)\n".into(),
+        };
+        let c = gh_auth_check(Some(&GhAuth::Plain(ok)));
+        assert_eq!(c.status, CheckStatus::Ok);
+        assert_eq!(c.detail, "Logged in to github.com as matt (keyring)");
+        let c = gh_auth_check(None);
+        assert_eq!(c.status, CheckStatus::Missing);
     }
 
     #[test]
