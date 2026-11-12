@@ -23,6 +23,7 @@ import { Automation } from "./screens/dashboard/Automation";
 import { Overview } from "./screens/dashboard/Overview";
 import { Catalogue } from "./screens/Catalogue";
 import { Setup } from "./screens/Setup";
+import { Updates } from "./screens/Updates";
 import { ProjectFrame } from "./shell/ProjectHeader";
 
 type Screens = { [N in Route["name"]]: (r: Extract<Route, { name: N }>) => React.ReactNode };
@@ -51,6 +52,7 @@ export const SCREENS: Screens = {
   accounts: () => <Accounts />,
   hosts: () => <Hosts />,
   setup: () => <Setup />,
+  updates: (r) => <Updates key={r.action ?? ""} check={r.action === "check"} />,
   catalogue: () => <Catalogue />,
 };
 

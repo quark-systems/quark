@@ -21,6 +21,15 @@ final class Store: ObservableObject {
     @Published private(set) var harnessNames: [String: String] = [:]
     @Published private(set) var refreshingQuota = false
     @Published private(set) var now = Date()
+    /// quarkd's updater; nil when this quarkd has none.
+    @Published private(set) var update: UpdateStatus?
+    /// An update action under way: "check", "install" or "rollback".
+    @Published private(set) var updating: String?
+    @Published private(set) var updateError: String?
+
+    /// Called once per version when an update is downloaded and ready.
+    var onUpdateReady: ((UpdateStatus.Offer) -> Void)?
+    private var announced: String?
 
     /// Called with each update the away policy decided to tell you about.
     var onNotice: ((Notice) -> Void)?
@@ -64,7 +73,9 @@ final class Store: ObservableObject {
     func load() async {
         now = Date()
         do {
-            connection = .connected(try await client.health())
+            let health = try await client.health()
+            connection = .connected(health)
+            if health.has("update") { setUpdate(try? await client.update()) }
         } catch {
             connection = .unreachable(error.localizedDescription)
             return
@@ -111,6 +122,35 @@ final class Store: ObservableObject {
             if let a = try? await client.accounts(refresh: true) { accounts = a }
             refreshingQuota = false
             now = Date()
+        }
+    }
+
+    private func setUpdate(_ u: UpdateStatus?) {
+        guard let u else { return }
+        update = u
+        if u.state == .ready, let offer = u.offer, announced != offer.version {
+            announced = offer.version
+            onUpdateReady?(offer)
+        }
+    }
+
+    /// Check for Updates…, Install and restart, Roll back: asks quarkd, which
+    /// does the work (crates/quarkd/src/update.rs).
+    func updateAction(_ name: String) {
+        guard updating == nil else { return }
+        updating = name
+        updateError = nil
+        Task {
+            do {
+                switch name {
+                case "install": setUpdate(try await client.installUpdate())
+                case "rollback": setUpdate(try await client.rollBackUpdate())
+                default: setUpdate(try await client.checkUpdate())
+                }
+            } catch {
+                updateError = error.localizedDescription
+            }
+            updating = nil
         }
     }
 

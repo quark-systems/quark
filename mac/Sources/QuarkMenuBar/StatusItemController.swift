@@ -172,6 +172,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let open = action(NSAttributedString(string: "Open Quark"), key: "o") { Opener.open(.home) }
         open.isEnabled = Opener.desktopAvailable
         menu.addItem(open)
+        addUpdates()
         let refresh = action(NSAttributedString(string: store.refreshingQuota ? "Reading quota…" : "Refresh"), key: "r") { [store] in
             store.loadSoon()
             store.refreshQuota()
@@ -188,6 +189,38 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(login)
         menu.addItem(.separator())
         menu.addItem(action(NSAttributedString(string: "Quit QuarkBar"), key: "q") { NSApp.terminate(nil) })
+    }
+
+    /// Check for Updates…, and Install and restart or Roll back when quarkd
+    /// offers them. Only when quarkd has an updater.
+    private func addUpdates() {
+        guard store.isConnected, let u = store.update else { return }
+        if let line = store.updateError ?? u.menuLine {
+            let info = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+            info.isEnabled = false
+            menu.addItem(info)
+        }
+        if u.state == .ready {
+            let install = action(NSAttributedString(string: store.updating == "install" ? "Installing…" : "Install and Restart")) { [store] in
+                store.updateAction("install")
+            }
+            install.isEnabled = store.updating == nil
+            menu.addItem(install)
+        }
+        let checking = store.updating == "check" || u.state == .checking
+        let check = action(NSAttributedString(string: checking ? "Checking for Updates…" : "Check for Updates…")) { [store] in
+            store.updateAction("check")
+        }
+        check.isEnabled = store.updating == nil && ![.disabled, .installing].contains(u.state)
+        if u.state == .disabled { check.toolTip = u.disabledReason }
+        menu.addItem(check)
+        if u.canRollBack == true, let from = u.lastInstall?.from {
+            let back = action(NSAttributedString(string: "Roll Back to Quark \(from)")) { [store] in
+                store.updateAction("rollback")
+            }
+            back.isEnabled = store.updating == nil && u.state != .installing
+            menu.addItem(back)
+        }
     }
 
     private func daemonItem() -> NSMenuItem {

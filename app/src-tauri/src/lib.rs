@@ -125,6 +125,27 @@ fn serve_links(
     Ok(())
 }
 
+/// The menu item that opens Updates and checks: `#/updates/check`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const CHECK_UPDATES: &str = "check-for-updates";
+
+/// The standard macOS menu with Check for Updates… after About Quark. quarkd does the
+/// checking (crates/quarkd/src/update.rs); the Updates screen shows what it found. Built
+/// on every platform so CI checks it, but only macOS gets it: elsewhere it would add a
+/// menu bar to the window.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem};
+    let menu = Menu::default(app)?;
+    let first = menu.items()?.into_iter().next();
+    if let Some(app_menu) = first.as_ref().and_then(|m| m.as_submenu()) {
+        let check =
+            MenuItem::with_id(app, CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
+        app_menu.insert(&check, 1)?;
+    }
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -134,6 +155,15 @@ pub fn run() {
         .setup(|app| {
             use tauri_plugin_deep_link::DeepLinkExt;
             release::start_quarkbar(app.handle());
+            #[cfg(target_os = "macos")]
+            {
+                app.set_menu(app_menu(app.handle())?)?;
+                app.on_menu_event(|app, event| {
+                    if event.id() == CHECK_UPDATES {
+                        open_link(app, "quark://open/updates/check");
+                    }
+                });
+            }
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {

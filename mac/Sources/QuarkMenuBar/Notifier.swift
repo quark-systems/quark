@@ -18,6 +18,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         store.onNotice = { [weak self] in self?.post($0) }
+        store.onUpdateReady = { [weak self] in self?.postUpdate($0) }
+    }
+
+    /// An update is downloaded; clicking opens Updates in the app.
+    func postUpdate(_ offer: UpdateStatus.Offer) {
+        guard available else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Quark \(offer.version) is ready"
+        content.body = offer.replacesPulled == true
+            ? "This version replaces one that was withdrawn. Install it from the QuarkBar menu."
+            : "Install and restart from the QuarkBar menu. Running workers carry on."
+        content.userInfo = ["link": DeskLink.checkForUpdates.url.absoluteString]
+        let request = UNNotificationRequest(identifier: "update-\(offer.version)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     func post(_ notice: Notice) {

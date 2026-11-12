@@ -137,3 +137,15 @@ button.since-item { width: 100%; font: inherit; text-align: left; cursor: pointe
 .wh-text h1 { margin: 0; font-size: 15px; }
 .wh-sub { font-size: 12px; color: var(--fg-faint); }
 .wh-sub a { color: inherit; }
+
+/* Quark updates: the banner above every screen (App.tsx UpdateBar). */
+.update-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-bottom: 1px solid var(--line);
+  background: var(--surface-2); font-size: 12.5px;
+}
+.update-banner.tone-failed { color: var(--tone-failed); }
+.updates { max-width: 680px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+.updates section { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding-top: 8px; }
+.updates h2 { font-size: 13px; margin: 0; }
+.updates label { display: flex; gap: 6px; align-items: center; }

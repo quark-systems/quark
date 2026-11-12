@@ -9,9 +9,11 @@ import { leftListGroups, ProjectGroup } from "./groups";
 import { NextAttention } from "./NextAttention";
 import "./shell.css";
 import { BeadText } from "../ui/BeadText";
+import { useUpdateStatus } from "../appUpdate";
 
 export function LeftList({ mod }: { mod: string }) {
   const route = useRoute();
+  const update = useUpdateStatus();
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
@@ -46,6 +48,9 @@ export function LeftList({ mod }: { mod: string }) {
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" /></svg>} />
         <Row href={href({ name: "hosts" })} current={route.name === "hosts"} testid="nav-hosts" title="Hosts"
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /></svg>} />
+        <Row href={href({ name: "updates" })} current={route.name === "updates"} testid="nav-updates" title="Updates"
+          trail={update?.state === "ready" ? <span className="ll-trail" data-testid="ll-update-ready">{update.offer?.version}</span> : undefined}
+          lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" /></svg>} />
         <Row href={href({ name: "setup" })} current={route.name === "setup"} testid="nav-setup" title="Setup"
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 12l2 2 4-4" /><circle cx="12" cy="12" r="9" /></svg>} />
       </div>

@@ -25,6 +25,7 @@ export const ROUTES = {
   pr: "pr/:id", // one pull request: checks, reviews, diff
   accounts: "accounts", // harness accounts, pools and quota
   hosts: "hosts", // every host: health, telemetry, what runs there, worktree pools
+  updates: "updates/:action?", // Quark updates: what's available, install, roll back, settings; `check` checks on open
   setup: "setup", // what this machine still needs before Quark can run a project, with fixes
   catalogue: "catalogue", // the component catalogue: every shared UI part with when to use it
 } as const;
