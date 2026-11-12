@@ -207,6 +207,8 @@ fn prompt(format: SessionFormat, v: &Value) -> Option<(Option<String>, Option<St
             str_at(v, "type") == Some("user")
                 && v.get("isMeta").and_then(Value::as_bool) != Some(true)
                 && v.get("isCompactSummary").and_then(Value::as_bool) != Some(true)
+                // Written to the log without running a turn.
+                && v.get("queueTranscriptOnly").and_then(Value::as_bool) != Some(true)
                 && match v.pointer("/message/content") {
                     Some(Value::String(_)) => true,
                     Some(Value::Array(parts)) => !parts
