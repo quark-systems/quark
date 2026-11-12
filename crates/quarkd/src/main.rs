@@ -359,7 +359,7 @@ async fn main() -> anyhow::Result<()> {
             let host = quarkd::update_install::Mac;
             let done =
                 quarkd::update_install::run(&home, &host, quarkd::update_install::HEALTH_GATE)?;
-            println!("{:?}: Quark {}", done.phase, done.to);
+            println!("{:?}: Quark {}", done.phase, done.installed());
             Ok(())
         }
         Command::Compat { json } => {

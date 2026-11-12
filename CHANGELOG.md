@@ -8,6 +8,13 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Fixed
+
+- After an update is undone because the new version didn't start, the updater's log names
+  the version that is back in place, not the one that failed.
+- The health-check error now says the new quarkd didn't stay up when it answered and then
+  died, instead of saying it never answered.
+
 ## 0.2.0-beta.2
 
 A beta to test updating from 0.2.0-beta.1: Quark on the beta channel offers it on its own.
