@@ -46,6 +46,8 @@ tracing-subscriber.workspace = true
 utoipa.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 tracing-appender.workspace = true
+minisign-verify = "0.2"
+semver = "1"
 
 [dev-dependencies]
 time = { workspace = true, features = ["macros"] }
@@ -54,3 +56,4 @@ tokio-tungstenite.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
 quark-transcript.workspace = true
 toml = "0.9"
+minisign = "0.10.0"

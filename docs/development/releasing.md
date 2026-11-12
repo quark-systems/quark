@@ -60,6 +60,16 @@ feed workflow by hand. Quark 0.1.0's desktop app still checks
 `releases/latest/download/latest.json` itself, so keep attaching `latest.json` to each
 release.
 
+quarkd reads the feed (`crates/quarkd/src/update.rs`): 60 seconds after it starts, then
+every six hours, and on `POST /v1/update/check` (Check for Updates…). It offers a
+release newer than itself, or any release when it is running a pulled one, and explains
+instead when `min_from` is above it. It downloads the platform's bundle into
+`~/.quark/updates/<version>/` and verifies it against the built-in public key (the
+release build passes `TAURI_UPDATER_PUBKEY` to `cargo build`); `GET /v1/update` reports
+the result. Settings (channel, checking, automatic download, install when idle) are in
+`~/.quark/update.json`, set with `PUT /v1/update/settings`. To try a feed of your own,
+point `QUARK_UPDATE_FEED` at it (`{channel}` is replaced, `file://` works).
+
 ## Compatibility
 
 The desktop app, QuarkBar and quarkd ship together, but can still run different builds:
