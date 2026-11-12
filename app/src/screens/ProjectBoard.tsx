@@ -15,6 +15,7 @@ import { useDraft } from "../drafts";
 import { readAttached, useAttachments, withAttachments } from "../attachments";
 import { CommandButton, StopButton, usePendingCommands, useRunCommand, useStoppedThrough } from "../components/CoordinatorCommand";
 import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
+import { Welcome } from "../components/Welcome";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
 
@@ -79,7 +80,7 @@ export function Conversation({ id }: { id: string }) {
     <>
       {project.status && project.status !== "ready" && <ProvisionBar project={project} />}
       <div className="conversation">
-        <CoordinatorChat cid={id} />
+        <CoordinatorChat cid={id} welcome />
         <SinceYouLooked project={id} />
       </div>
     </>
@@ -162,7 +163,10 @@ function ProvisionBar({ project }: { project: Project }) {
 
 const EMPTY: TranscriptItem[] = [];
 
-export function CoordinatorChat({ cid }: { cid: string }) {
+/** `welcome`: show the welcome while the conversation is empty (the Conversation tab; not the Issues side chat). */
+export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome?: boolean }) {
+  const project = useStore((s) => s.projects[cid]);
+  const box = useRef<HTMLElement>(null);
   const loaded = useStore((s) => s.chat[cid]);
   const items = loaded ?? EMPTY;
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
@@ -228,14 +232,16 @@ export function CoordinatorChat({ cid }: { cid: string }) {
   };
 
   return (
-    <aside className="side-chat" data-testid="coordinator-chat">
+    <aside className="side-chat" data-testid="coordinator-chat" ref={box}>
       <div className="panel-head">{l.Role("coordinator")}<CoordinatorContext cid={cid} changed={items.length} /><span className="spacer" /><StopButton cid={cid} /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} /></div>
       {status === "unavailable" ? (
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
           <Transcript key={cid} items={items} agent="coordinator" actions project={cid} className="chat-log" commandLabel={label} stoppedThrough={stoppedThrough}
-            empty={status === "ok" ? <div className="empty">Ask the {coordinator} to plan or delegate work.</div>
+            empty={status === "ok" ? (welcome && project
+              ? <Welcome project={project} onSuggest={(t) => { setText(t); box.current?.querySelector("textarea")?.focus(); }} />
+              : <div className="empty">Ask the {coordinator} to plan or delegate work.</div>)
               : status === "loading" ? <div className="empty">Loading…</div> : null}>
             {pending.map((p) => (
               <UserMessage key={p.key} pending item={{ text: p.text, ts: null, truncated: false }}
