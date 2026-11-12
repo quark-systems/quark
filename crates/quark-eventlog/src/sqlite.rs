@@ -35,6 +35,11 @@ use uuid::Uuid;
 
 /// The event log schema this build writes (SQLite `user_version`).
 pub const SCHEMA_VERSION: i64 = 1;
+/// The oldest schema a reader must know to use a log at [`SCHEMA_VERSION`].
+/// Leave it when a schema change only adds what older code ignores; raise it to
+/// the new version otherwise. Stored in the `schema_compat` table, so an older
+/// quarkd (after an update rolled back) can tell whether a newer log is safe.
+pub const MIN_READER: i64 = 1;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS events (
@@ -112,14 +117,26 @@ impl SqliteEventLog {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(backend)?;
         if version > SCHEMA_VERSION {
-            return Err(CoreError::Unsupported(format!(
-                "{} has event log schema {version}; this build knows {SCHEMA_VERSION}",
-                path.display()
-            )));
-        }
-        conn.execute_batch(SCHEMA).map_err(backend)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            let min_reader: Option<i64> = conn
+                .query_row("SELECT min_reader FROM schema_compat", [], |r| r.get(0))
+                .ok();
+            if !min_reader.is_some_and(|m| m <= SCHEMA_VERSION) {
+                return Err(CoreError::Unsupported(format!(
+                    "{} has event log schema {version}; this build knows {SCHEMA_VERSION}",
+                    path.display()
+                )));
+            }
+        } else {
+            conn.execute_batch(SCHEMA).map_err(backend)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(backend)?;
+            conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS schema_compat (min_reader INTEGER NOT NULL);
+                 DELETE FROM schema_compat;
+                 INSERT INTO schema_compat (min_reader) VALUES ({MIN_READER});"
+            ))
             .map_err(backend)?;
+        }
         Ok(Self {
             shared: Arc::new(Shared {
                 conn: Mutex::new(conn),
@@ -689,6 +706,35 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.pragma_update(None, "user_version", 99).unwrap();
         }
+        assert!(matches!(
+            SqliteEventLog::open(&path),
+            Err(CoreError::Unsupported(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn opens_a_newer_log_whose_changes_are_additive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.db");
+        drop(SqliteEventLog::open(&path).unwrap());
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+                .unwrap();
+        }
+        let log = SqliteEventLog::open(&path).unwrap();
+        drop(log);
+        let conn = Connection::open(&path).unwrap();
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION + 1, "not migrated down");
+        conn.execute(
+            "UPDATE schema_compat SET min_reader = ?1",
+            [SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+        drop(conn);
         assert!(matches!(
             SqliteEventLog::open(&path),
             Err(CoreError::Unsupported(_))

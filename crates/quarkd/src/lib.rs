@@ -6,6 +6,7 @@
 
 pub mod accounts;
 pub mod api;
+pub mod backup;
 pub mod beads;
 pub mod chat;
 pub mod classifier;

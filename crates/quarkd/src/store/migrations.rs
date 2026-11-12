@@ -5,6 +5,17 @@
 //! adding a file and one line at the end of the list. If another branch took
 //! the same number first, renumber yours at rebase: rename the file and its
 //! line. Never edit a migration that has shipped.
+//!
+//! # Older quarkds on a newer database
+//!
+//! After an update rolls back, an older quarkd can meet a database a newer one
+//! migrated. A migration marked `additive` only adds what older code ignores
+//! (a table, a column with a default, an index), so an older quarkd may keep
+//! using a database that has it. [`MIN_READER`] is the schema version of the
+//! last migration that isn't additive, and is stored in the `schema_compat`
+//! table: a quarkd whose [`SCHEMA_VERSION`] is at least that opens the newer
+//! database as it is, without migrating it down. Anything else that renames,
+//! drops or changes the meaning of data is not additive.
 
 use rusqlite::Connection;
 
@@ -13,6 +24,8 @@ use super::{Result, StoreError};
 pub(super) struct Migration {
     pub name: &'static str,
     pub sql: &'static str,
+    /// Older code keeps working with it applied (see the module docs).
+    pub additive: bool,
 }
 
 macro_rules! migration {
@@ -20,6 +33,14 @@ macro_rules! migration {
         Migration {
             name: $name,
             sql: include_str!(concat!("migrations/", $name, ".sql")),
+            additive: false,
+        }
+    };
+    ($name:literal, additive) => {
+        Migration {
+            name: $name,
+            sql: include_str!(concat!("migrations/", $name, ".sql")),
+            additive: true,
         }
     };
 }
@@ -56,13 +77,50 @@ pub(super) const MIGRATIONS: &[Migration] = &[
 /// The schema version a fully migrated database has.
 pub(super) const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
+/// The oldest schema a quarkd must know to use a database at
+/// [`SCHEMA_VERSION`]: the version after the last migration that isn't
+/// additive. Migrations up to 0026 shipped before this existed and count as
+/// not additive.
+pub(super) const MIN_READER: i64 = {
+    let mut v = MIGRATIONS.len();
+    while v > 0 && MIGRATIONS[v - 1].additive {
+        v -= 1;
+    }
+    v as i64
+};
+
+/// The `min_reader` a newer quarkd recorded, if any.
+fn recorded_min_reader(conn: &Connection) -> Result<Option<i64>> {
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_compat')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_table {
+        return Ok(None);
+    }
+    Ok(conn
+        .query_row("SELECT min_reader FROM schema_compat", [], |r| r.get(0))
+        .ok())
+}
+
 /// Bring `conn` up to [`SCHEMA_VERSION`], one transaction per migration.
 pub(super) fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version > SCHEMA_VERSION {
-        return Err(StoreError::Invalid(format!(
-            "database schema {version} is newer than this quarkd ({SCHEMA_VERSION})"
-        )));
+        return match recorded_min_reader(conn)? {
+            Some(min) if min <= SCHEMA_VERSION => {
+                tracing::info!(
+                    schema = version,
+                    ours = SCHEMA_VERSION,
+                    "database is from a newer quarkd, with only additive changes since ours; using it as it is"
+                );
+                Ok(())
+            }
+            _ => Err(StoreError::Invalid(format!(
+                "database schema {version} is newer than this quarkd ({SCHEMA_VERSION})"
+            ))),
+        };
     }
     for (i, m) in MIGRATIONS.iter().enumerate().skip(version as usize) {
         let tx = conn.transaction()?;
@@ -71,12 +129,55 @@ pub(super) fn migrate(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
         tracing::info!(migration = m.name, "applied schema migration");
     }
+    // Said again on every open, so it stays right after this quarkd migrates.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS schema_compat (min_reader INTEGER NOT NULL);
+         DELETE FROM schema_compat;
+         INSERT INTO schema_compat (min_reader) VALUES ({MIN_READER});"
+    ))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn min_reader_follows_the_last_non_additive_migration() {
+        const {
+            assert!(MIN_READER <= SCHEMA_VERSION);
+            // Migrations through 0026 shipped before `additive` existed.
+            assert!(MIN_READER >= 26);
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        assert_eq!(recorded_min_reader(&conn).unwrap(), Some(MIN_READER));
+    }
+
+    #[test]
+    fn opens_a_newer_database_only_when_its_changes_are_additive() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        // A newer quarkd added an additive migration.
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        conn.execute("CREATE TABLE later (x INTEGER)", []).unwrap();
+        migrate(&mut conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION + 1, "not migrated down");
+        // One whose newer migration wasn't additive.
+        conn.execute(
+            "UPDATE schema_compat SET min_reader = ?1",
+            [SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+        assert!(migrate(&mut conn).is_err());
+        // One from before schema_compat.
+        conn.execute("DROP TABLE schema_compat", []).unwrap();
+        assert!(migrate(&mut conn).is_err());
+    }
 
     #[test]
     fn file_numbers_match_positions() {

@@ -21,6 +21,16 @@ enum Command {
     Serve(ServeArgs),
     /// Print the OpenAPI document for the /v1 API.
     Openapi,
+    /// Copy the home's databases to <home>/backups/pre-<label> (the updater
+    /// does this before an update migrates them). Keeps the newest two.
+    Backup {
+        /// Quark home directory [default: $QUARK_HOME or ~/.quark]
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Name for the backup, such as the version about to be installed.
+        #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+        label: String,
+    },
     /// Print what this build is compatible with: its API contract and the
     /// home and database formats it writes. The release workflow puts it in
     /// the update feed.
@@ -330,6 +340,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Import { source } => import(source).await,
         Command::Openapi => {
             print!("{}", quarkd::api::ApiDoc::json());
+            Ok(())
+        }
+        Command::Backup { home, label } => {
+            let home = home.unwrap_or_else(config::default_home);
+            println!("{}", quarkd::backup::snapshot(&home, &label)?.display());
             Ok(())
         }
         Command::Compat { json } => {
