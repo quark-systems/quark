@@ -254,7 +254,9 @@ jobs:
           files: dist/*
 
   feed:
-    # Rebuilds the update feed for the release just published.
+    # Rebuilds the update feed for the release just published. An explicit `if`: the default
+    # success() also needs every earlier job to have run, and the Windows one is usually skipped.
+    if: always() && needs.publish.result == 'success'
     needs: publish
     permissions:
       contents: write
