@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "quark-coordinator"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "quark-core"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-systems",
@@ -1032,7 +1032,7 @@ dependencies = [
 
 [[package]]
 name = "quark-dispatch"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "quark-eventlog"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1069,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "quark-harness"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "quark-hosts"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "quark-isolation"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "quark-persona"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "quark-runtime"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "quark-sessions"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "quark-subcoordinator"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1168,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "quark-supervisor"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "quark-systems"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "quark-transcript"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "quark-systems",
  "serde",
@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "quark-triggers"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "quark-core",
@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "quark-verify"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "libc",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "quark-worker"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "quark-worktree"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "async-trait",
  "getrandom 0.3.4",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "quarkd"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "anyhow",
  "async-trait",
