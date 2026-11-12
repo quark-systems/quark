@@ -111,6 +111,16 @@ impl Intent {
         Ok(())
     }
 
+    /// The version in place when this phase is reached: what an undone install
+    /// went back to, otherwise where it was headed.
+    pub fn installed(&self) -> &str {
+        if self.phase == Phase::RolledBack && !self.rollback {
+            &self.from
+        } else {
+            &self.to
+        }
+    }
+
     /// Whether an updater is (or should be) working on it.
     pub fn in_progress(&self) -> bool {
         matches!(self.phase, Phase::Pending | Phase::Staged | Phase::Swapped)
@@ -180,8 +190,8 @@ pub fn run(home: &Path, host: &dyn Host, gate: Duration) -> anyhow::Result<Inten
 }
 
 fn step(home: &Path, intent: &mut Intent, phase: Phase) -> anyhow::Result<()> {
-    tracing::info!(?phase, to = %intent.to, "update");
     intent.phase = phase;
+    tracing::info!(?phase, version = %intent.installed(), "update");
     intent.save(home)
 }
 
@@ -315,10 +325,12 @@ fn unpack(bundle: &Path, into: &Path) -> anyhow::Result<PathBuf> {
 fn wait_healthy(host: &dyn Host, url: &str, version: &str, gate: Duration) -> Result<(), String> {
     let start = Instant::now();
     let mut seen = 0;
+    let mut answered = false;
     let mut last: Option<String>;
     loop {
         match host.health_version(url) {
             Some(v) if v == version => {
+                answered = true;
                 seen += 1;
                 if seen >= HEALTH_CHECKS {
                     return Ok(());
@@ -334,6 +346,10 @@ fn wait_healthy(host: &dyn Host, url: &str, version: &str, gate: Duration) -> Re
         if start.elapsed() >= gate {
             return Err(match last {
                 Some(v) => format!("quarkd {v} answered instead of {version}"),
+                None if answered => format!(
+                    "quarkd {version} didn't stay up for {HEALTH_CHECKS} checks in a row within {}s",
+                    gate.as_secs()
+                ),
                 None => format!("quarkd didn't answer within {}s", gate.as_secs()),
             });
         }
@@ -577,7 +593,13 @@ mod tests {
         host.broken = Some("0.2.0".into());
         let out = run(&s.home, &host, Duration::ZERO).unwrap();
         assert_eq!(out.phase, Phase::RolledBack);
-        assert!(out.error.unwrap().contains("Quark 0.2.0 didn't start"));
+        assert!(out
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("Quark 0.2.0 didn't start"));
+        // The log and the updater's last line name what's installed now.
+        assert_eq!(out.installed(), "0.1.0");
         assert_eq!(version(&s.app), "0.1.0");
         assert_eq!(
             *host.log.borrow(),
@@ -606,6 +628,20 @@ mod tests {
             .borrow_mut()
             .extend([Some("0.2.0".into()), None]);
         assert!(wait_healthy(&host, "u", "0.2.0", Duration::from_secs(60)).is_ok());
+    }
+
+    #[test]
+    fn a_quarkd_that_keeps_dying_fails_the_gate_as_such() {
+        let s = setup(false);
+        let host = Fake::new(&s.app);
+        host.answers
+            .borrow_mut()
+            .extend([Some("0.2.0".into()), None]);
+        let r = wait_healthy(&host, "u", "0.2.0", Duration::ZERO);
+        assert_eq!(
+            r,
+            Err("quarkd 0.2.0 didn't stay up for 2 checks in a row within 0s".into())
+        );
     }
 
     #[test]
