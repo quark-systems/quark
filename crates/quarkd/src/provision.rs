@@ -325,7 +325,7 @@ impl Provisioner {
             store.record_adapter_call(Some(&id), operation, d.is_none(), elapsed, d.as_deref())
         })
         .await;
-        res.map_err(|e| format!("{label}: {e}"))
+        res.map_err(|e| with_hint(format!("{label}: {e}")))
     }
 
     async fn status(
@@ -384,8 +384,32 @@ fn sources(repos: &[RepoSource]) -> Result<Vec<SourceRepo>, String> {
         .collect()
 }
 
+/// A failure people can fix themselves gets a pointer to where: ssh failing
+/// on a host key or a missing key is the Setup screen's SSH to GitHub check.
+fn with_hint(detail: String) -> String {
+    let ssh = [
+        "Host key verification failed",
+        "Permission denied (publickey)",
+    ];
+    if ssh.iter().any(|s| detail.contains(s)) {
+        format!("{detail} (Setup's \"SSH to GitHub\" check can fix this)")
+    } else {
+        detail
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ssh_failures_point_at_setup() {
+        let hk = with_hint(
+            "Cloning q: engine command failed: git clone: Host key verification failed.".into(),
+        );
+        assert!(hk.ends_with("(Setup's \"SSH to GitHub\" check can fix this)"));
+        let other = "Cloning r: engine command failed: could not resolve host";
+        assert_eq!(with_hint(other.into()), other);
+    }
     use super::*;
     use quark_systems::AgentConfig;
 

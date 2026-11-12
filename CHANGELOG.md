@@ -8,6 +8,13 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Fixed
+
+- Creating a project on a Mac that never connected to GitHub over SSH failed with "Host key
+  verification failed". Setup has a new **SSH to GitHub** check: it adds GitHub's published host
+  keys to `~/.ssh/known_hosts` with one button, or says when GitHub doesn't know this Mac's SSH
+  key. A clone that fails this way points at the check.
+
 ### Changed
 
 - Quark reads Claude Code and Codex quota itself; `quota-axi` is no longer needed and Setup no
