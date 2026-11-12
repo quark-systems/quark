@@ -10,7 +10,10 @@
 //!   after each step, so an interrupted upgrade carries on from where it
 //!   stopped on the next start;
 //! - a home a newer quarkd wrote is refused, so an older quarkd never reads
-//!   (or writes) a layout it does not know.
+//!   (or writes) a layout it does not know, unless the newer quarkd says
+//!   (`min_reader`) that every step since this one's format only added things
+//!   older code ignores. Then the older quarkd (after an update rolled back)
+//!   uses the home as it is and leaves the file alone.
 //!
 //! The databases keep their own schema versions (SQLite `user_version`)
 //! and migrate themselves when opened; this version covers the files around
@@ -41,6 +44,11 @@ use serde::{Deserialize, Serialize};
 pub const FILE: &str = "format.json";
 /// The format this quarkd writes.
 pub const CURRENT: u32 = 1;
+/// The oldest format a quarkd must know to use a home at [`CURRENT`]: the
+/// format of the last step that isn't additive. Leave it when a new step only
+/// adds files or directories older quarkds ignore; set it to the new format
+/// when a step moves, renames or reinterprets anything.
+pub const MIN_READER: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Format {
@@ -48,6 +56,10 @@ pub struct Format {
     /// The quarkd version that last wrote the file.
     #[serde(default)]
     pub written_by: String,
+    /// The oldest format a quarkd must know to use this home ([`MIN_READER`]
+    /// of the quarkd that wrote it). Missing means `format`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_reader: Option<u32>,
 }
 
 /// What [`migrate`] did.
@@ -89,23 +101,34 @@ pub fn migrate(home: &Path) -> anyhow::Result<Migrated> {
         linked: Vec::new(),
         adopt_legacy_projects: false,
     };
-    let mut at =
-        match found {
-            Some(f) if f.format > CURRENT => anyhow::bail!(
+    let mut at = match found {
+        Some(f) if f.format > CURRENT && f.min_reader.unwrap_or(f.format) <= CURRENT => {
+            tracing::info!(
+                format = f.format,
+                ours = CURRENT,
+                written_by = %f.written_by,
+                "the Quark home is from a newer quarkd, with only additive changes since ours; using it as it is"
+            );
+            out.to = f.format;
+            return Ok(out);
+        }
+        Some(f) if f.format > CURRENT => {
+            anyhow::bail!(
             "{} is format {} (written by quarkd {}), newer than this quarkd {} knows ({CURRENT}); \
              run the newer Quark, or give this one another home with --home",
             home.display(),
             f.format,
             if f.written_by.is_empty() { "?" } else { &f.written_by },
             env!("CARGO_PKG_VERSION"),
-        ),
-            Some(f) => f.format,
-            None if has_state(home) => 0,
-            None => {
-                write(home, CURRENT)?;
-                return Ok(out);
-            }
-        };
+        )
+        }
+        Some(f) => f.format,
+        None if has_state(home) => 0,
+        None => {
+            write(home, CURRENT)?;
+            return Ok(out);
+        }
+    };
     if at == CURRENT {
         // Rewrite only when another version last wrote it.
         if written_by.as_deref() != Some(env!("CARGO_PKG_VERSION")) {
@@ -139,6 +162,7 @@ fn write(home: &Path, format: u32) -> anyhow::Result<()> {
     let body = serde_json::to_string_pretty(&Format {
         format,
         written_by: env!("CARGO_PKG_VERSION").into(),
+        min_reader: Some(MIN_READER.min(format)),
     })?;
     std::fs::write(&tmp, body + "\n").with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
@@ -236,6 +260,29 @@ mod tests {
             std::fs::read_to_string(dir.path().join(FILE)).unwrap(),
             body
         );
+    }
+
+    #[test]
+    fn a_newer_home_with_only_additive_steps_is_used_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = format!(r#"{{"format": 99, "written_by": "9.0.0", "min_reader": {CURRENT}}}"#);
+        std::fs::write(dir.path().join(FILE), &body).unwrap();
+        let m = migrate(dir.path()).unwrap();
+        assert_eq!((m.from, m.to), (Some(99), 99));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(FILE)).unwrap(),
+            body,
+            "an older quarkd never rewrites a newer home's format"
+        );
+    }
+
+    #[test]
+    fn writes_its_min_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        migrate(dir.path()).unwrap();
+        let f = read(dir.path()).unwrap().unwrap();
+        assert_eq!(f.min_reader, Some(MIN_READER));
+        const { assert!(MIN_READER <= CURRENT) };
     }
 
     #[test]

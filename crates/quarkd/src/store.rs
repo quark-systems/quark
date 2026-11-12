@@ -76,6 +76,8 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 
 /// The schema version this build migrates `quark.db` to.
 pub const SCHEMA_VERSION: i64 = migrations::SCHEMA_VERSION;
+/// The oldest schema a quarkd must know to use this build's database.
+pub const SCHEMA_MIN_READER: i64 = migrations::MIN_READER;
 
 /// A transcript the daemon projects into events.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -82,8 +82,22 @@ says what it speaks:
 - **PTY supervisor.** `quark-ptyd` outlives quarkd, so a new quarkd can meet an old one.
   Its `hello` request reports `PROTOCOL` (`crates/quark-sessions/src/pty/proto.rs`) and its
   version; one from before `hello` (0.1.0) speaks protocol 1.
-- **Data.** `quarkd compat --json` prints the home format and database schemas a build
-  writes; the update feed carries it.
+- **Data.** The home (`format.json`), the store (`quark.db`) and the event log
+  (`events.db`) each record a version and a `min_reader`: the oldest version a quarkd
+  must know to use them. A change that only adds what older code ignores (a file, a
+  table, a column with a default) leaves `min_reader` alone, so after a rollback the
+  older quarkd keeps using the newer data as it is. Anything that moves, renames, drops
+  or reinterprets data raises it: mark a store migration `additive` in
+  `crates/quarkd/src/store/migrations.rs` only when it truly is, and raise
+  `home_format::MIN_READER` or `quark_eventlog::MIN_READER` with a breaking change.
+  `quarkd compat --json` prints all of them, and the update feed carries it.
+- **Backups.** `quarkd backup [--label <version>]` copies the databases and
+  `format.json` to `<home>/backups/pre-<label>/` and keeps the newest two; the updater
+  takes one before installing. To roll back past a breaking change, stop quarkd and copy
+  the files back.
+- **Upgrade test.** CI's `packaging/upgrade-test.sh` starts the previous release's Linux
+  quarkd on a fresh home, upgrades it with this build, then starts the previous quarkd on
+  it again: it must serve the home or refuse it by name, never fail half-way.
 
 ## Signing (repository secrets)
 

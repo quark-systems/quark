@@ -29,6 +29,12 @@ jobs:
           tar -xzf "$RUNNER_TEMP/treehouse.tgz" -C "$RUNNER_TEMP" treehouse
           echo "TREEHOUSE_BIN=$RUNNER_TEMP/treehouse" >> "$GITHUB_ENV"
       - run: cargo test --workspace
+      - name: Upgrade from the last release, and roll back
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch -q --no-tags origin '+refs/tags/v*:refs/tags/v*'
+          packaging/upgrade-test.sh target/debug/quarkd
 
   desktop-app:
     runs-on: ubuntu-latest
