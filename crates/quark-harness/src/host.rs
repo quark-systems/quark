@@ -118,6 +118,78 @@ pub fn resolve_bin(m: &HarnessManifest, env: &HostEnv) -> Option<PathBuf> {
     })
 }
 
+/// Bin directories of Node version managers and per-user package
+/// installs under `home`, for tools a login shell only finds through its
+/// interactive setup. nvm puts just its default version on a login PATH, so
+/// a CLI installed under another version (IBM Bob under an older Node, say)
+/// is missing from a launchd-started quarkd. Newest Node version first;
+/// only directories that exist.
+pub fn tool_dirs(home: &Path, nvm_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let nvm = nvm_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.join(".nvm"));
+    out.extend(node_versions(&nvm.join("versions/node"), "bin"));
+    for fnm in [
+        home.join(".local/share/fnm/node-versions"),
+        home.join("Library/Application Support/fnm/node-versions"),
+    ] {
+        out.extend(node_versions(&fnm, "installation/bin"));
+    }
+    for rel in [
+        ".volta/bin",
+        ".local/share/mise/shims",
+        ".asdf/shims",
+        ".npm-global/bin",
+        "Library/pnpm",
+        ".bun/bin",
+        ".local/bin",
+    ] {
+        out.push(home.join(rel));
+    }
+    out.retain(|d| d.is_dir());
+    out
+}
+
+/// `<root>/<version>/<bin>` for every version directory, newest first.
+fn node_versions(root: &Path, bin: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let key = name
+                .trim_start_matches('v')
+                .split('.')
+                .map(|p| p.parse().unwrap_or(0))
+                .collect();
+            (key, e.path().join(bin))
+        })
+        .collect();
+    versions.sort_by(|a, b| b.0.cmp(&a.0));
+    versions.into_iter().map(|(_, p)| p).collect()
+}
+
+/// `path` with each of `extra` not already on it appended, so what the
+/// user's PATH picks first still wins. `None` when nothing was added.
+pub fn widen_path(path: Option<&std::ffi::OsStr>, extra: &[PathBuf]) -> Option<OsString> {
+    let mut dirs: Vec<PathBuf> = path
+        .map(|p| std::env::split_paths(p).collect())
+        .unwrap_or_default();
+    let before = dirs.len();
+    for d in extra {
+        if !dirs.contains(d) {
+            dirs.push(d.clone());
+        }
+    }
+    if dirs.len() == before {
+        return None;
+    }
+    std::env::join_paths(dirs).ok()
+}
+
 /// Runs `<exe> <args>` with a timeout and returns the first non-empty line
 /// of stdout, or of stderr when stdout is empty. `None` when `args` is
 /// empty, the probe fails or it runs past [`PROBE_TIMEOUT`].
@@ -190,5 +262,60 @@ mod tests {
         assert_eq!(probe_version(&found, &[]).await, None);
 
         assert!(resolve_bin(reg.get("bob").unwrap(), &env).is_none());
+    }
+
+    #[test]
+    fn tool_dirs_add_every_nvm_version_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        for v in ["v22.19.0", "v26.13.1", "v24.14.1", "v9.0.0"] {
+            std::fs::create_dir_all(home.join(".nvm/versions/node").join(v).join("bin")).unwrap();
+        }
+        std::fs::create_dir_all(home.join(".volta/bin")).unwrap();
+        let node = |v: &str| home.join(".nvm/versions/node").join(v).join("bin");
+        let dirs = tool_dirs(home, None);
+        assert_eq!(
+            dirs,
+            [
+                node("v26.13.1"),
+                node("v24.14.1"),
+                node("v22.19.0"),
+                node("v9.0.0"),
+                home.join(".volta/bin"),
+            ]
+        );
+
+        // Already-listed directories keep their place; the rest go last.
+        let path = std::env::join_paths(["/usr/bin".into(), node("v26.13.1")]).unwrap();
+        let wide = widen_path(Some(&path), &dirs).unwrap();
+        let got: Vec<PathBuf> = std::env::split_paths(&wide).collect();
+        assert_eq!(
+            got[..3],
+            [
+                PathBuf::from("/usr/bin"),
+                node("v26.13.1"),
+                node("v24.14.1")
+            ]
+        );
+        assert_eq!(got.len(), 6);
+        let all = std::env::join_paths(&got).unwrap();
+        assert_eq!(widen_path(Some(&all), &dirs), None);
+
+        // Bob installed only under an older Node is found once widened.
+        exe(&node("v22.19.0").join("bob"), "echo bob");
+        let reg = crate::ManifestRegistry::builtin();
+        let env = HostEnv {
+            path: Some(path.clone()),
+            ..HostEnv::default()
+        };
+        assert!(resolve_bin(reg.get("bob").unwrap(), &env).is_none());
+        let env = HostEnv {
+            path: widen_path(Some(&path), &dirs),
+            ..HostEnv::default()
+        };
+        assert_eq!(
+            resolve_bin(reg.get("bob").unwrap(), &env),
+            Some(node("v22.19.0").join("bob"))
+        );
     }
 }

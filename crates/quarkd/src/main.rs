@@ -289,8 +289,37 @@ struct ServeArgs {
     user_memory: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Before any thread starts (setting the environment is only sound then):
+    // the Node version managers' bin directories, so harness CLIs installed
+    // under a Node version other than nvm's default are found by detection
+    // and by every worker quarkd launches.
+    let widened = widen_path();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(widened))
+}
+
+/// Appends [`quark_harness::tool_dirs`] missing from `PATH`; returns them.
+fn widen_path() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let nvm_dir = std::env::var_os("NVM_DIR").map(PathBuf::from);
+    let extra = quark_harness::tool_dirs(&home, nvm_dir.as_deref());
+    let path = std::env::var_os("PATH");
+    let Some(wide) = quark_harness::widen_path(path.as_deref(), &extra) else {
+        return Vec::new();
+    };
+    let had: Vec<PathBuf> = path
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    std::env::set_var("PATH", wide);
+    extra.into_iter().filter(|d| !had.contains(d)).collect()
+}
+
+async fn run(widened: Vec<PathBuf>) -> anyhow::Result<()> {
     let cli = Cli::parse();
     let command = cli.command.unwrap_or(Command::Serve(cli.serve));
     // The daemon also logs to <home>/logs, so a daemon the app launched
@@ -305,6 +334,10 @@ async fn main() -> anyhow::Result<()> {
         _ => None,
     };
     let _log_guard = init_tracing(log_dir.as_deref());
+    if !widened.is_empty() && log_dir.is_some() {
+        let dirs: Vec<String> = widened.iter().map(|d| d.display().to_string()).collect();
+        tracing::info!(dirs = %dirs.join(":"), "added tool directories to PATH");
+    }
 
     match command {
         Command::Ptyd { socket } => {
