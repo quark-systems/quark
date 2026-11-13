@@ -6,7 +6,9 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
-## Unreleased
+## 0.2.0-beta.3
+
+A beta to test updating from 0.2.0-beta.2: Quark on the beta channel offers it on its own.
 
 ### Added
 
@@ -16,6 +18,14 @@ page lists every merged pull request.
 
 ### Fixed
 
+- Harness CLIs installed under a Node version other than nvm's default (IBM Bob, say) are
+  found again when quarkd runs from the LaunchAgent: quarkd adds every nvm and fnm Node
+  version's bin, and other per-user tool directories, to the end of its PATH. Before, such a
+  harness looked uninstalled and its default account and quota vanished.
+- A coordinator's shell gets the harness API keys Quark keeps in the Keychain, so commands
+  it runs reach the same accounts its workers use.
+- A Claude Code coordinator no longer shows as working on a notice Claude Code only wrote
+  to its log after a restart.
 - Setup's "Signed in to GitHub" check judges each `gh` account on its own: only the active
   github.com account decides it, so a second account or a GitHub Enterprise host that is down
   or timing out no longer reports "not signed in". Broken accounts are named in the detail.
