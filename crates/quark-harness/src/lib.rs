@@ -25,7 +25,7 @@ use quark_core::harness::HarnessManifest;
 use quark_core::{CoreError, HarnessRegistry, Result};
 
 pub use account::{auth_status, config_dir};
-pub use host::{probe_version, resolve_bin, HostEnv, Keychain};
+pub use host::{probe_version, resolve_bin, tool_dirs, widen_path, HostEnv, Keychain};
 pub use launch::{argv, LaunchVars};
 pub use prepare::{hooks_reach_quark, launch_warnings, prepare_folder};
 
