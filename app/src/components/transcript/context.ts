@@ -12,6 +12,8 @@ export interface TranscriptSettings {
   freshAfter: number;
   /** A command's name in the Project's persona. */
   commandLabel: (c: CoordinatorCommand) => string;
+  /** The line under each message sent but not yet in the log, by its placed id. */
+  pendingNotes?: Map<number, string>;
 }
 
 const NEUTRAL: Record<CoordinatorCommand, string> = { catch_up: "Catch up", status_report: "Status report", wrap_up: "Wrap up" };

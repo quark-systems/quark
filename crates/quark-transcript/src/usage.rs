@@ -217,10 +217,7 @@ fn prompt(format: SessionFormat, v: &Value) -> Option<(Option<String>, Option<St
                     _ => false,
                 }
         }
-        SessionFormat::Codex => {
-            str_at(v, "type") == Some("event_msg")
-                && v.pointer("/payload/type").and_then(Value::as_str) == Some("user_message")
-        }
+        SessionFormat::Codex => crate::codex::user_message(v).is_some(),
         SessionFormat::Pi => {
             str_at(v, "type") == Some("message")
                 && v.pointer("/message/role").and_then(Value::as_str) == Some("user")
@@ -541,6 +538,33 @@ mod tests {
         assert_eq!(m.model, "gpt-5-codex");
         assert_eq!((m.input, m.output, m.cache_read, m.calls), (27, 6, 8, 2));
         assert_eq!(cur.model.as_deref(), Some("gpt-5-codex"));
+    }
+
+    #[test]
+    fn codex_item_messages_start_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let user = |text: &str| {
+            json!({"timestamp": "t", "type": "event_msg", "payload": {"type": "item_completed",
+                "item": {"type": "UserMessage", "content": [{"type": "text", "text": text}]}}})
+        };
+        write(
+            &path,
+            &[
+                json!({"type": "turn_context", "payload": {"model": "gpt-6.1-sol"}}),
+                user("go"),
+                json!({"type": "event_msg", "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {"total_tokens": 13},
+                    "last_token_usage": {"input_tokens": 10, "cached_input_tokens": 4,
+                        "output_tokens": 3, "total_tokens": 13}}}}),
+                user("again"),
+            ],
+        );
+        let (turns, _) =
+            read_turns(&path, &UsageCursor::default(), SessionFormat::Codex, false).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].models[0].model, "gpt-6.1-sol");
+        assert_eq!(turns[0].models[0].input, 10);
     }
 
     #[test]

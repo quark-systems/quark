@@ -1,9 +1,9 @@
 //! Codex CLI rollouts: one `{"timestamp", "type", "payload"}` envelope per
 //! line. `response_item` payloads are model-facing items (messages, tool calls
 //! and their outputs); `event_msg` payloads are UI events. The user's own
-//! words come from `event_msg` `user_message`, because user-role
-//! `response_item` messages also carry injected context (environment,
-//! AGENTS.md). Assistant text comes from `response_item` messages, since the
+//! words come from an `event_msg`, because user-role `response_item` messages
+//! also carry injected context (environment, AGENTS.md): `user_message` until
+//! Codex 0.16x, then an `item_completed` whose item is a `UserMessage`. Assistant text comes from `response_item` messages, since the
 //! matching `agent_message` event is a duplicate. Rollouts written before the
 //! envelope existed are not supported. A `compacted` line, where Codex
 //! replaced the conversation with a summary, is one
@@ -13,17 +13,32 @@ use serde_json::Value;
 
 use crate::{entry, str_at, text_of, tool_call, tool_entry, TranscriptEntry, TranscriptRole};
 
+/// The user's words when `v` is a line recording a message the user sent.
+pub(crate) fn user_message(v: &Value) -> Option<String> {
+    if str_at(v, "type") != Some("event_msg") {
+        return None;
+    }
+    let p = v.get("payload")?;
+    match str_at(p, "type")? {
+        "user_message" => Some(str_at(p, "message").unwrap_or("").to_string()),
+        "item_completed" => {
+            let item = p.get("item")?;
+            (str_at(item, "type") == Some("UserMessage"))
+                .then(|| text_of(item.get("content").unwrap_or(&Value::Null)))
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
     let ts = str_at(v, "timestamp");
+    if let Some(text) = user_message(v) {
+        return entry(TranscriptRole::User, &text, ts).into_iter().collect();
+    }
     let Some(p) = v.get("payload") else {
         return Vec::new();
     };
     match (str_at(v, "type"), str_at(p, "type")) {
-        (Some("event_msg"), Some("user_message")) => {
-            entry(TranscriptRole::User, str_at(p, "message").unwrap_or(""), ts)
-                .into_iter()
-                .collect()
-        }
         (Some("response_item"), Some(item)) => response_item(item, p, ts),
         (Some("compacted"), _) => entry(
             TranscriptRole::Compaction,

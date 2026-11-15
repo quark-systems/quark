@@ -7,7 +7,7 @@ import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
-import { CommandCard, lastId, PendingMessage, stillPending, stillPendingCommands, Transcript, UserMessage } from "../components/transcript";
+import { CommandCard, lastId, PendingMessage, stillPending, stillPendingCommands, Transcript } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
 import { CoordinatorContext } from "../components/CoordinatorContext";
 import { useLabels } from "../persona";
@@ -181,6 +181,8 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
   const l = useLabels(cid);
   const coordinator = l.role("coordinator");
   const commands = useRunCommand(cid);
+  const placed = useMemo(() => pending.map((p) => ({ after: p.after, text: p.text,
+    note: p.sending ? "sending…" : p.confirmed ? "sent" : "typed, not confirmed; check before sending again" })), [pending]);
   const stoppedThrough = useStoppedThrough(cid);
   const matches = slashMatches(text);
   const label = useCallback((c: CoordinatorCommand) => commandLabel(l, c), [l]);
@@ -238,15 +240,11 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
-          <Transcript key={cid} items={items} agent="coordinator" actions project={cid} className="chat-log" commandLabel={label} stoppedThrough={stoppedThrough}
+          <Transcript key={cid} items={items} pending={placed} agent="coordinator" actions project={cid} className="chat-log" commandLabel={label} stoppedThrough={stoppedThrough}
             empty={status === "ok" ? (welcome && project
               ? <Welcome project={project} onSuggest={(t) => { setText(t); box.current?.querySelector("textarea")?.focus(); }} />
               : <div className="empty">Ask the {coordinator} to plan or delegate work.</div>)
               : status === "loading" ? <div className="empty">Loading…</div> : null}>
-            {pending.map((p) => (
-              <UserMessage key={p.key} pending item={{ text: p.text, ts: null, truncated: false }}
-                note={p.sending ? "sending…" : p.confirmed ? "sent" : "typed, not confirmed; check before sending again"} />
-            ))}
             {commandsPending.map((p) => (
               <CommandCard key={p.key} note={{ command: p.command, asked: "you" }}
                 state={p.sending ? "sending" : p.confirmed ? "sent" : "unconfirmed"} />

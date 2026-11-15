@@ -17,12 +17,14 @@ import { Work } from "./Work";
 import { BeadMarkdown, BeadText } from "../../ui/BeadText";
 
 export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
-  const { freshAfter } = useTranscript();
+  const { freshAfter, pendingNotes } = useTranscript();
   const now = useNow(turn.live);
   const doing = activity(turn, now);
+  const pendingNote = turn.prompt && pendingNotes?.get(turn.prompt.id);
   return (
     <section className="tx-turn">
-      {turn.event && turn.prompt ? <EventRow event={turn.event} id={turn.prompt.id} />
+      {pendingNote !== undefined && turn.prompt ? <UserMessage item={turn.prompt} pending note={pendingNote} />
+        : turn.event && turn.prompt ? <EventRow event={turn.event} id={turn.prompt.id} />
         : turn.prompt && <UserMessage item={turn.prompt} fresh={turn.prompt.id > freshAfter} />}
       {turn.parts.map((p, i) =>
         p.kind === "text"
