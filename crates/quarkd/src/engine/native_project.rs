@@ -57,6 +57,10 @@ pub const STATE_DIR: &str = ".quark";
 const WORKSPACE_FILE: &str = "workspace.json";
 /// The coordinator's rendered prompt, inside [`STATE_DIR`].
 pub const PROMPT_FILE: &str = "coordinator.md";
+/// The layered prompt alone, as the running coordinator was launched with
+/// it, inside [`STATE_DIR`]: [`PROMPT_FILE`] adds Codex's and Pi's memories
+/// and the last switch's handoff, which the layered prompt never has.
+pub const LAUNCHED_PROMPT_FILE: &str = "coordinator.launched.md";
 /// One record per started coordinator, in the command-center workspace.
 const RECORDS_DIR: &str = "coordinators";
 /// A coordinator's window is this prefix and its Project id.
@@ -331,6 +335,10 @@ impl ProjectSetup {
             let (prompt, _) = crate::native_coordinator::build_prompt(&layout, &pid, &root)
                 .map_err(|e| EngineError::Invalid(format!("the coordinator's prompt: {e}")))?;
             let mut text = prompt_text(&prompt);
+            write_atomic(
+                &root.join(STATE_DIR).join(LAUNCHED_PROMPT_FILE),
+                text.as_bytes(),
+            )?;
             if let Some(m) = memories {
                 text = format!("{}\n\n{}", text.trim_end(), m);
             }
@@ -478,7 +486,7 @@ fn roots_for(roots: &SessionRoots, account_env: &[(String, String)]) -> SessionR
 }
 
 /// `prompt` as a coordinator is launched with it, which is also what
-/// [`PROMPT_FILE`] holds for the one that is running.
+/// [`LAUNCHED_PROMPT_FILE`] holds for the one that is running.
 pub fn prompt_text(prompt: &quark_coordinator::LayeredPrompt) -> String {
     fit(prompt.render(), MAX_SYSTEM_PROMPT)
 }
