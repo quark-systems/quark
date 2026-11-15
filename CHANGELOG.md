@@ -6,6 +6,14 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
+## 0.2.0-beta.4
+
+### Fixed
+
+- A coordinator on Codex or Pi stays up. quarkd thought its prompt had changed every time
+  it checked, so it closed the coordinator's terminal seconds after each start, and the app
+  showed "the coordinator has no live terminal" almost all the time.
+
 ## 0.2.0-beta.3
 
 A beta to test updating from 0.2.0-beta.2: Quark on the beta channel offers it on its own.
