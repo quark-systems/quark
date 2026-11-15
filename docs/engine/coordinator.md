@@ -158,6 +158,8 @@ Codex is wired on its command line only, so nothing is written to `~/.codex` or 
 
 When a reply asks the user something in text instead of through `ask_user`, quarkd sends the "Quark decision check" nudge back once per turn on every harness: as Claude Code's `Stop` hook block reply, as a Pi follow-up message from the bridge's `agent_end` report, and for Codex by typing it into the coordinator's terminal after `notify` reports the turn end (a Codex `Stop` hook would need the user to approve it in Codex first). Gap against Claude Code: Beads memories reach Claude Code at session start through `bd prime`; Codex and Pi get them only through the prompt's memory layer.
 
+When the layered prompt changes, quarkd closes the coordinator's window once its conversation (in the harness's own session log) has been still a minute, and recovery starts it again in its conversation. The change is judged against `.quark/coordinator.launched.md`, the layered prompt alone as it was launched: `.quark/coordinator.md` also carries Codex's and Pi's memories and the last switch's handoff, so comparing it restarted those coordinators every minute.
+
 The turn-end hook takes the turn's `usage` from its body when it sends one, else reads it from the coordinator's newest session log; an `Idempotency-Key` header makes a retried hook count once.
 
 The coordinator's decisions have the engine id `quarkd/coordinator/<key>`, so no engine refresh closes them. Asking again under the same key while one is open updates it in place.

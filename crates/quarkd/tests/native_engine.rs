@@ -1052,6 +1052,11 @@ async fn switches_a_coordinators_agent_resumed_and_by_handoff() {
     assert!(text.contains("fixing the login bug"), "{text}");
     let prompt = std::fs::read_to_string(root.join(".quark/coordinator.md")).unwrap();
     assert!(prompt.contains("fixing the login bug"));
+    // The prompt a change is judged by leaves the handoff out, or the
+    // coordinator would look stale and be restarted after every launch.
+    let launched = std::fs::read_to_string(root.join(".quark/coordinator.launched.md")).unwrap();
+    assert!(prompt.starts_with(launched.trim_end()));
+    assert!(!launched.contains("fixing the login bug"));
     assert!(chat.sent().last().unwrap().1.contains("Read the handoff"));
     assert!(store.switching_projects().unwrap().is_empty());
 
