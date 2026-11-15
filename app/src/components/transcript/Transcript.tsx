@@ -7,9 +7,12 @@ import type { CoordinatorCommand, TranscriptItem } from "../../api";
 import { neutralCommandLabel, TranscriptContext, TranscriptSettings } from "./context";
 import { useScrollAnchor } from "./hooks";
 import { Icon } from "./Icon";
+import { placePending, PendingPrompt } from "./pending";
 import { TurnView } from "./Turn";
 import { breakLabel, groupTurns } from "./turns";
 import "./transcript.css";
+
+const NONE: PendingPrompt[] = [];
 
 /** Turns rendered at first, and added each time the reader asks for earlier ones. */
 export const TURN_PAGE = 40;
@@ -22,8 +25,10 @@ export interface TranscriptProps {
   actions?: boolean;
   /** The Project whose coordinator this is: its questions show as decision cards answered in place. */
   project?: string;
-  /** Shown after the turns, such as messages sent but not yet in the log. */
+  /** Shown after the turns, such as commands asked for but not yet in the log. */
   children?: React.ReactNode;
+  /** Messages sent but not yet in the log, each shown where it was sent. */
+  pending?: PendingPrompt[];
   empty?: React.ReactNode;
   testId?: string;
   className?: string;
@@ -37,9 +42,16 @@ export interface TranscriptProps {
  * Give it a `key` per source (task or coordinator), so paging and the entries that
  * count as new start over when the source changes.
  */
-export function Transcript({ items, agent, actions = false, project, children, empty, testId, className, commandLabel = neutralCommandLabel, stoppedThrough }: TranscriptProps) {
-  const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id), stoppedThrough), [items, stoppedThrough]);
-  const { ref, onScroll, unseen, jump, holdPosition } = useScrollAnchor<HTMLDivElement>(items.length);
+export function Transcript({ items, agent, actions = false, project, children, empty, testId, className, commandLabel = neutralCommandLabel, stoppedThrough, pending = NONE }: TranscriptProps) {
+  const placed = useMemo(() => placePending([...items].sort((a, b) => a.id - b.id), pending), [items, pending]);
+  const turns = useMemo(() => {
+    const t = groupTurns(placed.items, stoppedThrough);
+    // A message the log has not recorded yet does not make the agent look busy.
+    const last = t[t.length - 1];
+    if (last?.prompt && placed.notes.has(last.prompt.id) && !last.parts.length) last.live = false;
+    return t;
+  }, [placed, stoppedThrough]);
+  const { ref, onScroll, unseen, jump, holdPosition } = useScrollAnchor<HTMLDivElement>(placed.items.length);
 
   // The first turn shown is fixed at the first load, so turns arriving later are
   // added below rather than pushing earlier ones out of view.
@@ -52,7 +64,8 @@ export function Transcript({ items, agent, actions = false, project, children, e
   const shown = turns.slice(start);
 
   const freshAfter = firstLoad.current?.maxId ?? Infinity;
-  const settings = useMemo<TranscriptSettings>(() => ({ agent, actions, project, freshAfter, commandLabel }), [agent, actions, project, freshAfter, commandLabel]);
+  const settings = useMemo<TranscriptSettings>(() => ({ agent, actions, project, freshAfter, commandLabel, pendingNotes: placed.notes }),
+    [agent, actions, project, freshAfter, commandLabel, placed.notes]);
 
   const showEarlier = () => {
     holdPosition();

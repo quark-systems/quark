@@ -36,6 +36,32 @@ export function stillPending(pending: PendingMessage[], items: TranscriptItem[])
   return left.length === pending.length ? pending : left;
 }
 
+/** A pending message as the transcript shows it: where it was sent, and the line under it. */
+export interface PendingPrompt {
+  /** The largest entry id loaded when it was sent. */
+  after: number;
+  text: string;
+  note: string;
+}
+
+/**
+ * The log with each pending message placed where it was sent: after the last entry
+ * loaded at the time, so entries recorded later (the replies to it) show below it even
+ * while the log has not recorded the message itself. A pending message gets an id
+ * between two whole entry ids; `notes` holds its line by that id. Pending messages
+ * are in the order they were sent, and an earlier one never has a larger `after`.
+ */
+export function placePending(items: TranscriptItem[], pending: PendingPrompt[]): { items: TranscriptItem[]; notes: Map<number, string> } {
+  const notes = new Map<number, string>();
+  if (!pending.length) return { items, notes };
+  const placed = pending.map((p, i): TranscriptItem => {
+    const id = p.after + (i + 1) / (pending.length + 1);
+    notes.set(id, p.note);
+    return { id, role: "user", text: p.text, ts: null, is_error: false, truncated: false };
+  });
+  return { items: [...items, ...placed].sort((a, b) => a.id - b.id), notes };
+}
+
 /** A command the person asked for whose note the session has not recorded yet. */
 export interface PendingCommand {
   key: number;

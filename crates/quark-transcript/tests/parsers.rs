@@ -113,6 +113,21 @@ fn codex_rollout() {
     );
 }
 
+/// Codex 0.16x records the user's words as an `item_completed` `UserMessage`
+/// instead of a `user_message` event, and its agent messages as items too.
+#[test]
+fn codex_item_rollout() {
+    let entries = parse(SessionFormat::Codex, "codex-items.jsonl");
+    assert_eq!(
+        shape(&entries),
+        vec![
+            (User, "Start on the do next list", None, false),
+            (Assistant, "Starting the source refresh.", None, false),
+        ]
+    );
+    assert_eq!(entries[0].ts.as_deref(), Some("2026-11-15T23:17:42.421Z"));
+}
+
 #[test]
 fn pi_session_log() {
     let entries = parse(SessionFormat::Pi, "pi.jsonl");
