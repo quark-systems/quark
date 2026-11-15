@@ -57,6 +57,10 @@ pub const STATE_DIR: &str = ".quark";
 const WORKSPACE_FILE: &str = "workspace.json";
 /// The coordinator's rendered prompt, inside [`STATE_DIR`].
 pub const PROMPT_FILE: &str = "coordinator.md";
+/// The layered prompt a coordinator was launched on, inside [`STATE_DIR`]:
+/// [`PROMPT_FILE`] without the memories and handoff added at launch, so it
+/// can be compared with the prompt as it is now.
+pub const LAUNCHED_FILE: &str = "coordinator.launched";
 /// One record per started coordinator, in the command-center workspace.
 const RECORDS_DIR: &str = "coordinators";
 /// A coordinator's window is this prefix and its Project id.
@@ -331,6 +335,7 @@ impl ProjectSetup {
             let (prompt, _) = crate::native_coordinator::build_prompt(&layout, &pid, &root)
                 .map_err(|e| EngineError::Invalid(format!("the coordinator's prompt: {e}")))?;
             let mut text = prompt_text(&prompt);
+            write_atomic(&root.join(STATE_DIR).join(LAUNCHED_FILE), text.as_bytes())?;
             if let Some(m) = memories {
                 text = format!("{}\n\n{}", text.trim_end(), m);
             }
@@ -1083,9 +1088,15 @@ mod tests {
             "# Memories from {}",
             crate::beads::beads_dir(&dir.path().join("home"), "p1").display()
         );
+        let launched = || std::fs::read_to_string(ws.join(".quark/coordinator.launched")).unwrap();
+        let layout = Layout::new(dir.path().join("home"));
+        let (prompt, _) = crate::native_coordinator::build_prompt(&layout, "p1", &ws).unwrap();
         for wiring in [Wiring::Codex, Wiring::Pi] {
             rt.block_on(setup.write_prompt(&wref, wiring)).unwrap();
             assert!(md().contains(&want), "{wiring:?}: {}", md());
+            // What the prompt is compared with leaves the memories out, so
+            // the coordinator is not taken for one on an older prompt.
+            assert_eq!(launched(), prompt_text(&prompt), "{wiring:?}");
         }
         // Claude Code primes itself from its session-start hook.
         rt.block_on(setup.write_prompt(&wref, Wiring::Claude))

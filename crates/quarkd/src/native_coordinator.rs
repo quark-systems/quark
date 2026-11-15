@@ -28,7 +28,9 @@ use quark_persona::FilePersonas;
 use quark_transcript::{locate, SessionFormat, SessionRoots};
 
 use crate::coordinator_http::{install, CoordinatorUrls, Tokens};
-use crate::engine::native_project::{prompt_text, PROMPT_FILE, STATE_DIR, WINDOW_PREFIX};
+use crate::engine::native_project::{
+    prompt_text, COORDINATOR_HARNESS, LAUNCHED_FILE, STATE_DIR, WINDOW_PREFIX,
+};
 use crate::provision::Layout;
 use crate::sessions::Sessions;
 use crate::store::Store;
@@ -118,7 +120,8 @@ impl NativeCoordinator {
                 tokio::task::spawn_blocking(move || build_prompt(&layout, &pid, &ws)).await?;
             match built {
                 Ok((prompt, persona)) => {
-                    self.retire_stale(&id, &workspace, &prompt_text(&prompt))
+                    let harness = project.agent_config.as_ref().map(|a| a.harness.as_str());
+                    self.retire_stale(&id, &workspace, harness, &prompt_text(&prompt))
                         .await;
                     if let Err(e) = self.coordinator.set_prompt(&id, prompt, &persona).await {
                         tracing::warn!(project = %id, error = %e, "slice 6 prompt not recorded");
@@ -148,12 +151,18 @@ impl NativeCoordinator {
     /// Close the window of a coordinator that was launched with a prompt
     /// other than `current`, when it is between turns. Coordinator recovery
     /// starts it again, in its conversation, on `current`.
-    async fn retire_stale(&self, id: &ProjectId, workspace: &Path, current: &str) {
+    async fn retire_stale(
+        &self,
+        id: &ProjectId,
+        workspace: &Path,
+        harness: Option<&str>,
+        current: &str,
+    ) {
         let Some(sessions) = &self.sessions else {
             return;
         };
         // Written at each launch; missing before the first one.
-        let Ok(launched) = std::fs::read_to_string(workspace.join(STATE_DIR).join(PROMPT_FILE))
+        let Ok(launched) = std::fs::read_to_string(workspace.join(STATE_DIR).join(LAUNCHED_FILE))
         else {
             return;
         };
@@ -165,7 +174,9 @@ impl NativeCoordinator {
         {
             return;
         }
-        let transcript = locate(SessionFormat::Claude, workspace, &self.roots);
+        let format = SessionFormat::for_harness(harness.unwrap_or(COORDINATOR_HARNESS))
+            .unwrap_or(SessionFormat::Claude);
+        let transcript = locate(format, workspace, &self.roots);
         if !still(transcript.as_deref(), SystemTime::now()) {
             return;
         }
