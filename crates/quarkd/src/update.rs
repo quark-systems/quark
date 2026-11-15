@@ -460,6 +460,7 @@ impl Updater {
         std::fs::create_dir_all(updater.parent().unwrap())?;
         let _ = std::fs::remove_file(&updater);
         std::fs::copy(std::env::current_exe()?, &updater).context("copying quark-updater")?;
+        clear_quarantine(&updater);
         intent.save(&self.home)?;
         tracing::info!(from = %intent.from, to = %intent.to, rollback = intent.rollback, "update install starting");
         let log = self.home.join("logs").join("updater.log");
@@ -726,6 +727,26 @@ async fn fetch(url: &str) -> anyhow::Result<Vec<u8>> {
         );
     }
     Ok(out.stdout)
+}
+
+/// On macOS a copy keeps its source's attributes, quarantine among them:
+/// a quarkd from a downloaded app that was opened only after "Open
+/// Anyway" would hand its copy the flag, and Gatekeeper would refuse to
+/// run the updater from its new path.
+fn clear_quarantine(path: &Path) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let out = std::process::Command::new("xattr")
+        .args(["-d", "com.apple.quarantine"])
+        .arg(path)
+        .output();
+    if let Ok(o) = out {
+        let err = String::from_utf8_lossy(&o.stderr);
+        if !o.status.success() && !err.contains("No such xattr") {
+            tracing::warn!(path = %path.display(), error = %err.trim(), "could not clear the updater's quarantine");
+        }
+    }
 }
 
 #[cfg(test)]
