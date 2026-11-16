@@ -5,6 +5,10 @@
 //! Agents draw these the same way: a few lines saying what is asked, then a
 //! numbered list of choices with a cursor on one of them (Claude Code
 //! `❯ 1. Yes`, Codex `› 1. Yes, proceed`, Bob and Gemini `● 1. Allow once`).
+//! Kiro CLI draws its choices unnumbered (`> Allow once`, `  Deny once`)
+//! above a key hint (`esc to close · ↑↓ to navigate · ↵ to select`); such a
+//! menu counts only with that hint under it, so a quoted `>` line in output
+//! is never taken for one.
 //! Nothing about them reaches a status file or a hook, so the supervisor
 //! reads them off the rendered screen and asks them as the worker's
 //! question, and an answer picks the choice with the arrow keys and Enter.
@@ -184,7 +188,10 @@ pub fn detect(screen: &str) -> Option<Prompt> {
         }
         i = j.max(i + 1);
     }
-    let (first, options, selected) = best?;
+    let (first, options, selected) = match best {
+        Some(b) => b,
+        None => unnumbered(&lines, near)?,
+    };
 
     let context: Vec<String> = {
         let above: Vec<&str> = lines[..first]
@@ -207,6 +214,52 @@ pub fn detect(screen: &str) -> Option<Prompt> {
         options,
         selected,
     })
+}
+
+/// Longest label an unnumbered choice row may have; a longer line is text.
+const MAX_LABEL: usize = 100;
+
+/// Whether a line is a menu's key hint: arrows to move, a key to select.
+fn nav_hint(line: &str) -> bool {
+    let l = unframe(line).to_lowercase();
+    (l.contains("↑↓") || l.contains("to navigate")) && (l.contains("select") || l.contains('↵'))
+}
+
+/// An unnumbered menu (Kiro CLI): the run of rows just above the lowest key
+/// hint near the bottom, with the cursor on exactly one of them. Returns the
+/// first row's line, the labels and the selected index.
+fn unnumbered(lines: &[&str], near: &[usize]) -> Option<(usize, Vec<String>, usize)> {
+    let hint = *near.iter().rev().find(|&&i| nav_hint(lines[i]))?;
+    // Skip the frame or blank lines between the choices and the hint.
+    let mut end = hint;
+    while end > 0 && blank(lines[end - 1]) {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && !blank(lines[start - 1]) {
+        start -= 1;
+    }
+    let mut options = Vec::new();
+    let mut selected = None;
+    for line in &lines[start..end] {
+        let row = unframe(line);
+        let (cursor, label) = match CURSORS.iter().find_map(|c| row.strip_prefix(c)) {
+            Some(rest) => (true, rest.trim()),
+            None => (false, row),
+        };
+        if label.is_empty() || label.chars().count() > MAX_LABEL {
+            return None;
+        }
+        if cursor {
+            if selected.is_some() {
+                return None;
+            }
+            selected = Some(options.len());
+        }
+        options.push(label.to_string());
+    }
+    (options.len() >= 2).then_some(())?;
+    Some((start, options, selected?))
 }
 
 /// Whether a decision key is a screen prompt's.
@@ -273,6 +326,68 @@ mod tests {
 
   Press enter to confirm or esc to cancel
 ";
+
+    // Kiro CLI 3.3.0 (V3 UI) asking to run a shell command, captured from a
+    // 160-column tmux pane on Matt's Mac (2026-11-16); rules shortened.
+    const KIRO: &str = "\
+  Run the shell command `ls -la` in this folder and tell me what you see.
+
+↓ Shell ls -la
+    ╰ description=List files in the current folder, cwd=/private/tmp/kiro-prompt-capture, run_in_background=false
+
+────────────────────────────────────────────────────────────
+ List files in the current folder requires approval
+ shell → ls -la
+
+ > Allow once                                         
+   Deny once
+   Create allow rule to approve future similar actions
+   Create deny rule to block future similar actions
+────────────────────────────────────────────────────────────
+ esc to close · ↑↓ to navigate · ↵ to select · Tab to edit
+";
+
+    #[test]
+    fn reads_kiros_unnumbered_menu() {
+        let k = detect(KIRO).unwrap();
+        assert_eq!(
+            k.options,
+            [
+                "Allow once",
+                "Deny once",
+                "Create allow rule to approve future similar actions",
+                "Create deny rule to block future similar actions"
+            ]
+        );
+        assert_eq!(k.selected, 0);
+        assert_eq!(
+            k.context[k.context.len() - 2..],
+            [
+                "List files in the current folder requires approval",
+                "shell → ls -la"
+            ]
+        );
+        assert_eq!(k.choice("2"), Ok(1));
+        // The cursor on another row is the same prompt.
+        let moved = KIRO
+            .replace(" > Allow once", "   Allow once")
+            .replace("   Deny once", " > Deny once");
+        assert_eq!(detect(&moved).unwrap().selected, 1);
+        assert_eq!(detect(&moved).unwrap().key, k.key);
+    }
+
+    #[test]
+    fn an_unnumbered_list_needs_the_key_hint() {
+        // Quoted output with a `>` line is not a menu.
+        let no_hint = KIRO.replace(
+            " esc to close · ↑↓ to navigate · ↵ to select · Tab to edit",
+            " done",
+        );
+        assert!(detect(&no_hint).is_none());
+        // Nor is a hint over rows with no cursor, or two.
+        assert!(detect(&KIRO.replace(" > Allow once", "   Allow once")).is_none());
+        assert!(detect(&KIRO.replace("   Deny once", " > Deny once")).is_none());
+    }
 
     #[test]
     fn reads_each_agents_permission_prompt() {

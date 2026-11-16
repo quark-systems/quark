@@ -15,6 +15,12 @@ page lists every merged pull request.
   The worker's terminal is view only until you press Take over, and a permission prompt on
   its screen shows as buttons above the box. New API route: `POST /v1/tasks/{id}:interrupt`.
 
+### Fixed
+
+- Kiro CLI's permission prompts are noticed: its unnumbered menu (`> Allow once`) above the
+  `↑↓ to navigate` hint is read like the other agents' numbered ones, so a Kiro worker
+  waiting on one asks its question instead of sitting stuck.
+
 ## 0.2.0-beta.4
 
 ### Fixed
