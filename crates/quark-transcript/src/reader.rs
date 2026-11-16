@@ -80,12 +80,15 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
                         batch.rate_limit = None;
                         batch.auth_error = None;
                     } else if entries.iter().any(|e| {
-                        matches!(
-                            e.role,
-                            TranscriptRole::Assistant
-                                | TranscriptRole::Thinking
-                                | TranscriptRole::ToolCall
-                        )
+                        // Ending a turn is not writing: Codex ends one after
+                        // an API error too.
+                        !e.turn_end
+                            && matches!(
+                                e.role,
+                                TranscriptRole::Assistant
+                                    | TranscriptRole::Thinking
+                                    | TranscriptRole::ToolCall
+                            )
                     }) {
                         batch.rate_limit = None;
                         batch.api_error = None;

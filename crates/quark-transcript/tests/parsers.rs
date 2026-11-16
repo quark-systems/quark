@@ -115,6 +115,8 @@ fn codex_rollout() {
 
 /// Codex 0.16x records the user's words as an `item_completed` `UserMessage`
 /// instead of a `user_message` event, and its agent messages as items too.
+/// Each `task_complete` ends a turn, also one whose last step was a tool call
+/// and whose final message is empty.
 #[test]
 fn codex_item_rollout() {
     let entries = parse(SessionFormat::Codex, "codex-items.jsonl");
@@ -123,8 +125,23 @@ fn codex_item_rollout() {
         vec![
             (User, "Start on the do next list", None, false),
             (Assistant, "Starting the source refresh.", None, false),
+            (Assistant, "", None, false),
+            (User, "Wake p#65: 1 item needs your judgment.", None, false),
+            (
+                ToolCall,
+                r#"text(await tools.mcp__quark_coordinator__tell_user({text:"PR #46 merged."}))"#,
+                Some("exec"),
+                false
+            ),
+            (ToolResult, "Told the user.", None, false),
+            (Assistant, "", None, false),
         ]
     );
+    let ends: Vec<usize> = (0..entries.len())
+        .filter(|&i| entries[i].turn_end)
+        .collect();
+    assert_eq!(ends, vec![2, 6]);
+    assert_eq!(entries[6].ts.as_deref(), Some("2026-11-16T22:29:05.987Z"));
     assert_eq!(entries[0].ts.as_deref(), Some("2026-11-15T23:17:42.421Z"));
 }
 

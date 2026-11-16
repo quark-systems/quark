@@ -368,6 +368,7 @@ mod tests {
             truncated: false,
             ts: None,
             tool: None,
+            turn_end: false,
         };
         store
             .apply_transcript(&p, &source, "/log", 1, &[said("before")])

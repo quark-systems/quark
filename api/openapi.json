@@ -15098,6 +15098,10 @@
               "null"
             ],
             "description": "RFC 3339 timestamp recorded by the harness, when present."
+          },
+          "turn_end": {
+            "type": "boolean",
+            "description": "`true` on the entry that records the harness ending its turn, for a\nharness that says so in its log (Codex's `task_complete`). Such an\nentry is an `assistant` entry with empty text, so a reader that\npredates this field still sees the turn answered."
           }
         }
       },

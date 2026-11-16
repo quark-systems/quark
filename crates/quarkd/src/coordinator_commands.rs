@@ -332,6 +332,7 @@ mod tests {
             truncated: false,
             ts: Some("2026-10-21T10:00:00Z".into()),
             tool: None,
+            turn_end: false,
         }
     }
 

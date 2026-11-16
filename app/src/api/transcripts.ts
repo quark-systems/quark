@@ -18,6 +18,8 @@ export interface TranscriptEntry {
   is_error: boolean; truncated: boolean; ts?: string | null;
   /** On `tool_call` entries; absent on entries recorded before the daemon summarized tools. */
   tool?: ToolInfo;
+  /** The harness ended its turn here (an `assistant` entry with empty text); absent otherwise. */
+  turn_end?: boolean;
 }
 /** A transcript entry with its id: the `seq` of the event that carried it. */
 export interface TranscriptItem extends TranscriptEntry {
