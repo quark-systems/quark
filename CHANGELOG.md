@@ -8,6 +8,20 @@ page lists every merged pull request.
 
 ## Unreleased
 
+## 0.2.0-beta.7
+
+### Added
+
+- A Project coordinator can run on IBM Bob. Quark writes Bob's mode, rules, workspace MCP
+  servers and hooks, and reads the coordinator's conversation from Bob's own transcript.
+
+### Fixed
+
+- Global Bob MCP servers are kept out of the Bob coordinator.
+- A Bob message is read once when Bob writes a conversation again, so it no longer shows
+  twice.
+- The coordinator window's header lines up on one centerline.
+
 ## 0.2.0-beta.6
 
 ### Fixed
