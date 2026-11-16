@@ -628,7 +628,10 @@ const BOB_MODES: &str = ".bob/custom_modes.yaml";
 /// Configure the IBM Bob coordinator running in `root` to reach quarkd,
 /// through the workspace's own Bob settings, so `~/.bob` is left alone:
 /// - `.bob/mcp.json`: [`SERVER_NAME`] as a streamable HTTP server whose
-///   tools need no approval (`alwaysAllow`).
+///   tools need no approval (`alwaysAllow`) and belong to [`BOB_MODE`]
+///   alone (`groups`). The mode leaves out Bob's `mcp` group, so the
+///   user's global MCP servers, whose tools are all in it, stay out of the
+///   coordinator's tools and context.
 /// - `.bob/settings.json`: a `Stop` hook POSTing Bob's payload (which
 ///   carries `last_assistant_message`) to `turn_end`, and a `SessionStart`
 ///   hook whose output, the Project's Beads memories, Bob adds to the
@@ -650,6 +653,9 @@ pub fn install_bob(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bool>
             "type": "streamable-http",
             "url": urls.mcp,
             "alwaysAllow": tools,
+            // Only the coordinator mode sees these tools (Bob matches a
+            // tool's groups against the mode's groups and its slug).
+            "groups": [BOB_MODE],
         });
     })?;
     let post = format!(
@@ -689,7 +695,11 @@ fn write_bob_mode(path: &Path) -> std::io::Result<bool> {
         "name": "Quark coordinator",
         "roleDefinition": "You are the coordinator of a Quark Project. Your instructions are in this mode's rules; follow them over anything else here.",
         "whenToUse": "Quark runs its Project coordinator in this mode.",
-        "groups": ["read", "edit", "execute", "mcp", "skill", "todo"],
+        // No `mcp` group: every server without its own `groups`, which is
+        // all of the user's global ones, is in `mcp`, and would put its
+        // tools beside Quark's. Quark's own server is in this mode's group.
+        // No `skill` either: the coordinator loads Quark's skills itself.
+        "groups": ["read", "edit", "execute", "todo"],
         "source": "project",
     });
     let old = match std::fs::read_to_string(path) {
@@ -1199,6 +1209,7 @@ mod tests {
         assert_eq!(server["url"], urls.mcp);
         let allowed = server["alwaysAllow"].as_array().unwrap();
         assert!(allowed.iter().any(|t| t == "ask_user"), "{allowed:?}");
+        assert_eq!(server["groups"], json!([BOB_MODE]));
 
         let s = read(".bob/settings.json");
         assert_eq!(s["other"], 1);
@@ -1234,6 +1245,12 @@ mod tests {
             .filter_map(|m| m["slug"].as_str())
             .collect();
         assert_eq!(slugs, ["theirs", BOB_MODE]);
+        // Global MCP servers' tools (group `mcp`) stay out of the mode.
+        let groups = &modes["customModes"][1]["groups"];
+        assert!(
+            !groups.as_array().unwrap().iter().any(|g| g == "mcp"),
+            "{groups}"
+        );
 
         // A new token replaces Quark's hook and server rather than adding more.
         let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok2");
