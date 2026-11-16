@@ -8,6 +8,14 @@ page lists every merged pull request.
 
 ## Unreleased
 
+## 0.2.0-beta.6
+
+### Fixed
+
+- The coordinator conversation fills the window again. On macOS it stayed about 200px wide
+  when the window grew, wrapped text drew over itself and cards squeezed into a thin column;
+  the transcript and the message box now share one centered column up to 760px wide.
+
 ## 0.2.0-beta.5
 
 The first signed and notarized build: Quark.app, QuarkBar, its widgets and quarkd carry
