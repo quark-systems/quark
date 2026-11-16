@@ -162,6 +162,24 @@ export function activity(t: Turn, now = Date.now()): Activity | null {
   return "working";
 }
 
+/** What the agent is doing now, read off the conversation's last turn, for a status line. */
+export interface LiveStatus {
+  activity: Activity | null;
+  /** Epoch ms the live turn started, when the harness recorded it. */
+  startedAt?: number;
+  /** The step it is on, while working. */
+  step?: string;
+}
+
+export function liveStatus(turns: Turn[], now = Date.now()): LiveStatus {
+  const last = turns[turns.length - 1];
+  if (!last || last.compaction) return { activity: null };
+  const doing = activity(last, now);
+  const end = last.parts[last.parts.length - 1];
+  const step = doing === "working" && end?.kind === "work" ? end.steps[end.steps.length - 1] : undefined;
+  return { activity: doing, startedAt: last.startedAt, step: step?.status === "running" ? stepTitle(step) : undefined };
+}
+
 /** "Read 3 files, ran 2 commands" for a folded run of steps. */
 export function summarize(steps: Step[]): string {
   const counts = new Map<string, number>();

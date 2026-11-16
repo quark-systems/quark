@@ -5,3 +5,6 @@ export { DiffCard } from "./DiffCard";
 export { lastId, placePending, stillPending, stillPendingCommands } from "./pending";
 export type { PendingCommand, PendingMessage, PendingPrompt } from "./pending";
 export { CommandCard } from "./CommandCard";
+export { activity, duration, groupTurns, liveStatus } from "./turns";
+export type { Activity, LiveStatus } from "./turns";
+export { useNow } from "./hooks";

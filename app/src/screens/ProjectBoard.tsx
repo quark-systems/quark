@@ -7,13 +7,13 @@ import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
-import { CommandCard, lastId, PendingMessage, stillPending, stillPendingCommands, Transcript } from "../components/transcript";
+import { CommandCard, duration, groupTurns, lastId, liveStatus, LiveStatus, PendingMessage, stillPending, stillPendingCommands, Transcript, useNow } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
 import { CoordinatorContext } from "../components/CoordinatorContext";
 import { useLabels } from "../persona";
 import { useDraft } from "../drafts";
 import { readAttached, useAttachments, withAttachments } from "../attachments";
-import { CommandButton, StopButton, usePendingCommands, useRunCommand, useStoppedThrough } from "../components/CoordinatorCommand";
+import { CommandButton, StopButton, usePendingCommands, useRunCommand, useStop, useStoppedThrough } from "../components/CoordinatorCommand";
 import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
 import { Welcome } from "../components/Welcome";
 
@@ -163,6 +163,23 @@ function ProvisionBar({ project }: { project: Project }) {
 
 const EMPTY: TranscriptItem[] = [];
 
+/** The coordinator's state as a pill in its header: working (with how long and on what), listening, idle, stopped, or your turn. */
+function ChatStatus({ live, stopped }: { live: LiveStatus; stopped: boolean }) {
+  const now = useNow(live.activity === "working", 1_000);
+  const [tone, text, title] =
+    stopped ? ["warn", "Stopped", "You pressed Stop; it reads your next message"]
+    : live.activity === "working" ? ["busy", live.startedAt !== undefined ? `Working · ${duration(now - live.startedAt)}` : "Working", live.step ? `On: ${live.step}` : undefined]
+    : live.activity === "listening" ? ["ok", "Listening", "Waiting for project events; costs nothing"]
+    : live.activity === "quiet" ? ["idle", "Idle", "Nothing has been recorded for a while"]
+    : ["idle", "Your turn", "It finished and waits for your next message"];
+  return (
+    <span className={"coord-status " + tone} data-testid="coordinator-status" title={title} role="status">
+      {tone === "busy" ? <span className="spinner" aria-hidden="true" /> : <span className="coord-status-dot" aria-hidden="true" />}
+      {text}
+    </span>
+  );
+}
+
 /** `welcome`: show the welcome while the conversation is empty (the Conversation tab; not the Issues side chat). */
 export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome?: boolean }) {
   const project = useStore((s) => s.projects[cid]);
@@ -181,9 +198,18 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
   const l = useLabels(cid);
   const coordinator = l.role("coordinator");
   const commands = useRunCommand(cid);
-  const placed = useMemo(() => pending.map((p) => ({ after: p.after, text: p.text,
-    note: p.sending ? "sending…" : p.confirmed ? "sent" : "typed, not confirmed; check before sending again" })), [pending]);
   const stoppedThrough = useStoppedThrough(cid);
+  const stopper = useStop(cid);
+  // What the coordinator is doing now, for the header's status and the composer's Stop.
+  const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id), stoppedThrough), [items, stoppedThrough]);
+  const now = useNow(true);
+  const live = liveStatus(turns, now);
+  const stopped = stoppedThrough !== undefined && lastId(items) === stoppedThrough;
+  const busy = live.activity === "working";
+  // A message sent while the coordinator works waits in its session until the current step ends.
+  const placed = useMemo(() => pending.map((p) => ({ after: p.after, text: p.text,
+    note: p.sending ? "Sending…" : !p.confirmed ? "Typed, not confirmed. Check before sending again."
+      : busy ? "Delivered · queued until the current step ends" : "Delivered" })), [pending, busy]);
   const matches = slashMatches(text);
   const label = useCallback((c: CoordinatorCommand) => commandLabel(l, c), [l]);
 
@@ -235,12 +261,21 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
 
   return (
     <aside className="side-chat" data-testid="coordinator-chat" ref={box}>
-      <div className="panel-head">{l.Role("coordinator")}<CoordinatorContext cid={cid} changed={items.length} /><span className="spacer" /><StopButton cid={cid} /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} /></div>
+      <div className="coord-head">
+        <span className="coord-avatar" aria-hidden="true">{l.Role("coordinator").slice(0, 1)}</span>
+        <div className="coord-title">
+          <span className="coord-name">{l.Role("coordinator")}</span>
+          <CoordinatorContext cid={cid} changed={items.length} />
+        </div>
+        <ChatStatus live={live} stopped={stopped} />
+        <span className="spacer" />
+        <StopButton cid={cid} /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} />
+      </div>
       {status === "unavailable" ? (
         <Unavailable what="Coordinator chat" endpoint={`GET /v1/coordinators/${cid}/messages`} />
       ) : (
         <>
-          <Transcript key={cid} items={items} pending={placed} agent="coordinator" actions project={cid} className="chat-log" commandLabel={label} stoppedThrough={stoppedThrough}
+          <Transcript key={cid} items={items} pending={placed} agent={coordinator} actions project={cid} className="chat-log" commandLabel={label} stoppedThrough={stoppedThrough}
             empty={status === "ok" ? (welcome && project
               ? <Welcome project={project} onSuggest={(t) => { setText(t); box.current?.querySelector("textarea")?.focus(); }} />
               : <div className="empty">Ask the {coordinator} to plan or delegate work.</div>)
@@ -250,7 +285,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
                 state={p.sending ? "sending" : p.confirmed ? "sent" : "unconfirmed"} />
             ))}
           </Transcript>
-          {(err ?? commands.err) && <div className="form-error">{err ?? commands.err}</div>}
+          {(err ?? commands.err ?? stopper.err) && <div className="form-error">{err ?? commands.err ?? stopper.err}</div>}
           {matches.length > 0 && (
             <div className="slash-menu" role="listbox" aria-label="Slash commands" data-testid="slash-menu">
               {matches.map((m) => (
@@ -262,7 +297,12 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
             </div>
           )}
           <Composer value={text} onChange={setText} onSend={() => void send()} sending={false} attachments={attach}
-            label={`Message the ${coordinator}`} placeholder={`Message the ${coordinator} (Enter to send, Shift+Enter for a newline)`} />
+            label={`Message the ${coordinator}`} placeholder={`Ask the ${coordinator} to plan, start or check work`}
+            tools={<button type="button" className="composer-tool" aria-label="Commands" title="Catch up, status report, wrap up" data-testid="composer-commands"
+              onClick={() => { setText(text.startsWith("/") ? "" : "/"); box.current?.querySelector("textarea")?.focus(); }}>
+              <span className="mono">/</span><span className="composer-tool-label">Commands</span></button>}
+            hint={<><kbd>↵</kbd> {busy ? "queues it for the next step" : "sends"} · <kbd>⇧↵</kbd> new line</>}
+            onStop={busy || live.activity === "quiet" ? () => void stopper.stop() : undefined} stopping={stopper.resting} />
         </>
       )}
     </aside>
