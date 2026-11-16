@@ -20,13 +20,31 @@ export interface TranscriptEntry {
   tool?: ToolInfo;
 }
 /** A transcript entry with its id: the `seq` of the event that carried it. */
-export interface TranscriptItem extends TranscriptEntry { id: number }
+export interface TranscriptItem extends TranscriptEntry {
+  id: number;
+  /** The sent message this user entry records (`OutboxMessage.id`), when the daemon recorded it. */
+  message_id?: string;
+}
+/** Where a message sent to a coordinator is (`OutboxState` in quarkd). */
+export type OutboxState = "queued" | "sending" | "sent" | "unconfirmed" | "failed" | "cancelled";
+/** A message sent to a coordinator, recorded by the daemon (`coordinator.outbox` events). */
+export interface OutboxMessage {
+  id: string; coordinator_id: string; text: string; state: OutboxState;
+  error?: string | null;
+  /** The transcript entry recording it, once typed in. */
+  entry_id?: number | null;
+  created_at: string; updated_at: string;
+}
 /** What the user asks a coordinator for with one control (`CoordinatorCommand` in quarkd). */
 export type CoordinatorCommand = "catch_up" | "status_report" | "wrap_up";
 export interface MessageAccepted {
   coordinator_id: string; confirmed: boolean; accepted_at: string;
   /** The command that ran, when the message was one: a catch up with nothing to recap from runs as a status report. */
   command?: CoordinatorCommand;
+  /** The sent message's id; absent for a command, and from daemons before the outbox. */
+  message_id?: string;
+  /** `queued` when it waits for the coordinator's turn to end. */
+  state?: OutboxState;
 }
 
 /** Where a compaction Quark started is: a wrap up first, then the harness's `/compact`. */
@@ -71,7 +89,15 @@ export interface CoordinatorSwitch {
 
 export const transcriptsApi = {
   chat: (cid: string) => req<TranscriptItem[]>("GET", `/v1/coordinators/${enc(cid)}/messages?limit=1000`),
-  sendChat: (cid: string, text: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}/messages`, { text }),
+  /** `queue`: hold it while the coordinator works, editable and cancellable, until its turn ends. */
+  sendChat: (cid: string, text: string, queue = false) =>
+    req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}/messages`, queue ? { text, queue } : { text }, true),
+  outbox: (cid: string) => req<OutboxMessage[]>("GET", `/v1/coordinators/${enc(cid)}/outbox`),
+  editQueued: (cid: string, mid: string, text: string) =>
+    req<OutboxMessage>("PATCH", `/v1/coordinators/${enc(cid)}/messages/${enc(mid)}`, { text }),
+  cancelQueued: (cid: string, mid: string) => req<OutboxMessage>("DELETE", `/v1/coordinators/${enc(cid)}/messages/${enc(mid)}`),
+  /** Type a queued message in now, or try a failed one again. */
+  sendQueuedNow: (cid: string, mid: string) => req<OutboxMessage>("POST", `/v1/coordinators/${enc(cid)}/messages/${enc(mid)}:send`),
   runCommand: (cid: string, command: CoordinatorCommand) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:run`, { command }),
   coordinatorContext: (cid: string) => req<CoordinatorContext>("GET", `/v1/coordinators/${enc(cid)}/context`),
   compactCoordinator: (cid: string) => req<MessageAccepted | undefined>("POST", `/v1/coordinators/${enc(cid)}:compact`),

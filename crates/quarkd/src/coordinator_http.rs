@@ -309,6 +309,13 @@ async fn hook(
                 tracing::warn!(%project, error = %e, "could not mark a switch's wrap up");
             }
             if let Some(w) = &r.wrap_up {
+                // A message queued while the turn ran goes in now, just
+                // after the hook returns.
+                let (store, chat, pid) = (r.store.clone(), w.chat.clone(), project.clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    crate::outbox::deliver_next(store, chat, pid).await;
+                });
                 compaction::after_turn(
                     w.compactor.clone(),
                     r.store.clone(),

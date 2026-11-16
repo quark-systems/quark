@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { CoordinatorCommand } from "../../api";
+import type { PendingPrompt } from "./pending";
 
 export interface TranscriptSettings {
   /** Who the agent is, for the live line: "coordinator" or "worker". */
@@ -12,8 +13,8 @@ export interface TranscriptSettings {
   freshAfter: number;
   /** A command's name in the Project's persona. */
   commandLabel: (c: CoordinatorCommand) => string;
-  /** The line under each message sent but not yet in the log, by its placed id. */
-  pendingNotes?: Map<number, string>;
+  /** Each message sent but not yet in the log, by its placed id. */
+  pendingNotes?: Map<number, PendingPrompt>;
 }
 
 const NEUTRAL: Record<CoordinatorCommand, string> = { catch_up: "Catch up", status_report: "Status report", wrap_up: "Wrap up" };

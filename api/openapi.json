@@ -575,7 +575,7 @@
           "coordinators"
         ],
         "summary": "Send a message to a Project's coordinator.",
-        "description": "The coordinator id is the Project id. The text is typed into the\ncoordinator's live session; its reply arrives on the event stream as\n`coordinator.message` events, which also carry this message once the\nsession records it.",
+        "description": "The coordinator id is the Project id. The daemon records the message\n(its `message_id`), then types it into the coordinator's live session and\nadds it to the transcript where it was sent: a `coordinator.message`\n`user` entry carrying the `message_id`. The harness's own copy of it is\nnot shown again. The reply arrives as later `coordinator.message` events.\n\nWith `queue`, a message sent while the coordinator is working waits as\n`queued` (202 with `state: queued`) until its turn ends; it can be\nedited, cancelled or sent at once until then. `coordinator.outbox`\nevents follow it.",
         "operationId": "send_coordinator_message",
         "parameters": [
           {
@@ -648,6 +648,263 @@
           },
           "503": {
             "description": "No live coordinator session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/coordinators/{id}/messages/{message_id}": {
+      "delete": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Cancel a queued (or failed) message, so it is never typed in.",
+        "operationId": "cancel_coordinator_message",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "description": "The sent message's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutboxMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The message was already typed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Change a queued message's text.",
+        "operationId": "edit_coordinator_message",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "description": "The sent message's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditOutboxMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutboxMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The message is no longer queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/coordinators/{id}/messages/{message_id}:send": {
+      "post": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Type a queued message in now, without waiting for the turn to end, or\ntry a failed one again. The custom method\n`/v1/coordinators/{id}/messages/{message_id}:send`.",
+        "operationId": "coordinator_message_action",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "description": "The sent message's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutboxMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The message is not queued or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Typing into the session failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No live coordinator session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/coordinators/{id}/outbox": {
+      "get": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Messages sent to a coordinator that aren't in its transcript yet:\nqueued, being typed in, or failed. Oldest first.",
+        "operationId": "coordinator_outbox",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutboxMessage"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -7215,6 +7472,10 @@
           "text"
         ],
         "properties": {
+          "queue": {
+            "type": "boolean",
+            "description": "Hold the message while the coordinator is busy: it waits as\n`queued`, editable and cancellable, and is typed in when the current\nturn ends. Without it the message is typed in at once."
+          },
           "text": {
             "type": "string"
           }
@@ -7249,6 +7510,24 @@
           },
           "coordinator_id": {
             "type": "string"
+          },
+          "message_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sent message's id; absent for a command."
+          },
+          "state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OutboxState",
+                "description": "`queued` when it waits for the coordinator's turn to end."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -8666,6 +8945,18 @@
           }
         }
       },
+      "EditOutboxMessage": {
+        "type": "object",
+        "description": "New text for a queued message.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
       "Effort": {
         "type": "string",
         "description": "Reasoning effort, shared across harnesses. Each harness accepts a subset.",
@@ -8765,7 +9056,8 @@
           "beads.status",
           "beads.changed",
           "issue_draft.updated",
-          "notice.posted"
+          "notice.posted",
+          "coordinator.outbox"
         ]
       },
       "Evidence": {
@@ -11017,6 +11309,64 @@
             "type": "string"
           }
         }
+      },
+      "OutboxMessage": {
+        "type": "object",
+        "description": "A message sent to a coordinator, recorded by the daemon when it is sent.\nPayload of `coordinator.outbox`. Once typed in, the message is also a\n`user` entry of the coordinator's transcript carrying this `id` as its\n`message_id`, placed where it was sent.",
+        "required": [
+          "id",
+          "coordinator_id",
+          "text",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "coordinator_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "entry_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The transcript entry recording it, once typed in: its `id`."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/OutboxState"
+          },
+          "text": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "OutboxState": {
+        "type": "string",
+        "description": "Where a message sent to a coordinator is.",
+        "enum": [
+          "queued",
+          "sending",
+          "sent",
+          "unconfirmed",
+          "failed",
+          "cancelled"
+        ]
       },
       "OverviewDigest": {
         "type": "object",
@@ -14154,6 +14504,13 @@
                 "type": "integer",
                 "format": "int64",
                 "description": "The `seq` of the event that carried this entry; pass it as `after` to\npage, and use it to merge history with live events."
+              },
+              "message_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The sent message this entry records, for a user message sent through\n`POST /v1/coordinators/{id}/messages`: the [`OutboxMessage`] id."
               }
             }
           }

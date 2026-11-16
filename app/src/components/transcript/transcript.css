@@ -16,6 +16,16 @@
 .tx-user.pending .tx-bubble { border-style: dashed; color: var(--fg-dim); }
 .tx-bubble { background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 14px 14px 4px 14px; padding: 8px 13px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .tx-meta { font-size: 11px; color: var(--fg-faint); }
+/* A message that waits or failed: its line says where it is, with what can be done. */
+.tx-user.failed .tx-bubble { border-color: var(--red); }
+.tx-user.failed .tx-meta { color: var(--red); }
+.tx-link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.tx-link:hover { text-decoration: underline; }
+.tx-link:disabled { color: var(--fg-faint); cursor: default; text-decoration: none; }
+.tx-edit { width: min(560px, 100%); display: flex; flex-direction: column; gap: 6px; }
+.tx-edit textarea { width: 100%; resize: vertical; background: var(--bg-2); color: var(--fg); border: 1px solid var(--accent); border-radius: 12px; padding: 8px 12px; font: 14px/1.5 var(--sans); }
+.tx-edit textarea:focus { outline: none; }
+.tx-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .tx-text { line-height: 1.6; }
 
 /* work: the fold line, step rows and their detail */

@@ -32,6 +32,13 @@ describe("api errors", () => {
     respond(202);
     await expect(api.steer("t1", "hi")).resolves.toBeUndefined();
   });
+  it("reads a sent coordinator message's id and state from its 202", async () => {
+    respond(202, { coordinator_id: "p", confirmed: false, accepted_at: "t", message_id: "msg_1", state: "queued" });
+    await expect(api.sendChat("p", "hi", true)).resolves.toMatchObject({ message_id: "msg_1", state: "queued" });
+    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual({ text: "hi", queue: true });
+    respond(202);
+    await expect(api.sendChat("p", "hi")).resolves.toBeUndefined();
+  });
 });
 
 describe("decisions", () => {

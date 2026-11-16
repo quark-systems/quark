@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import {
   Account, AccountQuotaChanged, api, apiMismatch, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Notice, Project, PullRequest,
-  ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
+  OutboxMessage, ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
 } from "./api";
 
 export interface AppState {
@@ -20,6 +20,8 @@ export interface AppState {
   memoryProposals: Record<string, MemoryProposal>;
   /** Coordinator transcripts by coordinator id (= Project id). Absent until loaded. */
   chat: Record<string, TranscriptItem[]>;
+  /** Messages sent to each coordinator, by coordinator id then message id, as the daemon last reported them. Absent until loaded. */
+  outbox: Record<string, Record<string, OutboxMessage>>;
   /** Worker transcripts by task id. Absent until loaded. */
   transcripts: Record<string, TranscriptItem[]>;
   /** Count of `task.event` events per task, so views can refetch what a task changed. */
@@ -55,7 +57,7 @@ export const NOTICES_KEPT = 50;
 
 export const initialState: AppState = {
   connected: false, lastSeq: 0, error: null, health: null,
-  projects: {}, tasks: {}, decisions: {}, rules: {}, memoryProposals: {}, chat: {}, transcripts: {}, taskActivity: {}, dispatch: {},
+  projects: {}, tasks: {}, decisions: {}, rules: {}, memoryProposals: {}, chat: {}, outbox: {}, transcripts: {}, taskActivity: {}, dispatch: {},
   pullRequests: {}, prsAvailable: null, prActivity: {}, merges: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
   beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null, notices: [],
@@ -119,8 +121,13 @@ export function applyEvent(s: AppState, e: DaemonEvent): AppState {
       // Transcript entries are identified by the seq of the event that carried them.
       const cid = p.coordinator_id ?? e.project_id;
       if (!cid || !(cid in s.chat) || !p.entry) return s; // loaded on demand; the fetch includes it
-      const item: TranscriptItem = { ...(p.entry as TranscriptEntry), id: e.seq };
+      const item: TranscriptItem = { ...(p.entry as TranscriptEntry), id: e.seq, ...(p.message_id ? { message_id: p.message_id as string } : {}) };
       return { ...s, chat: { ...s.chat, [cid]: upsertById(s.chat[cid], item) } };
+    }
+    case "coordinator.outbox": {
+      const cid = p?.coordinator_id as string | undefined;
+      if (!cid || !(cid in s.outbox) || typeof p.id !== "string") return s; // loaded on demand with the chat
+      return { ...s, outbox: { ...s.outbox, [cid]: { ...s.outbox[cid], [p.id]: p as OutboxMessage } } };
     }
     case "worker.transcript": {
       const tid = p.task_id as string;
@@ -303,15 +310,29 @@ export async function clearWorkers(pid: string, state: "done" | "failed", discar
 /** Loads a coordinator's chat; later `coordinator.message` events append to it. */
 export async function loadChat(cid: string): Promise<"ok" | "unavailable"> {
   try {
-    const msgs = await api.chat(cid);
+    const [msgs, outbox] = await Promise.all([
+      api.chat(cid),
+      // Daemons before the outbox don't serve it; the chat works without it.
+      api.outbox(cid).catch(() => [] as OutboxMessage[]),
+    ]);
     const merged = new Map((state.chat[cid] ?? []).map((m) => [m.id, m]));
     for (const m of msgs) merged.set(m.id, m);
-    set({ chat: { ...state.chat, [cid]: [...merged.values()] } });
+    const sent = { ...state.outbox[cid] };
+    for (const m of outbox) sent[m.id] = m;
+    set({ chat: { ...state.chat, [cid]: [...merged.values()] }, outbox: { ...state.outbox, [cid]: sent } });
     return "ok";
   } catch (e) {
     if (e instanceof NotAvailable) return "unavailable";
     throw e;
   }
+}
+
+/** Records what the daemon said about a sent message, ahead of its `coordinator.outbox` event. */
+export function noteOutbox(m: OutboxMessage) {
+  const mine = state.outbox[m.coordinator_id] ?? {};
+  const known = mine[m.id];
+  if (known && known.updated_at >= m.updated_at) return;
+  set({ outbox: { ...state.outbox, [m.coordinator_id]: { ...mine, [m.id]: m } } });
 }
 
 /** Loads a worker transcript; later `worker.transcript` events append to it. */

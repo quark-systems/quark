@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, CoordinatorCommand, Project, Task, TranscriptItem } from "../api";
 import { SinceYouLooked } from "../shell/SinceYouLooked";
-import { clearWorkers, loadChat, useStore } from "../store";
+import { clearWorkers, loadChat, noteOutbox, useStore } from "../store";
+import { useOutboxPrompts } from "../components/CoordinatorOutbox";
 import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
@@ -206,10 +207,15 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
   const live = liveStatus(turns, now);
   const stopped = stoppedThrough !== undefined && lastId(items) === stoppedThrough;
   const busy = live.activity === "working";
-  // A message sent while the coordinator works waits in its session until the current step ends.
-  const placed = useMemo(() => pending.map((p) => ({ after: p.after, text: p.text,
-    note: p.sending ? "Sending…" : !p.confirmed ? "Typed, not confirmed. Check before sending again."
-      : busy ? "Delivered · queued until the current step ends" : "Delivered" })), [pending, busy]);
+  // Sent messages the daemon holds: queued while the coordinator works, being typed in, or not delivered.
+  const outbox = useOutboxPrompts(cid, useStore((s) => s.outbox[cid]), items, pending, coordinator);
+  const queueing = busy || outbox.waiting.some((m) => m.state === "queued");
+  const placed = useMemo(() => [
+    ...pending.map((p) => ({ after: p.after, text: p.text,
+      note: p.sending ? "Sending…" : !p.confirmed ? "Typed, not confirmed. Check before sending again."
+        : busy ? "Delivered · waiting for the current step to end" : "Delivered" })),
+    ...outbox.prompts,
+  ], [pending, busy, outbox.prompts]);
   const matches = slashMatches(text);
   const label = useCallback((c: CoordinatorCommand) => commandLabel(l, c), [l]);
 
@@ -248,7 +254,14 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
     setText("");
     attach.clear();
     try {
-      const r = await api.sendChat(cid, t);
+      // While the coordinator works it waits, editable, until the step ends.
+      const r = await api.sendChat(cid, t, queueing);
+      if (r?.message_id && r.state) {
+        // The daemon recorded it: the transcript (or its outbox) shows it from here.
+        noteOutbox({ id: r.message_id, coordinator_id: cid, text: t, state: r.state, created_at: r.accepted_at, updated_at: r.accepted_at });
+        setPending((p) => p.filter((x) => x.key !== key));
+        return;
+      }
       setPending((p) => p.map((x) => x.key === key ? { ...x, sending: false, confirmed: r?.confirmed ?? true } : x));
     } catch (e) {
       setErr(errText(e));
@@ -285,7 +298,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
                 state={p.sending ? "sending" : p.confirmed ? "sent" : "unconfirmed"} />
             ))}
           </Transcript>
-          {(err ?? commands.err ?? stopper.err) && <div className="form-error">{err ?? commands.err ?? stopper.err}</div>}
+          {(err ?? outbox.err ?? commands.err ?? stopper.err) && <div className="form-error">{err ?? outbox.err ?? commands.err ?? stopper.err}</div>}
           {matches.length > 0 && (
             <div className="slash-menu" role="listbox" aria-label="Slash commands" data-testid="slash-menu">
               {matches.map((m) => (
@@ -301,7 +314,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
             tools={<button type="button" className="composer-tool" aria-label="Commands" title="Catch up, status report, wrap up" data-testid="composer-commands"
               onClick={() => { setText(text.startsWith("/") ? "" : "/"); box.current?.querySelector("textarea")?.focus(); }}>
               <span className="mono">/</span><span className="composer-tool-label">Commands</span></button>}
-            hint={<><kbd>↵</kbd> {busy ? "queues it for the next step" : "sends"} · <kbd>⇧↵</kbd> new line</>}
+            hint={<><kbd>↵</kbd> {queueing ? "queues it until this step ends" : "sends"} · <kbd>⇧↵</kbd> new line</>}
             onStop={busy || live.activity === "quiet" ? () => void stopper.stop() : undefined} stopping={stopper.resting} />
         </>
       )}

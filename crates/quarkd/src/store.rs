@@ -29,6 +29,7 @@ mod decisions;
 mod failover;
 mod memory;
 mod migrations;
+mod outbox;
 mod pull_requests;
 mod switches;
 pub use switches::SwitchRow;
@@ -1340,11 +1341,13 @@ impl Store {
         };
         self.read(|c| {
             let sql = if after.is_some() {
-                "SELECT seq, json_extract(payload, '$.entry') FROM events
+                "SELECT seq, json_extract(payload, '$.entry'), json_extract(payload, '$.message_id')
+                 FROM events
                  WHERE type = ?1 AND json_extract(payload, ?2) = ?3 AND seq > ?4
                  ORDER BY seq LIMIT ?5"
             } else {
-                "SELECT seq, json_extract(payload, '$.entry') FROM events
+                "SELECT seq, json_extract(payload, '$.entry'), json_extract(payload, '$.message_id')
+                 FROM events
                  WHERE type = ?1 AND json_extract(payload, ?2) = ?3 AND seq > ?4
                  ORDER BY seq DESC LIMIT ?5"
             };
@@ -1352,19 +1355,29 @@ impl Store {
             let mut rows = stmt
                 .query_map(
                     params![event_type.as_str(), key, id, after.unwrap_or(0), limit],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+                    |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                        ))
+                    },
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             if after.is_none() {
                 rows.reverse();
             }
             let mut out = Vec::new();
-            for (id, entry) in rows {
+            for (id, entry, message_id) in rows {
                 let entry: quark_systems::TranscriptEntry = serde_json::from_str(&entry)?;
                 if recorded_compaction_summary(&entry) {
                     continue;
                 }
-                out.push(TranscriptItem { id, entry });
+                out.push(TranscriptItem {
+                    id,
+                    entry,
+                    message_id,
+                });
             }
             Ok(out)
         })
@@ -1411,10 +1424,22 @@ impl Store {
         self.write(|tx, events| {
             for entry in entries {
                 let (event_type, payload) = match source {
-                    TranscriptSource::Coordinator { project_id } => (
-                        EventType::CoordinatorMessage,
-                        serde_json::json!({ "coordinator_id": project_id, "entry": entry }),
-                    ),
+                    TranscriptSource::Coordinator { project_id } => {
+                        // A message the daemon typed in is recorded once,
+                        // with its id, where it was sent.
+                        match outbox::claim_logged_message(tx, project_id, entry)? {
+                            outbox::Logged::Duplicate => continue,
+                            outbox::Logged::Record(m) => {
+                                outbox::record_logged(tx, events, &m, entry)?;
+                                continue;
+                            }
+                            outbox::Logged::Unknown => {}
+                        }
+                        (
+                            EventType::CoordinatorMessage,
+                            serde_json::json!({ "coordinator_id": project_id, "entry": entry }),
+                        )
+                    }
                     TranscriptSource::Task { task_id } => (
                         EventType::WorkerTranscript,
                         serde_json::json!({ "task_id": task_id, "entry": entry }),

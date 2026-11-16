@@ -400,6 +400,117 @@ async fn coordinator_messages_are_typed_into_the_session() {
 }
 
 #[tokio::test]
+async fn a_message_sent_while_the_coordinator_works_waits_editable() {
+    let h = harness();
+    let (_, project) = call(
+        &h.app,
+        "POST",
+        "/v1/projects",
+        Some(json!({"name": "Quark", "workspace_path": "/tmp/quark-ws"})),
+    )
+    .await;
+    let pid = project["id"].as_str().unwrap().to_string();
+    let uri = format!("/v1/coordinators/{pid}/messages");
+
+    // A quiet coordinator takes it at once, even when asked to queue it,
+    // and the transcript records it with its id.
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &uri,
+        Some(json!({"text": "hi", "queue": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["state"], "sent");
+    let first = body["message_id"].as_str().unwrap().to_string();
+    let (_, chat) = call(&h.app, "GET", &uri, None).await;
+    assert_eq!(chat[0]["text"], "hi");
+    assert_eq!(chat[0]["message_id"], first.as_str());
+
+    // While it works, the message waits.
+    h.store.coordinator_says(&pid, "Running the tests").unwrap();
+    let (_, body) = call(
+        &h.app,
+        "POST",
+        &uri,
+        Some(json!({"text": "and lint", "queue": true})),
+    )
+    .await;
+    assert_eq!(body["state"], "queued");
+    let mid = body["message_id"].as_str().unwrap().to_string();
+    assert_eq!(h.chat.sent().len(), 1);
+    let (_, outbox) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/coordinators/{pid}/outbox"),
+        None,
+    )
+    .await;
+    assert_eq!(outbox.as_array().unwrap().len(), 1);
+    assert_eq!(outbox[0]["state"], "queued");
+
+    let one = format!("{uri}/{mid}");
+    let (status, body) = call(
+        &h.app,
+        "PATCH",
+        &one,
+        Some(json!({"text": "and run clippy"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["text"], "and run clippy");
+    let (status, _) = call(
+        &h.app,
+        "PATCH",
+        &format!("{uri}/msg_missing"),
+        Some(json!({"text": "x"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Send now types it in and records it after what came before.
+    let (status, body) = call(&h.app, "POST", &format!("{one}:send"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], "sent");
+    assert_eq!(h.chat.sent()[1].1, "and run clippy");
+    let (_, chat) = call(&h.app, "GET", &uri, None).await;
+    let texts: Vec<_> = chat
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["hi", "Running the tests", "and run clippy"]);
+    assert_eq!(chat[2]["message_id"], mid.as_str());
+    let (status, _) = call(&h.app, "PATCH", &one, Some(json!({"text": "late"}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // A cancelled one never goes in.
+    let (_, body) = call(
+        &h.app,
+        "POST",
+        &uri,
+        Some(json!({"text": "never mind", "queue": true})),
+    )
+    .await;
+    assert_eq!(body["state"], "queued");
+    let gone = body["message_id"].as_str().unwrap();
+    let (status, body) = call(&h.app, "DELETE", &format!("{uri}/{gone}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["state"], "cancelled");
+    let (_, outbox) = call(
+        &h.app,
+        "GET",
+        &format!("/v1/coordinators/{pid}/outbox"),
+        None,
+    )
+    .await;
+    assert!(outbox.as_array().unwrap().is_empty());
+    assert_eq!(h.chat.sent().len(), 2);
+}
+
+#[tokio::test]
 async fn without_a_session_client_messages_are_refused() {
     let store = Arc::new(Store::open_in_memory().unwrap());
     let harnesses = Arc::new(quarkd::harness::HarnessRegistry::new(

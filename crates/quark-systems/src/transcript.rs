@@ -122,11 +122,89 @@ pub struct TranscriptItem {
     pub id: i64,
     #[serde(flatten)]
     pub entry: TranscriptEntry,
+    /// The sent message this entry records, for a user message sent through
+    /// `POST /v1/coordinators/{id}/messages`: the [`OutboxMessage`] id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
 }
 
 /// A message for a coordinator, typed into its session as if at the keyboard.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CoordinatorMessage {
+    pub text: String,
+    /// Hold the message while the coordinator is busy: it waits as
+    /// `queued`, editable and cancellable, and is typed in when the current
+    /// turn ends. Without it the message is typed in at once.
+    #[serde(default)]
+    pub queue: bool,
+}
+
+/// Where a message sent to a coordinator is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboxState {
+    /// Waiting for the coordinator's turn to end; can be edited or cancelled.
+    Queued,
+    /// Being typed into the coordinator's session.
+    Sending,
+    /// Typed in, and the session confirmed it.
+    Sent,
+    /// Typed in, but the session did not confirm it; check before resending.
+    Unconfirmed,
+    /// Not delivered; `error` says why. Can be sent again.
+    Failed,
+    /// Cancelled while queued; never delivered.
+    Cancelled,
+}
+
+impl OutboxState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutboxState::Queued => "queued",
+            OutboxState::Sending => "sending",
+            OutboxState::Sent => "sent",
+            OutboxState::Unconfirmed => "unconfirmed",
+            OutboxState::Failed => "failed",
+            OutboxState::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<OutboxState> {
+        [
+            OutboxState::Queued,
+            OutboxState::Sending,
+            OutboxState::Sent,
+            OutboxState::Unconfirmed,
+            OutboxState::Failed,
+            OutboxState::Cancelled,
+        ]
+        .into_iter()
+        .find(|v| v.as_str() == s)
+    }
+}
+
+/// A message sent to a coordinator, recorded by the daemon when it is sent.
+/// Payload of `coordinator.outbox`. Once typed in, the message is also a
+/// `user` entry of the coordinator's transcript carrying this `id` as its
+/// `message_id`, placed where it was sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct OutboxMessage {
+    pub id: String,
+    pub coordinator_id: String,
+    pub text: String,
+    pub state: OutboxState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The transcript entry recording it, once typed in: its `id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// New text for a queued message.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EditOutboxMessage {
     pub text: String,
 }
 
@@ -144,6 +222,12 @@ pub struct CoordinatorMessageAccepted {
     /// report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<CoordinatorCommand>,
+    /// The sent message's id; absent for a command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    /// `queued` when it waits for the coordinator's turn to end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<OutboxState>,
 }
 
 /// A request the user makes of a coordinator with one control: a button in
