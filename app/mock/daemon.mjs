@@ -657,6 +657,46 @@ function chat(projectId, role, text, extra) {
   chats.get(projectId).push({ ...entry, id: e.seq });
 }
 
+// Messages sent to each coordinator (quarkd's outbox), and the coordinators mid-step.
+const outboxes = new Map();
+const coordWorking = new Map();
+// Coordinators whose next queued delivery fails, as one whose session went away.
+const failNext = new Set();
+
+function setOutbox(msg, state, error = null) {
+  Object.assign(msg, { state, error, updated_at: now() });
+  emit("coordinator.outbox", { ...msg }, msg.coordinator_id);
+  return msg;
+}
+
+function outboxMessage(cid, text, state) {
+  const at = now();
+  const msg = { id: nextId("msg"), coordinator_id: cid, text, state, error: null, created_at: at, updated_at: at };
+  if (!outboxes.has(cid)) outboxes.set(cid, new Map());
+  outboxes.get(cid).set(msg.id, msg);
+  emit("coordinator.outbox", { ...msg }, cid);
+  return msg;
+}
+
+/** Types a message in: the transcript records it, with its id, where it was sent; the reply follows. */
+function deliverMessage(msg) {
+  const cid = msg.coordinator_id;
+  if (failNext.delete(cid)) return setOutbox(msg, "failed", "coordinator session unavailable: the coordinator has no live terminal");
+  const entry = entryOf("user", msg.text);
+  const e = emit("coordinator.message", { coordinator_id: cid, entry, message_id: msg.id }, cid);
+  chats.get(cid).push({ ...entry, id: e.seq, message_id: msg.id });
+  msg.entry_id = e.seq;
+  setOutbox(msg, "sent");
+  setTimeout(() => {
+    const t = addTask(cid, { title: msg.text.slice(0, 70), state: "queued", harness: projects.get(cid).agent_config?.harness ?? "claude-code" });
+    const command = `bin/fm-spawn.sh ${t.id} projects/${cid} --mode no-mistakes --yolo off`;
+    chat(cid, "tool_call", JSON.stringify({ command }), { tool_name: "bash", tool_call_id: `spawn-${t.id}`, tool: { kind: "shell", title: `Run ${command}`, command } });
+    chat(cid, "tool_result", "spawned", { tool_name: "bash", tool_call_id: `spawn-${t.id}` });
+    chat(cid, "assistant", `On it. I wrote a task contract and queued **${t.title}**.`);
+  }, QUIET ? 50 : 700);
+  return msg;
+}
+
 function outputEvent(task, kind, bytes) {
   const term = terms.get(task.id);
   return emit("worker.output", {
@@ -2143,17 +2183,63 @@ const server = http.createServer(async (req, res) => {
       const b = await readJson(req);
       if (!b?.text?.trim()) return invalid(res, "text is required");
       const text = b.text.trim();
-      // Like quarkd: not echoed; the session records it shortly after.
-      setTimeout(() => {
-        chat(cid, "user", text);
-        const t = addTask(cid, { title: text.slice(0, 70), state: "queued", harness: projects.get(cid).agent_config?.harness ?? "claude-code" });
-        const command = `bin/fm-spawn.sh ${t.id} projects/${cid} --mode no-mistakes --yolo off`;
-        chat(cid, "tool_call", JSON.stringify({ command }), { tool_name: "bash", tool_call_id: `spawn-${t.id}`, tool: { kind: "shell", title: `Run ${command}`, command } });
-        chat(cid, "tool_result", "spawned", { tool_name: "bash", tool_call_id: `spawn-${t.id}` });
-        chat(cid, "assistant", `On it. I wrote a task contract and queued **${t.title}**.`);
-      }, QUIET ? 50 : 700);
-      return send(res, 202, { coordinator_id: cid, confirmed: true, accepted_at: now() });
+      // Like quarkd: recorded at once; one sent with `queue` while the coordinator works waits.
+      if (b.queue && coordWorking.has(cid)) {
+        const msg = outboxMessage(cid, text, "queued");
+        return send(res, 202, { coordinator_id: cid, confirmed: false, accepted_at: msg.created_at, message_id: msg.id, state: "queued" });
+      }
+      const msg = deliverMessage(outboxMessage(cid, text, "sending"));
+      return send(res, 202, { coordinator_id: cid, confirmed: true, accepted_at: msg.created_at, message_id: msg.id, state: msg.state });
     }
+  }
+  if ((r = m(/^\/v1\/coordinators\/([^/]+)\/outbox$/)) && req.method === "GET") {
+    const cid = decodeURIComponent(r[1]);
+    if (!chats.has(cid)) return notFound(res);
+    return send(res, 200, [...(outboxes.get(cid)?.values() ?? [])].filter((x) => ["queued", "sending", "failed"].includes(x.state)));
+  }
+  if ((r = m(/^\/v1\/coordinators\/([^/]+)\/messages\/([^/:]+)(:send)?$/))) {
+    const cid = decodeURIComponent(r[1]);
+    const msg = outboxes.get(cid)?.get(decodeURIComponent(r[2]));
+    if (!msg) return notFound(res);
+    const conflict = () => send(res, 409, { error: { code: "conflict", message: `the message is ${msg.state}` } });
+    if (r[3] && req.method === "POST") {
+      if (msg.state !== "queued" && msg.state !== "failed") return conflict();
+      setOutbox(msg, "sending");
+      return send(res, 200, deliverMessage(msg));
+    }
+    if (req.method === "PATCH") {
+      const b = await readJson(req);
+      if (!b?.text?.trim()) return invalid(res, "text is required");
+      if (msg.state !== "queued") return conflict();
+      msg.text = b.text.trim();
+      return send(res, 200, setOutbox(msg, "queued"));
+    }
+    if (req.method === "DELETE") {
+      if (msg.state !== "queued" && msg.state !== "failed") return conflict();
+      return send(res, 200, setOutbox(msg, "cancelled"));
+    }
+  }
+  // The coordinator starts or finishes a long step, so tests can queue messages behind it.
+  if ((r = m(/^\/mock\/coordinators\/([^/]+)\/working$/)) && req.method === "POST") {
+    const cid = decodeURIComponent(r[1]);
+    if (!chats.has(cid)) return notFound(res);
+    const b = await readJson(req);
+    if (b?.fail_next) failNext.add(cid);
+    if (b?.working && !coordWorking.has(cid)) {
+      const command = b.command ?? "cargo test --workspace";
+      const call = `run-${nextId("st")}`;
+      coordWorking.set(cid, call);
+      chat(cid, "tool_call", JSON.stringify({ command }), { tool_name: "bash", tool_call_id: call, tool: { kind: "shell", title: `Run ${command}`, command } });
+    } else if (!b?.working && coordWorking.has(cid)) {
+      const call = coordWorking.get(cid);
+      coordWorking.delete(cid);
+      chat(cid, "tool_result", "ok", { tool_name: "bash", tool_call_id: call });
+      chat(cid, "assistant", "The tests pass.");
+      // Like quarkd's turn-end hook: the oldest queued message goes in.
+      const next = [...(outboxes.get(cid)?.values() ?? [])].find((x) => x.state === "queued");
+      if (next) deliverMessage(setOutbox(next, "sending"));
+    }
+    return send(res, 204);
   }
 
   if ((r = m(/^\/v1\/terminals\/([^/]+)(\/\w+)?$/))) {

@@ -41,6 +41,7 @@ pub mod native_dispatch;
 pub mod native_triggers;
 pub mod native_worktrees;
 pub mod nudge;
+pub mod outbox;
 pub mod overview;
 pub mod pr_center;
 pub mod project_repo;
@@ -400,6 +401,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     updater.set_listen(config.listen);
     tokio::spawn(updater.run());
 
+    // Messages queued while a coordinator works go in once it is quiet.
+    let outbox_task = tokio::spawn(outbox::run(
+        store.clone(),
+        chat_input.clone(),
+        outbox::INTERVAL,
+    ));
     let state = AppState {
         store,
         engine,
@@ -431,6 +438,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     projector_task.abort();
+    outbox_task.abort();
     if let Some(t) = recovery_task {
         t.abort();
     }

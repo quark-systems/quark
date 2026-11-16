@@ -50,7 +50,11 @@ export function setDaemonUrl(url: string) {
 export const enc = (s: string) => encodeURIComponent(s);
 
 /** A Blob body is sent as is, with its own type; anything else as JSON. */
-export async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+/**
+ * One call to the daemon. A 202 or 204 resolves to `undefined` unless `accepted` asks
+ * for a 202's body (a sent coordinator message's id and state).
+ */
+export async function req<T>(method: string, path: string, body?: unknown, accepted = false): Promise<T> {
   const raw = body instanceof Blob;
   const r = await fetch(daemon + path, {
     method,
@@ -75,6 +79,10 @@ export async function req<T>(method: string, path: string, body?: unknown): Prom
       message = j?.error?.message ?? (typeof j?.error === "string" ? j.error : message);
     } catch { /* not JSON */ }
     throw new ApiError(r.status, code, `${message} (${r.status})`);
+  }
+  if (r.status === 202 && accepted) {
+    const text = await r.text().catch(() => "");
+    try { return (text ? JSON.parse(text) : undefined) as T; } catch { return undefined as T; }
   }
   if (r.status === 202 || r.status === 204) return undefined as T;
   const ct = r.headers.get("content-type") ?? "";

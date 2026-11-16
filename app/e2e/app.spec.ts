@@ -82,6 +82,46 @@ test("the board updates live when the coordinator queues a task", async ({ page 
   await expect(page.getByTestId("col-queued")).toContainText("Add tests for the parser");
 });
 
+test("coordinator chat: a message sent while the coordinator works waits, editable, until the step ends", async ({ page }) => {
+  await open(page, "#/p/website");
+  await expect(page.getByTestId("connection")).toHaveText(/connected/);
+  const chat = page.getByTestId("coordinator-chat");
+  const working = (on: boolean) => page.evaluate(async (on) => {
+    await fetch("http://127.0.0.1:7392/mock/coordinators/website/working", { method: "POST", body: JSON.stringify({ working: on }) });
+  }, on);
+  await working(true);
+  await expect(chat.getByTestId("coordinator-status")).toContainText(/working/i);
+  const box = chat.getByLabel("Message the coordinator");
+  await expect(chat.getByText("queues it until this step ends")).toBeVisible();
+  await box.fill("Also check the footer links");
+  await box.press("Enter");
+  const queued = chat.locator(".msg.pending", { hasText: "Also check the footer links" });
+  await expect(queued).toContainText("Queued: the coordinator reads it when this step ends");
+  // Edit it in place while it waits.
+  await queued.getByTestId("queued-edit-open").click();
+  const edit = chat.getByLabel("Edit queued message");
+  await edit.fill("Also check the footer and nav links");
+  await edit.press("Enter");
+  const edited = chat.locator(".msg.pending", { hasText: "Also check the footer and nav links" });
+  await expect(edited).toContainText("Queued");
+  // A second one, cancelled, never goes in.
+  await box.fill("Never mind the nav");
+  await box.press("Enter");
+  const second = chat.locator(".msg.pending", { hasText: "Never mind the nav" });
+  await second.getByTestId("queued-cancel").click();
+  await expect(second).toHaveCount(0);
+  // The step ends: the queued message goes in, after the reply to the step.
+  await working(false);
+  await expect(chat.locator(".msg.pending")).toHaveCount(0);
+  const texts = await chat.locator(".tx-turn").allInnerTexts();
+  const passed = texts.findLastIndex((t) => t.includes("The tests pass."));
+  const sent = texts.findLastIndex((t) => t.includes("Also check the footer and nav links"));
+  expect(sent).toBeGreaterThan(passed);
+  await expect(chat).not.toContainText("Never mind the nav");
+  const outbox = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/coordinators/website/outbox")).json());
+  expect(outbox).toEqual([]);
+});
+
 test("drafts in message boxes survive leaving the view and reloading the app", async ({ page }) => {
   await open(page, "#/p/quark");
   const box = page.getByTestId("coordinator-chat").getByLabel("Message the coordinator");

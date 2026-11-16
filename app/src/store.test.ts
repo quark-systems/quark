@@ -80,6 +80,18 @@ describe("applyEvent", () => {
     expect(s.chat.p1).toEqual([{ ...entry, id: 7 }]);
   });
 
+  it("keeps the sent message's id on its entry, and tracks the outbox of a loaded chat", () => {
+    let s: AppState = { ...initialState, chat: { p1: [] }, outbox: { p1: {} } };
+    s = applyEvent(s, ev(8, "coordinator.message", { coordinator_id: "p1", entry: { ...entry, role: "user" }, message_id: "msg_1" }));
+    expect(s.chat.p1[0].message_id).toBe("msg_1");
+    const m = { id: "msg_2", coordinator_id: "p1", text: "and lint", state: "queued", created_at: "t", updated_at: "t" };
+    s = applyEvent(s, ev(9, "coordinator.outbox", m));
+    expect(s.outbox.p1.msg_2.state).toBe("queued");
+    s = applyEvent(s, ev(10, "coordinator.outbox", { ...m, state: "cancelled" }));
+    expect(s.outbox.p1.msg_2.state).toBe("cancelled");
+    expect(applyEvent(initialState, ev(9, "coordinator.outbox", m)).outbox).toEqual({});
+  });
+
   it("appends worker transcript entries to a loaded transcript", () => {
     expect(applyEvent(initialState, ev(3, "worker.transcript", { task_id: "t1", entry })).transcripts).toEqual({});
     const s = applyEvent({ ...initialState, transcripts: { t1: [] } }, ev(3, "worker.transcript", { task_id: "t1", entry }));

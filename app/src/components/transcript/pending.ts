@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { CoordinatorCommand, TranscriptItem } from "../../api";
 import { engineEvent } from "./events";
 
@@ -38,25 +39,32 @@ export function stillPending(pending: PendingMessage[], items: TranscriptItem[])
 
 /** A pending message as the transcript shows it: where it was sent, and the line under it. */
 export interface PendingPrompt {
-  /** The largest entry id loaded when it was sent. */
+  /** The largest entry id loaded when it was sent; queued messages go after everything. */
   after: number;
   text: string;
-  note: string;
+  /** The line under it: where it is, and what can be done with it. */
+  note: ReactNode;
+  /** `error` when it was not delivered. */
+  tone?: "error";
+  /** Change its text in place, while it waits; resolves `false` when that failed. */
+  onEdit?: (text: string) => Promise<boolean>;
+  /** Links after the note and Edit, such as Send now and Cancel. */
+  actions?: ReactNode;
 }
 
 /**
  * The log with each pending message placed where it was sent: after the last entry
  * loaded at the time, so entries recorded later (the replies to it) show below it even
  * while the log has not recorded the message itself. A pending message gets an id
- * between two whole entry ids; `notes` holds its line by that id. Pending messages
- * are in the order they were sent, and an earlier one never has a larger `after`.
+ * between two whole entry ids; `notes` holds it by that id. Pending messages are in
+ * the order they were sent, and an earlier one never has a larger `after`.
  */
-export function placePending(items: TranscriptItem[], pending: PendingPrompt[]): { items: TranscriptItem[]; notes: Map<number, string> } {
-  const notes = new Map<number, string>();
+export function placePending(items: TranscriptItem[], pending: PendingPrompt[]): { items: TranscriptItem[]; notes: Map<number, PendingPrompt> } {
+  const notes = new Map<number, PendingPrompt>();
   if (!pending.length) return { items, notes };
   const placed = pending.map((p, i): TranscriptItem => {
     const id = p.after + (i + 1) / (pending.length + 1);
-    notes.set(id, p.note);
+    notes.set(id, p);
     return { id, role: "user", text: p.text, ts: null, is_error: false, truncated: false };
   });
   return { items: [...items, ...placed].sort((a, b) => a.id - b.id), notes };

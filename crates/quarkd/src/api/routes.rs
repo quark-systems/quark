@@ -5,8 +5,9 @@ use axum::Json;
 use quark_systems::{
     ActOnDecision, AgentRole, AnswerDecision, CoordinatorCommand, CoordinatorCommandRequest,
     CoordinatorMessage, CoordinatorMessageAccepted, CreateProject, Decision, DecisionState,
-    DispatchRecord, ErrorBody, Health, Project, ProjectStatus, RelaunchTask, SendTaskMessage, Task,
-    TaskBrief, TaskChanges, TaskDiff, TaskEvent, TaskMessage, TranscriptItem, UpdateProject,
+    DispatchRecord, EditOutboxMessage, ErrorBody, Health, OutboxMessage, OutboxState, Project,
+    ProjectStatus, RelaunchTask, SendTaskMessage, Task, TaskBrief, TaskChanges, TaskDiff,
+    TaskEvent, TaskMessage, TranscriptItem, UpdateProject,
 };
 use std::path::PathBuf;
 
@@ -1079,10 +1080,16 @@ pub async fn coordinator_messages(
 
 /// Send a message to a Project's coordinator.
 ///
-/// The coordinator id is the Project id. The text is typed into the
-/// coordinator's live session; its reply arrives on the event stream as
-/// `coordinator.message` events, which also carry this message once the
-/// session records it.
+/// The coordinator id is the Project id. The daemon records the message
+/// (its `message_id`), then types it into the coordinator's live session and
+/// adds it to the transcript where it was sent: a `coordinator.message`
+/// `user` entry carrying the `message_id`. The harness's own copy of it is
+/// not shown again. The reply arrives as later `coordinator.message` events.
+///
+/// With `queue`, a message sent while the coordinator is working waits as
+/// `queued` (202 with `state: queued`) until its turn ends; it can be
+/// edited, cancelled or sent at once until then. `coordinator.outbox`
+/// events follow it.
 #[utoipa::path(
     post,
     path = "/v1/coordinators/{id}/messages",
@@ -1109,41 +1116,195 @@ pub async fn send_coordinator_message(
     }
     let project_id = id.clone();
     let project = db(&state, move |s| s.get_project(&project_id)).await?;
-    let Some(root) = project.workspace_path else {
+    if project.workspace_path.is_none() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "no_workspace",
             "the Project has no workspace, so it has no coordinator yet",
         ));
+    }
+    // Queued only while the coordinator is busy: a message for a quiet one,
+    // or one behind nothing, goes in at once.
+    let pid = project.id.clone();
+    let wait = input.queue
+        && db(&state, move |s| {
+            Ok(s.coordinator_outbox(&pid)?
+                .iter()
+                .any(|m| m.state == OutboxState::Queued || m.state == OutboxState::Sending)
+                || !crate::outbox::quiet(s, &pid)?)
+        })
+        .await?;
+    let (pid, text) = (project.id.clone(), input.text.clone());
+    let state_now = if wait {
+        OutboxState::Queued
+    } else {
+        OutboxState::Sending
     };
-    let ws = WorkspaceRef {
-        project_id: project.id.clone(),
-        root: PathBuf::from(root),
-    };
-    let confirmed = match state.chat.send(&ws, &input.text).await {
-        Ok(Delivery::Confirmed) => true,
-        Ok(Delivery::Unconfirmed) => false,
-        Err(ChatError::Unavailable(m)) => {
-            return Err(ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "session_unavailable",
-                m,
-            ))
+    let m = db(&state, move |s| {
+        s.new_outbox_message(&pid, &text, state_now)
+    })
+    .await?;
+    if wait {
+        return Ok((StatusCode::ACCEPTED, Json(accepted(&m))));
+    }
+    let (m, error) = crate::outbox::deliver(state.store.clone(), state.chat.clone(), m).await?;
+    if let Some(e) = error {
+        // The sender gets the error and keeps the text; nothing waits.
+        let (mid, why) = (m.id.clone(), e.to_string());
+        db(&state, move |s| s.abandon_outbox_message(&mid, &why)).await?;
+        return Err(chat_error(&id, e));
+    }
+    Ok((StatusCode::ACCEPTED, Json(accepted(&m))))
+}
+
+fn accepted(m: &OutboxMessage) -> CoordinatorMessageAccepted {
+    CoordinatorMessageAccepted {
+        coordinator_id: m.coordinator_id.clone(),
+        confirmed: m.state == OutboxState::Sent,
+        accepted_at: m.created_at.clone(),
+        command: None,
+        message_id: Some(m.id.clone()),
+        state: Some(m.state),
+    }
+}
+
+fn chat_error(id: &str, e: ChatError) -> ApiError {
+    match e {
+        ChatError::Unavailable(m) => {
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "session_unavailable", m)
         }
-        Err(ChatError::Failed(m)) => {
+        ChatError::Failed(m) => {
             tracing::warn!(coordinator = %id, error = %m, "coordinator message not delivered");
-            return Err(ApiError::new(StatusCode::BAD_GATEWAY, "delivery_failed", m));
+            ApiError::new(StatusCode::BAD_GATEWAY, "delivery_failed", m)
         }
-    };
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(CoordinatorMessageAccepted {
-            coordinator_id: project.id,
-            confirmed,
-            accepted_at: crate::now_rfc3339(),
-            command: None,
-        }),
+    }
+}
+
+/// The message `mid` when it was sent to coordinator `id`.
+async fn outbox_message_of(
+    state: &AppState,
+    id: &str,
+    mid: &str,
+) -> Result<OutboxMessage, ApiError> {
+    let mid = mid.to_string();
+    let m = db(state, move |s| s.outbox_message(&mid)).await?;
+    if m.coordinator_id != id {
+        return Err(crate::store::StoreError::NotFound.into());
+    }
+    Ok(m)
+}
+
+/// Messages sent to a coordinator that aren't in its transcript yet:
+/// queued, being typed in, or failed. Oldest first.
+#[utoipa::path(
+    get,
+    path = "/v1/coordinators/{id}/outbox",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    responses((status = 200, body = Vec<OutboxMessage>), (status = 404, body = ErrorBody))
+)]
+pub async fn coordinator_outbox(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<OutboxMessage>>, ApiError> {
+    Ok(Json(
+        db(&state, move |s| {
+            s.get_project(&id)?;
+            s.coordinator_outbox(&id)
+        })
+        .await?,
     ))
+}
+
+/// Change a queued message's text.
+#[utoipa::path(
+    patch,
+    path = "/v1/coordinators/{id}/messages/{message_id}",
+    tag = "coordinators",
+    params(
+        ("id" = String, Path, description = "Coordinator id (the Project id)"),
+        ("message_id" = String, Path, description = "The sent message's id")
+    ),
+    request_body = EditOutboxMessage,
+    responses(
+        (status = 200, body = OutboxMessage),
+        (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The message is no longer queued", body = ErrorBody)
+    )
+)]
+pub async fn edit_coordinator_message(
+    State(state): State<AppState>,
+    Path((id, mid)): Path<(String, String)>,
+    Json(input): Json<EditOutboxMessage>,
+) -> Result<Json<OutboxMessage>, ApiError> {
+    chat::validate(&input.text).map_err(ApiError::invalid)?;
+    outbox_message_of(&state, &id, &mid).await?;
+    Ok(Json(
+        db(&state, move |s| s.edit_outbox_message(&mid, &input.text)).await?,
+    ))
+}
+
+/// Cancel a queued (or failed) message, so it is never typed in.
+#[utoipa::path(
+    delete,
+    path = "/v1/coordinators/{id}/messages/{message_id}",
+    tag = "coordinators",
+    params(
+        ("id" = String, Path, description = "Coordinator id (the Project id)"),
+        ("message_id" = String, Path, description = "The sent message's id")
+    ),
+    responses(
+        (status = 200, body = OutboxMessage),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The message was already typed in", body = ErrorBody)
+    )
+)]
+pub async fn cancel_coordinator_message(
+    State(state): State<AppState>,
+    Path((id, mid)): Path<(String, String)>,
+) -> Result<Json<OutboxMessage>, ApiError> {
+    outbox_message_of(&state, &id, &mid).await?;
+    Ok(Json(
+        db(&state, move |s| s.cancel_outbox_message(&mid)).await?,
+    ))
+}
+
+/// Type a queued message in now, without waiting for the turn to end, or
+/// try a failed one again. The custom method
+/// `/v1/coordinators/{id}/messages/{message_id}:send`.
+#[utoipa::path(
+    post,
+    path = "/v1/coordinators/{id}/messages/{message_id}:send",
+    tag = "coordinators",
+    params(
+        ("id" = String, Path, description = "Coordinator id (the Project id)"),
+        ("message_id" = String, Path, description = "The sent message's id")
+    ),
+    responses(
+        (status = 200, body = OutboxMessage),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "The message is not queued or failed", body = ErrorBody),
+        (status = 502, description = "Typing into the session failed", body = ErrorBody),
+        (status = 503, description = "No live coordinator session", body = ErrorBody)
+    )
+)]
+pub async fn coordinator_message_action(
+    State(state): State<AppState>,
+    Path((id, target)): Path<(String, String)>,
+) -> Result<Json<OutboxMessage>, ApiError> {
+    let Some((mid, "send")) = target.rsplit_once(':') else {
+        return Err(crate::store::StoreError::NotFound.into());
+    };
+    outbox_message_of(&state, &id, mid).await?;
+    let mid = mid.to_string();
+    let m = db(&state, move |s| s.claim_outbox_message(&mid)).await?;
+    let (m, error) = crate::outbox::deliver(state.store.clone(), state.chat.clone(), m).await?;
+    match error {
+        // It stays in the outbox as failed, to try again or cancel.
+        Some(e) => Err(chat_error(&id, e)),
+        None => Ok(Json(m)),
+    }
 }
 
 /// Ask a Project's coordinator for a catch up, a status report or a wrap up.
@@ -1378,6 +1539,8 @@ pub async fn compact_coordinator(
             confirmed: false,
             accepted_at: crate::now_rfc3339(),
             command: None,
+            message_id: None,
+            state: None,
         }),
     ))
 }
@@ -1448,6 +1611,8 @@ pub async fn interrupt_coordinator(
             confirmed: true,
             accepted_at: crate::now_rfc3339(),
             command: None,
+            message_id: None,
+            state: None,
         }),
     ))
 }
@@ -1496,6 +1661,8 @@ async fn run_command(
             confirmed: delivery == Delivery::Confirmed,
             accepted_at: crate::now_rfc3339(),
             command: Some(command),
+            message_id: None,
+            state: None,
         }),
     ))
 }
@@ -1529,6 +1696,10 @@ async fn run_command(
         task_transcript,
         coordinator_messages,
         send_coordinator_message,
+        coordinator_outbox,
+        edit_coordinator_message,
+        cancel_coordinator_message,
+        coordinator_message_action,
         run_coordinator_command,
         coordinator_context,
         compact_coordinator,
@@ -1558,7 +1729,7 @@ pub(super) struct Api;
 
 /// This module's routes, merged into the `/v1` router.
 pub(super) fn router() -> axum::Router<AppState> {
-    use axum::routing::{get, post, put};
+    use axum::routing::{get, patch, post, put};
     axum::Router::new()
         .route("/v1/health", get(health))
         .route("/v1/projects", get(list_projects).post(create_project))
@@ -1595,6 +1766,14 @@ pub(super) fn router() -> axum::Router<AppState> {
         .route(
             "/v1/coordinators/{id}/messages",
             get(coordinator_messages).post(send_coordinator_message),
+        )
+        .route("/v1/coordinators/{id}/outbox", get(coordinator_outbox))
+        // POST serves the custom method `…/messages/{message_id}:send`.
+        .route(
+            "/v1/coordinators/{id}/messages/{message_id}",
+            patch(edit_coordinator_message)
+                .delete(cancel_coordinator_message)
+                .post(coordinator_message_action),
         )
         .route("/v1/coordinators/{id}/context", get(coordinator_context))
         .route("/v1/coordinators/{id}/agent", put(switch_coordinator_agent))

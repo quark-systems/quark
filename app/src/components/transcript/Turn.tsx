@@ -1,11 +1,11 @@
 // One turn: the person's prompt as a bubble, the agent's work, its answer as
 // unboxed prose, and a footer with how long it worked. Follows MonoCode's
 // UserMessageBlock, TurnDuration and CopyTurnButton (https://github.com/hardbeat920/monocode, MIT).
-import { memo, useState } from "react";
+import { memo, ReactNode, useState } from "react";
 import type { TranscriptItem } from "../../api";
 import { href } from "../../nav";
 import { useStore } from "../../store";
-import { StatusDot } from "../../ui";
+import { Button, StatusDot } from "../../ui";
 import { ago, workerNamed } from "../../util";
 import { rise, useTranscript } from "./context";
 import type { EngineEvent } from "./events";
@@ -23,7 +23,7 @@ export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
   const pendingNote = turn.prompt && pendingNotes?.get(turn.prompt.id);
   return (
     <section className="tx-turn">
-      {pendingNote !== undefined && turn.prompt ? <UserMessage item={turn.prompt} pending note={pendingNote} />
+      {pendingNote !== undefined && turn.prompt ? <UserMessage item={turn.prompt} pending note={pendingNote.note} tone={pendingNote.tone} onEdit={pendingNote.onEdit} actions={pendingNote.actions} />
         : turn.event && turn.prompt ? <EventRow event={turn.event} id={turn.prompt.id} />
         : turn.prompt && <UserMessage item={turn.prompt} fresh={turn.prompt.id > freshAfter} />}
       {turn.parts.length > 0 && <Author turn={turn} />}
@@ -107,13 +107,46 @@ function WakeCard({ event, id }: { event: EngineEvent; id: number }) {
   );
 }
 
-export function UserMessage({ item, pending, note, fresh }: {
-  item: Pick<TranscriptItem, "text" | "ts" | "truncated">; pending?: boolean; note?: string; fresh?: boolean;
+export function UserMessage({ item, pending, note, tone, onEdit, actions, fresh }: {
+  item: Pick<TranscriptItem, "text" | "ts" | "truncated">; pending?: boolean; note?: ReactNode; tone?: "error"; actions?: ReactNode;
+  /** Edit it in place (a queued message); resolves `false` when saving failed. */
+  onEdit?: (text: string) => Promise<boolean>;
+  fresh?: boolean;
 }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (draft === null || !onEdit) return;
+    const text = draft.trim();
+    if (!text || text === item.text.trim()) return setDraft(null);
+    setSaving(true);
+    const ok = await onEdit(text);
+    setSaving(false);
+    if (ok) setDraft(null);
+  };
   return (
-    <div className={"tx-user msg" + (pending ? " pending" : "") + (pending || fresh ? " tx-rise" : "")}>
-      <div className="tx-bubble">{item.text}</div>
-      <div className="tx-meta">{note ?? ago(item.ts)}{item.truncated && " · truncated"}</div>
+    <div className={"tx-user msg" + (pending ? " pending" : "") + (tone === "error" ? " failed" : "") + (pending || fresh ? " tx-rise" : "")}>
+      {draft !== null ? (
+        <div className="tx-edit" data-testid="queued-edit">
+          <textarea aria-label="Edit queued message" value={draft} autoFocus rows={Math.min(8, draft.split("\n").length + 1)}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.preventDefault(); setDraft(null); }
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void save(); }
+            }} />
+          <div className="tx-edit-actions">
+            <Button kind="quiet" onClick={() => setDraft(null)}>Cancel</Button>
+            <Button kind="primary" disabled={saving || !draft.trim()} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</Button>
+          </div>
+        </div>
+      ) : <div className="tx-bubble">{item.text}</div>}
+      {draft === null && (
+        <div className="tx-meta">
+          {note ?? ago(item.ts)}{item.truncated && " · truncated"}
+          {onEdit && <> · <button type="button" className="tx-link" data-testid="queued-edit-open" onClick={() => setDraft(item.text)}>Edit</button></>}
+          {actions}
+        </div>
+      )}
     </div>
   );
 }

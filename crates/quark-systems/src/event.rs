@@ -78,10 +78,14 @@ pub enum EventType {
     /// [`Notice`](crate::Notice).
     #[serde(rename = "notice.posted")]
     NoticePosted,
+    /// A message sent to a coordinator was queued, edited, cancelled or
+    /// delivered; payload is an [`OutboxMessage`](crate::OutboxMessage).
+    #[serde(rename = "coordinator.outbox")]
+    CoordinatorOutbox,
 }
 
 impl EventType {
-    pub const ALL: [EventType; 25] = [
+    pub const ALL: [EventType; 26] = [
         EventType::ProjectUpdated,
         EventType::ProjectDeleted,
         EventType::TaskCreated,
@@ -107,6 +111,7 @@ impl EventType {
         EventType::BeadsChanged,
         EventType::IssueDraftUpdated,
         EventType::NoticePosted,
+        EventType::CoordinatorOutbox,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -136,6 +141,7 @@ impl EventType {
             EventType::BeadsChanged => "beads.changed",
             EventType::IssueDraftUpdated => "issue_draft.updated",
             EventType::NoticePosted => "notice.posted",
+            EventType::CoordinatorOutbox => "coordinator.outbox",
         }
     }
 

@@ -53,7 +53,7 @@ describe("placePending", () => {
     const turns = groupTurns(merged);
     expect(turns).toHaveLength(2);
     expect(turns[1].prompt?.text).toBe("Start on the do next list");
-    expect(notes.get(turns[1].prompt!.id)).toBe("sent");
+    expect(notes.get(turns[1].prompt!.id)?.note).toBe("sent");
   });
 
   it("keeps messages sent at the same point in the order they were sent", () => {
