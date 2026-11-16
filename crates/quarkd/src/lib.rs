@@ -312,10 +312,10 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
             (None, None)
         }
     };
-    let chat_input: Arc<dyn chat::CoordinatorInput> = Arc::new(chat::SessionsInput::new(
-        sessions.clone(),
-        quark_transcript::SessionRoots::from_env(),
-    ));
+    let chat_input: Arc<dyn chat::CoordinatorInput> = Arc::new(
+        chat::SessionsInput::new(sessions.clone(), quark_transcript::SessionRoots::from_env())
+            .with_bob(store.clone(), transcripts::default_bob_db()),
+    );
     // Coordinators change agents through durable switches.
     let switch_task = native_engine.then(|| {
         let switches = switch::Switches::new(

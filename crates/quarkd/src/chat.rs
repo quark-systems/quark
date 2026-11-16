@@ -8,7 +8,7 @@
 //! here: it arrives as `coordinator.message` events read from the session log.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -16,6 +16,7 @@ use quark_transcript::{locate, read_from, SessionFormat, SessionRoots, Transcrip
 
 use crate::engine::WorkspaceRef;
 use crate::sessions::{SessionError, Sessions};
+use crate::store::{Store, TranscriptSource};
 
 /// How long to wait for the session log to record a typed message.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(10);
@@ -23,6 +24,9 @@ const CONFIRM_POLL: Duration = Duration::from_millis(250);
 /// Pause between the pasted text and Enter, so the harness has finished
 /// handling the paste before it sees the submit.
 const SUBMIT_DELAY: Duration = Duration::from_millis(150);
+/// IBM Bob sometimes shows a pasted message without submitting it; one more
+/// Enter this long after the first sends it.
+const BOB_ENTER_AGAIN: Duration = Duration::from_secs(4);
 
 /// Longest message accepted, in bytes.
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
@@ -108,6 +112,9 @@ pub struct SessionsInput {
     sessions: Sessions,
     roots: SessionRoots,
     confirm_timeout: Duration,
+    /// The store and Bob's database, to confirm a message to a coordinator
+    /// on IBM Bob, which keeps its conversation in that database.
+    bob: Option<(Arc<Store>, PathBuf)>,
 }
 
 impl SessionsInput {
@@ -116,13 +123,115 @@ impl SessionsInput {
             sessions,
             roots,
             confirm_timeout: CONFIRM_TIMEOUT,
+            bob: None,
         }
+    }
+
+    /// Confirm messages to coordinators on IBM Bob from Bob's database `db`
+    /// (`~/.bob/db/bob.db`); `store` says which coordinators run on Bob.
+    pub fn with_bob(mut self, store: Arc<Store>, db: PathBuf) -> Self {
+        self.bob = Some((store, db));
+        self
     }
 
     /// How long to wait for the session log before answering `Unconfirmed`.
     pub fn with_confirm_timeout(mut self, timeout: Duration) -> Self {
         self.confirm_timeout = timeout;
         self
+    }
+}
+
+impl SessionsInput {
+    /// [`CoordinatorInput::send`] to a coordinator on IBM Bob: confirmed
+    /// when Bob's database gains a user message starting with the text
+    /// after row `after`. Bob may leave a pasted message unsent, so Enter is
+    /// pressed once more if it is not seen within [`BOB_ENTER_AGAIN`].
+    async fn send_bob(
+        &self,
+        ws: &WorkspaceRef,
+        text: &str,
+        after: i64,
+        db: PathBuf,
+    ) -> Result<Delivery, ChatError> {
+        let terminal = ws.project_id.as_str();
+        self.type_in(terminal, text).await?;
+        let start = tokio::time::Instant::now();
+        let deadline = start + self.confirm_timeout.max(BOB_ENTER_AGAIN * 2);
+        let want = first_line(text).to_string();
+        let mut pressed_again = false;
+        loop {
+            let (db, root, want) = (db.clone(), ws.root.clone(), want.clone());
+            let seen = tokio::task::spawn_blocking(move || bob_logged(&db, &root, after, &want))
+                .await
+                .unwrap_or(false);
+            if seen {
+                return Ok(Delivery::Confirmed);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(Delivery::Unconfirmed);
+            }
+            if !pressed_again && now >= start + BOB_ENTER_AGAIN {
+                pressed_again = true;
+                self.sessions
+                    .input(terminal, b"\r", None)
+                    .await
+                    .map_err(|e| ChatError::Failed(format!("typed but not submitted: {e}")))?;
+            }
+            tokio::time::sleep(CONFIRM_POLL).await;
+        }
+    }
+
+    /// Paste `text` into `terminal` and press Enter.
+    async fn type_in(&self, terminal: &str, text: &str) -> Result<(), ChatError> {
+        let mut paste = Vec::with_capacity(text.len() + 12);
+        paste.extend_from_slice(b"\x1b[200~");
+        paste.extend_from_slice(text.as_bytes());
+        paste.extend_from_slice(b"\x1b[201~");
+        self.sessions
+            .input(terminal, &paste, None)
+            .await
+            .map_err(|e| ChatError::Failed(e.to_string()))?;
+        tokio::time::sleep(SUBMIT_DELAY).await;
+        self.sessions
+            .input(terminal, b"\r", None)
+            .await
+            .map_err(|e| ChatError::Failed(format!("typed but not submitted: {e}")))
+    }
+}
+
+/// Where the coordinator's transcript was last read in Bob's database `db`:
+/// messages after it are new. `0` when it was not read from `db`.
+fn store_cursor(store: &Store, db: &Path, project_id: &str) -> i64 {
+    let source = TranscriptSource::Coordinator {
+        project_id: project_id.to_string(),
+    };
+    match store.transcript_cursor(&source) {
+        Ok(Some((p, offset))) if Path::new(&p) == db => offset as i64,
+        _ => 0,
+    }
+}
+
+/// Whether Bob's database `db` has a user message starting with `want` in a
+/// task in `cwd`, after row `after`.
+fn bob_logged(db: &Path, cwd: &Path, after: i64, want: &str) -> bool {
+    let mut after = after;
+    loop {
+        let Ok(rows) = quark_dispatch::local::bob::task_messages(db, cwd, None, after, 200) else {
+            return false;
+        };
+        let Some(last) = rows.last().map(|m| m.seq) else {
+            return false;
+        };
+        let found = rows.iter().any(|m| {
+            quark_transcript::parse_bob_message(&m.data, None, None)
+                .iter()
+                .any(|e| e.role == TranscriptRole::User && e.text.trim_start().starts_with(want))
+        });
+        if found {
+            return true;
+        }
+        after = last;
     }
 }
 
@@ -136,6 +245,23 @@ impl CoordinatorInput for SessionsInput {
             }
             other => ChatError::Unavailable(other.to_string()),
         })?;
+
+        let bob = match &self.bob {
+            Some((store, db)) => {
+                let (store, pid, path) = (store.clone(), ws.project_id.clone(), db.clone());
+                tokio::task::spawn_blocking(move || {
+                    crate::transcripts::coordinator_on_bob(&store, &pid)
+                        .then(|| (store_cursor(&store, &path, &pid), path))
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+            None => None,
+        };
+        if let Some((after, db)) = bob {
+            return self.send_bob(ws, text, after, db).await;
+        }
 
         let roots = self.roots.clone();
         let root = ws.root.clone();

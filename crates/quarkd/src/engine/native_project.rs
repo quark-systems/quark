@@ -43,7 +43,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{EngineError, SourceRepo, WorkspacePlan, WorkspaceRef};
 use crate::coordinator_http::{
-    codex_overrides, install, CoordinatorUrls, Tokens, Wiring, COORDINATOR_HARNESSES, PI_EXTENSION,
+    codex_overrides, install, CoordinatorUrls, Tokens, Wiring, BOB_MODE, BOB_PROMPT,
+    COORDINATOR_HARNESSES, PI_EXTENSION,
 };
 use crate::provision::Layout;
 use crate::sessions::{SessionError, Sessions, WindowSpec};
@@ -142,6 +143,14 @@ impl ProjectSetup {
         self
     }
 
+    /// Bob's database, where its conversations are: `~/.bob/db/bob.db`.
+    fn bob_db(&self) -> PathBuf {
+        self.agent_home
+            .as_deref()
+            .map(|h| h.join(".bob").join("db").join("bob.db"))
+            .unwrap_or_default()
+    }
+
     pub fn with_agent_home(mut self, home: impl Into<PathBuf>) -> Self {
         self.agent_home = Some(home.into());
         self
@@ -224,7 +233,12 @@ impl ProjectSetup {
         }
         let roots = roots_for(&self.roots, account_env);
         let format = SessionFormat::for_harness(&manifest.id).unwrap_or(SessionFormat::Claude);
-        if resume && locate(format, &ws.root, &roots).is_none() {
+        let earlier = match wiring {
+            // Bob keeps its conversations in its database, not a log file.
+            Wiring::Bob => quark_dispatch::local::bob::has_task(&self.bob_db(), &ws.root, None),
+            _ => locate(format, &ws.root, &roots).is_some(),
+        };
+        if resume && !earlier {
             return Err(EngineError::Invalid(format!(
                 "the coordinator of {} has no earlier conversation to resume",
                 ws.project_id
@@ -255,6 +269,7 @@ impl ProjectSetup {
                 &prompt_file,
                 &urls,
                 resume,
+                &env,
             )?,
             cwd: Some(ws.root.clone()),
             env,
@@ -323,10 +338,11 @@ impl ProjectSetup {
         wiring: Wiring,
     ) -> Result<PathBuf, EngineError> {
         let (layout, pid, root) = (self.layout.clone(), ws.project_id.clone(), ws.root.clone());
-        // Claude Code primes itself from its session-start hook; Codex and
-        // Pi have none, so their prompt carries the memories as of launch.
+        // Claude Code and Bob prime themselves from their session-start
+        // hook; Codex and Pi have none, so their prompt carries the memories
+        // as of launch.
         let memories = match wiring {
-            Wiring::Claude => None,
+            Wiring::Claude | Wiring::Bob => None,
             Wiring::Codex | Wiring::Pi => {
                 crate::beads::prime_memories(&self.bd, &layout.home, &pid).await
             }
@@ -349,6 +365,12 @@ impl ProjectSetup {
             }
             let path = root.join(STATE_DIR).join(PROMPT_FILE);
             write_atomic(&path, text.as_bytes())?;
+            if wiring == Wiring::Bob {
+                // Bob reads it as its coordinator mode's rules.
+                let bob = root.join(BOB_PROMPT);
+                write_atomic(&bob, text.as_bytes())?;
+                return Ok(bob);
+            }
             if wiring != Wiring::Codex {
                 return Ok(path);
             }
@@ -370,6 +392,10 @@ impl ProjectSetup {
 /// small to carry it. Claude Code and Pi append it to their system prompt
 /// (`--append-system-prompt`); Codex reads a `-c developer_instructions`
 /// override from it. Codex and Pi also get their wiring to `urls` here.
+/// Bob has no system-prompt flag: it runs in its coordinator mode, whose
+/// rules are the prompt file, so it is started directly. `env` is the
+/// window's environment, for the manifest's `{env:NAME}` options.
+#[allow(clippy::too_many_arguments)]
 fn launch_argv(
     m: &HarnessManifest,
     wiring: Wiring,
@@ -378,6 +404,7 @@ fn launch_argv(
     prompt_file: &Path,
     urls: &CoordinatorUrls,
     resume: bool,
+    env: &[(String, String)],
 ) -> Result<Vec<String>, EngineError> {
     if let Some(effort) = &agent.effort {
         if !m.efforts.iter().any(|e| e == effort) {
@@ -397,11 +424,25 @@ fn launch_argv(
         prompt: None,
         prompt_file: None,
         cwd: Some(root.to_string_lossy().into_owned()),
-        ..Default::default()
+        env: env.iter().cloned().collect(),
     };
+    if wiring == Wiring::Bob {
+        let mut argv = quark_harness::argv(m, &vars);
+        // A worker's turn cap would end a coordinator that runs for weeks.
+        if let Some(i) = argv.iter().position(|a| a == "--max-turns") {
+            argv.drain(i..(i + 2).min(argv.len()));
+        }
+        argv.push("--mode".into());
+        argv.push(BOB_MODE.into());
+        if resume {
+            argv.extend(m.launch.resume.iter().cloned());
+        }
+        return Ok(argv);
+    }
     let flag = match wiring {
         Wiring::Claude | Wiring::Pi => "--append-system-prompt",
         Wiring::Codex => "-c",
+        Wiring::Bob => unreachable!("Bob is started above"),
     };
     let mut argv = vec![
         "/bin/sh".to_string(),
@@ -453,6 +494,7 @@ fn launch_argv(
                 harness.push("--continue".into());
             }
         }
+        Wiring::Bob => unreachable!("Bob is started above"),
     }
     argv.extend(harness);
     Ok(argv)
@@ -935,6 +977,7 @@ mod tests {
             Path::new("/w/.quark/coordinator.md"),
             &urls(),
             true,
+            &[],
         )
         .unwrap();
         assert!(argv[2].ends_with(r#""$@" --append-system-prompt "$(cat "$p")""#));
@@ -961,7 +1004,8 @@ mod tests {
             Path::new("/w"),
             Path::new("/p"),
             &urls(),
-            false
+            false,
+            &[]
         )
         .is_err());
 
@@ -980,7 +1024,17 @@ mod tests {
         let mut a = agent("codex");
         a.model = Some("gpt-5.5".into());
         let p = Path::new("/w/.quark/coordinator.codex");
-        let argv = launch_argv(m, Wiring::Codex, &a, Path::new("/w"), p, &urls(), false).unwrap();
+        let argv = launch_argv(
+            m,
+            Wiring::Codex,
+            &a,
+            Path::new("/w"),
+            p,
+            &urls(),
+            false,
+            &[],
+        )
+        .unwrap();
         assert!(argv[2].ends_with(r#""$@" -c "$(cat "$p")""#));
         assert_eq!(argv[4], "/w/.quark/coordinator.codex");
         assert_eq!(
@@ -1009,8 +1063,50 @@ mod tests {
         // The prompt never holds a placeholder Codex would read as one.
         assert!(!argv.iter().any(|a| a.contains("{prompt}")));
 
-        let resumed = launch_argv(m, Wiring::Codex, &a, Path::new("/w"), p, &urls(), true).unwrap();
+        let resumed =
+            launch_argv(m, Wiring::Codex, &a, Path::new("/w"), p, &urls(), true, &[]).unwrap();
         assert_eq!(&resumed[5..8], ["codex", "resume", "--last"]);
+    }
+
+    #[test]
+    fn launches_bob_in_its_coordinator_mode() {
+        let reg = ManifestRegistry::builtin();
+        let m = reg.get("bob").unwrap();
+        let mut a = agent("bob");
+        // Bob picks its own model and has no effort setting.
+        a.effort = None;
+        let p = Path::new("/w/.bob/rules-quark-coordinator/coordinator.md");
+        let env = [("BOB_TEAM_ID".to_string(), "team-1".to_string())];
+        let argv =
+            launch_argv(m, Wiring::Bob, &a, Path::new("/w"), p, &urls(), false, &env).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "bob",
+                "chat",
+                "--auto-approve",
+                "--trust",
+                "--team-id",
+                "team-1",
+                "--mode",
+                BOB_MODE
+            ]
+        );
+        let resumed =
+            launch_argv(m, Wiring::Bob, &a, Path::new("/w"), p, &urls(), true, &[]).unwrap();
+        assert_eq!(
+            resumed,
+            [
+                "bob",
+                "chat",
+                "--auto-approve",
+                "--trust",
+                "--mode",
+                BOB_MODE,
+                "--resume",
+                "latest"
+            ]
+        );
     }
 
     #[test]
@@ -1020,7 +1116,7 @@ mod tests {
         let mut a = agent("pi");
         a.model = Some("anthropic/claude-opus-5-5".into());
         let p = Path::new("/w/.quark/coordinator.md");
-        let argv = launch_argv(m, Wiring::Pi, &a, Path::new("/w"), p, &urls(), false).unwrap();
+        let argv = launch_argv(m, Wiring::Pi, &a, Path::new("/w"), p, &urls(), false, &[]).unwrap();
         assert!(argv[2].ends_with(r#""$@" --append-system-prompt "$(cat "$p")""#));
         assert_eq!(
             &argv[5..],
@@ -1034,7 +1130,8 @@ mod tests {
                 "/w/.quark/pi/quark-coordinator.ts"
             ]
         );
-        let resumed = launch_argv(m, Wiring::Pi, &a, Path::new("/w"), p, &urls(), true).unwrap();
+        let resumed =
+            launch_argv(m, Wiring::Pi, &a, Path::new("/w"), p, &urls(), true, &[]).unwrap();
         assert_eq!(resumed.last().unwrap(), "--continue");
     }
 
@@ -1098,6 +1195,11 @@ mod tests {
         // Claude Code primes itself from its session-start hook.
         rt.block_on(setup.write_prompt(&wref, Wiring::Claude))
             .unwrap();
+        assert!(!md().contains("# Memories"));
+        // So does Bob, which reads the prompt as its coordinator mode's rules.
+        let bob = rt.block_on(setup.write_prompt(&wref, Wiring::Bob)).unwrap();
+        assert_eq!(bob, ws.join(BOB_PROMPT));
+        assert_eq!(std::fs::read_to_string(&bob).unwrap(), md());
         assert!(!md().contains("# Memories"));
     }
 

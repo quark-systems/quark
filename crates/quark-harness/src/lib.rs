@@ -255,13 +255,15 @@ mod tests {
     }
 
     #[test]
-    fn coordinators_are_the_pi_family_claude_and_codex() {
+    fn coordinators_are_the_pi_family_claude_codex_and_bob() {
         let c: Vec<_> = builtin()
             .iter()
             .filter(|m| m.roles.iter().any(|r| r == "coordinator"))
             .map(|m| m.id.as_str())
             .collect();
-        assert_eq!(c, ["claude-code", "codex", "pi", "pi-signed"]);
+        let mut c = c;
+        c.sort_unstable();
+        assert_eq!(c, ["bob", "claude-code", "codex", "pi", "pi-signed"]);
     }
 
     #[test]
