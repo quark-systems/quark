@@ -14,7 +14,7 @@ import { Button, buttonClass, UsageMeter } from "../ui";
 const POLL_MS = 15_000;
 
 /** Reads the coordinator's context now, every {@link POLL_MS}, and whenever `changed` does. */
-function useCoordinatorContext(cid: string, changed: unknown) {
+export function useCoordinatorContext(cid: string, changed: unknown) {
   const [ctx, setCtx] = useState<Context | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const load = useCallback(() => {
@@ -26,14 +26,25 @@ function useCoordinatorContext(cid: string, changed: unknown) {
     return () => clearInterval(t);
   }, [load]);
   useEffect(() => { load(); }, [load, changed]);
-  return { ctx, unavailable, load };
+  return { ctx: unavailable ? null : ctx, load };
 }
 
-export function CoordinatorContext({ cid, changed }: { cid: string; changed?: unknown }) {
-  const { ctx, unavailable, load } = useCoordinatorContext(cid, changed);
+/** Which harness, model and effort the coordinator runs: the line under its name. */
+export function CoordinatorAgent({ ctx }: { ctx: Context | null }) {
+  if (!ctx) return null;
+  const agent = agentLine(ctx);
+  return (
+    <span className="coord-agent" data-testid="coordinator-agent" title="Harness, model and effort; change them in Settings › Agent">
+      {agent.harness} · {agent.model} · {agent.effort}
+    </span>
+  );
+}
+
+/** How full the coordinator's context is, a header control opening the context popover. */
+export function ContextMeter({ cid, ctx, load }: { cid: string; ctx: Context | null; load: () => void }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  if (unavailable || !ctx) return null;
+  if (!ctx) return null;
   const agent = agentLine(ctx);
   const used = ctx.context_tokens ?? 0;
   const max = ctx.window_tokens ?? 0;
@@ -47,10 +58,6 @@ export function CoordinatorContext({ cid, changed }: { cid: string; changed?: un
     } catch (e) { setNote(errText(e)); } finally { setBusy(false); }
   };
   return (
-    <span className="coord-context">
-      <span className="coord-agent" data-testid="coordinator-agent" title="Harness, model and effort; change them in Settings › Agent">
-        {agent.harness} · {agent.model} · {agent.effort}
-      </span>
       <Popover.Root onOpenChange={(o) => { if (o) load(); else setNote(null); }}>
         <Popover.Trigger className={buttonClass("quiet", "coord-meter")} data-testid="context-meter"
           aria-label={`Context: ${contextLine(ctx)}`}>
@@ -95,6 +102,5 @@ export function CoordinatorContext({ cid, changed }: { cid: string; changed?: un
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-    </span>
   );
 }

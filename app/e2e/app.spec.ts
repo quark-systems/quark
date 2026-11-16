@@ -138,6 +138,19 @@ test("coordinator chat: the conversation column follows the window's width, up t
   }
 });
 
+test("coordinator header: every widget sits on one centerline, controls at one height", async ({ page }) => {
+  await open(page, "#/p/website");
+  const head = page.locator(".coord-head");
+  await expect(head.getByTestId("context-meter")).toBeVisible();
+  const boxes = await head.evaluate((h) => [...h.querySelectorAll(".coord-avatar, .coord-title, .coord-meter, .coord-status, .ui-btn, select")]
+    .map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0).map((r) => ({ mid: r.top + r.height / 2, h: r.height })));
+  expect(boxes.length).toBeGreaterThanOrEqual(6);
+  for (const b of boxes) expect(Math.abs(b.mid - boxes[0].mid)).toBeLessThanOrEqual(1);
+  const controls = await head.evaluate((h) => [...h.querySelectorAll(".coord-meter, .coord-status, .ui-btn, select")]
+    .map((e) => Math.round(e.getBoundingClientRect().height)).filter((x) => x > 0));
+  expect(new Set(controls)).toEqual(new Set([28]));
+});
+
 test("drafts in message boxes survive leaving the view and reloading the app", async ({ page }) => {
   await open(page, "#/p/quark");
   const box = page.getByTestId("coordinator-chat").getByLabel("Message the coordinator");
