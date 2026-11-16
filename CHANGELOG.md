@@ -8,8 +8,17 @@ page lists every merged pull request.
 
 ## Unreleased
 
+## 0.2.0-beta.5
+
+The first signed and notarized build: Quark.app, QuarkBar, its widgets and quarkd carry
+Developer ID signatures, so macOS opens the downloaded app without a quarantine warning.
+
 ### Changed
 
+- The coordinator window has a status header, a card-style composer and author lines, and
+  messages to a coordinator are queued by quarkd: they can be edited or cancelled before
+  they're sent.
+- Accounts can be enabled or disabled for Quark; disabling one drains or moves its work.
 - A worker's view has one message box instead of three. It writes to the worker or, switched
   (Ctrl/Cmd+K), to the coordinator about that worker; Stop interrupts whoever it points at.
   The worker's terminal is view only until you press Take over, and a permission prompt on
@@ -17,6 +26,9 @@ page lists every merged pull request.
 
 ### Fixed
 
+- Updates no longer stall at "pending" when Quark was downloaded with a browser: the copied
+  quark-updater lost the quarantine flag that kept it from starting.
+- Codex 0.169's user messages show in the transcript, and unsent ones keep their order.
 - Kiro CLI's permission prompts are noticed: its unnumbered menu (`> Allow once`) above the
   `↑↓ to navigate` hint is read like the other agents' numbered ones, so a Kiro worker
   waiting on one asks its question instead of sitting stuck.
