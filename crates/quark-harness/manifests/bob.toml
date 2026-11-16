@@ -1,7 +1,7 @@
 schema = 1
 id = "bob"
 name = "IBM Bob"
-roles = ["worker"]
+roles = ["coordinator", "worker"]
 
 [detect]
 bins = ["bob"]

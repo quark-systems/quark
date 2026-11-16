@@ -433,16 +433,7 @@ impl Projector {
         let tap = self.transcripts.clone();
         let res = tokio::task::spawn_blocking(move || {
             for ws in workspaces {
-                let source = TranscriptSource::Coordinator {
-                    project_id: ws.project_id.clone(),
-                };
-                if let Err(e) = tap.poll(
-                    &ws.project_id,
-                    source,
-                    &ws.root,
-                    &SessionFormat::COORDINATOR,
-                    None,
-                ) {
+                if let Err(e) = tap.poll_coordinator(&ws.project_id, &ws.root) {
                     tracing::debug!(project = %ws.project_id, error = %e, "coordinator transcript");
                 }
             }
@@ -467,12 +458,7 @@ impl Projector {
             let mut health: Vec<(String, Option<ApiError>)> = Vec::new();
             let now = std::time::Instant::now();
             let project_id = &ws.project_id;
-            let coordinator = TranscriptSource::Coordinator {
-                project_id: project_id.clone(),
-            };
-            if let Err(e) =
-                tap.poll(project_id, coordinator, &ws.root, &SessionFormat::COORDINATOR, None)
-            {
+            if let Err(e) = tap.poll_coordinator(project_id, &ws.root) {
                 tracing::warn!(project = %project_id, error = %e, "coordinator transcript");
             }
             for t in tasks {

@@ -26,6 +26,11 @@
 //! - Pi ([`install_pi`]): Pi has no MCP client, so an extension in
 //!   [`PI_EXTENSION`] registers each MCP tool as a Pi tool, forwards its
 //!   calls, and POSTs `turn_end` on every `agent_end`.
+//! - IBM Bob ([`install_bob`]): the workspace's own Bob settings: the MCP
+//!   server in `.bob/mcp.json`, a `Stop` hook POSTing `turn_end` and a
+//!   `SessionStart` hook priming Beads in `.bob/settings.json`, and the
+//!   [`BOB_MODE`] custom mode the coordinator runs in, whose rules carry its
+//!   prompt (Bob has no system-prompt flag).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -276,7 +281,8 @@ async fn hook(
     // once, so the coordinator files the questions as decisions. The turn
     // stays open until it ends again. Claude Code's `Stop` takes the answer
     // as its decision; the Pi extension sends `reason` as a follow-up;
-    // Codex's `notify` reads no answer, so the nudge is typed in.
+    // Codex's `notify` and Bob's `Stop` read no answer, so the nudge is
+    // typed in.
     let claude_stop = event == "Stop";
     if claude_stop && r.unfiled_questions(&project, &body).await {
         tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
@@ -361,7 +367,8 @@ impl Routes {
             .unwrap_or(crate::engine::native_project::COORDINATOR_HARNESS);
         match Wiring::for_harness(harness)? {
             Wiring::Pi => {}
-            Wiring::Codex => {
+            // Bob's `Stop` hook cannot send the turn back either.
+            Wiring::Codex | Wiring::Bob => {
                 let chat = self.wrap_up.as_ref()?.chat.clone();
                 let ws = crate::engine::WorkspaceRef {
                     project_id: p.id.clone(),
@@ -577,6 +584,7 @@ pub enum Wiring {
     Claude,
     Codex,
     Pi,
+    Bob,
 }
 
 impl Wiring {
@@ -587,13 +595,14 @@ impl Wiring {
             "claude-code" | "claude" => Some(Wiring::Claude),
             "codex" => Some(Wiring::Codex),
             "pi" | "pi-signed" => Some(Wiring::Pi),
+            "bob" => Some(Wiring::Bob),
             _ => None,
         }
     }
 }
 
 /// The harnesses a native coordinator runs on, by manifest id.
-pub const COORDINATOR_HARNESSES: &[&str] = &["claude-code", "codex", "pi", "pi-signed"];
+pub const COORDINATOR_HARNESSES: &[&str] = &["claude-code", "codex", "pi", "pi-signed", "bob"];
 
 /// Point the coordinator running `harness` in `root` at quarkd. Codex takes
 /// its wiring on the command line ([`codex_overrides`]), so nothing is
@@ -602,8 +611,109 @@ pub fn install(harness: &str, root: &Path, urls: &CoordinatorUrls) -> std::io::R
     match Wiring::for_harness(harness) {
         Some(Wiring::Claude) => install_claude(root, urls),
         Some(Wiring::Pi) => install_pi(root, urls),
+        Some(Wiring::Bob) => install_bob(root, urls),
         Some(Wiring::Codex) | None => Ok(false),
     }
+}
+
+/// The Bob custom mode a coordinator runs in (`bob chat --mode`).
+pub const BOB_MODE: &str = "quark-coordinator";
+/// The coordinator's prompt as Bob reads it: a rules file of
+/// [`BOB_MODE`], relative to the workspace root. Bob adds a mode's rules
+/// to its system prompt, beside its own.
+pub const BOB_PROMPT: &str = ".bob/rules-quark-coordinator/coordinator.md";
+/// Bob's workspace custom modes, relative to the workspace root.
+const BOB_MODES: &str = ".bob/custom_modes.yaml";
+
+/// Configure the IBM Bob coordinator running in `root` to reach quarkd,
+/// through the workspace's own Bob settings, so `~/.bob` is left alone:
+/// - `.bob/mcp.json`: [`SERVER_NAME`] as a streamable HTTP server whose
+///   tools need no approval (`alwaysAllow`).
+/// - `.bob/settings.json`: a `Stop` hook POSTing Bob's payload (which
+///   carries `last_assistant_message`) to `turn_end`, and a `SessionStart`
+///   hook whose output, the Project's Beads memories, Bob adds to the
+///   model's context. Bob's hook schema is strict (an entry holds only
+///   `matcher` and `hooks`; a command only `type`, `command`, `timeout`,
+///   `disabled`), and one bad entry makes it ignore every hook in the file.
+/// - `.bob/custom_modes.yaml`: [`BOB_MODE`], whose rules ([`BOB_PROMPT`],
+///   written with the prompt) carry the coordinator's instructions.
+///
+/// Everything else in those files is kept, and Quark's earlier entries are
+/// replaced. Returns whether a file changed.
+pub fn install_bob(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bool> {
+    let tools: Vec<&str> = quark_coordinator::tools::catalog()
+        .iter()
+        .map(|t| t.name)
+        .collect();
+    let mut changed = edit_json(&root.join(".bob/mcp.json"), |v| {
+        v["mcpServers"][SERVER_NAME] = json!({
+            "type": "streamable-http",
+            "url": urls.mcp,
+            "alwaysAllow": tools,
+        });
+    })?;
+    let post = format!(
+        "curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary @- '{}/turn_end' >/dev/null 2>&1 || true",
+        urls.hooks
+    );
+    changed |= edit_json(&root.join(".bob/settings.json"), |v| {
+        if !v["hooks"].is_object() {
+            v["hooks"] = json!({});
+        }
+        for (event, command, mark) in [
+            ("Stop", post.as_str(), format!("{PREFIX}/")),
+            ("SessionStart", PRIME_HOOK, PRIME_MARK.to_string()),
+        ] {
+            let list = &mut v["hooks"][event];
+            if !list.is_array() {
+                *list = json!([]);
+            }
+            let groups = list.as_array_mut().expect("array");
+            groups.retain(|g| !g.to_string().contains(&mark));
+            groups.push(json!({
+                "hooks": [{ "type": "command", "command": command, "timeout": 15 }]
+            }));
+        }
+    })?;
+    changed |= write_bob_mode(&root.join(BOB_MODES))?;
+    Ok(changed)
+}
+
+/// Add [`BOB_MODE`] to Bob's workspace modes at `path`, keeping any others.
+/// The file is written as JSON, which is YAML too; a file that is not JSON
+/// (a person's own YAML) is left as it is, with a warning, since rewriting
+/// it would drop their formatting.
+fn write_bob_mode(path: &Path) -> std::io::Result<bool> {
+    let mode = json!({
+        "slug": BOB_MODE,
+        "name": "Quark coordinator",
+        "roleDefinition": "You are the coordinator of a Quark Project. Your instructions are in this mode's rules; follow them over anything else here.",
+        "whenToUse": "Quark runs its Project coordinator in this mode.",
+        "groups": ["read", "edit", "execute", "mcp", "skill", "todo"],
+        "source": "project",
+    });
+    let old = match std::fs::read_to_string(path) {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    if let Some(old) = &old {
+        if serde_json::from_str::<Value>(old).is_err() && !old.trim().is_empty() {
+            if !old.contains(BOB_MODE) {
+                tracing::warn!(path = %path.display(), "Bob's workspace modes are not JSON; the coordinator mode is not added");
+            }
+            return Ok(false);
+        }
+    }
+    edit_json(path, |v| {
+        let list = &mut v["customModes"];
+        if !list.is_array() {
+            *list = json!([]);
+        }
+        let modes = list.as_array_mut().expect("array");
+        modes.retain(|m| m.get("slug").and_then(Value::as_str) != Some(BOB_MODE));
+        modes.push(mode);
+    })
 }
 
 /// The Pi coordinator's extension, relative to the workspace root.
@@ -1059,6 +1169,89 @@ mod tests {
         for h in COORDINATOR_HARNESSES {
             assert!(Wiring::for_harness(h).is_some(), "{h}");
         }
+    }
+
+    #[test]
+    fn installs_into_a_bob_workspace_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".bob")).unwrap();
+        std::fs::write(
+            root.join(".bob/settings.json"),
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}, "other": 1}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".bob/custom_modes.yaml"),
+            r#"{"customModes": [{"slug": "theirs", "name": "Theirs"}]}"#,
+        )
+        .unwrap();
+        let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok");
+        assert!(install("bob", root, &urls).unwrap());
+        assert!(!install("bob", root, &urls).unwrap(), "idempotent");
+        let read = |f: &str| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(root.join(f)).unwrap()).unwrap()
+        };
+
+        let mcp = read(".bob/mcp.json");
+        let server = &mcp["mcpServers"][SERVER_NAME];
+        assert_eq!(server["type"], "streamable-http");
+        assert_eq!(server["url"], urls.mcp);
+        let allowed = server["alwaysAllow"].as_array().unwrap();
+        assert!(allowed.iter().any(|t| t == "ask_user"), "{allowed:?}");
+
+        let s = read(".bob/settings.json");
+        assert_eq!(s["other"], 1);
+        let stop = s["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "mine");
+        assert!(stop[1]
+            .to_string()
+            .contains("/v1/coordinator/p1/tok/hooks/turn_end"));
+        let start = s["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(start.len(), 1);
+        assert_eq!(start[0]["hooks"][0]["command"], PRIME_HOOK);
+        // Bob ignores every hook in a file with one key outside its schema.
+        for group in stop.iter().chain(start) {
+            for k in group.as_object().unwrap().keys() {
+                assert!(["matcher", "hooks"].contains(&k.as_str()), "{k}");
+            }
+            for h in group["hooks"].as_array().unwrap() {
+                for k in h.as_object().unwrap().keys() {
+                    assert!(
+                        ["type", "command", "timeout", "disabled"].contains(&k.as_str()),
+                        "{k}"
+                    );
+                }
+            }
+        }
+
+        let modes = read(".bob/custom_modes.yaml");
+        let slugs: Vec<&str> = modes["customModes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["slug"].as_str())
+            .collect();
+        assert_eq!(slugs, ["theirs", BOB_MODE]);
+
+        // A new token replaces Quark's hook and server rather than adding more.
+        let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok2");
+        assert!(install("bob", root, &urls).unwrap());
+        let stop = read(".bob/settings.json")["hooks"]["Stop"].clone();
+        assert_eq!(stop.as_array().unwrap().len(), 2);
+        assert!(stop[1].to_string().contains("tok2"));
+
+        // A person's own YAML modes are left alone.
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(other.path().join(".bob")).unwrap();
+        let yaml = "customModes:\n  - slug: mine\n";
+        std::fs::write(other.path().join(".bob/custom_modes.yaml"), yaml).unwrap();
+        install("bob", other.path(), &urls).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(other.path().join(".bob/custom_modes.yaml")).unwrap(),
+            yaml
+        );
     }
 
     #[test]

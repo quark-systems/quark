@@ -65,9 +65,7 @@ impl TranscriptTap {
         Self {
             store,
             roots,
-            bob_db: std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join(".bob").join("db").join("bob.db"))
-                .unwrap_or_default(),
+            bob_db: default_bob_db(),
             located: Mutex::new(HashMap::new()),
             polling: Mutex::new(()),
         }
@@ -123,6 +121,20 @@ impl TranscriptTap {
             moved: true,
             ..Polled::default()
         })
+    }
+
+    /// Appends what the Project's coordinator said since the last call: from
+    /// Bob's database when the Project's agent is IBM Bob, else from the
+    /// newest coordinator session log in `root`. Blocking: call from a
+    /// blocking task.
+    pub fn poll_coordinator(&self, project_id: &str, root: &Path) -> anyhow::Result<Polled> {
+        let source = TranscriptSource::Coordinator {
+            project_id: project_id.to_string(),
+        };
+        if coordinator_on_bob(&self.store, project_id) {
+            return self.poll_bob(project_id, source, root, None);
+        }
+        self.poll(project_id, source, root, &SessionFormat::COORDINATOR, None)
     }
 
     /// Reads whatever `cwd`'s session log gained since the last call and
@@ -257,4 +269,21 @@ pub fn locate_any(
                 .and_then(|m| m.modified())
                 .unwrap_or(SystemTime::UNIX_EPOCH)
         })
+}
+
+/// Bob's database in the user's home, `~/.bob/db/bob.db`.
+pub fn default_bob_db() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".bob").join("db").join("bob.db"))
+        .unwrap_or_default()
+}
+
+/// Whether the Project's coordinator runs on IBM Bob, whose conversation is
+/// in its database rather than a session log.
+pub fn coordinator_on_bob(store: &Store, project_id: &str) -> bool {
+    store.get_project(project_id).ok().is_some_and(|p| {
+        p.agent_config
+            .as_ref()
+            .is_some_and(|a| crate::engine::engine_harness(&a.harness) == "bob")
+    })
 }
