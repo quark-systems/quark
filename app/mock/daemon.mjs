@@ -1429,7 +1429,11 @@ function accountList() {
   // Grouped by harness in the registry's order, default first, like quarkd.
   const order = HARNESSES.map((h) => h.id);
   return [...accounts.values()]
-    .map(({ saved_health: _, ...a }) => ({ ...a, active_tasks: busy[a.id] ?? 0 }))
+    .map(({ saved_health: _, ...a }) => {
+      const enabled = a.enabled !== false, active_tasks = busy[a.id] ?? 0;
+      const availability = enabled ? "enabled" : active_tasks ? "draining" : "disabled";
+      return { ...a, enabled, availability, removing: !!a.removing, active_tasks };
+    })
     .sort((a, b) => order.indexOf(a.harness) - order.indexOf(b.harness) || Number(b.default) - Number(a.default));
 }
 
@@ -2087,6 +2091,28 @@ const server = http.createServer(async (req, res) => {
       if (a.saved_health) a.health = a.saved_health;
       return send(res, 200, accountList().find((x) => x.id === a.id));
     }
+  }
+  if ((r = m(/^\/v1\/accounts\/([^/]+)\/(plan|disable|remove|enable)$/)) && req.method === "POST") {
+    // Like quarkd, minus the dispatch rules: the mock's projects keep none per account.
+    const a = accounts.get(decodeURIComponent(r[1]));
+    if (!a) return notFound(res);
+    const listed = () => accountList().find((x) => x.id === a.id);
+    const running = [...tasks.values()]
+      .filter((t) => t.account_id === a.id && t.state !== "done" && t.state !== "failed")
+      .map((t) => ({ project_id: t.project_id, project_name: projects.get(t.project_id)?.name ?? t.project_id, task_id: t.id, title: t.title }));
+    if (r[2] === "plan") {
+      const b = await readJson(req);
+      const refused = b?.action === "remove" && a.default ? "a harness's default account cannot be removed; disable it instead" : null;
+      return send(res, 200, { account_id: a.id, action: b?.action ?? "disable", running, references: [], refused });
+    }
+    if (r[2] === "enable") { a.enabled = true; a.removing = false; return send(res, 200, listed()); }
+    if (r[2] === "remove" && a.default) return send(res, 409, { error: { code: "conflict", message: "a harness's default account cannot be removed; disable it instead" } });
+    a.enabled = false;
+    if (r[2] === "remove") {
+      if (!running.length) { accounts.delete(a.id); return send(res, 200, { account: null, removed: true, changed: [] }); }
+      a.removing = true;
+    }
+    return send(res, 200, { account: listed(), removed: false, changed: [] });
   }
   if ((r = m(/^\/v1\/accounts\/([^/]+)$/))) {
     const a = accounts.get(decodeURIComponent(r[1]));
