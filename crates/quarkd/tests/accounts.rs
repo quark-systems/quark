@@ -1076,3 +1076,107 @@ async fn a_coordinator_shell_gets_every_kept_key() {
     let env = s.accounts.coordinator_env(Vec::new()).await.unwrap();
     assert!(env.iter().all(|(k, _)| !k.contains("KIRO")), "{env:?}");
 }
+
+#[tokio::test]
+async fn a_disabled_account_drains_and_takes_no_new_work() {
+    let s = setup();
+    let a = s.claude_dir("a");
+    let b = s.claude_dir("b");
+    let acc_a = add(
+        &s,
+        json!({"harness": "claude-code", "config_dir": a, "pools": ["max"]}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let acc_b = add(
+        &s,
+        json!({"harness": "claude-code", "config_dir": b, "pools": ["max", "solo"]}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let p1 = project(&s, "one").await;
+    let l1 = s
+        .accounts
+        .lease(&Holder::Coordinator(p1.clone()), &agent(Some("solo")))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(l1.account_id, acc_b);
+
+    // The coordinator runs under it, so disabling leaves it draining.
+    let (status, plan) = call(
+        &s.app,
+        "POST",
+        &format!("/v1/accounts/{acc_b}/plan"),
+        Some(json!({"action": "remove"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    assert_eq!(plan["running"][0]["project_id"], json!(p1));
+    assert_eq!(plan["running"][0]["title"], "Coordinator");
+    let (status, out) = call(
+        &s.app,
+        "POST",
+        &format!("/v1/accounts/{acc_b}/remove"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["removed"], false);
+    assert_eq!(out["account"]["availability"], "draining");
+    assert_eq!(out["account"]["removing"], true);
+
+    // Not even its own holder starts under it again; the pool's other
+    // account takes the work, and a pool with no enabled account refuses.
+    let again = s
+        .accounts
+        .lease(&Holder::Coordinator(p1.clone()), &agent(Some("max")))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.account_id, acc_a);
+    let p2 = project(&s, "two").await;
+    let err = s
+        .accounts
+        .lease(&Holder::Coordinator(p2), &agent(Some("solo")))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("disabled"), "{err}");
+
+    // Its work moved off, so the removal finishes.
+    assert_eq!(
+        s.accounts.finish_removals().await.unwrap(),
+        std::slice::from_ref(&acc_b)
+    );
+    let (status, _) = call(&s.app, "GET", &format!("/v1/accounts/{acc_b}"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // A disabled default account stops pool-less starts too.
+    let (status, _) = call(
+        &s.app,
+        "POST",
+        "/v1/accounts/default-claude-code/disable",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let p3 = project(&s, "three").await;
+    let err = s
+        .accounts
+        .lease(&Holder::Coordinator(p3), &agent(None))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("disabled"), "{err}");
+    let (status, _) = call(
+        &s.app,
+        "POST",
+        "/v1/accounts/default-claude-code/remove",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}

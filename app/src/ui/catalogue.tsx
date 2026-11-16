@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, UsageMeter, CountBadge, BeadMarkdown, BeadText, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, Toggle, UsageMeter, CountBadge, BeadMarkdown, BeadText, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -132,6 +132,12 @@ export const CATALOGUE: CatalogueEntry[] = [
         <Row indent dim lead={<StatusDot tone="parked" />} title="usage-ring" sub="Parked until slice 2" />
       </div>
     ),
+  },
+  {
+    name: "Toggle",
+    when: "Turn one setting on or off where flipping it is the whole action, such as whether Quark may use an account.",
+    contract: "checked; onCheckedChange; label says what it switches (screen readers, tooltip); disabled while saving. Pair it with words that say the state; when turning it off needs a confirmation, keep it on until confirmed.",
+    example: () => <ToggleSample />,
   },
   {
     name: "Button",
@@ -286,3 +292,8 @@ export const CATALOGUE: CatalogueEntry[] = [
     example: () => <div style={{ maxWidth: 340 }}><DecisionEvidence d={SAMPLE} /></div>,
   },
 ];
+
+function ToggleSample() {
+  const [on, setOn] = useState(true);
+  return <span className="cat-inline"><Toggle checked={on} onCheckedChange={setOn} label="Use this account" />{on ? "Enabled" : "Disabled"}</span>;
+}

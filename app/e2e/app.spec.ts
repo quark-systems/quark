@@ -776,11 +776,20 @@ test("accounts: add a second Claude account and see both with health and quota",
   await expect(page.getByRole("option")).toHaveText(["Default account", "Pool: max"]);
   await page.keyboard.press("Escape");
 
-  // Removing takes a second click; the default account has no Remove button.
+  // Disabling asks first, then the row says so; enabling is one flip.
   await page.getByTestId("nav-accounts").click();
+  await work.getByRole("switch", { name: /Quark may use Work/ }).click();
+  await expect(work.getByTestId("account-change")).toContainText("Disable Work?");
+  await work.getByTestId("account-change-confirm").click();
+  await expect(work.getByTestId("account-availability")).toHaveText("Disabled");
+  await work.getByRole("switch", { name: "Enable Work for Quark" }).click();
+  await expect(work.getByTestId("account-availability")).toHaveCount(0);
+
+  // Removing shows what it touches first; the default account has no Remove button.
   await expect(rows.first().getByRole("button", { name: /^Remove/ })).toHaveCount(0);
   await work.getByRole("button", { name: "Remove Work" }).click();
-  await work.getByRole("button", { name: "Remove Work" }).click();
+  await expect(work.getByTestId("account-change")).toContainText("Remove Work?");
+  await work.getByTestId("account-change-confirm").click();
   await expect(rows).toHaveCount(1);
 });
 

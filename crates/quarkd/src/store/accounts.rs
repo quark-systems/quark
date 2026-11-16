@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use quark_systems::{AccountQuota, AccountQuotaChanged, EventType, Task};
+use quark_systems::{AccountQuota, AccountQuotaChanged, AccountWork, EventType, Task};
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use super::{append_event, get_project, Result, Store, StoreError, TASK_SELECT};
@@ -22,6 +22,13 @@ pub fn default_account_id(harness: &str) -> String {
 /// The harness of a default account id.
 pub fn default_harness(account_id: &str) -> Option<&str> {
     account_id.strip_prefix(DEFAULT_PREFIX)
+}
+
+/// An account's state, when it is not simply enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountState {
+    pub enabled: bool,
+    pub removing: bool,
 }
 
 /// An account added through the API.
@@ -163,12 +170,122 @@ impl Store {
                     "the account is in use by {in_use} running task(s)"
                 )));
             }
-            if tx.execute("DELETE FROM accounts WHERE id = ?1", [id])? == 0 {
-                return Err(StoreError::NotFound);
-            }
-            tx.execute("DELETE FROM account_pools WHERE account_id = ?1", [id])?;
-            tx.execute("DELETE FROM account_quota WHERE account_id = ?1", [id])?;
+            delete_account(tx, id)
+        })
+    }
+
+    /// Accounts the person disabled, with whether each waits to be removed.
+    /// An account missing here is enabled.
+    pub fn account_states(&self) -> Result<HashMap<String, AccountState>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT account_id, enabled, removing FROM account_states
+                 WHERE enabled = 0 OR removing = 1",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    AccountState {
+                        enabled: r.get(1)?,
+                        removing: r.get(2)?,
+                    },
+                ))
+            })?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    /// Enables or disables an account for Quark; enabling also calls off a
+    /// pending removal.
+    pub fn set_account_enabled(&self, id: &str, enabled: bool, at: &str) -> Result<()> {
+        self.write(|tx, _| {
+            tx.execute(
+                "INSERT INTO account_states (account_id, enabled, removing, changed_at)
+                 VALUES (?1, ?2, 0, ?3)
+                 ON CONFLICT (account_id) DO UPDATE SET enabled = excluded.enabled,
+                     removing = CASE WHEN excluded.enabled = 1 THEN 0 ELSE removing END,
+                     changed_at = excluded.changed_at",
+                params![id, enabled, at],
+            )?;
             Ok(())
+        })
+    }
+
+    /// Disables an added account and removes it once nothing runs under it:
+    /// now when nothing does (true), else when the last of it finishes
+    /// ([`Self::finish_removals`]).
+    pub fn remove_account_when_idle(&self, id: &str, at: &str) -> Result<bool> {
+        self.write(|tx, _| {
+            let in_use = active_leases(tx)?.get(id).copied().unwrap_or(0);
+            if in_use == 0 {
+                delete_account(tx, id)?;
+                return Ok(true);
+            }
+            tx.execute(
+                "INSERT INTO account_states (account_id, enabled, removing, changed_at)
+                 VALUES (?1, 0, 1, ?2)
+                 ON CONFLICT (account_id) DO UPDATE SET enabled = 0, removing = 1,
+                     changed_at = excluded.changed_at",
+                params![id, at],
+            )?;
+            Ok(false)
+        })
+    }
+
+    /// Removes the accounts waiting for their work to finish whose work has.
+    /// Returns their ids.
+    pub fn finish_removals(&self) -> Result<Vec<String>> {
+        self.write(|tx, _| {
+            let waiting: Vec<String> = {
+                let mut stmt =
+                    tx.prepare("SELECT account_id FROM account_states WHERE removing = 1")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                rows.collect::<std::result::Result<_, _>>()?
+            };
+            if waiting.is_empty() {
+                return Ok(waiting);
+            }
+            let leases = active_leases(tx)?;
+            let mut done = Vec::new();
+            for id in waiting {
+                if leases.get(&id).copied().unwrap_or(0) > 0 {
+                    continue;
+                }
+                match delete_account(tx, &id) {
+                    Ok(()) | Err(StoreError::NotFound) => {
+                        tx.execute("DELETE FROM account_states WHERE account_id = ?1", [&id])?;
+                        done.push(id);
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(done)
+        })
+    }
+
+    /// What runs under an account now: its tasks that have not finished and
+    /// the coordinators started under it, with their Project's name.
+    pub fn account_work(&self, id: &str) -> Result<Vec<AccountWork>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT t.project_id, p.name, t.id, t.title FROM tasks t
+                     JOIN projects p ON p.id = t.project_id
+                 WHERE t.account_id = ?1 AND t.state NOT IN {IDLE_TASK_STATES}
+                 UNION ALL
+                 SELECT id, name, NULL, 'Coordinator' FROM projects
+                 WHERE coordinator_account_id = ?1 AND status != 'failed'
+                     AND archived_at IS NULL
+                 ORDER BY 2, 3"
+            ))?;
+            let rows = stmt.query_map([id], |r| {
+                Ok(AccountWork {
+                    project_id: r.get(0)?,
+                    project_name: r.get(1)?,
+                    task_id: r.get(2)?,
+                    title: r.get(3)?,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
         })
     }
 
@@ -340,6 +457,16 @@ impl Store {
             Ok(())
         })
     }
+}
+
+fn delete_account(tx: &Transaction, id: &str) -> Result<()> {
+    if tx.execute("DELETE FROM accounts WHERE id = ?1", [id])? == 0 {
+        return Err(StoreError::NotFound);
+    }
+    tx.execute("DELETE FROM account_pools WHERE account_id = ?1", [id])?;
+    tx.execute("DELETE FROM account_quota WHERE account_id = ?1", [id])?;
+    tx.execute("DELETE FROM account_states WHERE account_id = ?1", [id])?;
+    Ok(())
 }
 
 fn set_pools(tx: &Transaction, id: &str, pools: &[String]) -> Result<()> {

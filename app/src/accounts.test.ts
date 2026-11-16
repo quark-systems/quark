@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { addable, usageText, groupByHarness, loginHint, parsePools, poolsFor, POOL_RE, quotaCls, quotaText, whereText } from "./accounts";
-import type { Account, AccountQuota, HarnessInfo } from "./api";
+import { addable, availabilityMeta, dispositionText, placeText, proposedDispositions, usageText, groupByHarness, loginHint, parsePools, poolsFor, POOL_RE, quotaCls, quotaText, whereText } from "./accounts";
+import type { Account, AccountQuota, AccountReference, HarnessInfo } from "./api";
 
 const quota = (over: Partial<AccountQuota> = {}): AccountQuota => ({ state: "known", remaining_percent: 62.4, windows: [], ...over });
 const account = (id: string, harness: string, pools: string[] = []): Account => ({
@@ -73,5 +73,29 @@ describe("single-account and key harnesses", () => {
       .toBe("API key in the Keychain, team t-7");
     expect(whereText({ ...account("default-kiro", "kiro"), config_dir: null })).toBe("the harness's own login");
     expect(whereText(account("acc_2", "claude-code"))).toBe("/a/acc_2");
+  });
+});
+
+describe("enabling and disabling accounts", () => {
+  it("says where a disabled account stands", () => {
+    expect(availabilityMeta(account("acc_a", "claude-code"))).toBeNull();
+    expect(availabilityMeta({ ...account("acc_a", "claude-code"), enabled: false, availability: "draining", active_tasks: 2 })?.label)
+      .toBe("Draining · 2 running");
+    expect(availabilityMeta({ ...account("acc_a", "claude-code"), enabled: false, availability: "disabled" })?.label).toBe("Disabled");
+    expect(availabilityMeta({ ...account("acc_a", "claude-code"), enabled: false, removing: true, active_tasks: 1 })?.label).toBe("Removing");
+  });
+  it("words each choice for a profile and starts from Quark's proposal", () => {
+    const ref: AccountReference = {
+      id: "prj_1/rules/0/0", project_id: "prj_1", project_name: "Selah", place: "rule", rule: "hard",
+      harness: "claude-code", pool: "max", remaining: [], stranded: true,
+      options: [{ kind: "use_pool", pool: "team", accounts: ["Work"] }, { kind: "drop" }, { kind: "keep" }],
+    };
+    expect(dispositionText(ref.options[0], ref)).toBe("Use pool team (Work)");
+    expect(dispositionText({ kind: "use_default" }, ref)).toBe("Use claude-code's default account");
+    expect(dispositionText({ kind: "drop" }, ref)).toBe("Take it out of the rule");
+    expect(placeText(ref)).toBe("Rule hard");
+    expect(placeText({ place: "coordinator" })).toBe("Coordinator");
+    const kept = { ...ref, id: "prj_1/default/0", stranded: false, options: [] };
+    expect(proposedDispositions([ref, kept])).toEqual({ "prj_1/rules/0/0": ref.options[0] });
   });
 });

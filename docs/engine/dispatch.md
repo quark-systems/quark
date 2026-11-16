@@ -93,6 +93,15 @@ A quota read that does not finish (a reader that timed out or failed to run) kee
 
 firstmate's opt-in per-session cap (`spawn_max_cost`) has no setting here: put `--max-cost <coins>` on `launch.argv` in a `<home>/harnesses/bob.toml` copy of the built-in manifest instead.
 
+## Enabling and disabling accounts
+
+Every account, a harness's default login too, is enabled for Quark until the person turns it off on Accounts. The flag is instance wide (`account_states` in quarkd's store), so it reaches every Project's dispatch rules and coordinator at once:
+
+- **Disabled** means no new work: `Accounts::lease`, failover's `next_account` and native dispatch's `pools::choose` pass it over, a task's own account included (sticky gives way). A profile naming no pool whose harness default is disabled, or a pool whose accounts are all disabled, is refused (`PoolError::Disabled`), so the task escalates to the coordinator. Quota is no longer read for it.
+- Work already running under it carries on; the account shows `availability: draining` until its last task and coordinator stop, then `disabled`.
+- Before the change, `POST /v1/accounts/{id}/plan` (`{"action": "disable" | "remove"}`) lists that running work and every dispatch profile and coordinator agent that reaches the account (through a pool it is in, or as the harness default when no pool is named). One left with no enabled account is `stranded`, with options, Quark's proposal first: another pool of the harness (the one with the most enabled accounts first), the harness default, taking the candidate out of its rule, or leaving it for the coordinator. `POST /v1/accounts/{id}/disable` or `/remove` with `{"dispositions": {<reference id>: <option>}}` refuses (`needs_disposition`) until every stranded profile has one, commits the rule changes to each Project's `dispatch.yaml` ("Move dispatch rules off the … account"), sets a changed coordinator agent for its next start, then disables the account.
+- Removing disables it and deletes it once nothing runs under it (`removing: true` meanwhile; quarkd checks every 10 s). `POST /v1/accounts/{id}/enable` undoes either.
+
 ## Admission control
 
 A host takes a new worker only when all of these hold:

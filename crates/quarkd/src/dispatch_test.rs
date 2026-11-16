@@ -358,7 +358,8 @@ fn checks(p: &Profile, engine: Option<&DispatchCandidate>, host: &Host) -> Vec<D
         }
         _ => Runs::Nowhere(unknown()),
     };
-    let usable = |a: &Account| a.launchable && a.health.state != AuthState::NotConfigured;
+    let usable =
+        |a: &Account| a.enabled && a.launchable && a.health.state != AuthState::NotConfigured;
     let health = match &runs {
         Runs::Nowhere(why) => (false, why.clone()),
         Runs::Harness(auth, name) => (
@@ -370,7 +371,9 @@ fn checks(p: &Profile, engine: Option<&DispatchCandidate>, host: &Host) -> Vec<D
             accounts
                 .iter()
                 .map(|a| {
-                    let launch = if a.launchable {
+                    let launch = if !a.enabled {
+                        "; disabled in Quark"
+                    } else if a.launchable {
                         ""
                     } else {
                         "; the engine cannot start a worker under it yet"
@@ -500,6 +503,9 @@ default:
             active_tasks: 0,
             launchable: true,
             created_at: None,
+            enabled: true,
+            availability: quark_systems::AccountAvailability::Enabled,
+            removing: false,
         }
     }
 

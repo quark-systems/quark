@@ -27,7 +27,11 @@ pub struct PoolAccount {
     pub pools: Vec<String>,
     /// The engine can start the harness under it.
     pub launchable: bool,
-    /// Launchable, logged in, and its last quota reading has quota left.
+    /// The person disabled it for Quark: no new work starts under it.
+    #[serde(default)]
+    pub disabled: bool,
+    /// Enabled, launchable, logged in, and its last quota reading has quota
+    /// left.
     pub ready: bool,
     pub remaining_percent: Option<f64>,
     pub active_tasks: u32,
@@ -51,6 +55,9 @@ pub enum PoolError {
     /// Every account in the pool is logged out, out of quota, or not
     /// launchable.
     NoneReady { pool: String },
+    /// Every account the profile could run under is disabled in Quark: the
+    /// pool's, or with no pool the harness's default account.
+    Disabled { pool: Option<String> },
 }
 
 impl std::fmt::Display for PoolError {
@@ -61,6 +68,12 @@ impl std::fmt::Display for PoolError {
                 f,
                 "no account in pool `{pool}` is ready: each is logged out, out of quota, or not launchable"
             ),
+            PoolError::Disabled { pool: Some(pool) } => {
+                write!(f, "every account in pool `{pool}` is disabled in Quark")
+            }
+            PoolError::Disabled { pool: None } => {
+                write!(f, "the harness's default account is disabled in Quark")
+            }
         }
     }
 }
@@ -76,18 +89,26 @@ pub fn choose<'a>(
     if let Some(a) = current.and_then(|c| {
         accounts
             .iter()
-            .find(|a| a.id == c && a.launchable && a.in_pool(pool))
+            .find(|a| a.id == c && a.launchable && !a.disabled && a.in_pool(pool))
     }) {
         return Ok(Some(a));
     }
     let Some(pool) = pool else {
-        return Ok(accounts.iter().find(|a| a.default));
+        return match accounts.iter().find(|a| a.default) {
+            Some(a) if a.disabled => Err(PoolError::Disabled { pool: None }),
+            found => Ok(found),
+        };
     };
     let members: Vec<&PoolAccount> = accounts.iter().filter(|a| a.in_pool(Some(pool))).collect();
     if members.is_empty() {
         return Err(PoolError::Empty { pool: pool.into() });
     }
-    least_busy(members.into_iter().filter(|a| a.ready))
+    if members.iter().all(|a| a.disabled) {
+        return Err(PoolError::Disabled {
+            pool: Some(pool.into()),
+        });
+    }
+    least_busy(members.into_iter().filter(|a| a.ready && !a.disabled))
         .map(Some)
         .ok_or_else(|| PoolError::NoneReady { pool: pool.into() })
 }
@@ -112,6 +133,7 @@ pub fn next<'a>(
         a.id != current
             && !exclude.contains(&a.id)
             && a.pools.iter().any(|p| pools.contains(p))
+            && !a.disabled
             && a.ready
     }))
 }
@@ -167,6 +189,7 @@ mod tests {
             default: id == "default",
             pools: pools.iter().map(|p| p.to_string()).collect(),
             launchable: true,
+            disabled: false,
             ready,
             remaining_percent: left,
             active_tasks: active,
@@ -208,6 +231,36 @@ mod tests {
             choose(&tired, Some("team"), None),
             Err(PoolError::NoneReady { .. })
         ));
+    }
+
+    #[test]
+    fn disabled_accounts_take_no_new_work() {
+        let off = |mut a: PoolAccount| {
+            a.disabled = true;
+            a
+        };
+        let a = vec![
+            off(acc("default", &[], true, 0, None)),
+            off(acc("a", &["team"], true, 0, Some(90.0))),
+            acc("b", &["team"], true, 3, Some(10.0)),
+            off(acc("c", &["solo"], true, 0, Some(90.0))),
+        ];
+        // Not even a task's own account, once disabled.
+        assert_eq!(
+            choose(&a, Some("team"), Some("a")).unwrap().unwrap().id,
+            "b"
+        );
+        assert_eq!(
+            choose(&a, None, None).unwrap_err(),
+            PoolError::Disabled { pool: None }
+        );
+        assert_eq!(
+            choose(&a, Some("solo"), None).unwrap_err(),
+            PoolError::Disabled {
+                pool: Some("solo".into())
+            }
+        );
+        assert!(next(&a, None, "b", &[]).is_none());
     }
 
     #[test]

@@ -94,6 +94,12 @@ fn set_agent(
 }
 
 impl Store {
+    /// Set the Project coordinator's agent for its next start, without
+    /// switching a running one. Emits `project.updated`.
+    pub fn set_project_agent(&self, project_id: &str, agent: Option<AgentConfig>) -> Result<()> {
+        self.write(|tx, events| set_agent(tx, events, project_id, agent))
+    }
+
     /// Record a switch of the Project's coordinator to `to`. Refused while
     /// another is open, and when `to` is the agent it already runs.
     pub fn start_switch(

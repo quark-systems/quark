@@ -909,3 +909,115 @@ async fn the_api_answers_the_classifier_in_effect_and_a_fallback_to_the_default_
     assert_eq!(err["error"]["code"], "dispatch_invalid");
     assert!(!err.to_string().contains("sk-live"), "{err}");
 }
+
+#[tokio::test]
+async fn disabling_an_account_moves_the_rules_that_need_it_once_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let Served {
+        app,
+        store,
+        project,
+        bare,
+        ..
+    } = served(dir.path());
+    let work = dir.path().join("accounts/work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join(".credentials.json"), "{}").unwrap();
+    let (status, added) = post(
+        &app,
+        "/v1/accounts",
+        json!({"harness": "claude-code", "label": "Work", "config_dir": work, "pools": ["max"]}),
+    )
+    .await;
+    assert_eq!(status, 201, "{added}");
+
+    // Every profile names no pool, so all run under the default account.
+    let (status, plan) = post(
+        &app,
+        "/v1/accounts/default-claude-code/plan",
+        json!({"action": "disable"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{plan}");
+    let p = &project.id;
+    let ids: Vec<_> = plan["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            format!("{p}/rules/0/0"),
+            format!("{p}/default/0"),
+            format!("{p}/coordinator")
+        ]
+    );
+    let proposed = &plan["references"][0]["options"][0];
+    assert_eq!(
+        proposed,
+        &json!({"kind": "use_pool", "pool": "max", "accounts": ["Work"]})
+    );
+    assert_eq!(plan["references"][0]["stranded"], true);
+    assert_eq!(plan["references"][0]["rule"], "trivial-edit");
+
+    // Nothing is disabled until every stranded profile has a choice.
+    let (status, err) = post(
+        &app,
+        "/v1/accounts/default-claude-code/disable",
+        json!({"dispositions": {}}),
+    )
+    .await;
+    assert_eq!(status, 409, "{err}");
+    assert_eq!(err["error"]["code"], "needs_disposition");
+    let (_, a) = call(&app, "GET", "/v1/accounts/default-claude-code", None).await;
+    assert_eq!(a["enabled"], true);
+
+    let choices: serde_json::Map<String, Value> = ids
+        .iter()
+        .map(|id| (id.clone(), proposed.clone()))
+        .collect();
+    let (status, done) = post(
+        &app,
+        "/v1/accounts/default-claude-code/disable",
+        json!({ "dispositions": choices }),
+    )
+    .await;
+    assert_eq!(status, 200, "{done}");
+    assert_eq!(done["account"]["enabled"], false);
+    assert_eq!(done["account"]["availability"], "disabled");
+    assert_eq!(done["changed"][0]["coordinator"], true);
+    let commit = done["changed"][0]["commit"].as_str().unwrap();
+    assert_eq!(commit, out(&bare, &["rev-parse", "main"]).trim());
+    assert_eq!(
+        out(&bare, &["log", "-1", "--format=%s", "main"]).trim(),
+        "Move dispatch rules off the claude-code account `Default`"
+    );
+    let (_, rules) = call(&app, "GET", &format!("/v1/projects/{p}/dispatch"), None).await;
+    assert_eq!(rules["rules"][0]["candidates"][0]["pool"], "max");
+    assert_eq!(rules["default"][0]["pool"], "max");
+    assert_eq!(
+        store
+            .get_project(p)
+            .unwrap()
+            .agent_config
+            .unwrap()
+            .pool
+            .as_deref(),
+        Some("max")
+    );
+
+    // Nothing references it now; enabling needs no plan.
+    let (_, plan) = post(
+        &app,
+        "/v1/accounts/default-claude-code/plan",
+        json!({"action": "disable"}),
+    )
+    .await;
+    assert_eq!(plan["references"], json!([]));
+    let (status, a) = post(&app, "/v1/accounts/default-claude-code/enable", json!(null)).await;
+    assert_eq!(status, 200, "{a}");
+    assert_eq!(a["enabled"], true);
+    assert_eq!(a["availability"], "enabled");
+}

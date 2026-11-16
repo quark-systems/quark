@@ -1,5 +1,5 @@
 // Accounts screen helpers (quark#23): health and quota labels, grouping and pool parsing.
-import type { Account, AccountQuota, AuthState, HarnessInfo, QuotaWindow } from "./api";
+import type { Account, AccountDisposition, AccountQuota, AccountReference, AuthState, HarnessInfo, QuotaWindow } from "./api";
 
 export const healthMeta: Record<AuthState, { label: string; cls: string }> = {
   configured: { label: "Logged in", cls: "green" },
@@ -86,4 +86,54 @@ export function loginHint(h: HarnessInfo | undefined, dir: string): string | nul
   if (!h?.account_env) return null;
   const bin = h.id === "claude-code" ? "claude" : h.id;
   return `${h.account_env}=${dir || "<dir>"} ${bin}`;
+}
+
+/** Where an account stands with Quark, for its row: null while it is simply enabled. */
+export function availabilityMeta(a: Account): { label: string; cls: string; title: string } | null {
+  const running = a.active_tasks;
+  const work = `${running} ${running === 1 ? "worker or coordinator" : "workers or coordinators"}`;
+  if (a.removing) {
+    return { label: "Removing", cls: "yellow", title: `Removed once the ${work} still running under it finish. Nothing new starts under it.` };
+  }
+  switch (a.availability ?? (a.enabled === false ? "disabled" : "enabled")) {
+    case "draining":
+      return { label: `Draining · ${running} running`, cls: "yellow", title: `Disabled: nothing new starts under it. The ${work} already running finish first.` };
+    case "disabled":
+      return { label: "Disabled", cls: "", title: "Quark starts nothing under this account, in any project." };
+    default:
+      return null;
+  }
+}
+
+/** The key a disposition is chosen by in a Select. */
+export function dispositionKey(d: AccountDisposition): string {
+  return d.kind === "use_pool" ? `use_pool:${d.pool}` : d.kind;
+}
+
+/** One line for a disposition, e.g. "Use pool team (Work, Batch)". */
+export function dispositionText(d: AccountDisposition, r: Pick<AccountReference, "place" | "harness">): string {
+  switch (d.kind) {
+    case "use_pool": return `Use pool ${d.pool}${d.accounts?.length ? ` (${d.accounts.join(", ")})` : ""}`;
+    case "use_default": return `Use ${r.harness}'s default account`;
+    case "drop": return r.place === "default" ? "Take it out of the default" : "Take it out of the rule";
+    case "keep": return r.place === "coordinator"
+      ? "Leave it: the coordinator won't start until you change its agent"
+      : "Leave it: matching work goes to the coordinator to place";
+  }
+}
+
+/** Where a reference sits, e.g. "Rule trivial-edit" or "Coordinator". */
+export function placeText(r: Pick<AccountReference, "place" | "rule">): string {
+  switch (r.place) {
+    case "rule": return `Rule ${r.rule ?? ""}`.trim();
+    case "default": return "Default rule";
+    case "coordinator": return "Coordinator";
+  }
+}
+
+/** The proposal for every stranded reference, by id: what the plan dialog starts with. */
+export function proposedDispositions(refs: AccountReference[]): Record<string, AccountDisposition> {
+  const out: Record<string, AccountDisposition> = {};
+  for (const r of refs) if (r.stranded && r.options[0]) out[r.id] = r.options[0];
+  return out;
 }
