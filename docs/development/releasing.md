@@ -127,13 +127,24 @@ says what it speaks:
   quarkd on a fresh home, upgrades it with this build, then starts the previous quarkd on
   it again: it must serve the home or refuse it by name, never fail half-way.
 
-## Signing (repository secrets)
+## Signing (the `release` environment)
+
+The Mac signing secrets live in the GitHub environment `release`, with Matt as its required
+reviewer: a tag build (or a manual run with `sign` ticked) waits for his approval before the
+Mac job sees them. Pull request and other manual runs build unsigned.
 
 | What | Secrets / variables |
 |---|---|
-| Mac code signing | `APPLE_CERTIFICATE` (base64 .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` |
-| Mac notarization | `APPLE_API_ISSUER`, `APPLE_API_KEY_ID`, `APPLE_API_KEY_P8` |
+| Mac code signing | `APPLE_CERTIFICATE` (base64 Developer ID Application .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID` (picks the identity) |
+| Mac notarization | `APPLE_API_KEY` (the App Store Connect .p8's text), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` |
 | Updates | secrets `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`), variable `TAURI_UPDATER_PUBKEY` (`npx tauri signer generate`) |
+
+Signing goes inside out: `mac/scripts/package.sh` signs quarkd (which is also ptyd and,
+copied, quark-updater), QuarkWidgets.appex (sandboxed, network client) and QuarkBar.app, all
+with the hardened runtime and a secure timestamp; Tauri then signs, notarizes and staples
+Quark.app around it, and the workflow signs, notarizes and staples the dmg and checks every
+layer with `codesign`, `stapler validate` and `spctl`. The update (`Quark.app.tar.gz`) holds
+the stapled app.
 
 Without them the builds are unsigned: macOS quarantines the app (right-click, Open, or
 `xattr -dr com.apple.quarantine /Applications/Quark.app`), Windows SmartScreen warns, and
