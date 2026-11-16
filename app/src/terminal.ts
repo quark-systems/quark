@@ -33,6 +33,9 @@ export interface TermHandle {
   error: string | null;
   onStatus: Set<() => void>;
   unsub: (() => void) | null;
+  /** Whether keys typed into it reach the agent. Off by default: the worker view's message box is
+   * where you write to a worker, and Take over turns this on for a dialog that needs real keys. */
+  typing: boolean;
 }
 
 const terms = new Map<string, TermHandle>();
@@ -42,10 +45,19 @@ export function getTerm(id: string): TermHandle {
   if (h) return h;
   const host = document.createElement("div");
   host.className = "term-host";
-  h = { id, host, adapter: null, status: "connecting", info: null, error: null, onStatus: new Set(), unsub: null };
+  h = { id, host, adapter: null, status: "connecting", info: null, error: null, onStatus: new Set(), unsub: null, typing: false };
   terms.set(id, h);
   void open(h);
   return h;
+}
+
+/** Lets keys through to the agent (Take over), or makes the terminal view only again. */
+export function setTyping(h: TermHandle, on: boolean) {
+  if (h.typing === on) return;
+  h.typing = on;
+  h.adapter?.setInput(on);
+  if (on) h.adapter?.focus();
+  h.onStatus.forEach((f) => f());
 }
 
 function setStatus(h: TermHandle, status: TermStatus, error: string | null = null) {
@@ -91,7 +103,7 @@ async function open(h: TermHandle) {
   };
   let resizeTimer = 0;
   const adapter = createXterm(opts, {
-    onData: (d) => { api.terminalInput(h.id, d).catch((e) => console.warn("terminal input failed", e)); },
+    onData: (d) => { if (!h.typing) return; api.terminalInput(h.id, d).catch((e) => console.warn("terminal input failed", e)); },
     onResize: (cols, rows) => {
       clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => api.terminalResize(h.id, cols, rows).catch(() => {}), 100);
@@ -112,6 +124,7 @@ async function open(h: TermHandle) {
   }
   for (const c of pending.splice(0)) if (c.seq > minSeq) { applyChunk(adapter, c.chunk); minSeq = c.seq; }
   h.adapter = adapter;
+  adapter.setInput(h.typing);
   adapter.fit();
   setStatus(h, "live");
 }

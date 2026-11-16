@@ -72,6 +72,8 @@ export const tasksApi = {
   tasks: (pid: string) => req<Task[]>("GET", `/v1/projects/${enc(pid)}/tasks`),
   task: (id: string) => req<Task>("GET", `/v1/tasks/${enc(id)}`),
   steer: (id: string, text: string) => req<void>("POST", `/v1/tasks/${enc(id)}/messages`, { text }),
+  /** Presses the worker's interrupt key; it keeps running and reads the next message. */
+  interruptTask: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:interrupt`),
   cancel: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:cancel`),
   relaunch: (id: string) => req<void>("POST", `/v1/tasks/${enc(id)}:relaunch`),
   /** With `discard`, work that has not landed is thrown away; commits stay on the worker's branch. */

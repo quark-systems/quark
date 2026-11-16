@@ -512,6 +512,21 @@ async fn without_a_classifier_the_coordinator_picked() {
 }
 
 #[tokio::test]
+async fn interrupt_reaches_the_engine_task() {
+    let h = harness().await;
+    let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;
+    let (status, _) = call(&h.app, "POST", &format!("/v1/tasks/{tid}:interrupt"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        h.engine.writes(),
+        vec![StubWrite::Control {
+            task_id: "fix-login".into(),
+            action: TaskControl::Interrupt
+        }]
+    );
+}
+
+#[tokio::test]
 async fn steer_cancel_and_relaunch_reach_the_engine_task() {
     let h = harness().await;
     let tid = project_with_task(&h, Some("/tmp/quark-ws")).await;

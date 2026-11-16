@@ -1797,6 +1797,7 @@ const server = http.createServer(async (req, res) => {
     }
     emit("decision.answered", { ...d }, d.project_id);
     const task = d.task_id && tasks.get(d.task_id);
+    if (task && d.question.startsWith("My terminal shows a prompt")) output(task, `\r\n[chose ${answer}]\r\n$ `);
     if (task && task.state === "needs_decision") setState(task, "running", `Answered: ${answer.slice(0, 60)}`);
     return send(res, 200, d);
   }
@@ -2284,6 +2285,11 @@ const server = http.createServer(async (req, res) => {
       output(task, "\r\n\x1b[31m[worker exited: cancelled]\x1b[0m\r\n");
       return send(res, 204);
     }
+    if (rest === ":interrupt" && req.method === "POST") {
+      if (task.state === "done" || task.state === "failed") return send(res, 409, { error: { code: "refused", message: `task ${task.id} has no running worker` } });
+      output(task, "\r\n\x1b[33m[interrupted by user]\x1b[0m\r\n$ ");
+      return send(res, 204);
+    }
     if (rest === ":clear" && req.method === "POST") {
       if (task.cleared_at) return send(res, 204);
       if (task.state !== "done" && task.state !== "failed") return send(res, 409, { error: { code: "conflict", message: `the worker is ${task.state}; cancel it or let it finish first` } });
@@ -2396,6 +2402,23 @@ const server = http.createServer(async (req, res) => {
     forgeComments.set(pr.id, [...(forgeComments.get(pr.id) ?? []), c]);
     emit("comment.updated", { pull_request_id: pr.id, task_id: pr.task_id, comment: c, deleted: false }, pr.project_id);
     return send(res, 200, c);
+  }
+  // A permission prompt appears on a worker's screen: quarkd asks it as that worker's question (quark#236).
+  if ((r = m(/^\/mock\/tasks\/([^/]+)\/screen-prompt$/)) && req.method === "POST") {
+    const task = tasks.get(decodeURIComponent(r[1]));
+    if (!task) return notFound(res);
+    const id = nextId("d");
+    const question = "My terminal shows a prompt waiting for a keypress (a permission or approval request, or a menu), so I cannot go on until it is answered."
+      + "\n\n```\nBash command\n  npm test -- export\nDo you want to proceed?\n```"
+      + "\n\nChoices:\n1. Yes\n2. Yes, and don't ask again for npm test\n3. No, and tell Claude what to do differently (esc)"
+      + "\n\nAnswer with the number of the choice (or its label); Quark selects it on my screen.";
+    const d = { id, number: [...decisions.values()].filter((x) => x.project_id === task.project_id).length + 1, project_id: task.project_id,
+      task_id: task.id, question, state: "open", opened_at: now(), brief: { asked_by: task.id }, answer: null, answered_by: null, answered_at: null,
+      answered_via: null, answer_why: null, outcome: null, acted_at: null, rule_id: null, made_rule_id: null, bead_id: null };
+    decisions.set(id, d);
+    output(task, "\r\n\x1b[1mBash command\x1b[0m\r\n  npm test -- export\r\nDo you want to proceed?\r\n\x1b[36m❯ 1. Yes\x1b[0m\r\n  2. Yes, and don't ask again for npm test\r\n  3. No, and tell Claude what to do differently (esc)\r\n");
+    emit("decision.opened", { ...d }, d.project_id);
+    return send(res, 200, d);
   }
   // Post an automation update (`notice.posted`), as quarkd's trigger engine does, so tests can drive Since you looked.
   if (p === "/mock/notice" && req.method === "POST") {

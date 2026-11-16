@@ -41,6 +41,9 @@ export function dockMessage(text: string, ctx: DockContext): string {
   return ctx.about ? `About "${ctx.about}" (${ctx.link}):\n${text}` : text;
 }
 
+/** Asks the worker view's message box to switch to the coordinator and take focus (Cmd/Ctrl+K). */
+export const ASK_COORDINATOR_EVENT = "quark:worker-ask-coordinator";
+
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 /** The shortcut modifier as shown in key hints. */
 export const MOD = isMac ? "⌘" : "Ctrl+";

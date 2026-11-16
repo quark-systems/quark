@@ -406,12 +406,13 @@ pub async fn task_action(
         return Err(ApiError::new(
             StatusCode::METHOD_NOT_ALLOWED,
             "method_not_allowed",
-            "use POST /v1/tasks/{id}:cancel, :relaunch or :clear",
+            "use POST /v1/tasks/{id}:cancel, :interrupt, :relaunch or :clear",
         ));
     };
     let id = Path(id.to_string());
     match action {
         "cancel" => cancel_task(state, id).await,
+        "interrupt" => interrupt_task(state, id).await,
         "clear" => {
             let input = if body.iter().all(u8::is_ascii_whitespace) {
                 None
@@ -462,6 +463,35 @@ pub async fn cancel_task(
     state
         .engine
         .control(&ws, &task, &TaskControl::Cancel)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Interrupt a task's worker.
+///
+/// Presses its harness's interrupt key (Escape for every supported harness),
+/// as Stop does in the app. The worker keeps running and reads the next
+/// message.
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}:interrupt",
+    tag = "tasks",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 204, description = "The interrupt keys were sent"),
+        (status = 404, body = ErrorBody),
+        (status = 409, body = ErrorBody, description = "The task has no running worker"),
+        (status = 502, body = ErrorBody, description = "The engine refused or failed the call")
+    )
+)]
+pub async fn interrupt_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let (ws, task) = engine_target(&state, id).await?;
+    state
+        .engine
+        .control(&ws, &task, &TaskControl::Interrupt)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1684,6 +1714,7 @@ async fn run_command(
         send_task_message,
         list_task_messages,
         cancel_task,
+        interrupt_task,
         relaunch_task,
         list_task_events,
         list_task_dispatch,
