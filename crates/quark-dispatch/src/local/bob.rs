@@ -719,26 +719,129 @@ pub fn has_task(db: &Path, dir: &Path, since: Option<std::time::SystemTime>) -> 
 /// One row of Bob's `messages` table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskMessage {
-    /// The row's `rowid`: grows with every message Bob writes, so the
-    /// largest one read is where the next read starts.
+    /// Where the message stands in the conversation: the time Bob added it
+    /// (`data._meta.timestamp`, epoch milliseconds), else the row's
+    /// `created_at`. Not the `rowid`: at a turn's end Bob may delete a
+    /// task's messages and write them all again (its store's
+    /// `deleteMessages` + `upsertMessage`), which gives every row a new
+    /// `rowid` and `created_at` but keeps the message's own timestamp. Two
+    /// messages can share one millisecond; their [`TaskMessage::id`]s tell
+    /// them apart ([`BobCursor`]).
     pub seq: i64,
-    /// When Bob wrote it, epoch milliseconds.
+    /// Bob's id for the message, kept when Bob writes it again.
+    pub id: String,
+    /// When Bob wrote the row, epoch milliseconds.
     pub created_ms: Option<i64>,
     /// The message, a JSON object.
     pub data: String,
 }
 
-/// The messages of Bob's top-level tasks in `dir` written after row `after`,
-/// oldest first, at most `limit`. With `since`, only tasks created at or
-/// after it count, so a reused worktree slot does not show an earlier
-/// occupant's conversation. Read from Bob's database at `db`; an absent
-/// database, or one without a `messages` table, reads as none.
+/// Where a read of Bob's messages stopped: the last position read and the
+/// ids of the messages read at it, so a message sharing that millisecond
+/// that Bob writes later is still read, and none is read twice.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BobCursor {
+    pub position: i64,
+    pub seen: Vec<String>,
+}
+
+impl BobCursor {
+    /// The cursor after reading `rows` (as [`task_messages`] returns them)
+    /// from this one.
+    pub fn after(&self, rows: &[TaskMessage]) -> BobCursor {
+        let Some(last) = rows.last().map(|m| m.seq) else {
+            return self.clone();
+        };
+        let mut seen: Vec<String> = if last == self.position {
+            self.seen.clone()
+        } else {
+            Vec::new()
+        };
+        seen.extend(rows.iter().filter(|m| m.seq == last).map(|m| m.id.clone()));
+        BobCursor {
+            position: last,
+            seen,
+        }
+    }
+}
+
+/// A message's position ([`TaskMessage::seq`]) in SQL over `messages`.
+const POSITION: &str = "COALESCE(CAST(json_extract(data, '$._meta.timestamp') AS INTEGER), \
+                        CAST(created_at AS INTEGER), 0)";
+
+/// The messages of Bob's top-level tasks in `dir` after `cursor`, oldest
+/// first, at most `limit`. With `since`, only tasks created at or after it
+/// count, so a reused worktree slot does not show an earlier occupant's
+/// conversation. Read from Bob's database at `db`; an absent database, or
+/// one without a `messages` table, reads as none.
 pub fn task_messages(
     db: &Path,
     dir: &Path,
     since: Option<std::time::SystemTime>,
-    after: i64,
+    cursor: &BobCursor,
     limit: usize,
+) -> Result<Vec<TaskMessage>, String> {
+    let sql = |tasks: &str| {
+        format!(
+            "SELECT {POSITION} AS pos, id, created_at, data FROM messages \
+             WHERE task_id IN ({tasks}) AND {POSITION} >= ?3 ORDER BY pos, rowid LIMIT ?4"
+        )
+    };
+    // Room for the messages already read at the cursor's position.
+    let room = (limit + cursor.seen.len()) as i64;
+    let mut out = messages_query(db, dir, since, &sql, cursor.position, room)?;
+    out.retain(|m| m.seq > cursor.position || !cursor.seen.contains(&m.id));
+    out.truncate(limit);
+    Ok(out)
+}
+
+/// Where a read that counted rows up to `rowid` stopped, as a
+/// [`BobCursor`]: the newest position among Bob's top-level tasks in `dir`
+/// at or before that row, with the messages there read. `None` when there
+/// is none.
+pub fn cursor_at_row(
+    db: &Path,
+    dir: &Path,
+    since: Option<std::time::SystemTime>,
+    rowid: i64,
+) -> Result<Option<BobCursor>, String> {
+    let sql = |tasks: &str| {
+        format!(
+            "SELECT {POSITION} AS pos, id, created_at, data FROM messages \
+             WHERE task_id IN ({tasks}) AND rowid <= ?3 ORDER BY pos DESC LIMIT ?4"
+        )
+    };
+    let Some(position) = messages_query(db, dir, since, &sql, rowid, 1)?
+        .iter()
+        .map(|m| m.seq)
+        .max()
+    else {
+        return Ok(None);
+    };
+    // Every message at that position up to the row was read.
+    let sql = |tasks: &str| {
+        format!(
+            "SELECT {POSITION} AS pos, id, created_at, data FROM messages \
+             WHERE task_id IN ({tasks}) AND rowid <= ?3 AND {POSITION} = {position} LIMIT ?4"
+        )
+    };
+    let seen = messages_query(db, dir, since, &sql, rowid, i64::MAX)?
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    Ok(Some(BobCursor { position, seen }))
+}
+
+/// Runs `sql` (given the subquery of `dir`'s top-level task ids, binding
+/// `?1` dir, `?2` since, `?3` `bound`, `?4` `limit`) for each spelling of
+/// `dir`, merged by position: up to `limit` rows per spelling.
+fn messages_query(
+    db: &Path,
+    dir: &Path,
+    since: Option<std::time::SystemTime>,
+    sql: &dyn Fn(&str) -> String,
+    bound: i64,
+    limit: i64,
 ) -> Result<Vec<TaskMessage>, String> {
     if db.as_os_str().is_empty() || !db.is_file() {
         return Ok(Vec::new());
@@ -775,41 +878,36 @@ pub fn task_messages(
         } else {
             tasks.push_str(" AND (?2 IS NULL OR 1)");
         }
-        let sql = format!(
-            "SELECT rowid, created_at, data FROM messages \
-             WHERE task_id IN ({tasks}) AND rowid > ?3 ORDER BY rowid LIMIT ?4"
-        );
-        let mut stmt = con.prepare(&sql)?;
-        let mut out: Vec<TaskMessage> = Vec::new();
+        let mut stmt = con.prepare(&sql(&tasks))?;
+        let mut out: Vec<(TaskMessage, String)> = Vec::new();
         for d in &dirs {
-            let rows =
-                stmt.query_map(rusqlite::params![d, since_ms, after, limit as i64], |r| {
-                    let created_ms = match r.get_ref(1)? {
-                        rusqlite::types::ValueRef::Integer(i) => Some(i),
-                        rusqlite::types::ValueRef::Real(f) => Some(f as i64),
-                        _ => None,
-                    };
-                    let data = match r.get_ref(2)? {
-                        rusqlite::types::ValueRef::Text(t) => {
-                            String::from_utf8_lossy(t).into_owned()
-                        }
-                        _ => String::new(),
-                    };
-                    Ok(TaskMessage {
-                        seq: r.get(0)?,
-                        created_ms,
-                        data,
-                    })
-                })?;
+            let rows = stmt.query_map(rusqlite::params![d, since_ms, bound, limit], |r| {
+                let created_ms = match r.get_ref(2)? {
+                    rusqlite::types::ValueRef::Integer(i) => Some(i),
+                    rusqlite::types::ValueRef::Real(f) => Some(f as i64),
+                    _ => None,
+                };
+                let data = match r.get_ref(3)? {
+                    rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
+                    _ => String::new(),
+                };
+                Ok(TaskMessage {
+                    seq: r.get(0)?,
+                    id: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    created_ms,
+                    data,
+                })
+            })?;
             for row in rows {
                 let row = row?;
-                if !out.iter().any(|m| m.seq == row.seq) {
-                    out.push(row);
+                let key = row.id.clone();
+                if !out.iter().any(|(_, k)| *k == key) {
+                    out.push((row, key));
                 }
             }
         }
+        let mut out: Vec<TaskMessage> = out.into_iter().map(|(m, _)| m).collect();
         out.sort_by_key(|m| m.seq);
-        out.truncate(limit);
         Ok(out)
     };
     read_only(db, query).map_err(|e| match e {
@@ -1404,12 +1502,15 @@ esac
     }
 
     #[test]
-    fn task_messages_reads_the_worktrees_conversation_after_a_row() {
+    fn task_messages_reads_the_worktrees_conversation_after_a_position() {
         let dir = tempfile::tempdir().unwrap();
         let wt = dir.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
         let db = dir.path().join("bob.db");
-        assert_eq!(task_messages(&db, &wt, None, 0, 10).unwrap(), Vec::new());
+        assert_eq!(
+            task_messages(&db, &wt, None, &BobCursor::default(), 10).unwrap(),
+            Vec::new()
+        );
         let con = rusqlite::Connection::open(&db).unwrap();
         con.execute_batch(
             "CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
@@ -1443,7 +1544,7 @@ esac
             )
             .unwrap();
         }
-        let all = task_messages(&db, &wt, None, 0, 10).unwrap();
+        let all = task_messages(&db, &wt, None, &BobCursor::default(), 10).unwrap();
         let ids: Vec<_> = all.iter().map(|m| m.data.as_str()).collect();
         assert_eq!(
             ids,
@@ -1457,16 +1558,105 @@ esac
 
         // A reused slot shows only its own task's messages.
         let took = std::time::UNIX_EPOCH + Duration::from_millis(4_000);
-        let mine = task_messages(&db, &wt, Some(took), 0, 10).unwrap();
+        let mine = task_messages(&db, &wt, Some(took), &BobCursor::default(), 10).unwrap();
         assert_eq!(mine.len(), 2);
         // Reads continue after the last row seen, and stop at `limit`.
-        let first = task_messages(&db, &wt, Some(took), 0, 1).unwrap();
+        let start = BobCursor::default();
+        let first = task_messages(&db, &wt, Some(took), &start, 1).unwrap();
         assert_eq!(first.len(), 1);
-        let rest = task_messages(&db, &wt, Some(took), first[0].seq, 10).unwrap();
+        let at = start.after(&first);
+        let rest = task_messages(&db, &wt, Some(took), &at, 10).unwrap();
         assert_eq!(rest.len(), 1);
         assert!(rest[0].data.contains("m5"));
-        assert!(task_messages(&db, &wt, Some(took), rest[0].seq, 10)
+        assert!(task_messages(&db, &wt, Some(took), &at.after(&rest), 10)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn task_messages_survive_bob_writing_a_conversation_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let db = dir.path().join("bob.db");
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+                directory TEXT NOT NULL, created_at INTEGER NOT NULL, task_type TEXT NOT NULL DEFAULT 'normal');
+             CREATE TABLE messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
+                data TEXT NOT NULL, created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let w = wt.to_string_lossy().into_owned();
+        con.execute(
+            "INSERT INTO tasks VALUES ('t', ?1, NULL, '', 1, 'normal')",
+            [format!("file:{w}")],
+        )
+        .unwrap();
+        // Each message keeps the time Bob added it in `_meta.timestamp`.
+        let insert = |id: &str, ts: i64, written_at: i64| {
+            con.execute(
+                "INSERT INTO messages VALUES (?1, 't', 'user', ?2, ?3)",
+                rusqlite::params![
+                    id,
+                    format!(r#"{{"content":"{id}","_meta":{{"timestamp":{ts}}}}}"#),
+                    written_at
+                ],
+            )
+            .unwrap();
+        };
+        let ids = |rows: &[TaskMessage]| rows.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+        insert("a", 100, 1_000);
+        insert("b", 200, 1_000);
+        let start = BobCursor::default();
+        let read = task_messages(&db, &wt, None, &start, 10).unwrap();
+        assert_eq!(ids(&read), ["a", "b"]);
+        let at = start.after(&read);
+        assert_eq!(
+            at,
+            BobCursor {
+                position: 200,
+                seen: vec!["b".into()]
+            }
+        );
+
+        // A message Bob adds in the same millisecond is still read, once.
+        insert("c", 200, 1_001);
+        let read = task_messages(&db, &wt, None, &at, 10).unwrap();
+        assert_eq!(ids(&read), ["c"]);
+        let at = at.after(&read);
+        assert_eq!(at.seen, ["b", "c"]);
+
+        // Bob deletes the task's messages and writes them all again, with
+        // new rows: nothing reads as new, and what follows does.
+        con.execute("DELETE FROM messages", []).unwrap();
+        for (id, ts) in [("a", 100), ("b", 200), ("c", 200)] {
+            insert(id, ts, 9_000);
+        }
+        assert!(task_messages(&db, &wt, None, &at, 10).unwrap().is_empty());
+        insert("d", 300, 9_001);
+        assert_eq!(ids(&task_messages(&db, &wt, None, &at, 10).unwrap()), ["d"]);
+
+        // A row-counted cursor converts to where it had read up to.
+        let rows: Vec<i64> = con
+            .prepare("SELECT rowid FROM messages ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let at_b = cursor_at_row(&db, &wt, None, rows[1]).unwrap().unwrap();
+        assert_eq!(
+            at_b,
+            BobCursor {
+                position: 200,
+                seen: vec!["b".into()]
+            }
+        );
+        assert_eq!(
+            ids(&task_messages(&db, &wt, None, &at_b, 10).unwrap()),
+            ["c", "d"]
+        );
+        assert_eq!(cursor_at_row(&db, &wt, None, 0).unwrap(), None);
     }
 }

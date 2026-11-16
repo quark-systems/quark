@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use quark_dispatch::local::bob::BobCursor;
 use quark_transcript::{locate_since, read_from, ApiError, RateLimit, SessionFormat, SessionRoots};
 
 use crate::store::{Store, TranscriptSource};
@@ -97,16 +98,29 @@ impl TranscriptTap {
     ) -> anyhow::Result<Polled> {
         let db = self.bob_db.to_string_lossy().into_owned();
         let _polling = self.polling.lock().unwrap_or_else(|e| e.into_inner());
-        let after = match self.store.transcript_cursor(&source)? {
-            Some((p, offset)) if p == db => offset as i64,
-            _ => 0,
+        let cursor = match self.store.transcript_cursor(&source)? {
+            Some((path, position)) => match parse_bob_cursor(&self.bob_db, &path, position) {
+                Some(c) => c,
+                // A cursor from before positions counted rows.
+                None if path == db => quark_dispatch::local::bob::cursor_at_row(
+                    &self.bob_db,
+                    cwd,
+                    since,
+                    position as i64,
+                )
+                .map_err(|e| anyhow::anyhow!("reading {db}: {e}"))?
+                .unwrap_or_default(),
+                None => BobCursor::default(),
+            },
+            None => BobCursor::default(),
         };
         let rows =
-            quark_dispatch::local::bob::task_messages(&self.bob_db, cwd, since, after, BOB_BATCH)
+            quark_dispatch::local::bob::task_messages(&self.bob_db, cwd, since, &cursor, BOB_BATCH)
                 .map_err(|e| anyhow::anyhow!("reading {db}: {e}"))?;
-        let Some(last) = rows.last().map(|m| m.seq) else {
+        if rows.is_empty() {
             return Ok(Polled::default());
-        };
+        }
+        let next = cursor.after(&rows);
         let workspace = cwd.to_string_lossy();
         let entries: Vec<_> = rows
             .iter()
@@ -115,8 +129,13 @@ impl TranscriptTap {
                 quark_transcript::parse_bob_message(&m.data, ts.as_deref(), Some(&workspace))
             })
             .collect();
-        self.store
-            .apply_transcript(project_id, &source, &db, last as u64, &entries)?;
+        self.store.apply_transcript(
+            project_id,
+            &source,
+            &bob_cursor_path(&self.bob_db, &next),
+            next.position.max(0) as u64,
+            &entries,
+        )?;
         Ok(Polled {
             moved: true,
             ..Polled::default()
@@ -269,6 +288,33 @@ pub fn locate_any(
                 .and_then(|m| m.modified())
                 .unwrap_or(SystemTime::UNIX_EPOCH)
         })
+}
+
+/// The cursor path of a transcript read from Bob's database `db` up to
+/// `cursor`: the database, `#position:`, and the ids of the messages read at
+/// the cursor's position (the offset). A cursor whose path is the bare
+/// database counted rows, as Quark did before.
+pub fn bob_cursor_path(db: &Path, cursor: &BobCursor) -> String {
+    format!(
+        "{}#position:{}",
+        db.to_string_lossy(),
+        cursor.seen.join(",")
+    )
+}
+
+/// The [`BobCursor`] a transcript cursor (`path`, `offset`) holds, when it
+/// was written by [`bob_cursor_path`] for `db`.
+pub fn parse_bob_cursor(db: &Path, path: &str, offset: u64) -> Option<BobCursor> {
+    let prefix = format!("{}#position:", db.to_string_lossy());
+    let ids = path.strip_prefix(&prefix)?;
+    Some(BobCursor {
+        position: offset as i64,
+        seen: ids
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+    })
 }
 
 /// Bob's database in the user's home, `~/.bob/db/bob.db`.

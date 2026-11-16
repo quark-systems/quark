@@ -17,6 +17,7 @@ use quark_transcript::{locate, read_from, SessionFormat, SessionRoots, Transcrip
 use crate::engine::WorkspaceRef;
 use crate::sessions::{SessionError, Sessions};
 use crate::store::{Store, TranscriptSource};
+use quark_dispatch::local::bob::BobCursor;
 
 /// How long to wait for the session log to record a typed message.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(10);
@@ -144,13 +145,13 @@ impl SessionsInput {
 impl SessionsInput {
     /// [`CoordinatorInput::send`] to a coordinator on IBM Bob: confirmed
     /// when Bob's database gains a user message starting with the text
-    /// after row `after`. Bob may leave a pasted message unsent, so Enter is
+    /// after position `after`. Bob may leave a pasted message unsent, so Enter is
     /// pressed once more if it is not seen within [`BOB_ENTER_AGAIN`].
     async fn send_bob(
         &self,
         ws: &WorkspaceRef,
         text: &str,
-        after: i64,
+        after: BobCursor,
         db: PathBuf,
     ) -> Result<Delivery, ChatError> {
         let terminal = ws.project_id.as_str();
@@ -160,8 +161,9 @@ impl SessionsInput {
         let want = first_line(text).to_string();
         let mut pressed_again = false;
         loop {
-            let (db, root, want) = (db.clone(), ws.root.clone(), want.clone());
-            let seen = tokio::task::spawn_blocking(move || bob_logged(&db, &root, after, &want))
+            let (db, root, want, after) =
+                (db.clone(), ws.root.clone(), want.clone(), after.clone());
+            let seen = tokio::task::spawn_blocking(move || bob_logged(&db, &root, &after, &want))
                 .await
                 .unwrap_or(false);
             if seen {
@@ -200,29 +202,32 @@ impl SessionsInput {
     }
 }
 
-/// Where the coordinator's transcript was last read in Bob's database `db`:
-/// messages after it are new. `0` when it was not read from `db`.
-fn store_cursor(store: &Store, db: &Path, project_id: &str) -> i64 {
+/// Where the coordinator's transcript was last read in Bob's database `db`,
+/// as a message position: messages after it are new. `0` when it was not
+/// read from `db` that way.
+fn store_cursor(store: &Store, db: &Path, project_id: &str) -> BobCursor {
     let source = TranscriptSource::Coordinator {
         project_id: project_id.to_string(),
     };
     match store.transcript_cursor(&source) {
-        Ok(Some((p, offset))) if Path::new(&p) == db => offset as i64,
-        _ => 0,
+        Ok(Some((path, position))) => {
+            crate::transcripts::parse_bob_cursor(db, &path, position).unwrap_or_default()
+        }
+        _ => BobCursor::default(),
     }
 }
 
 /// Whether Bob's database `db` has a user message starting with `want` in a
-/// task in `cwd`, after row `after`.
-fn bob_logged(db: &Path, cwd: &Path, after: i64, want: &str) -> bool {
-    let mut after = after;
+/// task in `cwd`, after position `after`.
+fn bob_logged(db: &Path, cwd: &Path, after: &BobCursor, want: &str) -> bool {
+    let mut after = after.clone();
     loop {
-        let Ok(rows) = quark_dispatch::local::bob::task_messages(db, cwd, None, after, 200) else {
+        let Ok(rows) = quark_dispatch::local::bob::task_messages(db, cwd, None, &after, 200) else {
             return false;
         };
-        let Some(last) = rows.last().map(|m| m.seq) else {
+        if rows.is_empty() {
             return false;
-        };
+        }
         let found = rows.iter().any(|m| {
             quark_transcript::parse_bob_message(&m.data, None, None)
                 .iter()
@@ -231,7 +236,7 @@ fn bob_logged(db: &Path, cwd: &Path, after: i64, want: &str) -> bool {
         if found {
             return true;
         }
-        after = last;
+        after = after.after(&rows);
     }
 }
 

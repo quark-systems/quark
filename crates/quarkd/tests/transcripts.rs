@@ -691,7 +691,11 @@ async fn a_bob_workers_conversation_comes_from_bobs_database() {
         [format!("file:{}", worktree.display())],
     )
     .unwrap();
-    let message = |id: &str, data: Value| {
+    // Bob stamps each message with the time it added it, as here.
+    let message = |id: &str, mut data: Value| {
+        if data.get("_meta").is_none() {
+            data["_meta"] = json!({"timestamp": 1793991197009_i64});
+        }
         con.execute(
             "INSERT INTO messages VALUES (?1, 't', ?2, ?3, 1793991197009)",
             rusqlite::params![id, data["role"].as_str().unwrap(), data.to_string()],
@@ -733,11 +737,48 @@ async fn a_bob_workers_conversation_comes_from_bobs_database() {
         json!({"role": "tool", "content": "src", "toolUsage": {"signature":
             {"id": "c1", "name": "execute_command", "isError": false}}}),
     );
-    h.projector().with_bob_db(db).refresh_all().await.unwrap();
+    h.projector()
+        .with_bob_db(db.clone())
+        .refresh_all()
+        .await
+        .unwrap();
     let new = h.events(last);
     assert_eq!(new.len(), 1);
     assert_eq!(new[0].payload["entry"]["role"], "tool_result");
     assert_eq!(new[0].payload["entry"]["tool_call_id"], "c1");
+
+    // At a turn's end Bob may delete the task's messages and write them all
+    // again, as new rows; each keeps the time Bob added it. Nothing repeats.
+    let last = new.last().unwrap().seq;
+    let rows: Vec<(String, String)> = con
+        .prepare("SELECT id, data FROM messages ORDER BY rowid")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    con.execute("DELETE FROM messages", []).unwrap();
+    for (id, data) in &rows {
+        con.execute(
+            "INSERT INTO messages VALUES (?1, 't', 'user', ?2, 1793991299999)",
+            rusqlite::params![id, data],
+        )
+        .unwrap();
+    }
+    h.projector()
+        .with_bob_db(db.clone())
+        .refresh_all()
+        .await
+        .unwrap();
+    assert!(h.events(last).is_empty(), "{:?}", h.events(last));
+    message(
+        "z",
+        json!({"role": "assistant", "content": "Done.", "_meta": {"timestamp": 1793991300000_i64}}),
+    );
+    h.projector().with_bob_db(db).refresh_all().await.unwrap();
+    let new = h.events(last);
+    assert_eq!(new.len(), 1);
+    assert_eq!(new[0].payload["entry"]["text"], "Done.");
 }
 
 #[tokio::test]
