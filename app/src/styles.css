@@ -378,6 +378,7 @@ a.side-item { text-decoration: none; }
 .board-layout.with-chat { grid-template-columns: minmax(0, 1fr) 360px; }
 .card .note { color: var(--fg-dim); font-size: 12px; margin: -2px 0 6px; }
 .col-empty { padding: 8px; font-size: 12px; }
+.side-chat > .composer { box-sizing: border-box; width: min(760px, calc(100% - 32px)); align-self: center; margin-inline: 0; }
 .side-chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--bg-1); container-type: inline-size; }
 /* The coordinator's header: who it is, its agent and context, and what it is doing now. */
 .coord-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 12px 6px 14px; border-bottom: 1px solid var(--line); }

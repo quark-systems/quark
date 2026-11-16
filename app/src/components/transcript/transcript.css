@@ -3,8 +3,13 @@
    (https://github.com/hardbeat920/monocode, MIT). */
 .tx { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 14px 14px 6px; display: flex; flex-direction: column; gap: 14px; }
 .tx-turn { display: flex; flex-direction: column; gap: 8px; }
+/* Rows never shrink below their content in the scrolling column: shrunk rows draw over each other. */
+.tx > * { flex-shrink: 0; }
 /* The coordinator's conversation reads as a centered column, like Claude desktop and T3 Code. */
-.chat-log.tx { padding-inline: max(16px, calc((100% - 760px) / 2)); gap: 20px; }
+/* Each row takes the column's width: no percentage padding, which WebKit resolves against
+   a different width while sizing the rows than when drawing them, so text overlapped. */
+.chat-log.tx { padding-inline: 16px; gap: 20px; }
+.chat-log.tx > :not(.tx-jump) { width: 100%; max-width: 760px; margin-inline: auto; }
 .chat-log .tx-text { font-size: 14px; }
 .chat-log .tx-bubble { font-size: 14px; }
 .tx-author { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--fg-faint); }
