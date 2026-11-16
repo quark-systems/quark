@@ -274,15 +274,24 @@ html.is-mac .drag-strip { display: block; flex: none; height: 28px; }
 .md blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid var(--line-2); color: var(--fg-dim); }
 .cursor-blink::after { content: "▍"; color: var(--accent); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
-.composer { flex: none; display: flex; gap: 6px; align-items: flex-end; margin: 8px 10px 10px; padding: 6px 6px 6px 10px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 10px; transition: border-color var(--motion-feedback-duration) var(--motion-ease-out), background-color var(--motion-feedback-duration) var(--motion-ease-out); }
-.composer:focus-within { border-color: var(--fg-faint); }
+/* The message composer: one card, the text on top and its tools along the bottom. */
+.composer { flex: none; display: flex; flex-direction: column; gap: 6px; margin: 8px 10px 10px; padding: 10px 8px 8px 12px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--radius-l); transition: border-color var(--motion-feedback-duration) var(--motion-ease-out), background-color var(--motion-feedback-duration) var(--motion-ease-out); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line-2)); }
+.composer-tools { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.composer-spacer { flex: 1; }
+.composer-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--fg-faint); margin-right: 6px; }
+.composer-hint kbd { font: 500 10.5px var(--mono); padding: 0 4px; border: 1px solid var(--line-2); border-radius: 4px; color: var(--fg-dim); }
+.composer-tool { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--radius-m); background: none; color: var(--fg-dim); font: 12px var(--sans); cursor: pointer; }
+.composer-tool:hover { background: var(--selection); color: var(--fg); }
+.composer-tool .mono { font-size: 12px; }
+@container (max-width: 420px) { .composer-tool-label, .composer-hint { display: none; } }
 /* Files held over a prompt box; the attachment chips take their own line above the text. */
-.composer, .draft-composer { flex-wrap: wrap; }
+.draft-composer { flex-wrap: wrap; }
 .composer.dropping, .draft-composer.dropping { border-color: var(--accent); background: var(--accent-soft); }
-.composer .ui-attach { align-self: flex-end; }
-.composer textarea { flex: 1; resize: none; min-height: 22px; max-height: 200px; background: none; color: var(--fg); border: 0; padding: 4px 0; font: 13px/1.45 var(--sans); outline: none; }
-.composer .btn.send { flex: none; width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border-radius: 7px; background: var(--fg); color: var(--bg); border: 0; }
+.composer textarea { width: 100%; resize: none; min-height: 22px; max-height: 200px; background: none; color: var(--fg); border: 0; padding: 2px 0; font: 14px/1.5 var(--sans); outline: none; }
+.composer .btn.send { flex: none; width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-radius: var(--radius-m); background: var(--accent); color: var(--on-tone); border: 0; }
 .composer .btn.send:disabled { background: var(--bg-3); color: var(--fg-faint); cursor: default; }
+.composer .btn.send.stop { background: var(--fg); color: var(--bg); }
 
 /* Slash commands: what a half-typed `/` can become, just above the composer. */
 .slash-menu { flex: none; display: flex; flex-direction: column; margin: 8px 10px 0; padding: 4px; background: var(--surface-popover); border: 1px solid var(--line-2); border-radius: 10px; }
@@ -369,7 +378,23 @@ a.side-item { text-decoration: none; }
 .board-layout.with-chat { grid-template-columns: minmax(0, 1fr) 360px; }
 .card .note { color: var(--fg-dim); font-size: 12px; margin: -2px 0 6px; }
 .col-empty { padding: 8px; font-size: 12px; }
-.side-chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--bg-1); }
+.side-chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--bg-1); container-type: inline-size; }
+/* The coordinator's header: who it is, its agent and context, and what it is doing now. */
+.coord-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 12px 6px 14px; border-bottom: 1px solid var(--line); }
+.coord-avatar { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-m); background: color-mix(in srgb, var(--violet) 16%, var(--bg-1)); border: 1px solid color-mix(in srgb, var(--violet) 40%, transparent); color: var(--violet); font-weight: 600; }
+.coord-title { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.coord-name { font-weight: 600; font-size: 14px; }
+.coord-title .coord-context { font-size: 11.5px; }
+.coord-title .coord-agent { font-family: var(--mono); font-size: 11px; }
+.coord-title .coord-meter { height: 20px; padding: 0 6px; }
+.coord-status { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--bg-2); color: var(--fg-dim); }
+.coord-status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.coord-status.busy { background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); }
+.coord-status.busy .spinner { border-color: color-mix(in srgb, var(--blue) 35%, transparent); border-top-color: var(--blue); }
+.coord-status.ok { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.coord-status.warn { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.coord-head .persona-picker .faint { display: none; }
+@container (max-width: 520px) { .coord-title .coord-context { display: none; } .coord-head .persona-picker { display: none; } }
 .panel-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); }
 .unavailable { overflow-wrap: anywhere; margin: 16px; padding: 14px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--fg-dim); display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .u-title { color: var(--fg); }

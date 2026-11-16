@@ -26,6 +26,7 @@ export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
       {pendingNote !== undefined && turn.prompt ? <UserMessage item={turn.prompt} pending note={pendingNote} />
         : turn.event && turn.prompt ? <EventRow event={turn.event} id={turn.prompt.id} />
         : turn.prompt && <UserMessage item={turn.prompt} fresh={turn.prompt.id > freshAfter} />}
+      {turn.parts.length > 0 && <Author turn={turn} />}
       {turn.parts.map((p, i) =>
         p.kind === "text"
           ? <AgentText key={p.item.id} item={p.item} />
@@ -35,6 +36,20 @@ export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
     </section>
   );
 });
+
+/** Who wrote what follows, and when: the agent's name over its part of the turn. */
+function Author({ turn }: { turn: Turn }) {
+  const { agent } = useTranscript();
+  const first = turn.parts[0];
+  const ts = first.kind === "text" ? first.item.ts : (first.steps[0]?.call ?? first.steps[0]?.thinking ?? first.steps[0]?.result)?.ts;
+  const at = ts ? new Date(ts) : null;
+  return (
+    <div className="tx-author">
+      <span className="tx-author-name">{agent[0].toUpperCase() + agent.slice(1)}</span>
+      {at && !Number.isNaN(at.getTime()) && <time dateTime={ts!} title={at.toLocaleString()}>{at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</time>}
+    </div>
+  );
+}
 
 const EVENT_ICON: Record<EngineEvent["kind"], string> = { wake: "event", background: "event", engine: "event", warning: "warning", command: "event" };
 

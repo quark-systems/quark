@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activity, breakLabel, duration, groupTurns, newDay, stepTitle, summarize, turnMarkdown } from "./turns";
+import { activity, breakLabel, duration, groupTurns, liveStatus, newDay, stepTitle, summarize, turnMarkdown } from "./turns";
 import type { ToolInfo, TranscriptItem, TranscriptRole } from "../../api";
 
 let next = 0;
@@ -141,5 +141,26 @@ describe("activity", () => {
     ]);
     expect(t.event?.title).toBe("Routine project check");
     expect(turnMarkdown(t)).toBe("Nothing needs you.");
+  });
+});
+
+describe("liveStatus", () => {
+  const at = (ms: number) => new Date(Date.UTC(2026, 10, 15, 23, 17, 0) + ms).toISOString();
+  const start = Date.parse(at(0));
+  const u = (id: number, ts: string): TranscriptItem => ({ id, role: "user", text: "Start on the do next list", ts, is_error: false, truncated: false });
+  const call = (id: number, title: string, ts: string): TranscriptItem => ({ id, role: "tool_call", text: "", tool: { kind: "shell", title }, ts, is_error: false, truncated: false });
+  const answer = (id: number, ts: string): TranscriptItem => ({ id, role: "assistant", text: "Done.", ts, is_error: false, truncated: false });
+
+  it("says the agent works on the step it is running, since its turn started", () => {
+    const s = liveStatus(groupTurns([u(1, at(0)), call(2, "Run gh pr checks 40", at(2000))]), start + 5000);
+    expect(s).toEqual({ activity: "working", startedAt: start, step: "Run gh pr checks 40" });
+  });
+
+  it("is not live once the agent answered", () => {
+    expect(liveStatus(groupTurns([u(1, at(0)), answer(2, at(3000))]), start + 5000).activity).toBeNull();
+  });
+
+  it("has nothing to say about an empty conversation", () => {
+    expect(liveStatus([])).toEqual({ activity: null });
   });
 });

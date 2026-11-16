@@ -94,9 +94,8 @@ export function useStoppedThrough(cid: string): number | undefined {
 /** How long Stop stays off after a press: a second Escape soon after opens the harness's rewind menu. */
 const STOP_REST_MS = 3_000;
 
-/** Stops the coordinator's current turn. Always shown: a stuck coordinator reports nothing to show it by. */
-export function StopButton({ cid }: { cid: string }) {
-  const l = useLabels(cid);
+/** Stops the coordinator's current turn: the press, whether Stop is resting after one, and its error. */
+export function useStop(cid: string) {
   const [resting, setResting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const stop = async () => {
@@ -108,6 +107,13 @@ export function StopButton({ cid }: { cid: string }) {
     } catch (e) { setErr(errText(e)); }
     finally { setTimeout(() => setResting(false), STOP_REST_MS); }
   };
+  return { stop, resting, err };
+}
+
+/** Stops the coordinator's current turn. Always shown: a stuck coordinator reports nothing to show it by. */
+export function StopButton({ cid }: { cid: string }) {
+  const l = useLabels(cid);
+  const { stop, resting, err } = useStop(cid);
   return (
     <span className="command-run">
       <Button kind="quiet" disabled={resting} data-testid="coordinator-stop" onClick={() => void stop()}

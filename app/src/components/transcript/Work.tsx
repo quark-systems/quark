@@ -42,10 +42,11 @@ export function Work({ part, activity }: { part: WorkPart; activity: Activity | 
   }
   return (
     <div className="tx-work">
-      <button className="tx-fold" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Icon kind={open ? "chevron-down" : "chevron-right"} />
+      <button className={"tx-fold done" + (failed ? " failed" : "")} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon kind={failed ? "warning" : "check"} />
         {summarize(part.steps)}
         {failed > 0 && <span className="bad"> · {failed} failed</span>}
+        <Icon kind={open ? "chevron-down" : "chevron-right"} />
       </button>
       {open ? part.steps.map((s) => <StepRow key={s.key} step={s} />) : <Previews steps={part.steps} />}
     </div>
