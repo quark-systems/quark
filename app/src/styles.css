@@ -584,6 +584,8 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 .pool-form input { min-width: 0; flex: 1; background: var(--bg-1); color: var(--fg); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 6px; font: 12px var(--mono); }
 .pool-form input.invalid { border-color: var(--red); }
 .account-actions { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 12px; white-space: nowrap; }
+.account-row.off > .account-main, .account-row.off > .account-health, .account-row.off > .account-quota, .account-row.off > .account-pools { opacity: .6; }
+.account-change { grid-column: 1 / -1; }
 .form.account-add { max-width: none; margin: 0; padding: 12px; gap: 8px; border: 1px dashed var(--line-2); border-radius: 6px; }
 .account-add-row { display: flex; gap: 8px; }
 .account-add-row > input { flex: 1; }

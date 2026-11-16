@@ -142,7 +142,7 @@
         "tags": [
           "accounts"
         ],
-        "summary": "Remove an added account. Its directory is left as it is. Refused for a\ndefault account and while a task runs under the account.",
+        "summary": "Remove an added account. Its directory is left as it is. Refused for a\ndefault account, while a task runs under the account, and while a\ndispatch profile would be left with no enabled account; `POST\n/v1/accounts/{id}/remove` handles both.",
         "operationId": "delete",
         "parameters": [
           {
@@ -169,7 +169,7 @@
             }
           },
           "409": {
-            "description": "A default account, or one in use",
+            "description": "A default account, one in use, or one a profile needs (`needs_disposition`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -222,6 +222,107 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}/disable": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Disable an account for Quark, in every Project.",
+        "description": "From now on no task or coordinator starts under it; those running under\nit carry on, and the account is `draining` until they finish. Every\nprofile the plan lists as `stranded` needs one of its options in\n`dispositions`; those changes are committed to each Project's\n`dispatch.yaml` (or set as its coordinator's agent for its next start)\nfirst.",
+        "operationId": "disable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyAccountChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountChangeOutcome"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A stranded profile has no choice (`needs_disposition`), or a Project's rules could not be saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}/enable": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Enable an account for Quark again; calls off a pending removal.",
+        "operationId": "enable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
                 }
               }
             }
@@ -384,6 +485,118 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}/plan": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "What disabling or removing an account touches, before anything changes.",
+        "description": "Lists the tasks and coordinators running under the account (they keep\nrunning until they finish), and every dispatch profile and coordinator\nagent, in every Project, that can run under it. A profile left with no\nenabled account is `stranded`, with what Quark proposes for it in\n`options`, the proposal first. Confirm with `POST\n/v1/accounts/{id}/disable` or `/remove`.",
+        "operationId": "plan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanAccountChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountChangePlan"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}/remove": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Remove an added account, once the work running under it finishes.",
+        "description": "As `disable`, then the account is removed: now when nothing runs under\nit, else when the last of that finishes (`removing` until then). Its\ndirectory is left as it is; a key account's key leaves the Keychain.",
+        "operationId": "remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyAccountChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountChangeOutcome"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A default account, a stranded profile with no choice (`needs_disposition`), or a Project's rules could not be saved",
             "content": {
               "application/json": {
                 "schema": {
@@ -6371,6 +6584,10 @@
             "type": "boolean",
             "description": "True for an account that signs in with an API key kept in the\nKeychain. The key is never returned."
           },
+          "availability": {
+            "$ref": "#/components/schemas/AccountAvailability",
+            "description": "Where the account stands: `enabled`, `draining` (disabled, with work\nstarted before still running under it) or `disabled`."
+          },
           "config_dir": {
             "type": [
               "string",
@@ -6386,6 +6603,10 @@
           },
           "default": {
             "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "False once the person disabled the account for Quark: no new task or\ncoordinator starts under it, in any Project. Every account starts\nenabled."
           },
           "harness": {
             "type": "string",
@@ -6416,6 +6637,10 @@
           "quota": {
             "$ref": "#/components/schemas/AccountQuota"
           },
+          "removing": {
+            "type": "boolean",
+            "description": "The account is removed once the work running under it finishes."
+          },
           "team_id": {
             "type": [
               "string",
@@ -6424,6 +6649,198 @@
             "description": "The team a key account's key belongs to, when the harness needs one."
           }
         }
+      },
+      "AccountAvailability": {
+        "type": "string",
+        "description": "Whether Quark starts work under an account.",
+        "enum": [
+          "enabled",
+          "draining",
+          "disabled"
+        ]
+      },
+      "AccountChangeAction": {
+        "type": "string",
+        "description": "What the person is about to do to an account.",
+        "enum": [
+          "disable",
+          "remove"
+        ]
+      },
+      "AccountChangeApplied": {
+        "type": "object",
+        "description": "One Project's part of a confirmed change.",
+        "required": [
+          "project_id",
+          "project_name",
+          "coordinator"
+        ],
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Project repo commit with the new dispatch rules, when they changed."
+          },
+          "coordinator": {
+            "type": "boolean",
+            "description": "The coordinator's agent changed (a switch was started when it runs)."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          }
+        }
+      },
+      "AccountChangeOutcome": {
+        "type": "object",
+        "description": "What a confirmed disable or remove did.",
+        "required": [
+          "removed",
+          "changed"
+        ],
+        "properties": {
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Account",
+                "description": "The account as it is now; absent once removed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountChangeApplied"
+            },
+            "description": "Projects whose dispatch rules or coordinator agent changed."
+          },
+          "removed": {
+            "type": "boolean",
+            "description": "The account is gone."
+          }
+        }
+      },
+      "AccountChangePlan": {
+        "type": "object",
+        "description": "What disabling or removing an account touches, and what Quark proposes\nfor each dispatch profile left without an enabled account. Nothing is\nchanged until the person confirms with `POST /v1/accounts/{id}/disable`\nor `/remove`.",
+        "required": [
+          "account_id",
+          "action",
+          "running",
+          "references"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/components/schemas/AccountChangeAction"
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountReference"
+            },
+            "description": "Every dispatch profile and coordinator agent, in any Project, that\ncan run under the account."
+          },
+          "refused": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the change cannot be made at all, e.g. removing a default account."
+          },
+          "running": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountWork"
+            },
+            "description": "Tasks and coordinators running under the account now. They keep\nrunning until they finish; the account is draining meanwhile."
+          }
+        }
+      },
+      "AccountDisposition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Run it on another pool of the same harness.",
+            "required": [
+              "pool",
+              "kind"
+            ],
+            "properties": {
+              "accounts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Labels of the pool's enabled accounts."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "use_pool"
+                ]
+              },
+              "pool": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Run it on the harness's default account (drop its pool).",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "use_default"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Take the candidate out of its rule; the rule keeps its others.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "drop"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Leave it as it is: work it would get goes to the coordinator to place.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "keep"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What to do with a stranded profile."
       },
       "AccountFailover": {
         "type": "object",
@@ -6472,6 +6889,15 @@
             "description": "The account the worker was relaunched under; absent unless `outcome`\nis `relaunched`."
           }
         }
+      },
+      "AccountPlace": {
+        "type": "string",
+        "description": "Where in a Project an agent profile is configured.",
+        "enum": [
+          "rule",
+          "default",
+          "coordinator"
+        ]
       },
       "AccountQuota": {
         "type": "object",
@@ -6552,6 +6978,82 @@
           }
         }
       },
+      "AccountReference": {
+        "type": "object",
+        "description": "A dispatch profile or coordinator agent that can run under the account.",
+        "required": [
+          "id",
+          "project_id",
+          "project_name",
+          "place",
+          "harness",
+          "remaining",
+          "stranded",
+          "options"
+        ],
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "Names the reference in a confirmation, e.g. `prj_1/rules/0/1`."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountDisposition"
+            },
+            "description": "What Quark can do with it, the one it proposes first. Empty when it\nis not stranded."
+          },
+          "place": {
+            "$ref": "#/components/schemas/AccountPlace"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool it names; absent runs under the harness's default account."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "remaining": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels of the enabled accounts it keeps after the change."
+          },
+          "rule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rule's name, or `rule N` (1-based) for one without a name."
+          },
+          "stranded": {
+            "type": "boolean",
+            "description": "No enabled account is left for it: one of `options` must be chosen."
+          }
+        }
+      },
       "AccountUse": {
         "type": "object",
         "description": "One account the Project's tasks ran under.",
@@ -6580,6 +7082,34 @@
             "format": "int32",
             "description": "The Project's tasks started under it.",
             "minimum": 0
+          }
+        }
+      },
+      "AccountWork": {
+        "type": "object",
+        "description": "One task or coordinator running under an account.",
+        "required": [
+          "project_id",
+          "project_name",
+          "title"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent for the Project's coordinator."
+          },
+          "title": {
+            "type": "string",
+            "description": "The task's title, or `Coordinator`."
           }
         }
       },
@@ -6702,6 +7232,21 @@
               "null"
             ],
             "description": "Why, for the log. Sent to the asker with the answer."
+          }
+        }
+      },
+      "ApplyAccountChange": {
+        "type": "object",
+        "description": "Request body for `POST /v1/accounts/{id}/disable` and `/remove`: the\nperson's choice for each stranded reference of the plan, by its id.",
+        "properties": {
+          "dispositions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AccountDisposition"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -11555,6 +12100,18 @@
           "rolled_back",
           "failed"
         ]
+      },
+      "PlanAccountChange": {
+        "type": "object",
+        "description": "Request body for `POST /v1/accounts/{id}/plan`.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AccountChangeAction"
+          }
+        }
       },
       "PrComment": {
         "type": "object",

@@ -3,7 +3,7 @@
 // the theme tokens (tailwind.css); Select, OptionCards and Disclosure take their behaviour
 // (keyboard, focus, screen readers) from Radix.
 import React from "react";
-import { Collapsible, RadioGroup, Select as RSelect } from "radix-ui";
+import { Collapsible, RadioGroup, Select as RSelect, Switch } from "radix-ui";
 import { cx } from "./cx";
 
 /** A vertical stack of fields with the standard gap, and the row of buttons that ends it. */
@@ -179,6 +179,22 @@ export function Disclosure({ summary, children, defaultOpen }: { summary: React.
       </Collapsible.Trigger>
       <Collapsible.Content className="flex flex-col gap-6 pt-6">{children}</Collapsible.Content>
     </Collapsible.Root>
+  );
+}
+
+/** An on/off setting that takes effect when flipped, such as whether Quark may use an account.
+ *  For a choice saved with a form's button, use OptionCards or a Select. */
+export function Toggle({ checked, onCheckedChange, disabled, label, testid }: {
+  checked: boolean; onCheckedChange: (on: boolean) => void; disabled?: boolean;
+  /** What it switches, for screen readers and as its tooltip. */
+  label: string; testid?: string;
+}) {
+  return (
+    <Switch.Root checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} aria-label={label} title={label}
+      data-testid={testid}
+      className="relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer items-center rounded-full border border-line-2 bg-surface-3 p-0 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent">
+      <Switch.Thumb className="block size-3.5 translate-x-0.5 rounded-full bg-fg shadow-popover transition-transform data-[state=checked]:translate-x-3.5 data-[state=checked]:bg-on-tone" />
+    </Switch.Root>
   );
 }
 

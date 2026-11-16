@@ -72,6 +72,174 @@ pub struct Account {
     /// yet, so only its default account can be chosen from a pool.
     pub launchable: bool,
     pub created_at: Option<String>,
+    /// False once the person disabled the account for Quark: no new task or
+    /// coordinator starts under it, in any Project. Every account starts
+    /// enabled.
+    #[serde(default = "enabled")]
+    pub enabled: bool,
+    /// Where the account stands: `enabled`, `draining` (disabled, with work
+    /// started before still running under it) or `disabled`.
+    #[serde(default)]
+    pub availability: AccountAvailability,
+    /// The account is removed once the work running under it finishes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removing: bool,
+}
+
+fn enabled() -> bool {
+    true
+}
+
+/// Whether Quark starts work under an account.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountAvailability {
+    /// New tasks and coordinators may start under it.
+    #[default]
+    Enabled,
+    /// Disabled, but work that started before still runs under it; it is
+    /// `disabled` once that work finishes.
+    Draining,
+    /// Nothing starts or runs under it.
+    Disabled,
+}
+
+/// What the person is about to do to an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountChangeAction {
+    Disable,
+    Remove,
+}
+
+/// Request body for `POST /v1/accounts/{id}/plan`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PlanAccountChange {
+    pub action: AccountChangeAction,
+}
+
+/// What disabling or removing an account touches, and what Quark proposes
+/// for each dispatch profile left without an enabled account. Nothing is
+/// changed until the person confirms with `POST /v1/accounts/{id}/disable`
+/// or `/remove`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AccountChangePlan {
+    pub account_id: String,
+    pub action: AccountChangeAction,
+    /// Tasks and coordinators running under the account now. They keep
+    /// running until they finish; the account is draining meanwhile.
+    pub running: Vec<AccountWork>,
+    /// Every dispatch profile and coordinator agent, in any Project, that
+    /// can run under the account.
+    pub references: Vec<AccountReference>,
+    /// Why the change cannot be made at all, e.g. removing a default account.
+    pub refused: Option<String>,
+}
+
+/// One task or coordinator running under an account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AccountWork {
+    pub project_id: String,
+    pub project_name: String,
+    /// Absent for the Project's coordinator.
+    pub task_id: Option<String>,
+    /// The task's title, or `Coordinator`.
+    pub title: String,
+}
+
+/// Where in a Project an agent profile is configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountPlace {
+    /// A candidate of one of the dispatch rules.
+    Rule,
+    /// A candidate of the dispatch rules' default.
+    Default,
+    /// The Project coordinator's own agent.
+    Coordinator,
+}
+
+/// A dispatch profile or coordinator agent that can run under the account.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AccountReference {
+    /// Names the reference in a confirmation, e.g. `prj_1/rules/0/1`.
+    pub id: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub place: AccountPlace,
+    /// The rule's name, or `rule N` (1-based) for one without a name.
+    pub rule: Option<String>,
+    pub harness: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// The pool it names; absent runs under the harness's default account.
+    pub pool: Option<String>,
+    /// Labels of the enabled accounts it keeps after the change.
+    pub remaining: Vec<String>,
+    /// No enabled account is left for it: one of `options` must be chosen.
+    pub stranded: bool,
+    /// What Quark can do with it, the one it proposes first. Empty when it
+    /// is not stranded.
+    pub options: Vec<AccountDisposition>,
+}
+
+/// What to do with a stranded profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AccountDisposition {
+    /// Run it on another pool of the same harness.
+    UsePool {
+        pool: String,
+        /// Labels of the pool's enabled accounts.
+        #[serde(default)]
+        accounts: Vec<String>,
+    },
+    /// Run it on the harness's default account (drop its pool).
+    UseDefault,
+    /// Take the candidate out of its rule; the rule keeps its others.
+    Drop,
+    /// Leave it as it is: work it would get goes to the coordinator to place.
+    Keep,
+}
+
+impl AccountDisposition {
+    /// Same choice, ignoring the labels shown with it.
+    pub fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::UsePool { pool: a, .. }, Self::UsePool { pool: b, .. }) => a == b,
+            _ => std::mem::discriminant(self) == std::mem::discriminant(other),
+        }
+    }
+}
+
+/// Request body for `POST /v1/accounts/{id}/disable` and `/remove`: the
+/// person's choice for each stranded reference of the plan, by its id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ApplyAccountChange {
+    #[serde(default)]
+    pub dispositions: std::collections::BTreeMap<String, AccountDisposition>,
+}
+
+/// What a confirmed disable or remove did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AccountChangeOutcome {
+    /// The account as it is now; absent once removed.
+    pub account: Option<Account>,
+    /// The account is gone.
+    pub removed: bool,
+    /// Projects whose dispatch rules or coordinator agent changed.
+    pub changed: Vec<AccountChangeApplied>,
+}
+
+/// One Project's part of a confirmed change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AccountChangeApplied {
+    pub project_id: String,
+    pub project_name: String,
+    /// The Project repo commit with the new dispatch rules, when they changed.
+    pub commit: Option<String>,
+    /// The coordinator's agent changed (a switch was started when it runs).
+    pub coordinator: bool,
 }
 
 /// Add an account for a harness.

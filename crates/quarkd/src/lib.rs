@@ -4,6 +4,7 @@
 //! engine state into SQLite, and reaches engine workspaces only through a
 //! [`engine::EngineAdapter`].
 
+pub mod account_change;
 pub mod accounts;
 pub mod api;
 pub mod backup;
@@ -212,6 +213,11 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         engine.account_envs(),
     ));
     let quota_task = tokio::spawn(accounts.clone().run(config.quota_refresh_interval));
+    let removals_task = tokio::spawn(
+        accounts
+            .clone()
+            .run_removals(std::time::Duration::from_secs(10)),
+    );
     let dispatch_task = dispatch.map(|d| {
         d.set_accounts(Arc::new(engine::native_dispatch_engine::StoreAccounts(
             accounts.clone(),
@@ -462,6 +468,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         t.abort();
     }
     quota_task.abort();
+    removals_task.abort();
     if let Some(t) = dispatch_task {
         t.abort();
     }

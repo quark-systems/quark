@@ -73,6 +73,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     migration!("0025_task_worktree_at"),
     migration!("0026_default_account_keys"),
     migration!("0027_coordinator_outbox", additive),
+    migration!("0028_account_states", additive),
 ];
 
 /// The schema version a fully migrated database has.

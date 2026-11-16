@@ -34,8 +34,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use quark_dispatch::local::LocalReading;
 use quark_systems::{
-    Account, AccountQuota, AgentConfig, AuthState, CreateAccount, ProviderQuota, QuotaState,
-    QuotaWindow, UpdateAccount,
+    Account, AccountAvailability, AccountQuota, AgentConfig, AuthState, CreateAccount,
+    ProviderQuota, QuotaState, QuotaWindow, UpdateAccount,
 };
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
@@ -44,7 +44,9 @@ use time::OffsetDateTime;
 use crate::harness::{self, pool_name_ok, Harness, HarnessRegistry};
 use crate::now_rfc3339;
 use crate::secrets::{Keychain, SecretStore};
-use crate::store::{default_account_id, AccountRow, Store, StoreError, KEYCHAIN_PREFIX};
+use crate::store::{
+    default_account_id, AccountRow, AccountState, Store, StoreError, KEYCHAIN_PREFIX,
+};
 
 /// Longest account label.
 const MAX_LABEL_CHARS: usize = 100;
@@ -313,13 +315,14 @@ impl Accounts {
     pub async fn list(&self) -> Result<Vec<Account>> {
         let infos = self.harnesses.list(false).await;
         let store = self.store.clone();
-        let (rows, pools, quotas, leases, kept) = tokio::task::spawn_blocking(move || {
+        let (rows, pools, quotas, leases, kept, states) = tokio::task::spawn_blocking(move || {
             Ok::<_, StoreError>((
                 store.account_rows()?,
                 store.account_pools()?,
                 store.account_quotas()?,
                 store.active_leases()?,
                 store.default_account_keys()?,
+                store.account_states()?,
             ))
         })
         .await
@@ -359,7 +362,11 @@ impl Accounts {
             } else {
                 (h.auth_status(env, &harness::Account::default()), true)
             };
+            let (enabled, availability, removing) = standing(&states, &leases, &default_id);
             out.push(Account {
+                enabled,
+                availability,
+                removing,
                 health,
                 quota: quota_for(&default_id),
                 pools: pools.get(&default_id).cloned().unwrap_or_default(),
@@ -394,7 +401,11 @@ impl Accounts {
                         var.is_some_and(|v| self.forwarded.contains(&v)),
                     )
                 };
+                let (enabled, availability, removing) = standing(&states, &leases, &r.id);
                 out.push(Account {
+                    enabled,
+                    availability,
+                    removing,
                     id: r.id.clone(),
                     harness: r.harness.clone(),
                     label: r.label.clone(),
@@ -627,12 +638,73 @@ impl Accounts {
         }
         let (store, id2) = (self.store.clone(), id.to_string());
         blocking(move || store.delete_account(&id2)).await?;
-        if account.api_key {
-            if let Err(e) = self.secrets.delete(&key_service(id)).await {
-                tracing::warn!(account = %id, error = %e, "could not remove the account's key from the Keychain");
+        self.forget_key(&account).await;
+        Ok(())
+    }
+
+    /// Enables an account for Quark again, calling off a pending removal.
+    pub async fn enable(&self, id: &str) -> Result<Account> {
+        self.get(id).await?;
+        let (store, id2) = (self.store.clone(), id.to_string());
+        blocking(move || store.set_account_enabled(&id2, true, &now_rfc3339())).await?;
+        self.get(id).await
+    }
+
+    /// Disables an account for Quark: nothing new starts under it from now
+    /// on, in any Project; work already running under it carries on.
+    pub async fn disable(&self, id: &str) -> Result<Account> {
+        self.get(id).await?;
+        let (store, id2) = (self.store.clone(), id.to_string());
+        blocking(move || store.set_account_enabled(&id2, false, &now_rfc3339())).await?;
+        self.get(id).await
+    }
+
+    /// Disables an added account and removes it once nothing runs under it.
+    /// True when it is gone already.
+    pub async fn remove_when_idle(&self, id: &str) -> Result<bool> {
+        let account = self.get(id).await?;
+        if account.default {
+            return Err(AccountError::Conflict(
+                "a harness's default account cannot be removed; disable it instead".into(),
+            ));
+        }
+        let (store, id2) = (self.store.clone(), id.to_string());
+        let removed =
+            blocking(move || store.remove_account_when_idle(&id2, &now_rfc3339())).await?;
+        if removed {
+            self.forget_key(&account).await;
+        }
+        Ok(removed)
+    }
+
+    /// Removes the accounts waiting on their work whose work has finished.
+    pub async fn finish_removals(&self) -> Result<Vec<String>> {
+        let rows = {
+            let store = self.store.clone();
+            blocking(move || store.account_rows()).await?
+        };
+        let store = self.store.clone();
+        let done = blocking(move || store.finish_removals()).await?;
+        for id in &done {
+            tracing::info!(account = %id, "removed the account now that its work finished");
+            if let Some(r) = rows
+                .iter()
+                .find(|r| &r.id == id && r.key_service().is_some())
+            {
+                if let Err(e) = self.secrets.delete(&key_service(&r.id)).await {
+                    tracing::warn!(account = %id, error = %e, "could not remove the account's key from the Keychain");
+                }
             }
         }
-        Ok(())
+        Ok(done)
+    }
+
+    async fn forget_key(&self, account: &Account) {
+        if account.api_key && !account.default {
+            if let Err(e) = self.secrets.delete(&key_service(&account.id)).await {
+                tracing::warn!(account = %account.id, error = %e, "could not remove the account's key from the Keychain");
+            }
+        }
     }
 
     /// Chooses the account `holder` starts under with `config` and records
@@ -665,18 +737,33 @@ impl Accounts {
         let sticky = current.and_then(|c| {
             accounts
                 .iter()
-                .find(|a| a.id == c && a.launchable && in_pool(a))
+                .find(|a| a.id == c && a.launchable && a.enabled && in_pool(a))
                 .cloned()
         });
 
         let chosen = match (sticky, pool) {
             (Some(a), _) => a.id.clone(),
-            (None, None) => default_account_id(h.id()),
+            (None, None) => {
+                let id = default_account_id(h.id());
+                if accounts.iter().any(|a| a.id == id && !a.enabled) {
+                    return Err(AccountError::Conflict(format!(
+                        "{}'s default account is disabled in Quark: name a pool with an enabled account, or enable it",
+                        h.name()
+                    )));
+                }
+                id
+            }
             (None, Some(pool)) => {
                 let members: Vec<&Account> = accounts.iter().filter(|a| in_pool(a)).collect();
                 if members.is_empty() {
                     return Err(AccountError::Invalid(format!(
                         "pool `{pool}` has no {} accounts",
+                        h.name()
+                    )));
+                }
+                if !members.iter().any(|a| a.enabled) {
+                    return Err(AccountError::Conflict(format!(
+                        "every {} account in pool `{pool}` is disabled in Quark",
                         h.name()
                     )));
                 }
@@ -765,6 +852,7 @@ impl Accounts {
             .filter(|a| a.harness == h.id())
             .map(|a| quark_dispatch::PoolAccount {
                 ready: ready(&a),
+                disabled: !a.enabled,
                 env: env_of(h.as_ref(), &a).into_iter().collect(),
                 id: a.id,
                 default: a.default,
@@ -854,6 +942,8 @@ impl Accounts {
             .await?
             .into_iter()
             .filter(|a| only.is_none_or(|id| id == a.id))
+            // Quark leaves a disabled login alone (a read can prompt).
+            .filter(|a| only.is_some() || a.availability != AccountAvailability::Disabled)
             .map(|a| self.read_account_quota(a, grant));
         for r in futures_util::future::join_all(reads).await {
             r?;
@@ -921,6 +1011,19 @@ impl Accounts {
             ticker.tick().await;
             if let Err(e) = self.refresh_quota(None).await {
                 tracing::warn!(error = %e, "quota refresh failed");
+            }
+        }
+    }
+
+    /// Removes accounts waiting on their work every `interval`, once that
+    /// work has finished.
+    pub async fn run_removals(self: Arc<Self>, interval: Duration) {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            if let Err(e) = self.finish_removals().await {
+                tracing::warn!(error = %e, "finishing account removals failed");
             }
         }
     }
@@ -1036,10 +1139,31 @@ fn team(raw: &str) -> Result<String> {
     Ok(raw.to_string())
 }
 
-/// Whether an agent can start under the account now: the engine can launch
-/// it, it is logged in, and its last quota reading has quota left.
+/// Whether an agent can start under the account now: it is enabled, the
+/// engine can launch it, it is logged in, and its last quota reading has
+/// quota left.
 fn ready(a: &Account) -> bool {
-    a.launchable && a.health.state != AuthState::NotConfigured && !a.quota.exhausted()
+    a.enabled && a.launchable && a.health.state != AuthState::NotConfigured && !a.quota.exhausted()
+}
+
+/// Whether an account is enabled, where it stands, and whether it waits to be
+/// removed.
+fn standing(
+    states: &std::collections::HashMap<String, AccountState>,
+    leases: &std::collections::HashMap<String, u32>,
+    id: &str,
+) -> (bool, AccountAvailability, bool) {
+    let Some(s) = states.get(id) else {
+        return (true, AccountAvailability::Enabled, false);
+    };
+    let availability = if s.enabled {
+        AccountAvailability::Enabled
+    } else if leases.get(id).copied().unwrap_or(0) > 0 {
+        AccountAvailability::Draining
+    } else {
+        AccountAvailability::Disabled
+    };
+    (s.enabled, availability, s.removing)
 }
 
 /// The account with the fewest running tasks, then the most quota left, then

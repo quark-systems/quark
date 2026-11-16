@@ -1,11 +1,17 @@
 // J9 accounts (quark#23): every harness account with its login health and quota, grouped
 // by harness. Add another config directory as an account (log in once with the harness
 // pointed at it), or for IBM Bob an API key kept in the Keychain; put accounts in pools
-// that dispatch profiles name, or remove one.
+// that dispatch profiles name, or remove one. Each account can be turned off for Quark: disabling
+// or removing one first shows what it touches (running work, every project's dispatch profiles)
+// and Quark's proposal for each profile left without an account, applied once confirmed.
 // Quota readings arrive live as `account.quota_changed`.
 import React, { useEffect, useMemo, useState } from "react";
-import { Account, api, HarnessInfo, NotAvailable } from "../api";
-import { addable, groupByHarness, healthMeta, loginHint, parsePools, POOL_RE, quotaCls, quotaText, usageText, whereText } from "../accounts";
+import { Account, AccountChangeAction, AccountChangePlan, AccountDisposition, api, HarnessInfo, NotAvailable } from "../api";
+import {
+  addable, availabilityMeta, dispositionKey, dispositionText, groupByHarness, healthMeta, loginHint, parsePools, placeText, POOL_RE,
+  proposedDispositions, quotaCls, quotaText, usageText, whereText,
+} from "../accounts";
+import { Button, FormError, Select, Toggle } from "../ui";
 import { loadAccounts, setAccounts, useStore } from "../store";
 import { ago, errText } from "../util";
 import { Unavailable } from "../components/Unavailable";
@@ -26,6 +32,13 @@ export function Accounts() {
 
   const accounts = useMemo(() => order.map((id) => byId[id]).filter(Boolean), [order, byId]);
   const groups = useMemo(() => groupByHarness(accounts, harnesses), [accounts, harnesses]);
+  // A draining account turns disabled, and a removal finishes, when its last worker does.
+  const waiting = accounts.some((a) => a.availability === "draining" || a.removing);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => { loadAccounts().catch(() => {}); }, 5000);
+    return () => clearInterval(t);
+  }, [waiting]);
 
   const refresh = async () => {
     setRefreshing(true); setErr(null);
@@ -79,8 +92,10 @@ function AccountRow({ account: a, onError, keyEnv }: {
   const q = a.quota;
   const [editing, setEditing] = useState(false);
   const [pools, setPools] = useState(a.pools.join(", "));
-  const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [change, setChange] = useState<AccountChangeAction | null>(null);
+  const enabled = a.enabled !== false;
+  const standing = availabilityMeta(a);
   const parsed = parsePools(pools);
   const badPool = parsed.find((p) => !POOL_RE.test(p));
 
@@ -121,21 +136,24 @@ function AccountRow({ account: a, onError, keyEnv }: {
       setAccounts(await api.accounts());
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
-  const remove = async () => {
-    if (!confirm) { setConfirm(true); return; }
+  const toggle = async (on: boolean) => {
+    if (!on) { setChange("disable"); return; }
     setBusy(true); onError(null);
     try {
-      await api.removeAccount(a.id);
+      await api.enableAccount(a.id);
       setAccounts(await api.accounts());
-    } catch (e) { onError(errText(e)); setConfirm(false); } finally { setBusy(false); }
+    } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
 
   return (
-    <div className="account-row" data-testid="account-row" data-account={a.id}>
+    <div className={"account-row" + (enabled ? "" : " off")} data-testid="account-row" data-account={a.id}>
       <div className="account-main">
         <div className="account-name">
+          <Toggle checked={enabled && change !== "disable"} onCheckedChange={toggle} disabled={busy || change !== null}
+            label={enabled ? `Quark may use ${a.label}; turn off to disable it` : `Enable ${a.label} for Quark`} testid="account-enabled" />
           <b>{a.label}</b>
           {a.default && <span className="pill">Default</span>}
+          {standing && <span className={"pill " + standing.cls} title={standing.title} data-testid="account-availability">{standing.label}</span>}
           {!a.launchable && <span className="pill yellow" title="The engine cannot start this harness under another account yet">Quota only</span>}
         </div>
         <div className="mono faint ellipsis" title={a.config_dir ?? undefined}>{whereText(a)}</div>
@@ -226,14 +244,134 @@ function AccountRow({ account: a, onError, keyEnv }: {
             <button className="btn small" type="button" onClick={() => { setKeying(false); setKey(""); }}>Cancel</button>
           </form>
         )}
-        {!a.default && (
-          <button className={"btn small" + (confirm ? " danger" : "")} onClick={remove} disabled={busy}
-            onBlur={() => setConfirm(false)} aria-label={`Remove ${a.label}`}>
-            {confirm ? "Confirm remove" : "Remove"}
+        {!a.default && !a.removing && (
+          <button className="btn small" onClick={() => setChange("remove")} disabled={busy || change !== null}
+            aria-label={`Remove ${a.label}`}>
+            Remove
           </button>
         )}
       </div>
+      {change && (
+        <AccountChange account={a} action={change} onError={onError}
+          onDone={async () => { setChange(null); setAccounts(await api.accounts()); }}
+          onCancel={() => setChange(null)} />
+      )}
     </div>
+  );
+}
+
+/** Before disabling or removing an account: what runs under it, every profile that reaches it, and a
+ *  choice (Quark's proposal first) for each profile it leaves without an enabled account. */
+function AccountChange({ account: a, action, onDone, onCancel, onError }: {
+  account: Account; action: AccountChangeAction; onDone: () => void; onCancel: () => void;
+  onError: (e: string | null) => void;
+}) {
+  const [plan, setPlan] = useState<AccountChangePlan | null>(null);
+  const [choices, setChoices] = useState<Record<string, AccountDisposition>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api.planAccountChange(a.id, action).then((p) => {
+      if (!live) return;
+      setPlan(p); setChoices(proposedDispositions(p.references));
+    }).catch((e) => { if (live) setErr(errText(e)); });
+    return () => { live = false; };
+  }, [a.id, action]);
+
+  const stranded = plan?.references.filter((r) => r.stranded) ?? [];
+  const kept = plan?.references.filter((r) => !r.stranded) ?? [];
+  const projects = [...new Set(stranded.map((r) => r.project_name))];
+  const verb = action === "disable" ? "Disable" : "Remove";
+
+  const confirm = async () => {
+    setBusy(true); setErr(null); onError(null);
+    try {
+      if (action === "disable") await api.disableAccount(a.id, choices);
+      else await api.removeAccountWhenIdle(a.id, choices);
+      onDone();
+    } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="account-change mt-2 flex flex-col gap-3 rounded-m border border-line-2 bg-surface-1 p-4" data-testid="account-change"
+      aria-label={`${verb} ${a.label}`}>
+      <div className="flex flex-col gap-1">
+        <b className="text-m">{verb} {a.label}?</b>
+        <span className="text-s text-dim">
+          {action === "disable"
+            ? "Nothing new starts under it, in any project. You can enable it again at any time."
+            : "Nothing new starts under it, in any project, and Quark forgets it. Its folder is left as it is."}
+        </span>
+      </div>
+      {!plan && !err && <span className="text-s text-dim">Checking which projects use it…</span>}
+      {plan?.refused && <FormError>{plan.refused}</FormError>}
+      {plan && !plan.refused && (
+        <>
+          {plan.running.length > 0 && (
+            <div className="flex flex-col gap-1" data-testid="account-change-running">
+              <span className="text-s font-medium">Still running under it ({plan.running.length})</span>
+              <span className="text-s text-dim">
+                {action === "disable"
+                  ? "They finish first; the account shows as draining until then."
+                  : "They finish first; the account is removed when the last one does."}
+              </span>
+              <ul className="m-0 flex flex-col gap-0.5 pl-4 text-s">
+                {plan.running.map((w) => <li key={`${w.project_id}/${w.task_id ?? "coordinator"}`}>{w.project_name}: {w.title}</li>)}
+              </ul>
+            </div>
+          )}
+          {stranded.length > 0 && (
+            <div className="flex flex-col gap-2" data-testid="account-change-stranded">
+              <span className="text-s font-medium">
+                {stranded.length === 1 ? "1 profile is" : `${stranded.length} profiles are`} left without an enabled account
+                {projects.length ? ` in ${projects.join(", ")}` : ""}
+              </span>
+              <span className="text-s text-dim">Quark proposes what to do with each; change any before you confirm. Dispatch rule changes are committed to each project's rules.</span>
+              {stranded.map((r) => (
+                <div key={r.id} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-3" data-testid="account-change-ref">
+                  <span className="min-w-0 text-s">
+                    <b>{r.project_name}</b> · {placeText(r)}
+                    <span className="text-dim"> · {[r.harness, r.model, r.effort].filter(Boolean).join(" ")}{r.pool ? `, pool ${r.pool}` : ", default account"}</span>
+                  </span>
+                  <Select value={choices[r.id] ? dispositionKey(choices[r.id]) : ""} aria-label={`What to do with ${placeText(r)} in ${r.project_name}`}
+                    onValueChange={(k) => {
+                      const o = r.options.find((x) => dispositionKey(x) === k);
+                      if (o) setChoices((c) => ({ ...c, [r.id]: o }));
+                    }}>
+                    {r.options.map((o, i) => (
+                      <option key={dispositionKey(o)} value={dispositionKey(o)}>{dispositionText(o, r)}{i === 0 ? " (proposed)" : ""}</option>
+                    ))}
+                  </Select>
+                </div>
+              ))}
+            </div>
+          )}
+          {kept.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-s font-medium">Keep running on other accounts</span>
+              <ul className="m-0 flex flex-col gap-0.5 pl-4 text-s text-dim">
+                {kept.map((r) => (
+                  <li key={r.id}>{r.project_name} · {placeText(r)}: pool {r.pool} keeps {r.remaining.join(", ")}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {!plan.running.length && !plan.references.length && (
+            <span className="text-s text-dim">No project's dispatch rules or coordinator use it, and nothing runs under it.</span>
+          )}
+        </>
+      )}
+      {err && <FormError>{err}</FormError>}
+      <div className="flex items-center justify-end gap-2">
+        <Button kind="quiet" onClick={onCancel} disabled={busy}>Cancel</Button>
+        <Button kind={action === "remove" ? "danger" : "primary"} onClick={confirm} disabled={busy || !plan || !!plan.refused}
+          data-testid="account-change-confirm">
+          {busy ? `${verb === "Disable" ? "Disabling" : "Removing"}…` : stranded.length ? `Apply and ${verb.toLowerCase()}` : `${verb} account`}
+        </Button>
+      </div>
+    </section>
   );
 }
 
