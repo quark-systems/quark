@@ -381,21 +381,29 @@ a.side-item { text-decoration: none; }
 .side-chat > .composer { box-sizing: border-box; width: min(760px, calc(100% - 32px)); align-self: center; margin-inline: 0; }
 .side-chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--bg-1); container-type: inline-size; }
 /* The coordinator's header: who it is, its agent and context, and what it is doing now. */
-.coord-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 12px 6px 14px; border-bottom: 1px solid var(--line); }
-.coord-avatar { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-m); background: color-mix(in srgb, var(--violet) 16%, var(--bg-1)); border: 1px solid color-mix(in srgb, var(--violet) 40%, transparent); color: var(--violet); font-weight: 600; }
-.coord-title { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
-.coord-name { font-weight: 600; font-size: 14px; }
-.coord-title .coord-context { font-size: 11.5px; }
-.coord-title .coord-agent { font-family: var(--mono); font-size: 11px; }
-.coord-title .coord-meter { height: 20px; padding: 0 6px; }
-.coord-status { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--bg-2); color: var(--fg-dim); }
+/* The coordinator's header: one row on one centerline. Avatar and the two-line title on the
+   left, then every control at the same height (--coord-control): the context meter, the
+   status pill, Stop, Wrap up and the persona picker. */
+.coord-head { --coord-control: 28px; flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 12px 0 14px; border-bottom: 1px solid var(--line); }
+.coord-head > * { flex: none; }
+.coord-head .spacer { flex: 1; }
+.coord-avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--radius-m); background: color-mix(in srgb, var(--violet) 16%, var(--bg-1)); border: 1px solid color-mix(in srgb, var(--violet) 40%, transparent); color: var(--violet); font-weight: 600; }
+.coord-head > .coord-title { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; margin-right: 4px; }
+.coord-name { font-weight: 600; font-size: 14px; line-height: 18px; }
+.coord-title .coord-agent { font-family: var(--mono); font-size: 11px; line-height: 15px; }
+.coord-head .ui-btn, .coord-head .persona-picker select { height: var(--coord-control); }
+.coord-head .command-run { height: var(--coord-control); }
+.coord-head .coord-meter { padding: 0 8px; font-size: 12px; }
+.coord-head .persona-picker { display: inline-flex; align-items: center; height: var(--coord-control); }
+.coord-status { display: inline-flex; align-items: center; gap: 6px; height: var(--coord-control); padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; background: var(--bg-2); color: var(--fg-dim); }
 .coord-status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .coord-status.busy { background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); }
 .coord-status.busy .spinner { border-color: color-mix(in srgb, var(--blue) 35%, transparent); border-top-color: var(--blue); }
 .coord-status.ok { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
 .coord-status.warn { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
 .coord-head .persona-picker .faint { display: none; }
-@container (max-width: 520px) { .coord-title .coord-context { display: none; } .coord-head .persona-picker { display: none; } }
+@container (max-width: 620px) { .coord-head .coord-meter, .coord-title .coord-agent { display: none; } }
+@container (max-width: 520px) { .coord-head .persona-picker { display: none; } }
 .panel-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); }
 .unavailable { overflow-wrap: anywhere; margin: 16px; padding: 14px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--fg-dim); display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .u-title { color: var(--fg); }
@@ -668,8 +676,7 @@ details.why-record > summary.why-head { cursor: pointer; }
 .dx-checks { flex-basis: 100%; list-style: none; margin: 2px 0 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 1px; font-size: 12px; overflow-wrap: anywhere; }
 .dx-row .meta > span { white-space: nowrap; }
 
-/* The coordinator header's agent and context meter (components/CoordinatorContext.tsx). */
-.coord-context { display: inline-flex; align-items: center; gap: 6px; min-width: 0; text-transform: none; letter-spacing: 0; font-weight: 400; }
+/* The coordinator header's agent line and context meter (components/CoordinatorContext.tsx). */
 .coord-agent { color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .coord-meter { height: 24px; padding: 0 8px; gap: 6px; }
 .coord-meter-bar { display: inline-flex; width: 44px; }

@@ -10,7 +10,7 @@ import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
 import { CommandCard, duration, groupTurns, lastId, liveStatus, LiveStatus, PendingMessage, stillPending, stillPendingCommands, Transcript, useNow } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
-import { CoordinatorContext } from "../components/CoordinatorContext";
+import { ContextMeter, CoordinatorAgent, useCoordinatorContext } from "../components/CoordinatorContext";
 import { useLabels } from "../persona";
 import { useDraft } from "../drafts";
 import { readAttached, useAttachments, withAttachments } from "../attachments";
@@ -201,6 +201,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
   const commands = useRunCommand(cid);
   const stoppedThrough = useStoppedThrough(cid);
   const stopper = useStop(cid);
+  const context = useCoordinatorContext(cid, items.length);
   // What the coordinator is doing now, for the header's status and the composer's Stop.
   const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id), stoppedThrough), [items, stoppedThrough]);
   const now = useNow(true);
@@ -278,8 +279,9 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
         <span className="coord-avatar" aria-hidden="true">{l.Role("coordinator").slice(0, 1)}</span>
         <div className="coord-title">
           <span className="coord-name">{l.Role("coordinator")}</span>
-          <CoordinatorContext cid={cid} changed={items.length} />
+          <CoordinatorAgent ctx={context.ctx} />
         </div>
+        <ContextMeter cid={cid} ctx={context.ctx} load={context.load} />
         <ChatStatus live={live} stopped={stopped} />
         <span className="spacer" />
         <StopButton cid={cid} /><CommandButton cid={cid} command="wrap_up" /><PersonaPicker projectId={cid} />
