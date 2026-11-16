@@ -122,6 +122,22 @@ test("coordinator chat: a message sent while the coordinator works waits, editab
   expect(outbox).toEqual([]);
 });
 
+test("coordinator chat: the conversation column follows the window's width, up to 760px", async ({ page }) => {
+  await open(page, "#/p/website");
+  const chat = page.getByTestId("coordinator-chat");
+  const turn = chat.locator(".tx-turn").first();
+  await expect(turn).toBeVisible();
+  for (const width of [900, 1400, 2200]) {
+    await page.setViewportSize({ width, height: 900 });
+    const log = (await chat.locator(".chat-log").boundingBox())!;
+    const expected = Math.min(760, log.width - 32);
+    await expect.poll(async () => Math.round((await turn.boundingBox())!.width)).toBeGreaterThanOrEqual(Math.floor(expected) - 16);
+    // Centered: as much room on each side.
+    const box = (await turn.boundingBox())!;
+    expect(Math.abs((box.x - log.x) - (log.x + log.width - box.x - box.width))).toBeLessThan(20);
+  }
+});
+
 test("drafts in message boxes survive leaving the view and reloading the app", async ({ page }) => {
   await open(page, "#/p/quark");
   const box = page.getByTestId("coordinator-chat").getByLabel("Message the coordinator");
