@@ -160,7 +160,26 @@ pub(crate) fn entry(role: TranscriptRole, text: &str, ts: Option<&str>) -> Optio
         truncated,
         ts: ts.map(str::to_string),
         tool: None,
+        turn_end: false,
     })
+}
+
+/// The harness ended its turn here: an `assistant` entry with empty text and
+/// [`TranscriptEntry::turn_end`] set. Readers that know the field end the
+/// turn without showing anything; older ones see an empty answer, which also
+/// ends it.
+pub(crate) fn turn_end(ts: Option<&str>) -> TranscriptEntry {
+    TranscriptEntry {
+        role: TranscriptRole::Assistant,
+        text: String::new(),
+        tool_name: None,
+        tool_call_id: None,
+        is_error: false,
+        truncated: false,
+        ts: ts.map(str::to_string),
+        tool: None,
+        turn_end: true,
+    }
 }
 
 /// A tool call or result. Unlike [`entry`], empty text is kept: a tool that
@@ -183,6 +202,7 @@ pub(crate) fn tool_entry(
         truncated,
         ts: ts.map(str::to_string),
         tool: None,
+        turn_end: false,
     }
 }
 

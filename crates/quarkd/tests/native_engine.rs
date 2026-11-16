@@ -1023,6 +1023,7 @@ async fn switches_a_coordinators_agent_resumed_and_by_handoff() {
         truncated: false,
         ts: None,
         tool: None,
+        turn_end: false,
     };
     store
         .apply_transcript(

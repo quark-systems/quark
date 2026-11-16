@@ -160,6 +160,16 @@ describe("liveStatus", () => {
     expect(liveStatus(groupTurns([u(1, at(0)), answer(2, at(3000))]), start + 5000).activity).toBeNull();
   });
 
+  it("is not live once the harness ended a turn whose last step was a tool call", () => {
+    const end: TranscriptItem = { id: 3, role: "assistant", text: "", ts: at(4000), is_error: false, truncated: false, turn_end: true };
+    const turns = groupTurns([u(1, at(0)), call(2, "Tell the user", at(2000)), end]);
+    expect(liveStatus(turns, start + 5000).activity).toBeNull();
+    expect(turns[0].parts.map((p) => p.kind)).toEqual(["work"]);
+    expect(turns[0].endedAt).toBe(start + 4000);
+    // More work in the same turn makes it live again.
+    expect(liveStatus(groupTurns([u(1, at(0)), call(2, "a", at(2000)), end, call(4, "b", at(5000))]), start + 6000).activity).toBe("working");
+  });
+
   it("has nothing to say about an empty conversation", () => {
     expect(liveStatus([])).toEqual({ activity: null });
   });

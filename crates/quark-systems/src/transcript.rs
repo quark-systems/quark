@@ -45,6 +45,12 @@ pub struct TranscriptEntry {
     /// before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolInfo>,
+    /// `true` on the entry that records the harness ending its turn, for a
+    /// harness that says so in its log (Codex's `task_complete`). Such an
+    /// entry is an `assistant` entry with empty text, so a reader that
+    /// predates this field still sees the turn answered.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn_end: bool,
 }
 
 /// What kind of work a tool call does.

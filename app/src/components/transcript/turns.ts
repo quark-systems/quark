@@ -34,6 +34,8 @@ export interface Turn {
   endedAt?: number;
   /** The agent is still working: the last turn, and it hasn't written its answer yet. */
   live: boolean;
+  /** The harness recorded ending this turn, after which nothing more came. */
+  ended?: boolean;
   /** Not a turn but the point where the harness compacted the conversation. */
   compaction?: TranscriptItem;
 }
@@ -68,8 +70,12 @@ export function groupTurns(items: TranscriptItem[], stoppedThrough?: number): Tu
       const t = open(item);
       const event = engineEvent(item.text);
       if (event) t.event = event;
+    } else if (item.turn_end) {
+      // Shows nothing; ends the turn even when its last step was a tool call.
+      if (cur) cur.ended = true;
     } else {
       const t = cur ?? open(undefined, item.id);
+      t.ended = false;
       if (item.role === "assistant") t.parts.push({ kind: "text", item });
       else if (item.role === "thinking") work(t, item.id).steps.push({ key: item.id, thinking: item, status: "ok" });
       else if (item.role === "tool_call") work(t, item.id).steps.push({ key: item.id, call: item, status: "running" });
@@ -85,7 +91,7 @@ export function groupTurns(items: TranscriptItem[], stoppedThrough?: number): Tu
   if (last && !last.compaction) {
     const end = last.parts[last.parts.length - 1];
     const stopped = stoppedThrough !== undefined && items[items.length - 1]?.id === stoppedThrough;
-    last.live = !stopped && (end?.kind === "work" || (end === undefined && !!last.prompt));
+    last.live = !stopped && !last.ended && (end?.kind === "work" || (end === undefined && !!last.prompt));
   }
   return turns;
 }

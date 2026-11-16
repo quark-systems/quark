@@ -128,6 +128,7 @@ impl Store {
             truncated: false,
             ts: Some(now_rfc3339()),
             tool: None,
+            turn_end: false,
         };
         self.write(|tx, events| {
             append_event(
@@ -351,6 +352,7 @@ mod tests {
             truncated: false,
             ts: Some(ts.into()),
             tool: None,
+            turn_end: false,
         };
         let source = TranscriptSource::Coordinator {
             project_id: p.clone(),

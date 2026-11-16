@@ -293,6 +293,7 @@ impl Store {
                     truncated: false,
                     ts: Some(now_rfc3339()),
                     tool: None,
+                    turn_end: false,
                 };
                 record(tx, events, &m, &entry)?;
             }
@@ -380,6 +381,7 @@ mod tests {
             truncated: false,
             ts: None,
             tool: None,
+            turn_end: false,
         }
     }
 

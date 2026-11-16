@@ -7,11 +7,16 @@
 //! matching `agent_message` event is a duplicate. Rollouts written before the
 //! envelope existed are not supported. A `compacted` line, where Codex
 //! replaced the conversation with a summary, is one
-//! [`TranscriptRole::Compaction`] entry.
+//! [`TranscriptRole::Compaction`] entry. A `task_complete` or `turn_aborted`
+//! event, Codex ending its turn, is a [`turn_end`] entry: a turn whose last
+//! step was a tool call, with an empty final message, would otherwise read as
+//! still running.
 
 use serde_json::Value;
 
-use crate::{entry, str_at, text_of, tool_call, tool_entry, TranscriptEntry, TranscriptRole};
+use crate::{
+    entry, str_at, text_of, tool_call, tool_entry, turn_end, TranscriptEntry, TranscriptRole,
+};
 
 /// The user's words when `v` is a line recording a message the user sent.
 pub(crate) fn user_message(v: &Value) -> Option<String> {
@@ -40,6 +45,7 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
     };
     match (str_at(v, "type"), str_at(p, "type")) {
         (Some("response_item"), Some(item)) => response_item(item, p, ts),
+        (Some("event_msg"), Some("task_complete" | "turn_aborted")) => vec![turn_end(ts)],
         (Some("compacted"), _) => entry(
             TranscriptRole::Compaction,
             "Codex compacted the conversation",
