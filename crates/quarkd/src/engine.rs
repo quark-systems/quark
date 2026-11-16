@@ -184,6 +184,9 @@ pub struct Hold {
 pub enum TaskControl {
     /// Stop the agent. Its worktree and uncommitted changes are kept.
     Cancel,
+    /// Interrupt the agent's current turn with its harness's interrupt
+    /// keys. The agent keeps running and reads the next message.
+    Interrupt,
     /// Replace the agent in the same worktree, optionally on another harness,
     /// model or effort. `note` tells the new agent where things stand.
     Relaunch {

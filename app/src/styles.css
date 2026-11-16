@@ -421,6 +421,28 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 /* The note goes above the button so the button stays on the text's line, beside the attach button. */
 .steer-side { display: flex; flex-direction: column-reverse; gap: 4px; align-items: flex-end; max-width: 40%; }
 .composer .steer-side .btn { height: 28px; }
+/* The worker view's one message box: to the worker or, switched, to the coordinator about it. */
+.worker-composer { flex: none; }
+.target-switch { display: inline-flex; height: 28px; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; margin-left: 4px; }
+.ts-opt { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 0 11px; font: 500 12px var(--sans); color: var(--fg-dim); cursor: pointer; }
+.ts-opt + .ts-opt { border-left: 1px solid var(--line); }
+.ts-opt:hover { color: var(--fg); }
+.ts-opt.on.worker { background: var(--accent-dim); color: var(--fg); }
+.ts-opt.on.coordinator { background: color-mix(in srgb, var(--tone-needs-you) 18%, transparent); color: var(--fg); }
+.composer.to-coordinator:focus-within { border-color: color-mix(in srgb, var(--tone-needs-you) 60%, var(--line-2)); }
+.composer .composer-hint .ok, .composer .composer-hint .bad { white-space: nowrap; }
+/* A prompt on the worker's screen, answered with a button. */
+.screen-prompt { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; margin: 0 4px 4px 0; border: 1px solid color-mix(in srgb, var(--tone-needs-you) 55%, var(--line-2)); border-radius: var(--radius-m); background: color-mix(in srgb, var(--tone-needs-you) 8%, transparent); font-size: 13px; }
+.sp-who { color: var(--tone-needs-you); font-weight: 600; margin-right: 4px; }
+.sp-detail { font-size: 11.5px; color: var(--fg-dim); }
+.sp-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-options .btn.small { padding: 3px 10px; font-size: 12px; }
+.sp-options .btn.sp-first { border-color: var(--accent); color: var(--accent); }
+/* The terminal is view only until you take it over. */
+.btn.quiet { border-color: transparent; background: none; color: var(--fg-dim); }
+.btn.quiet:hover { border-color: var(--line-2); color: var(--fg); }
+.term-typing-note { font: 11.5px var(--sans); color: var(--tone-needs-you); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pane.term-typing { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-needs-you) 60%, transparent); }
 .tabs { flex: none; display: flex; gap: 2px; padding: 4px 8px 0; border-bottom: 1px solid var(--line); background: var(--bg-1); }
 .tabs button { border: 0; background: none; padding: 6px 12px; cursor: pointer; color: var(--fg-dim); border-bottom: 2px solid transparent; }
 .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }

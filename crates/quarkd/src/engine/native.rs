@@ -401,6 +401,7 @@ impl EngineAdapter for NativeEngine {
         let (p, t) = (project(ws), task_id(task)?);
         match action {
             TaskControl::Cancel => self.supervisor.cancel(&p, &t).await,
+            TaskControl::Interrupt => self.supervisor.interrupt(&p, &t).await,
             TaskControl::Relaunch {
                 harness,
                 model,

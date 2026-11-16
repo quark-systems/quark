@@ -40,7 +40,8 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    /// The question the worker is recorded asking.
+    /// The question the worker is recorded asking. The app reads its
+    /// context and choices back (app/src/screenPrompt.ts): keep the shape.
     pub fn question(&self) -> String {
         let mut q = String::from(
             "My terminal shows a prompt waiting for a keypress (a permission or approval \

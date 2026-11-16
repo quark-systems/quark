@@ -13,6 +13,8 @@ export interface TermAdapter {
   resize(cols: number, rows: number): void;
   fit(): void;
   focus(): void;
+  /** Whether typed keys are passed on (`onData`); off shows the terminal view only. */
+  setInput(on: boolean): void;
   /** The buffer's text, scrollback included, one line per row, whatever the renderer. */
   text(): string;
   /** The underlying library object, for debugging. */

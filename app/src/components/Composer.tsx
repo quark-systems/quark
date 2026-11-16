@@ -6,7 +6,7 @@ import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import type { Attachments } from "../attachments";
 import { AttachButton, AttachmentList, cx } from "../ui";
 
-export function Composer({ value, onChange, onSend, sending, label, placeholder, attachments, tools, hint, onStop, stopping }: {
+export function Composer({ value, onChange, onSend, sending, label, placeholder, attachments, tools, hint, onStop, stopping, className, above }: {
   value: string; onChange: (v: string) => void; onSend: () => void; sending: boolean; label: string; placeholder: string;
   attachments?: Attachments;
   /** More tools after the attach button, such as the commands button. */
@@ -16,6 +16,10 @@ export function Composer({ value, onChange, onSend, sending, label, placeholder,
   /** Shown in place of Send while the box is empty: stops what the agent is doing. */
   onStop?: () => void;
   stopping?: boolean;
+  /** More classes on the card, such as the current target's. */
+  className?: string;
+  /** Shown inside the card above the text, such as what the agent is asking. */
+  above?: ReactNode;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useAutoGrow(ref, value);
@@ -23,7 +27,8 @@ export function Composer({ value, onChange, onSend, sending, label, placeholder,
   const ready = !!value.trim() || !!a?.items.length;
   const stop = onStop && !ready;
   return (
-    <div className={cx("composer", a?.dragging && "dropping")} {...a?.dropProps}>
+    <div className={cx("composer", className, a?.dragging && "dropping")} {...a?.dropProps}>
+      {above}
       {a && <AttachmentList items={a.items} uploading={a.uploading} error={a.error} onRemove={a.remove} />}
       <textarea ref={ref} rows={1} value={value} placeholder={placeholder} aria-label={label}
         onChange={(e) => onChange(e.target.value)} onPaste={a?.onPaste}

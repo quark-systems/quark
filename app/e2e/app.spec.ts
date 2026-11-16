@@ -273,11 +273,15 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
   await expect(page).toHaveURL(/#\/t\//);
 
-  // Terminal: the snapshot is drawn, and typed keys echo back through the daemon.
+  // Terminal: the snapshot is drawn. It is view only until taken over; then typed keys echo back through the daemon.
   const term = page.getByTestId("terminal");
   const termText = terminalText(page);
   await expect.poll(termText).toContain("writing the failing test");
   await term.locator(".xterm").click();
+  await page.keyboard.type("nope");
+  await page.keyboard.press("Enter");
+  await term.getByTestId("term-takeover").click();
+  await expect(term.getByTestId("term-typing-note")).toBeVisible();
   await page.keyboard.type("ls -la");
   await page.keyboard.press("Enter");
   await expect.poll(termText).toContain("you typed: ls -la");
@@ -286,13 +290,16 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await page.keyboard.press("Enter");
   await expect.poll(termText).toContain("resynced");
   expect(await termText()).toContain("flood line 0");
+  expect(await termText()).not.toContain("you typed: nope");
+  await term.getByTestId("term-release").click();
+  await expect(term.getByTestId("term-takeover")).toBeVisible();
 
   // Transcript shows history; steering lands in it.
   const transcript = page.getByTestId("transcript");
   await expect(transcript).toContainText("The tests pass on the base");
   await page.getByLabel("Message the worker").fill("Please also cover the lagged receiver");
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("status")).toHaveText("Delivered to the worker's inbox");
+  await page.getByTestId("worker-composer").getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("worker-composer").getByRole("status")).toHaveText("Delivered to the worker's inbox");
   await expect(transcript).toContainText("Please also cover the lagged receiver");
   await expect(transcript).toContainText("Adjusting the plan");
 
@@ -311,6 +318,44 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await page.getByTestId("relaunch").click();
   await expect(page.getByTestId("task-state")).toHaveText("Running");
   await expect.poll(termText).toContain("relaunched on");
+});
+
+test("worker view: one message box answers screen prompts, stops the worker and asks the coordinator", async ({ page }) => {
+  await open(page, "#/p/quark/work");
+  await page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).click();
+  await expect(page).toHaveURL(/#\/t\//);
+  const box = page.getByTestId("worker-composer");
+  const termText = terminalText(page);
+  // One box under the terminal, no separate coordinator dock.
+  await expect(page.getByTestId("dock")).toHaveCount(0);
+  await expect(box.getByTestId("target-worker")).toHaveAttribute("aria-checked", "true");
+
+  // A permission prompt on the worker's screen shows as buttons; a message waits for it.
+  const tid = decodeURIComponent(page.url().split("#/t/")[1]);
+  await page.evaluate(async (id) => { await fetch(`http://127.0.0.1:7392/mock/tasks/${encodeURIComponent(id)}/screen-prompt`, { method: "POST" }); }, tid);
+  const prompt = box.getByTestId("screen-prompt");
+  await expect(prompt).toContainText("The worker is asking Do you want to proceed?");
+  await expect(prompt.getByRole("button")).toHaveText(["Yes", "Yes, and don't ask again for npm test", "No, and tell Claude what to do differently (esc)"]);
+  await expect(box.getByLabel("Message the worker")).toHaveAttribute("placeholder", /waits until the prompt above is answered/);
+  await prompt.getByRole("button", { name: "Yes", exact: true }).click();
+  await expect(prompt).toHaveCount(0);
+  await expect.poll(termText).toContain("[chose 1]");
+
+  // Stop, with the box empty, interrupts the worker.
+  const asked = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith(":interrupt") && r.url().includes("/v1/tasks/"));
+  await box.getByTestId("composer-stop").click();
+  await asked;
+  await expect.poll(termText).toContain("[interrupted by user]");
+
+  // Ctrl+K switches the same box to the coordinator, about this worker.
+  await page.keyboard.press("Control+k");
+  await expect(box.getByTestId("target-coordinator")).toHaveAttribute("aria-checked", "true");
+  const ask = box.getByRole("textbox", { name: "Message the coordinator" });
+  await expect(ask).toBeFocused();
+  await expect(ask).toHaveAttribute("placeholder", "Ask the coordinator about this worker…");
+  // (Sending to the coordinator from here is covered by the dock test in shell.spec.ts.)
+  await box.getByTestId("target-worker").click();
+  await expect(box.getByRole("textbox", { name: "Message the worker" })).toBeFocused();
 });
 
 test("worker view: why this agent, live on relaunch and kept after the task ends", async ({ page }) => {
@@ -1625,7 +1670,7 @@ test("prompt boxes take pasted images and picked or dropped files, and send thei
   });
   await expect(steer.getByTestId("attachments")).toContainText("numbers.csv");
   await steer.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("status")).toHaveText("Delivered to the worker's inbox");
+  await expect(steer.getByRole("status")).toHaveText("Delivered to the worker's inbox");
   await expect(page.getByTestId("transcript")).toContainText(/Attached file:\s*- \S+\/numbers\.csv/);
 });
 

@@ -1,24 +1,29 @@
-// J4: one worker in one view. Its live terminal and a box to message it in the middle; the work
-// pane on the right with its transcript, changed files with their diff, its PR, the brief it
-// was dispatched with and why this agent; cancel, relaunch and clear in the header, and the coordinator dock under the terminal.
-import { KeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, NotAvailable, TaskChanges, TranscriptItem } from "../api";
+// J4: one worker in one view. Its live terminal (view only until you take it over) and one message
+// box in the middle, which writes to the worker or, switched, to the coordinator about it; prompts on
+// the worker's screen show as buttons above the box. The work pane on the right has its transcript,
+// changed files with their diff, its PR, the brief it was dispatched with and why this agent;
+// cancel, relaunch and clear are in the header.
+import { KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, Decision, NotAvailable, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
 import { externalLink } from "../links";
 import { loadTranscript, refreshTask, useStore } from "../store";
-import { attach, getTerm, resetTerm, TermHandle } from "../terminal";
+import { attach, getTerm, resetTerm, setTyping, TermHandle } from "../terminal";
 import { ago, errText, isActive, stateMeta } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
 import { FileDiff } from "../components/diff/DiffView";
 import { Unavailable } from "../components/Unavailable";
-import { useAutoGrow } from "../components/Composer";
+import { Composer } from "../components/Composer";
+import { runCommand, useStop } from "../components/CoordinatorCommand";
+import { fromSlash } from "../commands";
+import { promptTitle, screenPrompt, ScreenPrompt } from "../screenPrompt";
 import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
 import { WorkerBrief } from "../components/WorkerBrief";
 import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 import { useLabels } from "../persona";
-import { Dock } from "../shell/Dock";
-import { AttachButton, AttachmentList, cx, StatusDot, taskTone, TONE_LABEL } from "../ui";
+import { ASK_COORDINATOR_EVENT, dockMessage, MOD } from "../shell/Dock";
+import { CoordinatorMark, cx, StatusDot, taskTone, TONE_LABEL } from "../ui";
 import { useDraft } from "../drafts";
 import { useAttachments, withAttachments } from "../attachments";
 import { BeadText } from "../ui/BeadText";
@@ -66,9 +71,8 @@ export function WorkerView({ id }: { id: string }) {
         </div>
         {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
         <TerminalPanel taskId={id} taskState={task.state} />
-        <SteerBox taskId={id} />
-        {/* The dock sits under the worker's own terminal; the work pane runs the full height. */}
-        <Dock />
+        {/* One box under the worker's terminal: to the worker, or to the coordinator about it. */}
+        <WorkerComposer taskId={id} />
       </section>
       <aside className="worker-pane" aria-label="Work">
         <PaneResizer width={paneWidth} onWidth={setPaneWidth} />
@@ -249,6 +253,9 @@ function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: strin
     if (h.status === "none") { resetTerm(taskId); setGen((g) => g + 1); }
   }, [taskState]);
 
+  // Leaving the worker gives the keyboard back: the terminal opens view only every time.
+  useEffect(() => () => setTyping(h, false), [h]);
+
   useEffect(() => {
     if (!body.current) return;
     attach(h, body.current);
@@ -258,11 +265,22 @@ function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: strin
   }, [h]);
 
   return (
-    <div className="pane" data-testid="terminal">
+    <div className={cx("pane", h.typing && "term-typing")} data-testid="terminal">
       <div className="pane-head">
         <span>terminal</span>
         {h.info && <span className="faint ellipsis">{h.info.title}</span>}
         <span className="spacer" />
+        {status === "live" && (h.typing ? (
+          <>
+            <span className="term-typing-note" data-testid="term-typing-note">Typing straight to the agent · not recorded</span>
+            <button className="btn small" onClick={() => setTyping(h, false)} data-testid="term-release">Done</button>
+          </>
+        ) : (
+          <button className="btn small quiet" onClick={() => setTyping(h, true)} data-testid="term-takeover"
+            title="Type into the terminal yourself, for a dialog or menu that needs real keys. Use the message box below for everything else.">
+            View only · Take over
+          </button>
+        ))}
         {status === "connecting" && <span className="faint">connecting…</span>}
         {status === "error" && (
           <>
@@ -282,46 +300,125 @@ function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: strin
   );
 }
 
-// ---- steering ----
+// ---- one message box: to the worker, or to the coordinator about it ----
 
-function SteerBox({ taskId }: { taskId: string }) {
-  const pid = useStore((s) => s.tasks[taskId]?.project_id);
-  const worker = useLabels(pid).role("worker");
+type Target = "worker" | "coordinator";
+const STOP_REST_MS = 3_000;
+
+/** The worker's open screen prompts: permission requests or menus quarkd read off its terminal. */
+function useScreenPrompts(taskId: string) {
+  const decisions = useStore((s) => s.decisions);
+  return useMemo(() => Object.values(decisions)
+    .filter((d) => d.task_id === taskId && d.state === "open")
+    .map((d) => ({ d, p: screenPrompt(d.question) }))
+    .filter((x): x is { d: Decision; p: ScreenPrompt } => x.p !== null)
+    .sort((a, b) => a.d.opened_at.localeCompare(b.d.opened_at)), [decisions, taskId]);
+}
+
+/** A prompt on the worker's screen, answered with a button: Quark picks that choice on its screen. */
+function PromptCard({ d, p, worker }: { d: Decision; p: ScreenPrompt; worker: string }) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const pick = async (i: number) => {
+    setBusy(i); setErr(null);
+    try { await api.answerDecision(d.id, { answer: String(i + 1), via: "app" }); }
+    catch (e) { setErr(errText(e)); setBusy(null); }
+  };
+  const title = promptTitle(p);
+  const detail = p.context.slice(0, -1).join(" ");
+  return (
+    <div className="screen-prompt" role="group" aria-label={`The ${worker} is asking`} data-testid="screen-prompt">
+      <div className="sp-q"><span className="sp-who">The {worker} is asking</span> {title}</div>
+      {detail && <div className="sp-detail mono ellipsis" title={detail}>{detail}</div>}
+      <div className="sp-options">
+        {p.options.map((o, i) => (
+          <button key={i} type="button" className={cx("btn small", i === 0 && "sp-first")} disabled={busy !== null} onClick={() => void pick(i)}>
+            {busy === i ? "Choosing…" : o}
+          </button>
+        ))}
+      </div>
+      {err && <div className="bad small-text" role="alert">{err}</div>}
+    </div>
+  );
+}
+
+function WorkerComposer({ taskId }: { taskId: string }) {
+  const task = useStore((s) => s.tasks[taskId]);
+  const pid = task?.project_id;
+  const labels = useLabels(pid);
+  const worker = labels.role("worker");
+  const coordinator = labels.role("coordinator");
+  const [target, setTarget] = useState<Target>("worker");
   const [text, setText] = useDraft(`worker:${taskId}`);
   const attach = useAttachments(pid, `worker:${taskId}`);
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
-  const box = useRef<HTMLTextAreaElement>(null);
-  useAutoGrow(box, text);
-  const ready = !!text.trim() || attach.items.length > 0;
+  const [note, setNote] = useState<{ ok: boolean; text: ReactNode } | null>(null);
+  const [resting, setResting] = useState(false);
+  const coordStop = useStop(pid ?? "");
+  const prompts = useScreenPrompts(taskId);
+  const wrap = useRef<HTMLDivElement>(null);
+  const active = !!task && isActive(task.state);
+  const toCoord = target === "coordinator";
+
+  // Cmd/Ctrl+K asks the coordinator about this worker from the same box.
+  useEffect(() => {
+    const ask = () => { setTarget("coordinator"); wrap.current?.querySelector("textarea")?.focus(); };
+    window.addEventListener(ASK_COORDINATOR_EVENT, ask);
+    return () => window.removeEventListener(ASK_COORDINATOR_EVENT, ask);
+  }, []);
+  useEffect(() => setNote(null), [target]);
 
   const send = async () => {
-    if (!ready || busy || attach.uploading) return;
+    const t = text.trim();
+    if ((!t && !attach.items.length) || busy || attach.uploading || !pid) return;
     setBusy(true); setNote(null);
     try {
-      await api.steer(taskId, withAttachments(text, attach.items));
-      setText("");
-      attach.clear();
-      setNote({ ok: true, text: `Delivered to the ${worker}'s inbox` });
+      if (toCoord) {
+        const command = attach.items.length ? null : fromSlash(t);
+        const ctx = { projectId: pid, pinned: true, about: task?.title ?? null, link: href({ name: "task", id: taskId }) };
+        await (command ? runCommand(pid, command) : api.sendChat(pid, dockMessage(withAttachments(t, attach.items), ctx)));
+        setNote({ ok: true, text: <>Sent to the {coordinator}. <a href={href({ name: "project", id: pid })}>See the conversation</a></> });
+      } else {
+        await api.steer(taskId, withAttachments(t, attach.items));
+        setNote({ ok: true, text: prompts.length ? `Sent. The ${worker} gets it once the prompt above is answered` : `Delivered to the ${worker}'s inbox` });
+      }
+      setText(""); attach.clear();
     } catch (e) {
-      setNote({ ok: false, text: e instanceof NotAvailable ? `Messaging a ${worker} is not available from this daemon yet` : errText(e) });
+      setNote({ ok: false, text: !toCoord && e instanceof NotAvailable ? `Messaging a ${worker} is not available from this daemon yet` : errText(e) });
     } finally { setBusy(false); }
   };
 
+  const stopWorker = async () => {
+    setResting(true); setNote(null);
+    try { await api.interruptTask(taskId); }
+    catch (e) { setNote({ ok: false, text: e instanceof NotAvailable ? `Stopping a ${worker} is not available from this daemon yet` : errText(e) }); }
+    finally { setTimeout(() => setResting(false), STOP_REST_MS); }
+  };
+
+  const tools = (
+    <div className="target-switch" role="radiogroup" aria-label="Send to">
+      {(["worker", "coordinator"] as const).map((t) => (
+        <button key={t} type="button" role="radio" aria-checked={target === t} className={cx("ts-opt", target === t && "on", t)}
+          onClick={() => { setTarget(t); wrap.current?.querySelector("textarea")?.focus(); }} data-testid={`target-${t}`}>
+          {t === "coordinator" && <CoordinatorMark size={14} />}{labels.role(t).replace(/^./, (c) => c.toUpperCase())}
+        </button>
+      ))}
+    </div>
+  );
+  const placeholder = toCoord ? `Ask the ${coordinator} about this ${worker}…`
+    : prompts.length ? `Message the ${worker}… it waits until the prompt above is answered`
+    : `Message the ${worker}…`;
+
   return (
-    <div className={cx("composer steer", attach.dragging && "dropping")} {...attach.dropProps}>
-      <AttachmentList items={attach.items} uploading={attach.uploading} error={attach.error} onRemove={attach.remove} />
-      <AttachButton onFiles={(f) => void attach.add(f)} />
-      <textarea ref={box} rows={1} value={text} aria-label={`Message the ${worker}`}
-        placeholder={`Message the ${worker} (Enter to send, Shift+Enter for a newline)`}
-        onChange={(e) => setText(e.target.value)} onPaste={attach.onPaste}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
-        }} />
-      <div className="steer-side">
-        <button className="btn" onClick={() => void send()} disabled={busy || !ready || attach.uploading > 0}>{busy ? "Sending…" : "Send"}</button>
-        {note && <span className={(note.ok ? "ok" : "bad") + " small-text"} role="status">{note.text}</span>}
-      </div>
+    <div ref={wrap} className="worker-composer" data-testid="worker-composer">
+      <Composer value={text} onChange={(v) => { setText(v); setNote(null); }} onSend={() => void send()} sending={busy}
+        className={cx("steer", toCoord && "to-coordinator")}
+        label={`Message the ${toCoord ? coordinator : worker}`} placeholder={placeholder} attachments={attach} tools={tools}
+        above={!toCoord && prompts.length ? prompts.map(({ d, p }) => <PromptCard key={d.id} d={d} p={p} worker={worker} />) : null}
+        hint={note ? <span className={note.ok ? "ok" : "bad"} role="status">{note.text}</span>
+          : toCoord ? <>Enter sends · about this {worker}</> : <>Enter sends · <kbd>{MOD}K</kbd> asks the {coordinator}</>}
+        onStop={toCoord ? (pid ? () => void coordStop.stop() : undefined) : active ? () => void stopWorker() : undefined}
+        stopping={toCoord ? coordStop.resting : resting} />
     </div>
   );
 }

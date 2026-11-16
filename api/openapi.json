@@ -6084,6 +6084,61 @@
         }
       }
     },
+    "/v1/tasks/{id}:interrupt": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Interrupt a task's worker.",
+        "description": "Presses its harness's interrupt key (Escape for every supported harness),\nas Stop does in the app. The worker keeps running and reads the next\nmessage.",
+        "operationId": "interrupt_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The interrupt keys were sent"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The task has no running worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The engine refused or failed the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tasks/{id}:relaunch": {
       "post": {
         "tags": [

@@ -19,6 +19,7 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
   const term = new Terminal({
     cols: o.cols, rows: o.rows, fontFamily: o.fontFamily, fontSize: o.fontSize, lineHeight: o.lineHeight,
     scrollback: 5000, theme: themeNow(), allowTransparency: true, allowProposedApi: true, cursorBlink: false,
+    disableStdin: true,
   });
   live.add(term);
   const dispose = term.dispose.bind(term);
@@ -48,6 +49,7 @@ export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapte
     // A hidden terminal (another work-pane tab is showing) keeps its size until it is shown again.
     fit() { if (!el?.offsetWidth) return; try { fit.fit(); } catch { /* not laid out */ } },
     focus() { term.focus(); },
+    setInput(on) { term.options.disableStdin = !on; },
     text() {
       const b = term.buffer.active, lines: string[] = [];
       for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? "");

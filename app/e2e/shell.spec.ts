@@ -90,7 +90,7 @@ test("next attention: one button and Ctrl+J walk what waits on you, oldest first
   expect(seen.some((h) => h.startsWith("#/t/"))).toBe(true);
 });
 
-test("dock: Ctrl+K from a worker asks its project's coordinator about that worker", async ({ page }) => {
+test("dock: Ctrl+K asks the coordinator, and on a worker the worker's own box switches to it", async ({ page }) => {
   await open(page, "#/p/quark");
   await expect(page.getByTestId("coordinator-chat")).toBeVisible();
   // The coordinator's own conversation has no dock; Ctrl+K goes to its message box.
@@ -98,15 +98,18 @@ test("dock: Ctrl+K from a worker asks its project's coordinator about that worke
   await page.keyboard.press("Control+k");
   await expect(page.getByTestId("coordinator-chat").getByRole("textbox")).toBeFocused();
 
+  // A pull request's page has the dock, about that pull request.
+  await open(page, "#/p/quark/prs");
+  await expect(page.getByTestId("dock")).toBeVisible();
   await page.getByRole("navigation", { name: "Projects" }).getByTestId("ll-worker").filter({ hasText: "Terminal sessions over tmux" }).click();
-  const dock = page.getByTestId("dock");
-  await expect(dock.getByTestId("dock-about")).toHaveText("about Terminal sessions over tmux control mode");
+  // On a worker, its one message box takes Ctrl+K: no second box.
+  await expect(page.getByTestId("dock")).toHaveCount(0);
   await page.keyboard.press("Control+k");
-  const box = dock.getByRole("textbox", { name: "Message the coordinator" });
+  const box = page.getByTestId("worker-composer").getByRole("textbox", { name: "Message the coordinator" });
   await expect(box).toBeFocused();
   await box.fill("Is control mode lossy under load?");
   await box.press("Enter");
-  await expect(dock.getByTestId("dock-note")).toContainText("Sent to the coordinator of Quark MVP");
+  await expect(page.getByTestId("worker-composer").getByRole("status")).toContainText("Sent to the coordinator");
 
   // The coordinator records the message shortly after it is accepted.
   await expect.poll(async () => JSON.stringify(await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/coordinators/quark/messages")).json())))
@@ -114,7 +117,7 @@ test("dock: Ctrl+K from a worker asks its project's coordinator about that worke
   await expect.poll(async () => JSON.stringify(await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/coordinators/quark/messages")).json())))
     .toContain("Is control mode lossy under load?");
 
-  await dock.getByRole("link", { name: "See the conversation" }).click();
+  await page.getByTestId("worker-composer").getByRole("link", { name: "See the conversation" }).click();
   await expect(page).toHaveURL(/#\/p\/quark$/);
 });
 
@@ -174,8 +177,9 @@ test("worker view: terminal in the middle, Transcript, Changes, PR, Brief and Wh
   // The center is the worker's live terminal and a box to message it; the work pane opens on its transcript.
   await expect(page.locator(".worker-center").getByTestId("terminal")).toBeVisible();
   await expect(page.locator(".worker-center").getByLabel("Message the worker")).toBeVisible();
-  // The dock sits under the worker's terminal, not under the work pane.
-  await expect(page.locator(".worker-center").getByTestId("dock")).toBeVisible();
+  // One message box under the worker's terminal, not under the work pane, and no separate dock.
+  await expect(page.locator(".worker-center").getByTestId("worker-composer")).toBeVisible();
+  await expect(page.getByTestId("dock")).toHaveCount(0);
   const pane = page.getByRole("complementary", { name: "Work" });
   await expect(pane.getByRole("tab")).toHaveText(["Transcript", "Changes", "PR", "Brief", "Why this agent"]);
   await expect(pane.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");

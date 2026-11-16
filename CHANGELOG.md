@@ -6,6 +6,15 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
+## Unreleased
+
+### Changed
+
+- A worker's view has one message box instead of three. It writes to the worker or, switched
+  (Ctrl/Cmd+K), to the coordinator about that worker; Stop interrupts whoever it points at.
+  The worker's terminal is view only until you press Take over, and a permission prompt on
+  its screen shows as buttons above the box. New API route: `POST /v1/tasks/{id}:interrupt`.
+
 ## 0.2.0-beta.4
 
 ### Fixed
