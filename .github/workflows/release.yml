@@ -202,18 +202,28 @@ jobs:
           bundle=app/src-tauri/target/aarch64-apple-darwin/release/bundle
           app="$(ls -d "$bundle"/macos/*.app)"
           bar="$app/Contents/Library/LoginItems/QuarkBar.app"
-          # Every layer carries the Developer ID, hardened runtime and a secure timestamp.
-          for code in "$bar/Contents/MacOS/quarkd" "$bar/Contents/PlugIns/QuarkWidgets.appex" "$bar" "$app"; do
+          # Every executable in the bundle (found by file type, so a new helper or dylib can't
+          # slip through) and every nested bundle carries the Developer ID, hardened runtime
+          # and a secure timestamp. quark-updater and ptyd are quarkd itself at run time.
+          machos="$(find "$app" -type f -exec file {} + | grep 'Mach-O' | cut -d: -f1 | sed 's/ (for architecture.*//' | sort -u)"
+          echo "Mach-O files:"; echo "$machos"
+          for want in "$app/Contents/MacOS/quark-desktop" "$bar/Contents/MacOS/QuarkBar" \
+              "$bar/Contents/MacOS/quarkd" "$bar/Contents/PlugIns/QuarkWidgets.appex/Contents/MacOS/QuarkWidgets"; do
+            grep -qxF "$want" <<<"$machos" || { echo "::error::missing $want"; exit 1; }
+          done
+          while IFS= read -r code; do
             info="$(codesign -dvv "$code" 2>&1)"
             grep -q "Authority=Developer ID Application" <<<"$info" \
               && grep -q "flags=.*runtime" <<<"$info" && grep -q "^Timestamp=" <<<"$info" \
               || { echo "$info"; echo "::error::$code is not Developer ID signed with hardened runtime"; exit 1; }
-          done
+            echo "ok: $code"
+          done < <(echo "$machos"; echo "$bar/Contents/PlugIns/QuarkWidgets.appex"; echo "$bar"; echo "$app")
           if [ -n "${APPLE_API_KEY_PATH:-}" ]; then
             dmg="$(ls "$bundle"/dmg/*.dmg)"
             xcrun stapler validate "$app"
             xcrun stapler validate "$dmg"
             spctl -a -vv -t exec "$app"
+            spctl -a -vv -t exec "$bar"
             spctl -a -vv -t open --context context:primary-signature "$dmg"
           fi
       - name: Collect
