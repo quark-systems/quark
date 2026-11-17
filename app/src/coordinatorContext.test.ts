@@ -53,5 +53,8 @@ describe("coordinator context", () => {
     expect(switchLine(sw({ state: "done" }))).toBe("Changed from Claude Code, sonnet, default effort to Claude Code, opus, high effort, in the same conversation.");
     expect(switchLine(sw({ state: "failed", error: "no account" }))).toBe("Could not change to Claude Code, opus, high effort: no account. The coordinator kept Claude Code, sonnet, default effort.");
     expect(switchLine(sw({ state: "done", kind: "handoff", to: { harness: "bob" } }))).toBe("Changed from Claude Code, sonnet, default effort to IBM Bob, with a handoff.");
+    const bob = { harness: "bob" };
+    expect(switchLine(sw({ state: "starting", from: bob, to: bob }))).toBe("Restarting IBM Bob.");
+    expect(switchLine(sw({ state: "done", from: bob, to: bob }))).toBe("Restarted IBM Bob, in the same conversation.");
   });
 });

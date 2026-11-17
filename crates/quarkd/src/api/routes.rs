@@ -1,6 +1,7 @@
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use quark_systems::{
     ActOnDecision, AgentRole, AnswerDecision, CoordinatorCommand, CoordinatorCommandRequest,
@@ -1376,26 +1377,37 @@ pub async fn run_coordinator_command(
     State(state): State<AppState>,
     Path(target): Path<String>,
     body: Bytes,
-) -> Result<(StatusCode, Json<CoordinatorMessageAccepted>), ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let id = match target.rsplit_once(':') {
         Some((id, "run")) => id,
         Some((id, "compact")) => {
-            return compact_coordinator(State(state), Path(id.to_string())).await
+            return compact_coordinator(State(state), Path(id.to_string()))
+                .await
+                .map(IntoResponse::into_response)
         }
         Some((id, "interrupt")) => {
-            return interrupt_coordinator(State(state), Path(id.to_string())).await
+            return interrupt_coordinator(State(state), Path(id.to_string()))
+                .await
+                .map(IntoResponse::into_response)
+        }
+        Some((id, "restart")) => {
+            return restart_coordinator(State(state), Path(id.to_string()))
+                .await
+                .map(IntoResponse::into_response)
         }
         _ => {
             return Err(ApiError::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "method_not_allowed",
-                "use POST /v1/coordinators/{id}:run, :compact or :interrupt",
+                "use POST /v1/coordinators/{id}:run, :compact, :interrupt or :restart",
             ))
         }
     };
     let input: CoordinatorCommandRequest = serde_json::from_slice(&body)
         .map_err(|e| ApiError::invalid(format!("invalid command: {e}")))?;
-    run_command(&state, id, input.command).await
+    run_command(&state, id, input.command)
+        .await
+        .map(IntoResponse::into_response)
 }
 
 /// A Project coordinator's harness, model and effort, how full its context
@@ -1529,6 +1541,48 @@ pub async fn switch_coordinator_agent(
         quark_systems::SwitchKind::Handoff
     };
     let switch = db(&state, move |s| s.start_switch(&id, &to, kind)).await?;
+    Ok((StatusCode::ACCEPTED, Json(switch)))
+}
+
+/// Restart a Project coordinator in the same conversation.
+///
+/// Served as `POST /v1/coordinators/{id}:restart`, with no body. Starts a
+/// `resume` switch to the agent the coordinator already runs: its session
+/// is closed and started again with the harness's resume, and told why.
+/// For a session that stopped taking input. Answers at once; `GET
+/// /v1/coordinators/{id}/context` shows how far it got under `switch`.
+#[utoipa::path(
+    post,
+    path = "/v1/coordinators/{id}:restart",
+    tag = "coordinators",
+    params(("id" = String, Path, description = "Coordinator id (the Project id)")),
+    responses(
+        (status = 202, body = quark_systems::CoordinatorSwitch),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "A switch is under way, or the Project has no running coordinator", body = ErrorBody)
+    )
+)]
+pub async fn restart_coordinator(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<quark_systems::CoordinatorSwitch>), ApiError> {
+    if !state.engine.switches_coordinators() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unsupported",
+            "only the native engine can restart a coordinator",
+        ));
+    }
+    let pid = id.clone();
+    let project = db(&state, move |s| s.get_project(&pid)).await?;
+    if project.status != ProjectStatus::Ready || project.workspace_path.is_none() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not_ready",
+            "the Project has no running coordinator to restart",
+        ));
+    }
+    let switch = db(&state, move |s| s.restart_switch(&id)).await?;
     Ok((StatusCode::ACCEPTED, Json(switch)))
 }
 
@@ -1747,6 +1801,7 @@ async fn run_command(
         coordinator_context,
         compact_coordinator,
         interrupt_coordinator,
+        restart_coordinator,
         switch_coordinator_agent
     ),
     components(schemas(

@@ -11,13 +11,15 @@ Code: `crates/quarkd/src/switch.rs` (the driver, a pass every 2 seconds), `crate
 | Model, effort or pool on the same harness | `resume` | The whole conversation: the harness continues its latest session (`--continue`) with the new model and effort. |
 | Another harness | `handoff` | A handoff brief that the old coordinator writes before it stops, plus the engine's facts. The new coordinator starts fresh with both in its system prompt. |
 
+**Restart.** `POST /v1/coordinators/{id}:restart` (Settings › Agent › Restart coordinator) starts a `resume` switch to the agent the coordinator already runs. Its window is closed and the harness resumes its latest session, with no wrap up. It is for a session that stopped taking input, such as a TUI that still thinks a cancelled command is running and drops what is typed. The brief note says why it restarted and that messages sent while it was stuck may not have reached it.
+
 Everything durable is outside the conversation either way: memory, Beads issues, decisions, the event log and the workers. The new coordinator reads `fleet` and Beads as usual.
 
 ## Steps
 
 Each step is written to `coordinator_switches` before its effect happens, so a crash repeats at most the last step. Every step is safe to repeat.
 
-1. **requested**. The row records `from`, `to`, the kind, and the event log position at the time. Only one switch per Project can be open. A change to the same agent is refused.
+1. **requested**. The row records `from`, `to`, the kind, and the event log position at the time. Only one switch per Project can be open. A change to the same agent is refused, except as a restart.
 2. **wrapping_up** (handoff only, and only when the coordinator is running). The engine types a note asking the coordinator to save what only its conversation holds (`remember`, `bd create`) and then to reply with a handoff brief: what it was doing, what it promised the user, what is waiting on whom, and what it would do next. Once the note is typed, a turn that ended before it no longer counts and the 5 minutes start. The step ends 10 seconds after the coordinator's turn ends (the turn-end hook marks the row, and the wait lets the transcript ingest record the reply), or after the 5 minutes. The brief is the newest of the coordinator's replies since the recorded log position that says "Handoff brief", else its newest reply, else nothing.
 3. **switching**. In one transaction, the Project's agent config becomes `to` and the brief is stored. This is the commit point: from now on recovery, dispatch and the header all see the new agent. The engine writes `.quark/handoff.md` in the workspace with the brief and its own facts (open decisions, workers under way), then closes the old coordinator's window.
 4. **starting**. The new coordinator starts under an account leased for the new agent. A `resume` switch continues the conversation, and if it cannot, it writes the handoff file (with no brief) and starts fresh like a `handoff` switch. A start that fails puts the old agent back and marks the switch **failed** with the reason, in one transaction. Coordinator recovery then starts the old agent again, resumed, as it does for any lost coordinator. A Project is never left without a coordinator because of a switch.

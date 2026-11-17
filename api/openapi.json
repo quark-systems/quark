@@ -1251,6 +1251,57 @@
         }
       }
     },
+    "/v1/coordinators/{id}:restart": {
+      "post": {
+        "tags": [
+          "coordinators"
+        ],
+        "summary": "Restart a Project coordinator in the same conversation.",
+        "description": "Served as `POST /v1/coordinators/{id}:restart`, with no body. Starts a\n`resume` switch to the agent the coordinator already runs: its session\nis closed and started again with the harness's resume, and told why.\nFor a session that stopped taking input. Answers at once; `GET\n/v1/coordinators/{id}/context` shows how far it got under `switch`.",
+        "operationId": "restart_coordinator",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Coordinator id (the Project id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorSwitch"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A switch is under way, or the Project has no running coordinator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/coordinators/{id}:run": {
       "post": {
         "tags": [

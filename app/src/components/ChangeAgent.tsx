@@ -1,5 +1,5 @@
-// Settings › Agent: change the coordinator's harness, model, effort or pool, and follow the
-// switch to its end (`PUT /v1/coordinators/{id}/agent`, then its context's `switch`).
+// Settings › Agent: change the coordinator's harness, model, effort or pool, or restart it in
+// the same conversation (`POST /v1/coordinators/{id}:restart`), and follow the switch to its end (`PUT /v1/coordinators/{id}/agent`, then its context's `switch`).
 // The daemon's protocol is in docs/engine/coordinator-switch.md.
 import React, { useEffect, useMemo, useState } from "react";
 import { Account, AgentConfig, api, CoordinatorSwitch, HarnessInfo, NotAvailable } from "../api";
@@ -30,6 +30,15 @@ export function ChangeAgent({ pid, agent, onChanged }: { pid: string; agent?: Ag
   const state = sw?.state;
   useEffect(() => { if (state && state !== "requested" && state !== "wrapping_up") onChanged(); }, [state]);
 
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+  const restart = async () => {
+    setRestarting(true); setRestartError(null);
+    try { await api.restartCoordinator(pid); await read(); }
+    catch (e) { setRestartError(errText(e)); }
+    finally { setRestarting(false); }
+  };
+
   if (unavailable) return null;
   return (
     <>
@@ -37,7 +46,14 @@ export function ChangeAgent({ pid, agent, onChanged }: { pid: string; agent?: Ag
       {open
         ? <AgentForm agent={agent} onCancel={() => setOpen(false)}
             onSubmit={async (to) => { await api.switchCoordinatorAgent(pid, to); setOpen(false); await read(); }} />
-        : <Button disabled={under} onClick={() => setOpen(true)} data-testid="change-agent">Change agent</Button>}
+        : <ControlRow>
+            <Button disabled={under} onClick={() => setOpen(true)} data-testid="change-agent">Change agent</Button>
+            <Button disabled={under || restarting} onClick={restart} data-testid="restart-coordinator"
+              title="Close the coordinator's session and start it again in the same conversation, for one that stopped taking messages">
+              {restarting ? "Restarting…" : "Restart coordinator"}
+            </Button>
+          </ControlRow>}
+      {restartError && <p className="set-error" role="alert">{restartError}</p>}
     </>
   );
 }
