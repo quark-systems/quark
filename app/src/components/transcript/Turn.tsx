@@ -23,7 +23,8 @@ export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
   const pendingNote = turn.prompt && pendingNotes?.get(turn.prompt.id);
   return (
     <section className="tx-turn">
-      {pendingNote !== undefined && turn.prompt ? <UserMessage item={turn.prompt} pending note={pendingNote.note} tone={pendingNote.tone} onEdit={pendingNote.onEdit} actions={pendingNote.actions} />
+      {pendingNote?.card ? pendingNote.card
+        : pendingNote !== undefined && turn.prompt ? <UserMessage item={turn.prompt} pending note={pendingNote.note} tone={pendingNote.tone} onEdit={pendingNote.onEdit} actions={pendingNote.actions} />
         : turn.event && turn.prompt ? <EventRow event={turn.event} id={turn.prompt.id} />
         : turn.prompt && <UserMessage item={turn.prompt} fresh={turn.prompt.id > freshAfter} />}
       {turn.parts.length > 0 && <Author turn={turn} />}

@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use quark_systems::{
-    CoordinatorCommand, Decision, DecisionState, DigestItem, DigestKind, OverviewDigest,
-    PulseState, TaskPulse, TranscriptEntry,
+    CoordinatorCommand, Decision, DecisionState, DigestItem, DigestKind, OutboxState,
+    OverviewDigest, PulseState, TaskPulse, TranscriptEntry,
 };
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -149,8 +149,48 @@ pub async fn run(
         project_id: project.id.clone(),
         root: PathBuf::from(root),
     };
-    let delivery = chat.send(&ws, &note(command, asked, &facts)).await?;
+    let delivery = send_recorded(store, chat, &ws, note(command, asked, &facts)).await?;
     Ok((command, delivery))
+}
+
+/// Types a command's note in through the outbox, so the daemon adds it to
+/// the transcript where it was asked for, like any message the user sends.
+/// A harness's own log may never hold it as a user entry (Claude Code
+/// passes input typed during a turn on inside that turn), and the note's
+/// card would then never find its place.
+async fn send_recorded(
+    store: &Arc<Store>,
+    chat: &dyn CoordinatorInput,
+    ws: &WorkspaceRef,
+    text: String,
+) -> Result<Delivery, CommandError> {
+    let s = store.clone();
+    let pid = ws.project_id.clone();
+    let m = blocking(move || s.new_outbox_message(&pid, &text, OutboxState::Sending)).await?;
+    let sent = chat.send(ws, &m.text).await;
+    let s = store.clone();
+    let id = m.id.clone();
+    match sent {
+        Ok(d) => {
+            blocking(move || s.finish_outbox_delivery(&id, Ok(d == Delivery::Confirmed))).await?;
+            Ok(d)
+        }
+        Err(e) => {
+            // The caller reports the error; nothing waits to be retried.
+            let why = e.to_string();
+            blocking(move || s.abandon_outbox_message(&id, &why)).await?;
+            Err(e.into())
+        }
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> crate::store::Result<T> + Send + 'static,
+) -> Result<T, CommandError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| ChatError::Failed(e.to_string()))?
+        .map_err(CommandError::from)
 }
 
 /// Whether a user entry of the coordinator's conversation is the user

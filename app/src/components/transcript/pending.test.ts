@@ -64,6 +64,16 @@ describe("placePending", () => {
     expect(merged.map((i) => i.text)).toEqual(["Hi", "one", "two"]);
   });
 
+  it("keeps a command asked for above the replies after it, as its card", () => {
+    // /status while the coordinator answered something else: the card belongs where it was asked.
+    const card = "status card";
+    const { items: merged, notes } = placePending([user(1, "Earlier"), reply(2, "Done."), reply(5, "Steered the worker.")],
+      [{ after: 2, text: "Status report", note: null, card }]);
+    expect(merged.map((i) => i.text)).toEqual(["Earlier", "Done.", "Status report", "Steered the worker."]);
+    const turns = groupTurns(merged);
+    expect(notes.get(turns[1].prompt!.id)?.card).toBe(card);
+  });
+
   it("returns the log itself when nothing is pending", () => {
     const items = [user(1, "x")];
     expect(placePending(items, []).items).toBe(items);
