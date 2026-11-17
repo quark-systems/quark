@@ -20,7 +20,10 @@
 .ui-row:hover { background: var(--selection-subtle); }
 .ui-row.current { background: var(--selection-strong); }
 .ui-row.indent { padding-left: 20px; }
-.ui-row.dim { opacity: .55; }
+/* Dimmed with color, not opacity: an opacity layer drops the system's text smoothing and fades the
+   subtitle under 4.5:1. The lead dot keeps its tone at half strength. */
+.ui-row.dim, .ui-row.dim .ui-row-sub { color: var(--fg-faint); }
+.ui-row.dim .ui-row-lead { opacity: .55; }
 .ui-row-lead { flex: none; display: inline-flex; align-items: center; }
 .ui-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ui-row-title, .ui-row-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -141,5 +144,5 @@
 .bead-ref { display: inline; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, currentColor 9%, transparent);
   color: inherit; text-decoration: none; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 a.bead-ref:hover { background: color-mix(in srgb, currentColor 16%, transparent); }
-.bead-ref-id { font: 0.88em var(--mono); opacity: .72; white-space: nowrap; }
+.bead-ref-id { font: 0.88em var(--mono); color: color-mix(in srgb, currentColor 78%, var(--background)); white-space: nowrap; }
 .bead-ref-title { margin-left: .45em; }

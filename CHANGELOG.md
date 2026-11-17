@@ -8,6 +8,13 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Fixed
+
+- Small secondary text (subtitles, labels, timestamps) is crisp and readable in both themes: it
+  was drawn see-through at 2.6 to 3.3:1 contrast and now uses solid colors that clear 4.5:1.
+  Light mode keeps the system's text smoothing, the terminal draws on a solid background,
+  code blocks get light syntax colors, and light status colors follow Quark Design.
+
 ## 0.2.0-beta.7
 
 ### Added
