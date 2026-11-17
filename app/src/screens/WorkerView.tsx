@@ -16,7 +16,8 @@ import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
 import { runCommand, useStop } from "../components/CoordinatorCommand";
 import { fromSlash } from "../commands";
-import { promptTitle, screenPrompt, ScreenPrompt } from "../screenPrompt";
+import { screenPrompt, ScreenPrompt } from "../screenPrompt";
+import { ScreenPromptCard } from "../components/ScreenPromptCard";
 import { Transcript } from "../components/transcript";
 import { WhyThisAgent } from "../components/WhyThisAgent";
 import { WorkerBrief } from "../components/WorkerBrief";
@@ -315,33 +316,6 @@ function useScreenPrompts(taskId: string) {
     .sort((a, b) => a.d.opened_at.localeCompare(b.d.opened_at)), [decisions, taskId]);
 }
 
-/** A prompt on the worker's screen, answered with a button: Quark picks that choice on its screen. */
-function PromptCard({ d, p, worker }: { d: Decision; p: ScreenPrompt; worker: string }) {
-  const [busy, setBusy] = useState<number | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const pick = async (i: number) => {
-    setBusy(i); setErr(null);
-    try { await api.answerDecision(d.id, { answer: String(i + 1), via: "app" }); }
-    catch (e) { setErr(errText(e)); setBusy(null); }
-  };
-  const title = promptTitle(p);
-  const detail = p.context.slice(0, -1).join(" ");
-  return (
-    <div className="screen-prompt" role="group" aria-label={`The ${worker} is asking`} data-testid="screen-prompt">
-      <div className="sp-q"><span className="sp-who">The {worker} is asking</span> {title}</div>
-      {detail && <div className="sp-detail mono ellipsis" title={detail}>{detail}</div>}
-      <div className="sp-options">
-        {p.options.map((o, i) => (
-          <button key={i} type="button" className={cx("btn small", i === 0 && "sp-first")} disabled={busy !== null} onClick={() => void pick(i)}>
-            {busy === i ? "Choosing…" : o}
-          </button>
-        ))}
-      </div>
-      {err && <div className="bad small-text" role="alert">{err}</div>}
-    </div>
-  );
-}
-
 function WorkerComposer({ taskId }: { taskId: string }) {
   const task = useStore((s) => s.tasks[taskId]);
   const pid = task?.project_id;
@@ -414,7 +388,7 @@ function WorkerComposer({ taskId }: { taskId: string }) {
       <Composer value={text} onChange={(v) => { setText(v); setNote(null); }} onSend={() => void send()} sending={busy}
         className={cx("steer", toCoord && "to-coordinator")}
         label={`Message the ${toCoord ? coordinator : worker}`} placeholder={placeholder} attachments={attach} tools={tools}
-        above={!toCoord && prompts.length ? prompts.map(({ d, p }) => <PromptCard key={d.id} d={d} p={p} worker={worker} />) : null}
+        above={!toCoord && prompts.length ? prompts.map(({ d, p }) => <ScreenPromptCard key={d.id} d={d} p={p} who={worker} />) : null}
         hint={note ? <span className={note.ok ? "ok" : "bad"} role="status">{note.text}</span>
           : toCoord ? <>Enter sends · about this {worker}</> : <>Enter sends · <kbd>{MOD}K</kbd> asks the {coordinator}</>}
         onStop={toCoord ? (pid ? () => void coordStop.stop() : undefined) : active ? () => void stopWorker() : undefined}
