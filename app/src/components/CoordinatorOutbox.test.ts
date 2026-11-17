@@ -24,4 +24,9 @@ describe("waitingMessages", () => {
     expect(waitingMessages(outbox, [], local)).toEqual([]);
     expect(waitingMessages(outbox, [], [{ ...local[0], sending: false }]).map((m) => m.id)).toEqual(["s"]);
   });
+
+  it("leaves a command's note to its card", () => {
+    const outbox = { n: msg("n", "sending", "Engine note: The user asked for a status report.") };
+    expect(waitingMessages(outbox, [])).toEqual([]);
+  });
 });

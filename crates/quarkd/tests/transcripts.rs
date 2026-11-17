@@ -585,8 +585,16 @@ async fn coordinator_commands_carry_what_the_coordinator_needs() {
         sent[0].1
     );
     assert!(sent[0].1.contains("No decisions are open."));
+    // The daemon records the note where it was asked for, so its card sits
+    // above the reply even when the harness's log never holds it.
+    let (_, chat) = call(&h.app, "GET", &uri, None).await;
+    assert_eq!(chat.as_array().unwrap().len(), 1, "{chat}");
+    assert_eq!(chat[0]["role"], "user");
+    assert_eq!(chat[0]["text"], sent[0].1.as_str());
+    assert!(chat[0]["message_id"].is_string());
 
-    // The user wrote, then a wake arrived; the wake is not the user.
+    // The harness's copy is not shown again. The user wrote, then a wake
+    // arrived; the wake is not the user.
     let claude_log = h
         .dir
         .path()
@@ -595,9 +603,23 @@ async fn coordinator_commands_carry_what_the_coordinator_needs() {
         "message": {"role": "user", "content": format!("Wake {pid}#1: 1 item needs your judgment.")}});
     append(
         &claude_log,
-        &[claude_user("ship the parser"), claude_reply("On it."), wake],
+        &[
+            claude_user(&sent[0].1),
+            claude_reply("Status report: nothing open."),
+            claude_user("ship the parser"),
+            claude_reply("On it."),
+            wake,
+        ],
     );
     h.projector().refresh_all().await.unwrap();
+    let (_, chat) = call(&h.app, "GET", &uri, None).await;
+    let notes = chat
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["text"].as_str().unwrap().starts_with("Engine note:"))
+        .count();
+    assert_eq!(notes, 1, "{chat}");
 
     let (status, body) = call(
         &h.app,

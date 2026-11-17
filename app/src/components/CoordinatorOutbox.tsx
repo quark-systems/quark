@@ -22,6 +22,8 @@ export function waitingMessages(outbox: Record<string, OutboxMessage> | undefine
   const mine = local.filter((p) => p.sending).map((p) => same(p.text));
   return Object.values(outbox)
     .filter((m) => (m.state === "queued" || m.state === "sending" || m.state === "failed") && !recorded.has(m.id))
+    // A command's note: its card shows it while it is on its way.
+    .filter((m) => !m.text.startsWith("Engine note: "))
     .filter((m) => {
       if (m.state !== "sending") return true;
       const i = mine.indexOf(same(m.text));

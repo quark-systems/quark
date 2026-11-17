@@ -50,6 +50,8 @@ export interface PendingPrompt {
   onEdit?: (text: string) => Promise<boolean>;
   /** Links after the note and Edit, such as Send now and Cancel. */
   actions?: ReactNode;
+  /** Shown in place of the message bubble, such as a command's card. */
+  card?: ReactNode;
 }
 
 /**

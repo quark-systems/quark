@@ -8,7 +8,7 @@ import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
 import { WorkerCard } from "../components/WorkerCard";
-import { CommandCard, duration, groupTurns, lastId, liveStatus, LiveStatus, PendingMessage, stillPending, stillPendingCommands, Transcript, useNow } from "../components/transcript";
+import { CommandCard, duration, groupTurns, lastId, liveStatus, LiveStatus, PendingMessage, PendingPrompt, stillPending, stillPendingCommands, Transcript, useNow } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
 import { ContextMeter, CoordinatorAgent, useCoordinatorContext } from "../components/CoordinatorContext";
 import { useLabels } from "../persona";
@@ -216,7 +216,10 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
       note: p.sending ? "Sending…" : !p.confirmed ? "Typed, not confirmed. Check before sending again."
         : busy ? "Delivered · waiting for the current step to end" : "Delivered" })),
     ...outbox.prompts,
-  ], [pending, busy, outbox.prompts]);
+    // A command asked for shows as its card where it was asked, not after the replies.
+    ...commandsPending.map((p): PendingPrompt => ({ after: p.after, text: commandLabel(l, p.command), note: null,
+      card: <CommandCard key={p.key} note={{ command: p.command, asked: "you" }} state={p.sending ? "sending" : p.confirmed ? "sent" : "unconfirmed"} /> })),
+  ].sort((a, b) => a.after - b.after), [pending, busy, outbox.prompts, commandsPending, l]);
   const matches = slashMatches(text);
   const label = useCallback((c: CoordinatorCommand) => commandLabel(l, c), [l]);
 
@@ -294,12 +297,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
             empty={status === "ok" ? (welcome && project
               ? <Welcome project={project} onSuggest={(t) => { setText(t); box.current?.querySelector("textarea")?.focus(); }} />
               : <div className="empty">Ask the {coordinator} to plan or delegate work.</div>)
-              : status === "loading" ? <div className="empty">Loading…</div> : null}>
-            {commandsPending.map((p) => (
-              <CommandCard key={p.key} note={{ command: p.command, asked: "you" }}
-                state={p.sending ? "sending" : p.confirmed ? "sent" : "unconfirmed"} />
-            ))}
-          </Transcript>
+              : status === "loading" ? <div className="empty">Loading…</div> : null} />
           {(err ?? outbox.err ?? commands.err ?? stopper.err) && <div className="form-error">{err ?? outbox.err ?? commands.err ?? stopper.err}</div>}
           {matches.length > 0 && (
             <div className="slash-menu" role="listbox" aria-label="Slash commands" data-testid="slash-menu">

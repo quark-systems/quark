@@ -25,7 +25,7 @@ export interface TranscriptProps {
   actions?: boolean;
   /** The Project whose coordinator this is: its questions show as decision cards answered in place. */
   project?: string;
-  /** Shown after the turns, such as commands asked for but not yet in the log. */
+  /** Shown after the turns. */
   children?: React.ReactNode;
   /** Messages sent but not yet in the log, each shown where it was sent. */
   pending?: PendingPrompt[];
