@@ -34,8 +34,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use quark_dispatch::local::LocalReading;
 use quark_systems::{
-    Account, AccountAvailability, AccountQuota, AgentConfig, AuthState, CreateAccount,
-    ProviderQuota, QuotaState, QuotaWindow, UpdateAccount,
+    Account, AccountAvailability, AccountChange, AccountChanged, AccountQuota, AgentConfig,
+    AuthState, CreateAccount, EventType, ProviderQuota, QuotaState, QuotaWindow, UpdateAccount,
 };
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
@@ -482,6 +482,7 @@ impl Accounts {
         };
         let (store, r) = (self.store.clone(), row.clone());
         blocking(move || store.insert_account(&r, &pools)).await?;
+        self.announce(&row.id, AccountChange::Created).await;
         self.get(&row.id).await
     }
 
@@ -554,6 +555,7 @@ impl Accounts {
             let _ = self.secrets.delete(&service).await;
             return Err(e);
         }
+        self.announce(&id, AccountChange::Created).await;
         self.get(&id).await
     }
 
@@ -574,6 +576,7 @@ impl Accounts {
         let (store, id2, at) = (self.store.clone(), id.to_string(), now_rfc3339());
         blocking(move || store.set_default_account_key(&id2, true, &at)).await?;
         tracing::info!(account = %id, harness = %h, "kept an API key for the default account");
+        self.announce(id, AccountChange::Updated).await;
         self.get(id).await
     }
 
@@ -587,6 +590,7 @@ impl Accounts {
         if let Err(e) = self.secrets.delete(&key_service(id)).await {
             tracing::warn!(account = %id, error = %e, "could not remove the account's key from the Keychain");
         }
+        self.announce(id, AccountChange::Updated).await;
         self.get(id).await
     }
 
@@ -625,6 +629,7 @@ impl Accounts {
         let pools = input.pools.as_deref().map(pools).transpose()?;
         let (store, id2) = (self.store.clone(), id.to_string());
         blocking(move || store.update_account(&id2, label.as_deref(), pools.as_deref())).await?;
+        self.announce(id, AccountChange::Updated).await;
         self.get(id).await
     }
 
@@ -639,6 +644,7 @@ impl Accounts {
         let (store, id2) = (self.store.clone(), id.to_string());
         blocking(move || store.delete_account(&id2)).await?;
         self.forget_key(&account).await;
+        self.announce(id, AccountChange::Removed).await;
         Ok(())
     }
 
@@ -647,6 +653,7 @@ impl Accounts {
         self.get(id).await?;
         let (store, id2) = (self.store.clone(), id.to_string());
         blocking(move || store.set_account_enabled(&id2, true, &now_rfc3339())).await?;
+        self.announce(id, AccountChange::Enabled).await;
         self.get(id).await
     }
 
@@ -656,6 +663,7 @@ impl Accounts {
         self.get(id).await?;
         let (store, id2) = (self.store.clone(), id.to_string());
         blocking(move || store.set_account_enabled(&id2, false, &now_rfc3339())).await?;
+        self.announce(id, AccountChange::Disabled).await;
         self.get(id).await
     }
 
@@ -674,6 +682,12 @@ impl Accounts {
         if removed {
             self.forget_key(&account).await;
         }
+        let change = if removed {
+            AccountChange::Removed
+        } else {
+            AccountChange::Removing
+        };
+        self.announce(id, change).await;
         Ok(removed)
     }
 
@@ -687,6 +701,7 @@ impl Accounts {
         let done = blocking(move || store.finish_removals()).await?;
         for id in &done {
             tracing::info!(account = %id, "removed the account now that its work finished");
+            self.announce(id, AccountChange::Removed).await;
             if let Some(r) = rows
                 .iter()
                 .find(|r| &r.id == id && r.key_service().is_some())
@@ -697,6 +712,28 @@ impl Accounts {
             }
         }
         Ok(done)
+    }
+
+    /// Tells clients that account `id` changed (`account.changed`), so
+    /// lists such as the menu bar's read the accounts again. A failure is
+    /// only logged: the change itself stands.
+    async fn announce(&self, id: &str, change: AccountChange) {
+        let store = self.store.clone();
+        let payload = AccountChanged {
+            account_id: id.to_string(),
+            change,
+        };
+        let res = blocking(move || {
+            store.emit(
+                None,
+                EventType::AccountChanged,
+                serde_json::to_value(payload).map_err(StoreError::from)?,
+            )
+        })
+        .await;
+        if let Err(e) = res {
+            tracing::warn!(account = %id, error = %e, "could not record account.changed");
+        }
     }
 
     async fn forget_key(&self, account: &Account) {

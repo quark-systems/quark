@@ -6714,6 +6714,18 @@
           "disabled"
         ]
       },
+      "AccountChange": {
+        "type": "string",
+        "description": "What happened to an account, in `account.changed`.",
+        "enum": [
+          "created",
+          "updated",
+          "enabled",
+          "disabled",
+          "removing",
+          "removed"
+        ]
+      },
       "AccountChangeAction": {
         "type": "string",
         "description": "What the person is about to do to an account.",
@@ -6818,6 +6830,22 @@
               "$ref": "#/components/schemas/AccountWork"
             },
             "description": "Tasks and coordinators running under the account now. They keep\nrunning until they finish; the account is draining meanwhile."
+          }
+        }
+      },
+      "AccountChanged": {
+        "type": "object",
+        "description": "Payload of `account.changed`.",
+        "required": [
+          "account_id",
+          "change"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "change": {
+            "$ref": "#/components/schemas/AccountChange"
           }
         }
       },
@@ -9650,6 +9678,7 @@
           "comment.updated",
           "dispatch.recorded",
           "account.quota_changed",
+          "account.changed",
           "memory.proposed",
           "memory.accepted",
           "memory.rejected",

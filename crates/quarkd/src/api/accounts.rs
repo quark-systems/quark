@@ -513,6 +513,8 @@ async fn settle(
     components(schemas(
         quark_systems::QuotaState,
         quark_systems::AccountQuotaChanged,
+        quark_systems::AccountChanged,
+        quark_systems::AccountChange,
         quark_systems::AccountFailover,
         quark_systems::FailoverOutcome,
     ))

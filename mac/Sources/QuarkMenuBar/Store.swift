@@ -85,7 +85,7 @@ final class Store: ObservableObject {
         async let hosts = client.hosts()
         async let harnesses = client.harnesses()
         if let s = try? await status { self.status = s }
-        if let a = try? await accounts { self.accounts = a }
+        if let a = try? await accounts { self.accounts = a.filter(\.isEnabled) }
         if let h = try? await hosts { self.hosts = h }
         if let hs = try? await harnesses, !hs.isEmpty {
             harnessNames = Dictionary(hs.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
@@ -119,7 +119,7 @@ final class Store: ObservableObject {
         guard !refreshingQuota else { return }
         refreshingQuota = true
         Task {
-            if let a = try? await client.accounts(refresh: true) { accounts = a }
+            if let a = try? await client.accounts(refresh: true) { accounts = a.filter(\.isEnabled) }
             refreshingQuota = false
             now = Date()
         }
