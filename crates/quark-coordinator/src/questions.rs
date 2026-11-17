@@ -45,13 +45,33 @@ pub fn questions(text: &str) -> Vec<String> {
         }
         let prose = strip_inline(t);
         for sentence in sentences(&prose) {
-            if sentence.ends_with('?') && sentence.chars().filter(|c| c.is_alphabetic()).count() > 2
+            if sentence.ends_with('?')
+                && sentence.chars().filter(|c| c.is_alphabetic()).count() > 2
+                && !offers_help(&sentence)
             {
                 out.push(sentence);
             }
         }
     }
     out
+}
+
+/// An open offer of help ("What can I assist you with today?", "Anything
+/// else?"): small talk that waits on nothing. IBM Bob answers a greeting
+/// with one without running its model.
+fn offers_help(sentence: &str) -> bool {
+    const OFFERS: &[&str] = &[
+        "can i help",
+        "can i assist",
+        "can i do for you",
+        "may i help",
+        "may i assist",
+        "help you with",
+        "assist you with",
+        "anything else",
+    ];
+    let s = sentence.to_lowercase();
+    OFFERS.iter().any(|o| s.contains(o))
 }
 
 /// `line` without inline code, link targets and bare URLs.
@@ -141,6 +161,17 @@ mod tests {
     fn skips_what_is_shown_rather_than_asked() {
         let text = "Done: merged the PR.\n\n```\nif ok? { x }\n```\n\n> Can we ship it?\n\n## Why?\n\nSee [why?](https://x.test/a?b) and `is_ready?`, https://x.test/q?a=1 for details.";
         assert!(questions(text).is_empty(), "{:?}", questions(text));
+    }
+
+    #[test]
+    fn an_offer_of_help_is_not_a_question() {
+        let bob = "Hello! Olá! Hola! Bonjour! I'm Bob. What can I assist you with today?";
+        assert!(questions(bob).is_empty(), "{:?}", questions(bob));
+        assert!(questions("Done. Anything else?").is_empty());
+        assert_eq!(
+            questions("How can I help? Should I merge #12 now?"),
+            ["Should I merge #12 now?"]
+        );
     }
 
     #[test]
