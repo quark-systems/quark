@@ -927,6 +927,17 @@ pub(crate) async fn answer(
         )
         .await
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, "engine_failed", e.to_string()))?;
+    } else if let Some(key) = crate::store::coordinator_prompt_key(&target.engine_id) {
+        // A prompt on the coordinator's screen: pick the choice there.
+        let done = crate::coordinator_prompt::answer(
+            &state.sessions,
+            &ws.project_id,
+            key,
+            input.answer.trim(),
+        )
+        .await
+        .map_err(|e| ApiError::new(StatusCode::CONFLICT, "prompt_gone", e))?;
+        tracing::info!(decision = %id, project = %ws.project_id, "{done} on the coordinator's screen");
     } else if crate::store::is_daemon_decision(&target.engine_id) {
         // The daemon's own question about a rate limit: the answer
         // relaunches the worker instead of going to the engine.
@@ -1161,7 +1172,8 @@ pub async fn send_coordinator_message(
             Ok(s.coordinator_outbox(&pid)?
                 .iter()
                 .any(|m| m.state == OutboxState::Queued || m.state == OutboxState::Sending)
-                || !crate::outbox::quiet(s, &pid)?)
+                || !crate::outbox::quiet(s, &pid)?
+                || crate::coordinator_prompt::waiting(&pid))
         })
         .await?;
     let (pid, text) = (project.id.clone(), input.text.clone());

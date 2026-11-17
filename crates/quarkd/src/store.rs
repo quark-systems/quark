@@ -31,6 +31,7 @@ mod memory;
 mod migrations;
 mod outbox;
 mod pull_requests;
+mod screen_prompts;
 mod switches;
 pub use switches::SwitchRow;
 
@@ -39,6 +40,7 @@ pub use coordinator::{coordinator_decision_id, coordinator_decision_key};
 pub use failover::is_daemon_decision;
 pub use memory::{NewProposal, PendingLearning};
 pub use pull_requests::{artifact_id, artifact_path, PrOwner, PrSyncTarget};
+pub use screen_prompts::{coordinator_prompt_key, CoordinatorPrompt};
 
 /// One `worker.output` event to append.
 #[derive(Debug, Clone)]

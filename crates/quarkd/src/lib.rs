@@ -19,6 +19,7 @@ pub mod config;
 pub mod coordinator_commands;
 pub mod coordinator_hands;
 pub mod coordinator_http;
+pub mod coordinator_prompt;
 pub mod crew_dispatch;
 pub mod diagnose;
 pub mod dispatch;
@@ -407,6 +408,12 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     updater.set_listen(config.listen);
     tokio::spawn(updater.run());
 
+    // Prompts a coordinator's harness draws on its screen and waits on.
+    let prompts_task = tokio::spawn(coordinator_prompt::run(
+        store.clone(),
+        sessions.clone(),
+        coordinator_prompt::INTERVAL,
+    ));
     // Messages queued while a coordinator works go in once it is quiet.
     let outbox_task = tokio::spawn(outbox::run(
         store.clone(),
@@ -445,6 +452,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .await?;
     projector_task.abort();
     outbox_task.abort();
+    prompts_task.abort();
     if let Some(t) = recovery_task {
         t.abort();
     }

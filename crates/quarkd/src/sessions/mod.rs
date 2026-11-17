@@ -430,6 +430,21 @@ impl Sessions {
             .map_err(|_| SessionError::Unavailable("the terminal closed".into()))
     }
 
+    /// The terminal's visible screen as plain text, one line per row, read
+    /// with tmux's `capture-pane`. Unlike [`Self::snapshot`] it adds nothing
+    /// to the event stream, so it can be read often. A PTY terminal has no
+    /// such reading and is `NotFound`.
+    pub async fn screen_text(&self, terminal_id: &str) -> Result<String, SessionError> {
+        if self.pty_for(terminal_id).is_some() {
+            return Err(SessionError::NotFound);
+        }
+        let pane = self.pane_hub()?.find(terminal_id)?;
+        Ok(self
+            .server()?
+            .run(&["capture-pane", "-p", "-t", pane.as_str()])
+            .await?)
+    }
+
     /// Detaches every control client and PTY stream. The tmux server, the
     /// PTY supervisor and their programs keep running, so a later daemon
     /// reattaches to them.
