@@ -438,6 +438,21 @@ impl Routes {
         let Some(root) = p.workspace_path.map(PathBuf::from) else {
             return (Usage::default(), None);
         };
+        // Bob writes no session log; its database has the context (and no
+        // per-turn token counts).
+        if p.agent_config
+            .as_ref()
+            .is_some_and(|a| crate::engine::engine_harness(&a.harness) == "bob")
+        {
+            let db = crate::transcripts::default_bob_db();
+            let context = tokio::task::spawn_blocking(move || {
+                quark_dispatch::local::bob::conversation(&db, &root).and_then(|c| c.context_tokens)
+            })
+            .await
+            .ok()
+            .flatten();
+            return (Usage::default(), context);
+        }
         let roots = self.roots.clone();
         let Ok(Some((path, format))) =
             tokio::task::spawn_blocking(move || newest_log(&roots, &root)).await

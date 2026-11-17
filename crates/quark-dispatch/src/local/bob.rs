@@ -716,6 +716,117 @@ pub fn has_task(db: &Path, dir: &Path, since: Option<std::time::SystemTime>) -> 
     read_only(db, query).unwrap_or(false)
 }
 
+/// What Bob's database says about the conversation `bob chat --resume
+/// latest` continues in a directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Conversation {
+    pub id: String,
+    /// When Bob last wrote the task, epoch milliseconds.
+    pub updated_ms: Option<i64>,
+    /// The context the last call sent, in tokens (`costs.contextTokens`).
+    pub context_tokens: Option<u64>,
+    /// The model Bob resolved for it (`env.model.id`, such as
+    /// `premium-ide`); Bob picks it, there is no choosing one.
+    pub model: Option<String>,
+    /// That model's input window, as Bob's server gave it
+    /// (`env.model.contextWindow`).
+    pub context_window: Option<u64>,
+}
+
+/// The newest top-level task in `dir` that has run (its `costs` set), from
+/// Bob's database at `db`. `None` when there is none, or no database.
+pub fn conversation(db: &Path, dir: &Path) -> Option<Conversation> {
+    if db.as_os_str().is_empty() || !db.is_file() {
+        return None;
+    }
+    let mut dirs = vec![dir.to_string_lossy().into_owned()];
+    if let Ok(real) = std::fs::canonicalize(dir) {
+        let real = real.to_string_lossy().into_owned();
+        if real != dirs[0] {
+            dirs.push(real);
+        }
+    }
+    type Row = (String, Option<i64>, Option<String>, Option<String>);
+    let query = |con: &rusqlite::Connection| -> Result<Option<Row>, rusqlite::Error> {
+        let cols = columns(con)?;
+        let has = |c: &str| cols.iter().any(|x| x == c);
+        let Some(in_dir) = in_dir(&has).filter(|_| has("id") && has("costs")) else {
+            return Ok(None);
+        };
+        let updated = if has("updated_at") {
+            "updated_at"
+        } else {
+            "NULL"
+        };
+        let env = if has("env") { "env" } else { "NULL" };
+        let mut sql = format!(
+            "SELECT CAST(id AS TEXT), {updated}, {env}, costs FROM tasks
+             WHERE {in_dir} AND costs IS NOT NULL"
+        );
+        if has("task_type") {
+            sql.push_str(" AND (task_type IS NULL OR task_type = 'normal')");
+        }
+        if has("parent_id") {
+            sql.push_str(" AND parent_id IS NULL");
+        }
+        sql.push_str(&format!(" ORDER BY {updated} DESC, rowid DESC LIMIT 1"));
+        let mut stmt = con.prepare(&sql)?;
+        let mut best: Option<Row> = None;
+        for d in &dirs {
+            let row = stmt
+                .query_row([d], |r| {
+                    let text = |i: usize| -> rusqlite::Result<Option<String>> {
+                        Ok(match r.get_ref(i)? {
+                            rusqlite::types::ValueRef::Text(t) => {
+                                Some(String::from_utf8_lossy(t).into_owned())
+                            }
+                            _ => None,
+                        })
+                    };
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<i64>>(1)?,
+                        text(2)?,
+                        text(3)?,
+                    ))
+                })
+                .map(Some)
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    e => Err(e),
+                })?;
+            if let Some(row) = row {
+                if best.as_ref().is_none_or(|b| row.1 > b.1) {
+                    best = Some(row);
+                }
+            }
+        }
+        Ok(best)
+    };
+    let (id, updated_ms, env, costs) = read_only(db, query).ok().flatten()?;
+    let json = |s: Option<String>| s.and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let (env, costs) = (json(env), json(costs));
+    let model = env.as_ref().map(|e| &e["model"]);
+    Some(Conversation {
+        id,
+        updated_ms,
+        context_tokens: costs
+            .as_ref()
+            .and_then(|c| c.get("contextTokens"))
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0),
+        model: model
+            .and_then(|m| m.get("id"))
+            .and_then(Value::as_str)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string),
+        context_window: model
+            .and_then(|m| m.get("contextWindow"))
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0),
+    })
+}
+
 /// One row of Bob's `messages` table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskMessage {
@@ -1195,6 +1306,65 @@ mod tests {
         ("2026-10-06T00:00:00Z", r#"{"cost": 50}"#, Some("subagent")),
         ("2026-10-07T00:00:00Z", r#"not json"#, None),
     ];
+
+    #[test]
+    fn a_conversation_reads_its_context_model_and_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("bob.db");
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let ws = std::fs::canonicalize(&ws).unwrap();
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT,
+             directory TEXT, env TEXT, costs TEXT, created_at INTEGER, updated_at INTEGER,
+             task_type TEXT NOT NULL DEFAULT 'normal');",
+        )
+        .unwrap();
+        let p = format!("file:{}", ws.display());
+        let env =
+            r#"{"model":{"id":"premium-ide","contextWindow":270000,"maxOutputTokens":64000}}"#;
+        for (id, parent, env, costs, updated) in [
+            (
+                "old",
+                None,
+                Some(env),
+                Some(r#"{"cost":0.1,"contextTokens":9000}"#),
+                1,
+            ),
+            (
+                "live",
+                None,
+                Some(env),
+                Some(r#"{"cost":0.43,"contextTokens":50425}"#),
+                5,
+            ),
+            // A subtask, and a task a resume started that has not run.
+            (
+                "sub",
+                Some("live"),
+                Some(env),
+                Some(r#"{"cost":0,"contextTokens":1}"#),
+                9,
+            ),
+            ("empty", None, None, None, 9),
+        ] {
+            con.execute(
+                "INSERT INTO tasks (id, project_id, parent_id, directory, env, costs, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, '', ?4, ?5, 0, ?6)",
+                rusqlite::params![id, p, parent, env, costs, updated],
+            )
+            .unwrap();
+        }
+        drop(con);
+        let c = conversation(&db, &ws).unwrap();
+        assert_eq!(c.id, "live");
+        assert_eq!(c.context_tokens, Some(50425));
+        assert_eq!(c.model.as_deref(), Some("premium-ide"));
+        assert_eq!(c.context_window, Some(270_000));
+        assert!(conversation(&db, &dir.path().join("other")).is_none());
+        assert!(conversation(&dir.path().join("none.db"), &ws).is_none());
+    }
 
     #[test]
     fn a_top_level_task_in_the_worktree_can_be_resumed() {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CoordinatorContext, CoordinatorSwitch } from "./api";
-import { agentLine, compactionLine, contextLine, fullness, switching, switchLine, tokens } from "./coordinatorContext";
+import { agentLine, agentParts, compactionLine, contextLine, fullness, switching, switchLine, tokens } from "./coordinatorContext";
 
 const ctx = (c: Partial<CoordinatorContext> = {}): CoordinatorContext => ({
   coordinator_id: "p",
@@ -22,6 +22,13 @@ describe("coordinator context", () => {
     const a = agentLine(ctx({ agent_config: { harness: "claude-code" }, model_seen: "claude-opus-5-5" }));
     expect(a.model).toBe("claude-opus-5-5");
     expect(a.effort).toBe("default effort");
+  });
+  it("names a harness that picks its own model by what it used, with no effort", () => {
+    const bob = ctx({ agent_config: { harness: "bob" }, model_seen: "premium-ide", window_tokens: 270_000 });
+    expect(agentLine(bob)).toEqual({ harness: "IBM Bob", model: "premium-ide", effort: null });
+    expect(agentParts(bob, " · ")).toBe("IBM Bob · premium-ide");
+    expect(agentParts(ctx(), " · ")).toBe("Claude Code · opus · high effort");
+    expect(fullness(bob)).toBe("17%");
   });
   it("says how full the context is", () => {
     expect(fullness(ctx())).toBe("23%");
@@ -45,5 +52,6 @@ describe("coordinator context", () => {
     expect(switchLine(sw({ state: "wrapping_up", kind: "handoff" }))).toBe("Changing to Claude Code, opus, high effort. The coordinator is saving its work and writing a handoff.");
     expect(switchLine(sw({ state: "done" }))).toBe("Changed from Claude Code, sonnet, default effort to Claude Code, opus, high effort, in the same conversation.");
     expect(switchLine(sw({ state: "failed", error: "no account" }))).toBe("Could not change to Claude Code, opus, high effort: no account. The coordinator kept Claude Code, sonnet, default effort.");
+    expect(switchLine(sw({ state: "done", kind: "handoff", to: { harness: "bob" } }))).toBe("Changed from Claude Code, sonnet, default effort to IBM Bob, with a handoff.");
   });
 });

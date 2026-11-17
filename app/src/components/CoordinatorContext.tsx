@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Popover } from "radix-ui";
 import { api, CoordinatorContext as Context, NotAvailable } from "../api";
-import { agentLine, compactionLine, contextLine, fullness, switching, switchLine, tokens } from "../coordinatorContext";
+import { agentParts, compactionLine, contextLine, fullness, switching, switchLine, tokens } from "../coordinatorContext";
 import { href } from "../nav";
 import { ago, errText } from "../util";
 import { Button, buttonClass, UsageMeter } from "../ui";
@@ -32,10 +32,9 @@ export function useCoordinatorContext(cid: string, changed: unknown) {
 /** Which harness, model and effort the coordinator runs: the line under its name. */
 export function CoordinatorAgent({ ctx }: { ctx: Context | null }) {
   if (!ctx) return null;
-  const agent = agentLine(ctx);
   return (
     <span className="coord-agent" data-testid="coordinator-agent" title="Harness, model and effort; change them in Settings › Agent">
-      {agent.harness} · {agent.model} · {agent.effort}
+      {agentParts(ctx, " · ")}
     </span>
   );
 }
@@ -45,7 +44,6 @@ export function ContextMeter({ cid, ctx, load }: { cid: string; ctx: Context | n
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   if (!ctx) return null;
-  const agent = agentLine(ctx);
   const used = ctx.context_tokens ?? 0;
   const max = ctx.window_tokens ?? 0;
   const mark = ctx.compact_at_tokens ?? undefined;
@@ -86,7 +84,7 @@ export function ContextMeter({ cid, ctx, load }: { cid: string; ctx: Context | n
             </div>
             <div className="flex flex-col gap-0.5 border-t border-line pt-3">
               <span className="text-xs text-faint">Agent</span>
-              <span>{agent.harness}, {agent.model}, {agent.effort}{ctx.agent_config?.pool ? `, pool ${ctx.agent_config.pool}` : ""}</span>
+              <span>{agentParts(ctx, ", ")}{ctx.agent_config?.pool ? `, pool ${ctx.agent_config.pool}` : ""}</span>
               {ctx.switch && (switching(ctx.switch) || ctx.switch.state === "failed") &&
                 <span className="text-dim" data-testid="context-switch">{switchLine(ctx.switch)}</span>}
               <a className="text-accent" href={href({ name: "settings", project: cid })}>Change agent</a>

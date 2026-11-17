@@ -10,14 +10,29 @@ export function tokens(n: number): string {
   return String(n);
 }
 
-/** The agent in one line: "Claude Code · opus · high". Blanks say the harness picks. */
-export function agentLine(c: CoordinatorContext): { harness: string; model: string; effort: string } {
+/** Harnesses that pick the model and effort themselves, with no choosing either (IBM Bob). */
+const PICKS_ITS_OWN = new Set(["bob"]);
+
+/** Whether `harness` takes an effort; one that picks its own says nothing about effort. */
+export function hasEffort(harness: string | undefined): boolean {
+  return !harness || !PICKS_ITS_OWN.has(harness);
+}
+
+/** The agent in one line: "Claude Code · opus · high". Blanks say the harness picks; `effort`
+ * is null for a harness with no effort to choose. */
+export function agentLine(c: CoordinatorContext): { harness: string; model: string; effort: string | null } {
   const a = c.agent_config;
   return {
     harness: a ? harnessMark(a.harness).name : "Unknown harness",
     model: a?.model ?? c.model_seen ?? "default model",
-    effort: a?.effort ? `${a.effort} effort` : "default effort",
+    effort: !hasEffort(a?.harness) ? null : a?.effort ? `${a.effort} effort` : "default effort",
   };
+}
+
+/** The agent's parts that apply, joined with `sep`. */
+export function agentParts(c: CoordinatorContext, sep: string): string {
+  const a = agentLine(c);
+  return [a.harness, a.model, a.effort].filter(Boolean).join(sep);
 }
 
 /** How full the context is, for the meter's label: "23%", or "46k" when the window is unknown, or "–". */
@@ -50,6 +65,9 @@ export function compactionLine(c: CoordinatorContext): string {
 /** An agent in words: "Claude Code, opus, high effort". */
 export function agentWords(a: AgentConfig | null | undefined): string {
   if (!a) return "no agent";
+  if (!hasEffort(a.harness)) {
+    return [harnessMark(a.harness).name, ...(a.model ? [a.model] : []), ...(a.pool ? [`pool ${a.pool}`] : [])].join(", ");
+  }
   return [harnessMark(a.harness).name, a.model ?? "default model", a.effort ? `${a.effort} effort` : "default effort",
     ...(a.pool ? [`pool ${a.pool}`] : [])].join(", ");
 }

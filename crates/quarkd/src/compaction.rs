@@ -68,6 +68,9 @@ pub enum Step {
 pub struct Compactor {
     default: CompactionSettings,
     roots: SessionRoots,
+    /// IBM Bob's database (`~/.bob/db/bob.db`), where a coordinator on Bob
+    /// keeps its conversation, context and model: Bob writes no session log.
+    bob_db: PathBuf,
     live: Mutex<HashMap<String, Live>>,
 }
 
@@ -82,6 +85,9 @@ struct Live {
     log: Option<(PathBuf, UsageCursor)>,
     context: Option<u64>,
     model: Option<String>,
+    /// The model's window as its harness reported it (IBM Bob), which wins
+    /// over Quark's own table.
+    window: Option<u64>,
     measured_at: Option<String>,
 }
 
@@ -94,6 +100,7 @@ impl Default for Live {
             log: None,
             context: None,
             model: None,
+            window: None,
             measured_at: None,
         }
     }
@@ -116,6 +123,7 @@ impl Compactor {
         Self {
             default,
             roots,
+            bob_db: crate::transcripts::default_bob_db(),
             live: Mutex::new(HashMap::new()),
         }
     }
@@ -144,6 +152,12 @@ impl Compactor {
         Self::new(default, roots)
     }
 
+    /// Read coordinators on IBM Bob from Bob's database at `db`.
+    pub fn with_bob_db(mut self, db: PathBuf) -> Self {
+        self.bob_db = db;
+        self
+    }
+
     /// The settings of a Project that never set its own.
     pub fn defaults(&self) -> CompactionSettings {
         self.default
@@ -158,14 +172,14 @@ impl Compactor {
         agent: Option<&AgentConfig>,
         settings: CompactionSettings,
     ) -> Option<u64> {
-        let (model, context) = self
+        let (model, context, window) = self
             .live
             .lock()
             .unwrap()
             .get(project)
-            .map(|l| (l.model.clone(), l.context))
+            .map(|l| (l.model.clone(), l.context, l.window))
             .unwrap_or_default();
-        threshold(agent, model.as_deref(), context, settings)
+        threshold(agent, model.as_deref(), context, window, settings)
     }
 
     /// Record a coordinator turn that ended with `context` tokens (when
@@ -256,8 +270,16 @@ impl Compactor {
             .get(&project.id)
             .cloned()
             .unwrap_or_default();
+        let on_bob = project
+            .agent_config
+            .as_ref()
+            .is_some_and(|a| crate::engine::engine_harness(&a.harness) == "bob");
         if let Some(root) = &project.workspace_path {
-            read_log(&self.roots, Path::new(root), &mut read);
+            if on_bob {
+                read_bob(&self.bob_db, Path::new(root), &mut read);
+            } else {
+                read_log(&self.roots, Path::new(root), &mut read);
+            }
         }
         let compacted_at = last_compaction
             .as_ref()
@@ -266,8 +288,11 @@ impl Compactor {
         let mut live = self.live.lock().unwrap();
         let l = live.entry(project.id.clone()).or_default();
         l.log = read.log;
-        if read.measured_at >= l.measured_at {
-            (l.context, l.model, l.measured_at) = (read.context, read.model, read.measured_at);
+        // Bob's database is the whole truth for a coordinator on Bob; what
+        // an earlier harness's log said is not its.
+        if on_bob || read.measured_at >= l.measured_at {
+            (l.context, l.model, l.window, l.measured_at) =
+                (read.context, read.model, read.window, read.measured_at);
         }
         // A compaction the log recorded after Quark started one ends it.
         if l.phase == CompactionPhase::Compacting && compacted_at.is_some_and(|t| t >= l.since) {
@@ -284,8 +309,16 @@ impl Compactor {
             _ => l.context,
         };
         let agent = project.agent_config.clone();
-        let window = window_tokens(agent.as_ref(), l.model.as_deref(), context);
-        let compact_at = threshold(agent.as_ref(), l.model.as_deref(), context, compaction);
+        let window = l
+            .window
+            .or_else(|| window_tokens(agent.as_ref(), l.model.as_deref(), context));
+        let compact_at = threshold(
+            agent.as_ref(),
+            l.model.as_deref(),
+            context,
+            l.window,
+            compaction,
+        );
         let model_seen = l
             .model
             .clone()
@@ -336,17 +369,37 @@ fn read_log(roots: &SessionRoots, root: &Path, l: &mut Live) {
     l.log = Some((path, next));
 }
 
+/// What Bob's database says about the conversation of the coordinator on
+/// Bob in the workspace at `root`: its context, model and window, measured
+/// when Bob last wrote the task.
+fn read_bob(db: &Path, root: &Path, l: &mut Live) {
+    let Some(c) = quark_dispatch::local::bob::conversation(db, root) else {
+        return;
+    };
+    l.context = c.context_tokens;
+    l.model = c.model;
+    l.window = c.context_window;
+    l.measured_at = c
+        .updated_ms
+        .and_then(|ms| OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok())
+        .and_then(|t| t.format(&Rfc3339).ok());
+}
+
 /// The context size at which a coordinator compacts under `settings`.
+/// `known` is the window its harness reported, if it did.
 fn threshold(
     agent: Option<&AgentConfig>,
     model: Option<&str>,
     context: Option<u64>,
+    known: Option<u64>,
     settings: CompactionSettings,
 ) -> Option<u64> {
     if !settings.auto || settings.at_percent == 0 {
         return None;
     }
-    let window = window_tokens(agent, model, context).unwrap_or(ASSUMED_WINDOW);
+    let window = known
+        .or_else(|| window_tokens(agent, model, context))
+        .unwrap_or(ASSUMED_WINDOW);
     Some(window * u64::from(settings.at_percent.min(100)) / 100)
 }
 
@@ -615,6 +668,66 @@ mod tests {
     }
 
     #[test]
+    fn a_coordinator_on_bob_reads_its_context_model_and_window_from_bob() {
+        use quark_systems::CreateProject;
+        let dir = tempfile::tempdir().unwrap();
+        let ws = std::fs::canonicalize(dir.path()).unwrap().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let db = dir.path().join("bob.db");
+        let con = rusqlite::Connection::open(&db).unwrap();
+        con.execute_batch(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT,
+             directory TEXT, env TEXT, costs TEXT, created_at INTEGER, updated_at INTEGER,
+             task_type TEXT NOT NULL DEFAULT 'normal');",
+        )
+        .unwrap();
+        con.execute(
+            "INSERT INTO tasks VALUES ('t', ?1, NULL, '', ?2, ?3, 0, 1794872480803, 'normal')",
+            rusqlite::params![
+                format!("file:{}", ws.display()),
+                r#"{"model":{"id":"premium-ide","contextWindow":270000}}"#,
+                r#"{"cost":0.43,"contextTokens":54000}"#
+            ],
+        )
+        .unwrap();
+        drop(con);
+        let store = Store::open_in_memory().unwrap();
+        let project = store
+            .create_project(CreateProject {
+                name: "Gluon".into(),
+                goal: None,
+                workspace_path: Some(ws.display().to_string()),
+                repos: vec![],
+                // Switched from Claude Code: no model or effort of its own.
+                agent_config: Some(AgentConfig {
+                    harness: "bob".into(),
+                    model: None,
+                    effort: None,
+                    pool: None,
+                }),
+                dispatch_preset: None,
+                delivery: None,
+            })
+            .unwrap();
+        let c = Compactor::default().with_bob_db(db);
+        // What the Claude Code coordinator's log said before the switch.
+        c.seen(&project.id, 110_000);
+        let ctx = c.context(&store, &project).unwrap();
+        assert_eq!(ctx.context_tokens, Some(54_000));
+        assert_eq!(ctx.model_seen.as_deref(), Some("premium-ide"));
+        assert_eq!(ctx.window_tokens, Some(270_000));
+        // 80% by default of Bob's window, not of a 1M Claude window.
+        assert_eq!(
+            ctx.compact_at_tokens,
+            Some(270_000 * u64::from(ctx.compaction.at_percent) / 100)
+        );
+        assert_eq!(
+            c.threshold(&project.id, project.agent_config.as_ref(), ctx.compaction),
+            ctx.compact_at_tokens
+        );
+    }
+
+    #[test]
     fn a_compaction_never_seen_is_given_up_on() {
         let c = Compactor::default();
         let t0 = OffsetDateTime::now_utc();
@@ -648,7 +761,7 @@ mod tests {
                 auto: true,
                 at_percent: percent,
             };
-            threshold(Some(&agent), None, context, s)
+            threshold(Some(&agent), None, context, None, s)
         };
         // Claude Code's default model: 1M.
         assert_eq!(at(70, None, None), Some(700_000));
@@ -663,7 +776,7 @@ mod tests {
             auto: false,
             at_percent: 70,
         };
-        assert_eq!(threshold(None, None, None, off), None);
+        assert_eq!(threshold(None, None, None, None, off), None);
         // Unknown window: the assumed one.
         let pi = AgentConfig {
             harness: "pi".into(),
@@ -675,7 +788,7 @@ mod tests {
             auto: true,
             at_percent: 50,
         };
-        assert_eq!(threshold(Some(&pi), None, None, s), Some(100_000));
+        assert_eq!(threshold(Some(&pi), None, None, None, s), Some(100_000));
     }
 
     #[test]
