@@ -32,8 +32,9 @@ test("opens Setup on first run when something is missing, fixes it, then continu
 
   await page.getByTestId("setup-done").click();
   await expect(page).toHaveURL(/#\/$/);
-  // Once past it, Setup doesn't open on its own again; the left list still reaches it.
+  // Once past it, Setup doesn't open on its own again; the app menu still reaches it.
   await page.reload();
+  await page.getByTestId("app-menu").click();
   await expect(page.getByTestId("nav-setup")).toBeVisible();
   await expect(page).not.toHaveURL(/#\/setup/);
 });

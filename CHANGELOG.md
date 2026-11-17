@@ -8,6 +8,12 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Added
+
+- An app menu (the gear in the left list's head) with Appearance: System, Light or Dark.
+  System follows the computer and stays the default. Updates and Setup moved into it from the
+  left list's footer; a dot on the gear says an update is ready.
+
 ### Fixed
 
 - Small secondary text (subtitles, labels, timestamps) is crisp and readable in both themes: it

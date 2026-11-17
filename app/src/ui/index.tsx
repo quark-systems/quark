@@ -16,6 +16,8 @@ export { ImagePreview } from "./ImagePreview";
 export { AttachButton, AttachmentList } from "./Attachments";
 export type { AttachmentChip } from "./Attachments";
 export { UsageMeter } from "./UsageMeter";
+export { Menu } from "./Menu";
+export type { MenuGroup, MenuOption, MenuAction } from "./Menu";
 export type { PreviewImage } from "./ImagePreview";
 export { Button, ButtonLink, buttonClass } from "./button";
 export { controlClass } from "./form";

@@ -10,14 +10,18 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
 
 - **All projects**: the app's home: what needs you across every project, open PRs, and one card per project.
   _Avoid_: dashboard, home screen, projects list.
-- **Left list**: the column on the left: projects, each with its coordinator pinned on top and its workers under it, then Accounts, Hosts and Setup in its footer.
+- **Left list**: the column on the left: projects, each with its coordinator pinned on top and its workers under it, then Accounts and Hosts in its footer. The app menu (a gear) sits in its head.
   _Avoid_: sidebar, nav, tree.
 - **Work pane**: the panel that slides in on the right with views of the selected thing: Terminal, Changes, PR, Brief, Why this agent.
   _Avoid_: inspector, drawer, details panel.
 - **Dock**: the coordinator box at the bottom of every screen that is not the coordinator's own conversation. It carries what you are looking at as its context.
   _Avoid_: chat bar, omnibox, prompt bar.
-- **Setup**: the page listing what this Mac still needs before Quark can run a project (tools, sign-ins), with a button for each fix Quark can make itself. It opens on its own the first time something is missing; the left list's footer reaches it after that.
+- **Setup**: the page listing what this Mac still needs before Quark can run a project (tools, sign-ins), with a button for each fix Quark can make itself. It opens on its own the first time something is missing; the app menu reaches it after that.
   _Avoid_: onboarding, wizard, doctor (in copy).
+- **App menu**: the gear in the left list's head, for what belongs to the whole app rather than one project: Appearance, Updates and Setup.
+  _Avoid_: preferences, app settings (Settings is a project's).
+- **Appearance**: System, Light or Dark. System follows the computer's setting and is the default.
+  _Avoid_: theme, color scheme, dark mode (as a setting's name).
 - **Component catalogue**: the page listing every shared UI part with when to use it (`#/catalogue`).
 
 ## People and agents
