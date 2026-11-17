@@ -320,16 +320,15 @@ mod tests {
     #[test]
     fn bobs_outside_the_workspace_dialog_is_a_prompt() {
         let screen = "\
- Execute Command  podman compose up -d --build
- ⚠ Security Warning
- ⚠ This operation affects files outside the workspace
-
- ● 1. Approve Once
-   2. Always Allow Command for task
-   3. Reject
-   4. Block Outside Workspace
-
- Press Enter to confirm
+  Execute Command
+  Command:          podman compose up -d --build
+  Approve commands: [podman]
+  ⚠ This operation affects files outside the workspace
+  → Approve Once
+    Always Allow Command for task
+    Reject
+    Block Outside Workspace
+  Press Enter to confirm
 ";
         let p = prompt::detect(screen).expect("a prompt");
         assert_eq!(p.options.len(), 4);

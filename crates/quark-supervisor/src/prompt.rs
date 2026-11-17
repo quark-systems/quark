@@ -6,9 +6,11 @@
 //! numbered list of choices with a cursor on one of them (Claude Code
 //! `❯ 1. Yes`, Codex `› 1. Yes, proceed`, Bob and Gemini `● 1. Allow once`).
 //! Kiro CLI draws its choices unnumbered (`> Allow once`, `  Deny once`)
-//! above a key hint (`esc to close · ↑↓ to navigate · ↵ to select`); such a
-//! menu counts only with that hint under it, so a quoted `>` line in output
-//! is never taken for one.
+//! above a key hint (`esc to close · ↑↓ to navigate · ↵ to select`), and IBM
+//! Bob 2.1 does too (`→ Approve Once`, `  Reject`, then `Press Enter to
+//! confirm`); such a menu counts only with that hint under it, so a quoted
+//! `>` line in output is never taken for one, and its choices are the rows
+//! whose labels line up with the cursor's.
 //! Nothing about them reaches a status file or a hook, so the supervisor
 //! reads them off the rendered screen and asks them as the worker's
 //! question, and an answer picks the choice with the arrow keys and Enter.
@@ -219,15 +221,41 @@ pub fn detect(screen: &str) -> Option<Prompt> {
 /// Longest label an unnumbered choice row may have; a longer line is text.
 const MAX_LABEL: usize = 100;
 
-/// Whether a line is a menu's key hint: arrows to move, a key to select.
+/// Whether a line is a menu's key hint: arrows to move, a key to select
+/// (Kiro CLI), or IBM Bob's `Press Enter to confirm`.
 fn nav_hint(line: &str) -> bool {
     let l = unframe(line).to_lowercase();
-    (l.contains("↑↓") || l.contains("to navigate")) && (l.contains("select") || l.contains('↵'))
+    ((l.contains("↑↓") || l.contains("to navigate")) && (l.contains("select") || l.contains('↵')))
+        || l.starts_with("press enter to confirm")
 }
 
-/// An unnumbered menu (Kiro CLI): the run of rows just above the lowest key
-/// hint near the bottom, with the cursor on exactly one of them. Returns the
-/// first row's line, the labels and the selected index.
+/// Where a row's text starts, in characters, with frame characters counted
+/// as padding, and whether a cursor mark is what starts it; then the column
+/// its label starts at.
+fn label_column(line: &str) -> Option<(bool, usize, &str)> {
+    let lead = line
+        .char_indices()
+        .find(|(_, c)| !c.is_whitespace() && !FRAME.contains(c))
+        .map(|(i, _)| i)?;
+    let rest = &line[lead..];
+    let (cursor, label) = match CURSORS.iter().find_map(|c| rest.strip_prefix(c)) {
+        Some(after) if after.starts_with(' ') => (true, after.trim_start()),
+        _ => (false, rest),
+    };
+    let col = line[..line.len() - label.len()].chars().count();
+    let label = label
+        .trim_end()
+        .trim_end_matches(|c: char| FRAME.contains(&c))
+        .trim_end();
+    Some((cursor, col, label))
+}
+
+/// An unnumbered menu (Kiro CLI, IBM Bob): rows above the lowest key hint
+/// near the bottom whose labels line up with the one the cursor is on
+/// (`> Allow once` over `  Deny once`, `→ Approve Once` over
+/// `  Reject`), with the cursor on exactly one of them. Lines above that do
+/// not line up are what the prompt asks. Returns the first row's line, the
+/// labels and the selected index.
 fn unnumbered(lines: &[&str], near: &[usize]) -> Option<(usize, Vec<String>, usize)> {
     let hint = *near.iter().rev().find(|&&i| nav_hint(lines[i]))?;
     // Skip the frame or blank lines between the choices and the hint.
@@ -235,31 +263,37 @@ fn unnumbered(lines: &[&str], near: &[usize]) -> Option<(usize, Vec<String>, usi
     while end > 0 && blank(lines[end - 1]) {
         end -= 1;
     }
-    let mut start = end;
-    while start > 0 && !blank(lines[start - 1]) {
-        start -= 1;
+    let mut block = end;
+    while block > 0 && !blank(lines[block - 1]) {
+        block -= 1;
+    }
+    let rows: Vec<(bool, usize, &str)> = lines[block..end]
+        .iter()
+        .map(|l| label_column(l))
+        .collect::<Option<_>>()?;
+    let mut cursors = rows.iter().enumerate().filter(|(_, r)| r.0);
+    let (at, &(_, col, _)) = cursors.next()?;
+    if cursors.next().is_some() {
+        return None;
+    }
+    let lines_up = |r: &(bool, usize, &str)| r.1 == col;
+    let mut first = at;
+    while first > 0 && lines_up(&rows[first - 1]) {
+        first -= 1;
+    }
+    let mut last = at;
+    while last + 1 < rows.len() && lines_up(&rows[last + 1]) {
+        last += 1;
     }
     let mut options = Vec::new();
-    let mut selected = None;
-    for line in &lines[start..end] {
-        let row = unframe(line);
-        let (cursor, label) = match CURSORS.iter().find_map(|c| row.strip_prefix(c)) {
-            Some(rest) => (true, rest.trim()),
-            None => (false, row),
-        };
-        if label.is_empty() || label.chars().count() > MAX_LABEL {
+    for r in &rows[first..=last] {
+        if r.2.is_empty() || r.2.chars().count() > MAX_LABEL {
             return None;
         }
-        if cursor {
-            if selected.is_some() {
-                return None;
-            }
-            selected = Some(options.len());
-        }
-        options.push(label.to_string());
+        options.push(r.2.to_string());
     }
     (options.len() >= 2).then_some(())?;
-    Some((start, options, selected?))
+    Some((block + first, options, at - first))
 }
 
 /// Whether a decision key is a screen prompt's.
@@ -374,6 +408,49 @@ mod tests {
             .replace("   Deny once", " > Deny once");
         assert_eq!(detect(&moved).unwrap().selected, 1);
         assert_eq!(detect(&moved).unwrap().key, k.key);
+    }
+
+    // IBM Bob 2.1 asking to run a command outside its workspace, from the
+    // coordinator pane on Matt's Mac (2026-11-17).
+    const BOB_2_1: &str = "\
+ Relaunch (quark-coordinator) (failed) 0.2s
+ Error from tool mcp__quark-coordinator__relaunch: invalid request: task gluon-6j7 is done
+  Execute Command
+  Command:          git worktree list
+  Approve commands: [git]
+  ⚠ This operation affects files outside the workspace
+  → Approve Once
+    Always Allow Command for task
+    Reject
+    Block Outside Workspace
+  Press Enter to confirm
+";
+
+    #[test]
+    fn reads_bobs_unnumbered_menu() {
+        let b = detect(BOB_2_1).unwrap();
+        assert_eq!(
+            b.options,
+            [
+                "Approve Once",
+                "Always Allow Command for task",
+                "Reject",
+                "Block Outside Workspace"
+            ]
+        );
+        assert_eq!(b.selected, 0);
+        assert_eq!(
+            b.context.last().map(String::as_str),
+            Some("⚠ This operation affects files outside the workspace")
+        );
+        let moved = BOB_2_1
+            .replace("  → Approve Once", "    Approve Once")
+            .replace("    Reject", "  → Reject");
+        let m = detect(&moved).unwrap();
+        assert_eq!(m.selected, 2);
+        assert_eq!(m.key, b.key);
+        // Without the hint it is output.
+        assert!(detect(&BOB_2_1.replace("  Press Enter to confirm", "  done")).is_none());
     }
 
     #[test]
