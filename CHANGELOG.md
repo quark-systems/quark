@@ -8,6 +8,12 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Fixed
+
+- Worker terminals are no longer washed out in light mode. The light ANSI colors are darker,
+  and every cell is held to a minimum contrast (7:1 on light, 4.5:1 on dark; half for dim
+  text), which also fixes the pale truecolors Kiro and Bob pick for dark terminals.
+
 ### Added
 
 - An app menu (the gear in the left list's head) with Appearance: System, Light or Dark.

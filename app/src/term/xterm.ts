@@ -5,20 +5,23 @@ import { FitAddon } from "@xterm/addon-fit";
 // until the app restarts. Move back to a stable release once 6.1 ships.
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { AdapterCallbacks, AdapterOptions, TermAdapter, terminalTheme } from "./types";
+import { AdapterCallbacks, AdapterOptions, TermAdapter, minimumContrast, terminalTheme } from "./types";
 import { cssColor, isLight, SCHEME_EVENT } from "../theme";
 
 // Open terminals repaint when the light/dark scheme changes.
 const live = new Set<Terminal>();
 const themeNow = () => terminalTheme(isLight(), cssColor);
 if (typeof window !== "undefined") {
-  window.addEventListener(SCHEME_EVENT, () => { const t = themeNow(); for (const term of live) term.options.theme = t; });
+  window.addEventListener(SCHEME_EVENT, () => {
+    const t = themeNow(), ratio = minimumContrast(isLight());
+    for (const term of live) { term.options.theme = t; term.options.minimumContrastRatio = ratio; }
+  });
 }
 
 export function createXterm(o: AdapterOptions, cb: AdapterCallbacks): TermAdapter {
   const term = new Terminal({
     cols: o.cols, rows: o.rows, fontFamily: o.fontFamily, fontSize: o.fontSize, lineHeight: o.lineHeight,
-    scrollback: 5000, theme: themeNow(), allowTransparency: true, allowProposedApi: true, cursorBlink: false,
+    scrollback: 5000, theme: themeNow(), minimumContrastRatio: minimumContrast(isLight()), allowTransparency: true, allowProposedApi: true, cursorBlink: false,
     disableStdin: true,
   });
   live.add(term);
