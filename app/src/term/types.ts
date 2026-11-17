@@ -32,20 +32,25 @@ export const ANSI_DARK = {
   brightBlack: "#64748b", brightRed: "#fca5a5", brightGreen: "#86efac", brightYellow: "#fde68a",
   brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#f8fafc",
 };
-/** GitHub Light's terminal colors: every hue clears 4.5:1 on a near-white page. */
+/**
+ * Catppuccin Latte (https://github.com/catppuccin/catppuccin, MIT, Copyright (c) 2021 Catppuccin).
+ * Kept as is: its colors are meant to read on a near-white page.
+ */
 export const ANSI_LIGHT = {
-  black: "#24292f", red: "#cf222e", green: "#116329", yellow: "#7d4e00",
-  blue: "#0969da", magenta: "#8250df", cyan: "#1b7c83", white: "#6e7781",
-  brightBlack: "#57606a", brightRed: "#a40e26", brightGreen: "#1a7f37", brightYellow: "#633c01",
-  brightBlue: "#218bff", brightMagenta: "#a475f9", brightCyan: "#3192aa", brightWhite: "#8c959f",
+  black: "#5c5f77", red: "#d20f39", green: "#40a02b", yellow: "#df8e1d",
+  blue: "#1e66f5", magenta: "#ea76cb", cyan: "#179299", white: "#acb0be",
+  brightBlack: "#6c6f85", brightRed: "#d20f39", brightGreen: "#40a02b", brightYellow: "#df8e1d",
+  brightBlue: "#1e66f5", brightMagenta: "#ea76cb", brightCyan: "#179299", brightWhite: "#bcc0cc",
 };
 
 /**
  * The contrast xterm enforces per cell, adjusting any color (ANSI, 256 or truecolor) that falls
  * short. Harnesses such as Kiro and Bob pick pale truecolors for a dark terminal, which wash out
- * on the light theme. xterm halves it for dim (faint) text, so dim stays visibly dim but legible.
+ * on the light theme (under 2:1). The light floor is 3: it lifts those, and leaves Latte's own
+ * colors nearly untouched, since xterm's adjustment darkens toward grey and a higher floor turns
+ * them muddy. xterm halves it for dim (faint) text.
  */
-export function minimumContrast(light: boolean) { return light ? 7 : 4.5; }
+export function minimumContrast(light: boolean) { return light ? 3 : 4.5; }
 
 /**
  * The terminal theme for a scheme. The background is the page color, opaque: the WebGL renderer

@@ -10,9 +10,9 @@ page lists every merged pull request.
 
 ### Fixed
 
-- Worker terminals are no longer washed out in light mode. The light ANSI colors are darker,
-  and every cell is held to a minimum contrast (7:1 on light, 4.5:1 on dark; half for dim
-  text), which also fixes the pale truecolors Kiro and Bob pick for dark terminals.
+- Worker terminals are no longer washed out in light mode. The light terminal uses the
+  Catppuccin Latte colors, and every cell is held to a minimum contrast (3:1 on light, 4.5:1 on
+  dark; half for dim text), which lifts the pale truecolors Kiro and Bob pick for dark terminals.
 
 ### Added
 
