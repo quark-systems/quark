@@ -80,6 +80,7 @@ export function switching(s: CoordinatorSwitch | null | undefined): boolean {
 /** How far a change of agent got, in a sentence. */
 export function switchLine(s: CoordinatorSwitch): string {
   const to = agentWords(s.to);
+  if (isRestart(s)) return restartLine(s, to);
   switch (s.state) {
     case "requested": return `Changing to ${to}.`;
     case "wrapping_up": return `Changing to ${to}. The coordinator is saving its work and writing a handoff.`;
@@ -90,5 +91,20 @@ export function switchLine(s: CoordinatorSwitch): string {
       ? `Changed from ${agentWords(s.from)} to ${to}, in the same conversation.`
       : `Changed from ${agentWords(s.from)} to ${to}, with a handoff.`;
     case "failed": return `Could not change to ${to}: ${s.error ?? "it did not start"}. The coordinator kept ${agentWords(s.from)}.`;
+  }
+}
+
+/** A switch to the agent the coordinator already ran: a restart. */
+export function isRestart(s: CoordinatorSwitch): boolean {
+  const a = s.from, b = s.to;
+  return !!a && a.harness === b.harness && (a.model ?? null) === (b.model ?? null)
+    && (a.effort ?? null) === (b.effort ?? null) && (a.pool ?? null) === (b.pool ?? null);
+}
+
+function restartLine(s: CoordinatorSwitch, to: string): string {
+  switch (s.state) {
+    case "done": return `Restarted ${to}, in the same conversation.`;
+    case "failed": return `Could not restart ${to}: ${s.error ?? "it did not start"}.`;
+    default: return `Restarting ${to}.`;
   }
 }

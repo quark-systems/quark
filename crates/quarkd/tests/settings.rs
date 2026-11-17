@@ -335,6 +335,9 @@ async fn the_coordinators_agent_is_changed_through_a_switch() {
     // Not before the Project has a coordinator.
     let (status, e) = call(&app, "PUT", &agent, Some(opus.clone())).await;
     assert_eq!(status, 409, "{e}");
+    let restart = format!("/v1/coordinators/{}:restart", project.id);
+    let (status, e) = call(&app, "POST", &restart, None).await;
+    assert_eq!(status, 409, "{e}");
     store
         .set_project_status(
             &project.id,
@@ -366,9 +369,40 @@ async fn the_coordinators_agent_is_changed_through_a_switch() {
     // One at a time.
     let (status, e) = call(&app, "PUT", &agent, Some(json!({"harness": "claude-code"}))).await;
     assert_eq!(status, 409, "{e}");
+    let (status, e) = call(&app, "POST", &restart, None).await;
+    assert_eq!(status, 409, "{e}");
     // The header shows it.
     let context = format!("/v1/coordinators/{}/context", project.id);
     let (_, c) = call(&app, "GET", &context, None).await;
     assert_eq!(c["switch"]["id"], s["id"]);
     assert_eq!(c["switch"]["state"], "requested");
+
+    // A restart resumes the agent it runs.
+    let other = store
+        .create_project(CreateProject {
+            name: "Gluon".into(),
+            agent_config: Some(AgentConfig {
+                harness: "bob".into(),
+                model: None,
+                effort: None,
+                pool: None,
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .set_project_status(
+            &other.id,
+            ProjectStatus::Ready,
+            None,
+            Some(&dir.path().display().to_string()),
+            None,
+        )
+        .unwrap();
+    let restart = format!("/v1/coordinators/{}:restart", other.id);
+    let (status, s) = call(&app, "POST", &restart, None).await;
+    assert_eq!(status, 202, "{s}");
+    assert_eq!(s["kind"], "resume");
+    assert_eq!(s["from"]["harness"], "bob");
+    assert_eq!(s["to"]["harness"], "bob");
 }

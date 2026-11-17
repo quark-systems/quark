@@ -108,6 +108,24 @@ impl Store {
         to: &AgentConfig,
         kind: SwitchKind,
     ) -> Result<CoordinatorSwitch> {
+        self.insert_switch(project_id, Some(to), kind)
+    }
+
+    /// Record a restart of the Project's coordinator: a `resume` switch to
+    /// the agent it already runs, which closes its session and starts it
+    /// again in the same conversation. For a session that stopped taking
+    /// input. Refused while another switch is open.
+    pub fn restart_switch(&self, project_id: &str) -> Result<CoordinatorSwitch> {
+        self.insert_switch(project_id, None, SwitchKind::Resume)
+    }
+
+    /// `to` of `None` is the agent the coordinator runs: a restart.
+    fn insert_switch(
+        &self,
+        project_id: &str,
+        to: Option<&AgentConfig>,
+        kind: SwitchKind,
+    ) -> Result<CoordinatorSwitch> {
         self.write(|tx, _| {
             let project = get_project(tx, project_id)?;
             let open: Option<String> = tx
@@ -123,11 +141,17 @@ impl Store {
                     "the coordinator is already switching agents".into(),
                 ));
             }
-            if project.agent_config.as_ref() == Some(to) {
-                return Err(StoreError::Invalid(
-                    "the coordinator already runs this agent".into(),
-                ));
-            }
+            let to = match to {
+                Some(to) if project.agent_config.as_ref() == Some(to) => {
+                    return Err(StoreError::Invalid(
+                        "the coordinator already runs this agent".into(),
+                    ));
+                }
+                Some(to) => to,
+                None => project.agent_config.as_ref().ok_or_else(|| {
+                    StoreError::Invalid("the coordinator has no agent to restart".into())
+                })?,
+            };
             let after: i64 =
                 tx.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| r.get(0))?;
             let (id, now) = (new_id("sw"), now_rfc3339());
@@ -401,5 +425,19 @@ mod tests {
                 .unwrap(),
             vec!["the brief".to_string(), "one".into()]
         );
+    }
+
+    #[test]
+    fn a_restart_resumes_the_agent_it_runs() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        let s = store.restart_switch(&p).unwrap();
+        assert_eq!(s.kind, SwitchKind::Resume);
+        assert_eq!(s.from, Some(agent("sonnet")));
+        assert_eq!(s.to, agent("sonnet"));
+        assert!(matches!(
+            store.restart_switch(&p),
+            Err(StoreError::Conflict(_))
+        ));
     }
 }

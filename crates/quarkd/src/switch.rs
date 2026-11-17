@@ -429,6 +429,12 @@ pub fn brief_note(s: &CoordinatorSwitch) -> String {
         .map(describe)
         .unwrap_or_else(|| "none".into());
     let to = describe(&s.to);
+    if s.from.as_ref() == Some(&s.to) {
+        return "Quark restarted your session because it stopped taking input. This is the \
+                same conversation; carry on where you left off. Messages sent while it was \
+                stuck may not have reached you: run `fleet` and check for anything you missed."
+            .into();
+    }
     match s.kind {
         SwitchKind::Resume => format!(
             "The user changed your agent from {from} to {to}. This is the same conversation; \
@@ -570,5 +576,8 @@ mod tests {
         assert!(resume.contains("same conversation"));
         let handoff = brief_note(&switch(SwitchKind::Handoff, None));
         assert!(handoff.contains("Read the handoff"));
+        let mut restart = switch(SwitchKind::Resume, None);
+        restart.from = Some(restart.to.clone());
+        assert!(brief_note(&restart).contains("restarted your session"));
     }
 }
