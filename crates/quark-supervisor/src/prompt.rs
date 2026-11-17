@@ -218,6 +218,11 @@ pub fn detect(screen: &str) -> Option<Prompt> {
     })
 }
 
+/// Most blocks of footer lines between an unnumbered menu and its hint.
+const MAX_FOOTERS: usize = 3;
+/// Most lines in one such footer block.
+const MAX_FOOTER_LINES: usize = 2;
+
 /// Longest label an unnumbered choice row may have; a longer line is text.
 const MAX_LABEL: usize = 100;
 
@@ -258,19 +263,38 @@ fn label_column(line: &str) -> Option<(bool, usize, &str)> {
 /// labels and the selected index.
 fn unnumbered(lines: &[&str], near: &[usize]) -> Option<(usize, Vec<String>, usize)> {
     let hint = *near.iter().rev().find(|&&i| nav_hint(lines[i]))?;
-    // Skip the frame or blank lines between the choices and the hint.
+    // The choices are the nearest block above the hint with a cursor row.
+    // Short footer blocks between them and the hint are skipped: Bob draws
+    // `↑↓ (1/4)` and `Wait for input after execution: No (Tab to toggle)`
+    // there.
     let mut end = hint;
-    while end > 0 && blank(lines[end - 1]) {
-        end -= 1;
+    let mut found = None;
+    for _ in 0..=MAX_FOOTERS {
+        // Skip the frame or blank lines above.
+        while end > 0 && blank(lines[end - 1]) {
+            end -= 1;
+        }
+        let mut block = end;
+        while block > 0 && !blank(lines[block - 1]) {
+            block -= 1;
+        }
+        if block == end {
+            return None;
+        }
+        let rows: Vec<(bool, usize, &str)> = lines[block..end]
+            .iter()
+            .map(|l| label_column(l))
+            .collect::<Option<_>>()?;
+        if rows.iter().any(|r| r.0) {
+            found = Some((block, rows));
+            break;
+        }
+        if rows.len() > MAX_FOOTER_LINES {
+            return None;
+        }
+        end = block;
     }
-    let mut block = end;
-    while block > 0 && !blank(lines[block - 1]) {
-        block -= 1;
-    }
-    let rows: Vec<(bool, usize, &str)> = lines[block..end]
-        .iter()
-        .map(|l| label_column(l))
-        .collect::<Option<_>>()?;
+    let (block, rows) = found?;
     let mut cursors = rows.iter().enumerate().filter(|(_, r)| r.0);
     let (at, &(_, col, _)) = cursors.next()?;
     if cursors.next().is_some() {
@@ -425,6 +449,75 @@ mod tests {
     Block Outside Workspace
   Press Enter to confirm
 ";
+
+    /// Bob 2.1's dialog as `capture-pane -p` reads it on a 120 column pane.
+    const BOB_2_1_PANE: &str = "\
+ /Users/msanchez/.quark/workers/prj_01a18e36f116723d9dd5d3d1af2d981b/gluon-6j7-findings-http-list-endpoint-an
+ 1 file
+
+ List Files in /Users/msanchez/.quark/workers/prj_01a18e36f116723d9dd5d3d1af2d981b/gluon-6j7-findings-http-list-endpoint
+-(completed)0.1s
+ an/2c68fb43cb5e48139c9a15925d33d75d
+ 2 files
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Execute Command
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Command:          git branch -a
+  Approve commands:
+  ┌───┐
+  │git│
+  └───┘
+
+  ⚠ This operation affects files outside the workspace
+  → Approve Once
+    Always Allow Command for task
+    Reject
+    Block Outside Workspace
+
+    ↑↓ (1/4)
+
+  Wait for input after execution: No (Tab to toggle)
+
+  Press Enter to confirm
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+";
+
+    #[test]
+    fn reads_bobs_dialog_as_the_pane_draws_it() {
+        let b = detect(BOB_2_1_PANE).expect("a prompt");
+        assert_eq!(
+            b.options,
+            [
+                "Approve Once",
+                "Always Allow Command for task",
+                "Reject",
+                "Block Outside Workspace"
+            ]
+        );
+        assert_eq!(b.selected, 0);
+        assert_eq!(
+            b.context.last().map(String::as_str),
+            Some("⚠ This operation affects files outside the workspace")
+        );
+        // The cursor moved: the same prompt, one row down.
+        let moved = BOB_2_1_PANE
+            .replace("  → Approve Once", "    Approve Once")
+            .replace("    Reject", "  → Reject");
+        let m = detect(&moved).expect("a prompt");
+        assert_eq!(m.selected, 2);
+        assert_eq!(m.key, b.key);
+        // Text above a hint with no cursor anywhere near is not a menu.
+        let gone = BOB_2_1_PANE.replace("  → Approve Once", "    Approve Once");
+        assert!(detect(&gone).is_none());
+    }
 
     #[test]
     fn reads_bobs_unnumbered_menu() {
