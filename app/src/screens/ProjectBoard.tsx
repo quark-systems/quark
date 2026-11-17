@@ -17,8 +17,22 @@ import { readAttached, useAttachments, withAttachments } from "../attachments";
 import { CommandButton, StopButton, usePendingCommands, useRunCommand, useStop, useStoppedThrough } from "../components/CoordinatorCommand";
 import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
 import { Welcome } from "../components/Welcome";
+import { ScreenPromptCard } from "../components/ScreenPromptCard";
+import { coordinatorScreenPrompt, ScreenPrompt } from "../screenPrompt";
+import type { Decision } from "../api";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
+
+/** Prompts on the coordinator's screen that wait for a choice, oldest first: quarkd opens a
+ * decision for each, and a button here picks the choice on that screen. */
+function useCoordinatorPrompts(cid: string) {
+  const decisions = useStore((s) => s.decisions);
+  return useMemo(() => Object.values(decisions)
+    .filter((d) => d.project_id === cid && d.state === "open")
+    .map((d) => ({ d, p: coordinatorScreenPrompt(d) }))
+    .filter((x): x is { d: Decision; p: ScreenPrompt } => x.p !== null)
+    .sort((a, b) => a.d.opened_at.localeCompare(b.d.opened_at)), [decisions, cid]);
+}
 
 export function ProjectBoard({ id }: { id: string }) {
   const project = useStore((s) => s.projects[id]);
@@ -202,6 +216,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
   const stoppedThrough = useStoppedThrough(cid);
   const stopper = useStop(cid);
   const context = useCoordinatorContext(cid, items.length);
+  const screenPrompts = useCoordinatorPrompts(cid);
   // What the coordinator is doing now, for the header's status and the composer's Stop.
   const turns = useMemo(() => groupTurns([...items].sort((a, b) => a.id - b.id), stoppedThrough), [items, stoppedThrough]);
   const now = useNow(true);
@@ -310,6 +325,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
             </div>
           )}
           <Composer value={text} onChange={setText} onSend={() => void send()} sending={false} attachments={attach}
+            above={screenPrompts.length ? screenPrompts.map(({ d, p }) => <ScreenPromptCard key={d.id} d={d} p={p} who={coordinator} />) : null}
             label={`Message the ${coordinator}`} placeholder={`Ask the ${coordinator} to plan, start or check work`}
             tools={<button type="button" className="composer-tool" aria-label="Commands" title="Catch up, status report, wrap up" data-testid="composer-commands"
               onClick={() => { setText(text.startsWith("/") ? "" : "/"); box.current?.querySelector("textarea")?.focus(); }}>

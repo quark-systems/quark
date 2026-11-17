@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { promptTitle, screenPrompt } from "./screenPrompt";
+import type { Decision } from "./api";
+import { coordinatorScreenPrompt, promptTitle, screenPrompt } from "./screenPrompt";
 
 // Exactly what quark-supervisor's `Prompt::question` writes.
 const Q = "My terminal shows a prompt waiting for a keypress (a permission or approval request, or a menu), so I cannot go on until it is answered."
@@ -23,5 +24,24 @@ describe("screenPrompt", () => {
     expect(p.context).toEqual([]);
     expect(p.options).toHaveLength(3);
     expect(promptTitle(p)).toMatch(/waiting for a choice/);
+  });
+});
+
+describe("a prompt on the coordinator's screen", () => {
+  const d = (c: Partial<Decision> = {}): Decision => ({
+    id: "dec_1", project_id: "p", task_id: null, state: "open", opened_at: "t",
+    question: "The coordinator's terminal shows a prompt waiting for a keypress (⚠ This operation affects files outside the workspace), so the coordinator cannot go on until it is answered.",
+    brief: { asked_by: "quarkd", context: "Command:          git worktree list\n⚠ This operation affects files outside the workspace",
+      options: [{ label: "Approve Once" }, { label: "Always Allow Command for task" }, { label: "Reject" }, { label: "Block Outside Workspace" }] },
+    ...c,
+  });
+  it("reads its choices and what it asks from quarkd's decision", () => {
+    const p = coordinatorScreenPrompt(d());
+    expect(p?.options).toEqual(["Approve Once", "Always Allow Command for task", "Reject", "Block Outside Workspace"]);
+    expect(p?.context.at(-1)).toBe("⚠ This operation affects files outside the workspace");
+  });
+  it("leaves other decisions alone", () => {
+    expect(coordinatorScreenPrompt(d({ question: "Which branch?" }))).toBeNull();
+    expect(coordinatorScreenPrompt(d({ task_id: "t1" }))).toBeNull();
   });
 });
