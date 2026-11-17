@@ -250,6 +250,15 @@ impl CoordinatorInput for SessionsInput {
             }
             other => ChatError::Unavailable(other.to_string()),
         })?;
+        // Typed into a permission or approval prompt, the text would be
+        // lost and Enter would pick a choice.
+        if let Ok(Some(p)) = crate::coordinator_prompt::read(&self.sessions, terminal).await {
+            return Err(ChatError::Unavailable(format!(
+                "the coordinator's screen shows a prompt waiting for a choice ({}); answer it \
+                 in the decisions inbox first",
+                p.context.last().map(String::as_str).unwrap_or("a menu")
+            )));
+        }
 
         let bob = match &self.bob {
             Some((store, db)) => {

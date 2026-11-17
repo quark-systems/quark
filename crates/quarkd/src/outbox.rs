@@ -65,6 +65,10 @@ pub async fn deliver(
 /// Types in the Project's oldest queued message, if one waits and none is
 /// being typed in.
 pub async fn deliver_next(store: Arc<Store>, chat: Arc<dyn CoordinatorInput>, project_id: String) {
+    // [`run`] types it in once the prompt on the screen is answered.
+    if crate::coordinator_prompt::waiting(&project_id) {
+        return;
+    }
     let s = store.clone();
     let pid = project_id.clone();
     let next = match blocking(move || s.claim_next_queued(&pid)).await {
@@ -110,7 +114,8 @@ pub async fn run(store: Arc<Store>, chat: Arc<dyn CoordinatorInput>, interval: D
         let ready = blocking(move || {
             let mut ready = Vec::new();
             for p in s.projects_with_queued_messages()? {
-                if quiet(&s, &p)? {
+                // A prompt on its screen would take the typing.
+                if quiet(&s, &p)? && !crate::coordinator_prompt::waiting(&p) {
                     ready.push(p);
                 }
             }
