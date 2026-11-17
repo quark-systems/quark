@@ -41,13 +41,15 @@ export const ANSI_LIGHT = {
 };
 
 /**
- * The terminal theme for a scheme. The background is fully transparent so the terminal sits on
- * the same surface (and glass) as the rest of the window; foreground and cursor come from the
- * page's tokens through `css`, which resolves a CSS color expression (or returns null).
+ * The terminal theme for a scheme. The background is the page color, opaque: the WebGL renderer
+ * rasterizes glyphs onto its background, and on a transparent one it can only use coarse
+ * grayscale edges, which read as jagged text (worst dark-on-light). Foreground, cursor and
+ * background come from the page's tokens through `css`, which resolves a CSS color expression
+ * (or returns null).
  */
 export function terminalTheme(light: boolean, css: (expr: string) => string | null = () => null) {
   return {
-    background: "#00000000",
+    background: css("var(--background)") ?? (light ? "#f6f6f8" : "#131418"),
     foreground: css("var(--content)") ?? (light ? "#2e2e2e" : "#e2e4e9"),
     cursor: css("var(--accent)") ?? (light ? "#4078f2" : "#4da3f5"),
     cursorAccent: light ? "#ffffff" : "#000000",

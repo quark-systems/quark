@@ -33,8 +33,15 @@
   --surface-popover: var(--surface-1);
 
   --text: var(--content);
-  --text-dim: color-mix(in srgb, var(--content) 62%, transparent);
-  --text-faint: color-mix(in srgb, var(--content) 40%, transparent);
+  /* Secondary text is opaque, mixed toward the page rather than made see-through: translucent
+     glyphs lose contrast and look soft or jagged at small sizes, worst on glass. Both clear 4.5:1
+     on every surface (they match the design system's ink-3 and ink-4). */
+  --text-dim-strength: 72%;
+  --text-faint-strength: 66%;
+  /* How strongly a status pill tints its ground; lighter on the light theme so its text keeps 4.5:1. */
+  --pill-tint: 13%;
+  --text-dim: color-mix(in srgb, var(--content) var(--text-dim-strength), var(--background));
+  --text-faint: color-mix(in srgb, var(--content) var(--text-faint-strength), var(--background));
 
   --accent: hsl(211 92% 62%);
   --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
@@ -134,19 +141,21 @@ html.theme-light {
   --surface-3: color-mix(in srgb, var(--content) 6%, var(--background));
   --surface-inset: color-mix(in srgb, var(--content) 4%, var(--background));
   --surface-popover: color-mix(in srgb, white 80%, var(--background));
-  --text-dim: color-mix(in srgb, var(--content) 68%, transparent);
-  --text-faint: color-mix(in srgb, var(--content) 46%, transparent);
-  --accent: hsl(211 92% 45%);
-  --link: hsl(211 92% 40%);
-  --green: #15803d;
-  --red: #dc2626;
-  --yellow: #b45309;
-  --blue: #2563eb;
-  --cyan: #0e7490;
-  --violet: #9333ea;
+  --text-dim-strength: 80%;
+  --text-faint-strength: 72%;
+  --pill-tint: 5%;
+  /* The design system's light values: each clears 4.5:1 on the page and on its own tint. */
+  --accent: #1b66c9;
+  --link: #0b62a3;
+  --green: #157a3a;
+  --red: #c8221f;
+  --yellow: #a14d06;
+  --blue: #2459d6;
+  --cyan: #0e6a80;
+  --violet: #7e36c9;
   --on-tone: #fff;
-  --diff-add-fg: #047857;
-  --diff-del-fg: #be123c;
+  --diff-add-fg: #03684a;
+  --diff-del-fg: #a3112f;
   --scrim: color-mix(in srgb, black 22%, transparent);
   --shadow-popover: 0 16px 48px color-mix(in srgb, black 18%, transparent), 0 0 0 1px var(--stroke-strong);
   color-scheme: light;
@@ -182,8 +191,11 @@ html.is-mac .drag-strip { display: block; flex: none; height: 28px; }
 @layer base {
   * { box-sizing: border-box; }
   html, body, #root { height: 100%; margin: 0; }
-  body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); overflow: hidden; -webkit-font-smoothing: antialiased;
+  body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); overflow: hidden;
     transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
+  /* Grayscale smoothing keeps light-on-dark text from blooming; dark-on-light text keeps the
+     system's smoothing, which antialiased would thin out and make jagged. */
+  html:not(.theme-light) body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   button { font: inherit; color: inherit; }
   a { color: var(--link); }
 }
@@ -231,12 +243,12 @@ html.is-mac .drag-strip { display: block; flex: none; height: 28px; }
 .btn:hover { border-color: var(--accent); }
 .btn.on { background: var(--accent-dim); border-color: var(--accent); color: var(--fg); }
 .pill { display: inline-flex; align-items: center; gap: 4px; font: 10.5px var(--mono); padding: 1px 6px; border-radius: 9px; background: var(--bg-3); color: var(--fg-dim); white-space: nowrap; }
-.pill.green { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
-.pill.red { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
-.pill.yellow { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
-.pill.blue { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
-.pill.needs-you { color: var(--tone-needs-you); background: color-mix(in srgb, var(--tone-needs-you) 14%, transparent); }
-.pill.accent { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.pill.green { color: var(--green); background: color-mix(in srgb, var(--green) var(--pill-tint), transparent); }
+.pill.red { color: var(--red); background: color-mix(in srgb, var(--red) var(--pill-tint), transparent); }
+.pill.yellow { color: var(--yellow); background: color-mix(in srgb, var(--yellow) var(--pill-tint), transparent); }
+.pill.blue { color: var(--blue); background: color-mix(in srgb, var(--blue) var(--pill-tint), transparent); }
+.pill.needs-you { color: var(--tone-needs-you); background: color-mix(in srgb, var(--tone-needs-you) var(--pill-tint), transparent); }
+.pill.accent { color: var(--accent); background: color-mix(in srgb, var(--accent) var(--pill-tint), transparent); }
 .mono { font-family: var(--mono); }
 .dim { color: var(--fg-dim); }
 .faint { color: var(--fg-faint); }
@@ -268,6 +280,26 @@ html.is-mac .drag-strip { display: block; flex: none; height: 28px; }
 .md pre code { background: none; padding: 0; font-size: 12px; line-height: 1.5; }
 /* highlight.js's theme sets a light text color for a dark block; ours follows the app theme. */
 .md pre code.hljs { color: var(--fg); }
+/* highlight.js ships github-dark only; on the light theme its pale tokens fall to 1.7:1, so they
+   take GitHub's light colors instead. */
+html.theme-light .hljs-doctag, html.theme-light .hljs-keyword, html.theme-light .hljs-meta .hljs-keyword,
+html.theme-light .hljs-template-tag, html.theme-light .hljs-template-variable, html.theme-light .hljs-type,
+html.theme-light .hljs-variable.language_ { color: #cf222e; }
+html.theme-light .hljs-title, html.theme-light .hljs-title.class_, html.theme-light .hljs-title.class_.inherited__,
+html.theme-light .hljs-title.function_ { color: #8250df; }
+html.theme-light .hljs-attr, html.theme-light .hljs-attribute, html.theme-light .hljs-literal, html.theme-light .hljs-meta,
+html.theme-light .hljs-number, html.theme-light .hljs-operator, html.theme-light .hljs-variable,
+html.theme-light .hljs-selector-attr, html.theme-light .hljs-selector-class, html.theme-light .hljs-selector-id { color: #0550ae; }
+html.theme-light .hljs-regexp, html.theme-light .hljs-string, html.theme-light .hljs-meta .hljs-string { color: #0a3069; }
+html.theme-light .hljs-built_in, html.theme-light .hljs-symbol { color: #953800; }
+html.theme-light .hljs-comment, html.theme-light .hljs-code, html.theme-light .hljs-formula { color: #57606a; }
+html.theme-light .hljs-name, html.theme-light .hljs-quote, html.theme-light .hljs-selector-tag,
+html.theme-light .hljs-selector-pseudo { color: #116329; }
+html.theme-light .hljs-subst { color: var(--fg); }
+html.theme-light .hljs-section { color: #0550ae; }
+html.theme-light .hljs-bullet { color: #953800; }
+html.theme-light .hljs-addition { color: #116329; background-color: #dafbe1; }
+html.theme-light .hljs-deletion { color: #82071e; background-color: #ffebe9; }
 .md h1, .md h2, .md h3 { font-size: 14px; margin: 10px 0 6px; }
 .md table { border-collapse: collapse; margin-bottom: 8px; }
 .md td, .md th { border: 1px solid var(--line); padding: 3px 8px; }
@@ -424,7 +456,7 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 .pane-head { flex: none; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; background: var(--bg-1); border-bottom: 1px solid var(--line); font: 11px var(--mono); color: var(--fg-dim); }
 .pane-body { flex: 1; min-height: 0; padding: 4px 0 0 6px; }
 .term-host { width: 100%; height: 100%; }
-/* The terminal theme is transparent; xterm.css still paints its viewport black. */
+/* xterm.css paints its viewport black; the terminal theme brings its own (opaque) background. */
 .term-host .xterm-viewport { background: transparent !important; }
 .term-host .xterm-scrollable-element > .shadow { display: none !important; }
 /* The note goes above the button so the button stays on the text's line, beside the attach button. */
@@ -471,7 +503,7 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; background: var(--bg-2); color: var(--fg-dim); padding: 3px 10px; cursor: pointer; font: 12px var(--sans); }
 .seg button.on { background: var(--accent-dim); color: var(--fg); }
-.seg .n { font: 10.5px var(--mono); opacity: .8; margin-left: 2px; }
+.seg .n { font: 10.5px var(--mono); color: var(--fg-dim); margin-left: 2px; }
 .inbox { display: grid; grid-template-columns: minmax(260px, 380px) minmax(0, 1fr); }
 .inbox-list { overflow-y: auto; border-right: 1px solid var(--line); background: var(--bg-1); padding: 6px; display: flex; flex-direction: column; gap: 4px; }
 .decision-row { display: block; color: inherit; text-decoration: none; padding: 8px 10px; border-radius: 6px; border: 1px solid transparent; }
