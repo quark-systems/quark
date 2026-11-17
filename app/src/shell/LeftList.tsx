@@ -1,5 +1,6 @@
 // The left list: All projects, then each project with its coordinator pinned on top and its
-// workers under it, then Accounts and Hosts in the footer (plans/ui-shell-design.md).
+// workers under it, then Accounts and Hosts in the footer (plans/ui-shell-design.md). The app menu
+// (Appearance, Updates, Setup) is the gear in its head.
 import React, { useMemo } from "react";
 import { href, Route, useRoute } from "../nav";
 import { useStore } from "../store";
@@ -9,11 +10,10 @@ import { leftListGroups, ProjectGroup } from "./groups";
 import { NextAttention } from "./NextAttention";
 import "./shell.css";
 import { BeadText } from "../ui/BeadText";
-import { useUpdateStatus } from "../appUpdate";
+import { AppMenu } from "./AppMenu";
 
 export function LeftList({ mod }: { mod: string }) {
   const route = useRoute();
-  const update = useUpdateStatus();
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
@@ -29,6 +29,7 @@ export function LeftList({ mod }: { mod: string }) {
           <svg width="16" height="16" viewBox="0 0 100 100"><path d="M60 12 H36 Q12 12 12 36 V64 Q12 88 36 88 H64 Q88 88 88 64 V40" fill="none" stroke="currentColor" strokeWidth="15" strokeLinejoin="round" /><circle cx="40" cy="60" r="11" fill="currentColor" /><circle cx="80" cy="20" r="13" fill="currentColor" /></svg>
         </span>
         <a className="ll-brand" href={href({ name: "projects" })}>Quark</a>
+        <AppMenu />
         <a className="ll-new" href={href({ name: "new" })} aria-label="New project" title="New project" data-testid="nav-new-project">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
         </a>
@@ -48,11 +49,6 @@ export function LeftList({ mod }: { mod: string }) {
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" /></svg>} />
         <Row href={href({ name: "hosts" })} current={route.name === "hosts"} testid="nav-hosts" title="Hosts"
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /></svg>} />
-        <Row href={href({ name: "updates" })} current={route.name === "updates"} testid="nav-updates" title="Updates"
-          trail={update?.state === "ready" ? <span className="ll-trail" data-testid="ll-update-ready">{update.offer?.version}</span> : undefined}
-          lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" /></svg>} />
-        <Row href={href({ name: "setup" })} current={route.name === "setup"} testid="nav-setup" title="Setup"
-          lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 12l2 2 4-4" /><circle cx="12" cy="12" r="9" /></svg>} />
       </div>
     </nav>
   );

@@ -7,11 +7,15 @@
 // Scheme approach adapted from MonoCode (https://github.com/hardbeat920/monocode), MIT,
 // Copyright (c) 2026 Nick.
 
+import { useSyncExternalStore } from "react";
+
 export type ThemePreference = "system" | "light" | "dark";
 export type ColorScheme = "light" | "dark";
 
 /** Fired on window with the new scheme whenever it changes (terminals repaint on it). */
 export const SCHEME_EVENT = "quark:scheme";
+/** Fired on window whenever the stored preference changes (the app menu and palette follow it). */
+export const PREFERENCE_EVENT = "quark:theme-preference";
 const KEY = "quark.theme";
 
 export function parsePreference(v: string | null | undefined): ThemePreference {
@@ -52,6 +56,17 @@ function apply(pref: ThemePreference) {
 export function setThemePreference(pref: ThemePreference) {
   try { localStorage.setItem(KEY, pref); } catch { /* private mode */ }
   apply(pref);
+  window.dispatchEvent(new CustomEvent<ThemePreference>(PREFERENCE_EVENT, { detail: pref }));
+}
+
+function onPreference(cb: () => void) {
+  window.addEventListener(PREFERENCE_EVENT, cb);
+  return () => window.removeEventListener(PREFERENCE_EVENT, cb);
+}
+
+/** The stored preference (System, Light or Dark), re-rendering when it changes. */
+export function useThemePreference(): ThemePreference {
+  return useSyncExternalStore(onPreference, themePreference, () => "system");
 }
 
 /** Applies the stored theme and shell flags; call once before the first render. */

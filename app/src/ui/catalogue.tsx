@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, Toggle, UsageMeter, CountBadge, BeadMarkdown, BeadText, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, Toggle, UsageMeter, Menu, CountBadge, BeadMarkdown, BeadText, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -29,6 +29,16 @@ const SAMPLE: Decision = {
   answer: null, answered_by: null, answered_at: null, answered_via: null, answer_why: null,
   outcome: null, acted_at: null, rule_id: null, made_rule_id: null,
 };
+
+function MenuExample() {
+  const [size, setSize] = useState("comfortable");
+  return (
+    <Menu label="View options" trigger={<Button>View: {size}</Button>} groups={[
+      { label: "Density", value: size, onChange: setSize, options: [{ value: "comfortable", label: "Comfortable" }, { value: "compact", label: "Compact" }] },
+      { actions: [{ label: "Reset to defaults", onSelect: () => setSize("comfortable") }] },
+    ]} />
+  );
+}
 
 function FolderPickerExample() {
   const [path, setPath] = useState("");
@@ -107,6 +117,12 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "Show how much of a limit is used: the coordinator's context against its window.",
     contract: "used and max in one unit; mark adds a tick (markLabel on hover) and turns the bar yellow once used reaches it; label names what is measured. Put the numbers in words beside it.",
     example: () => <div style={{ width: 240 }}><UsageMeter used={96_000} max={200_000} mark={140_000} markLabel="Compacts at 140k" label="Context" /></div>,
+  },
+  {
+    name: "Menu",
+    when: "Offer a few app-wide actions or one choice from a small set behind a button, such as the app menu's Appearance. Not for picking a form value (use Select).",
+    contract: "trigger is a button element with its own aria-label; label names the menu; groups are either a choice (value, options, onChange: the picked one shows a check and the menu stays open) or actions (label, icon, detail, onSelect). Groups are split by a line and may carry an uppercase label.",
+    example: () => <MenuExample />,
   },
   {
     name: "SectionLabel",

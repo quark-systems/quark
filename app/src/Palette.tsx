@@ -65,7 +65,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
             <Command.Group heading="Appearance">
               {(["system", "dark", "light"] as ThemePreference[]).map((t) => (
                 <Command.Item key={t} value={`theme ${t} appearance color scheme`} onSelect={() => pick(() => setThemePreference(t))}>
-                  {t === "system" ? "Theme: match system" : t === "dark" ? "Theme: dark" : "Theme: light"}
+                  {t === "system" ? "Appearance: System" : t === "dark" ? "Appearance: Dark" : "Appearance: Light"}
                   {themePreference() === t && <span className="sub">current</span>}
                 </Command.Item>
               ))}
