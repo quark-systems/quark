@@ -55,6 +55,11 @@ pub enum EventType {
     /// [`AccountQuotaChanged`](crate::AccountQuotaChanged).
     #[serde(rename = "account.quota_changed")]
     AccountQuotaChanged,
+    /// An account was added, changed, enabled, disabled or removed; payload
+    /// is an [`AccountChanged`](crate::AccountChanged). Read the accounts
+    /// again for the new list.
+    #[serde(rename = "account.changed")]
+    AccountChanged,
     /// A finished task's learning awaits review; payload is a [`MemoryProposal`](crate::MemoryProposal)(crate::MemoryProposal).
     #[serde(rename = "memory.proposed")]
     MemoryProposed,
@@ -85,7 +90,7 @@ pub enum EventType {
 }
 
 impl EventType {
-    pub const ALL: [EventType; 26] = [
+    pub const ALL: [EventType; 27] = [
         EventType::ProjectUpdated,
         EventType::ProjectDeleted,
         EventType::TaskCreated,
@@ -104,6 +109,7 @@ impl EventType {
         EventType::CommentUpdated,
         EventType::DispatchRecorded,
         EventType::AccountQuotaChanged,
+        EventType::AccountChanged,
         EventType::MemoryProposed,
         EventType::MemoryAccepted,
         EventType::MemoryRejected,
@@ -134,6 +140,7 @@ impl EventType {
             EventType::CommentUpdated => "comment.updated",
             EventType::DispatchRecorded => "dispatch.recorded",
             EventType::AccountQuotaChanged => "account.quota_changed",
+            EventType::AccountChanged => "account.changed",
             EventType::MemoryProposed => "memory.proposed",
             EventType::MemoryAccepted => "memory.accepted",
             EventType::MemoryRejected => "memory.rejected",

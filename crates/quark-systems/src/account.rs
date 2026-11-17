@@ -380,6 +380,31 @@ impl AccountQuota {
     }
 }
 
+/// What happened to an account, in `account.changed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountChange {
+    /// Added.
+    Created,
+    /// Renamed, pools replaced, or a kept key set or cleared.
+    Updated,
+    /// Enabled for Quark again.
+    Enabled,
+    /// Disabled for Quark; work running under it drains.
+    Disabled,
+    /// Disabled and waiting on its work to be removed.
+    Removing,
+    /// Gone.
+    Removed,
+}
+
+/// Payload of `account.changed`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AccountChanged {
+    pub account_id: String,
+    pub change: AccountChange,
+}
+
 /// Payload of `account.quota_changed`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct AccountQuotaChanged {

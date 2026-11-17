@@ -42,7 +42,7 @@ struct Snapshot: TimelineEntry {
             return s
         }
         if wantAccounts {
-            s.accounts = ((try? await client.accounts()) ?? []).filter { $0.quota.state != .unsupported }
+            s.accounts = ((try? await client.accounts()) ?? []).filter { $0.isEnabled && $0.quota.state != .unsupported }
             let names = (try? await client.harnesses()) ?? []
             s.harnessNames = Dictionary(names.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         }

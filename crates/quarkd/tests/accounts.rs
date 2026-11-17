@@ -1180,3 +1180,41 @@ async fn a_disabled_account_drains_and_takes_no_new_work() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+/// Adding, disabling, enabling and removing an account each tell clients
+/// (the menu bar) to read the accounts again.
+#[tokio::test]
+async fn account_changes_are_announced() {
+    let s = setup();
+    let dir = s.claude_dir("work");
+    let account = add(&s, json!({"harness": "claude-code", "config_dir": dir})).await;
+    let id = account["id"].as_str().unwrap().to_string();
+    for path in ["disable", "enable", "remove"] {
+        let (status, body) = call(
+            &s.app,
+            "POST",
+            &format!("/v1/accounts/{id}/{path}"),
+            Some(json!({"dispositions": {}})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+    let changes: Vec<(String, String)> = s
+        .store
+        .events_after(0, 1000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.event_type == EventType::AccountChanged)
+        .map(|e| {
+            (
+                e.payload["account_id"].as_str().unwrap().to_string(),
+                e.payload["change"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let want: Vec<(String, String)> = ["created", "disabled", "enabled", "removed"]
+        .into_iter()
+        .map(|c| (id.clone(), c.to_string()))
+        .collect();
+    assert_eq!(changes, want);
+}

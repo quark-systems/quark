@@ -50,6 +50,10 @@ public enum Format {
 }
 
 extension Account {
+    /// Whether Quark may start work under the account. Disabled accounts
+    /// (draining ones too) are left out of the menu bar and widgets.
+    public var isEnabled: Bool { enabled ?? true }
+
     /// The percentage to show for the account, when its quota is known.
     public var shownRemaining: Double? {
         quota.state == .known ? quota.remainingPercent : nil
@@ -68,5 +72,5 @@ extension Account {
 
 /// The lowest known remaining quota across accounts, for the menubar icon.
 public func lowestRemaining(_ accounts: [Account]) -> Double? {
-    accounts.compactMap(\.shownRemaining).min()
+    accounts.filter(\.isEnabled).compactMap(\.shownRemaining).min()
 }

@@ -193,6 +193,9 @@ public struct Account: Codable, Equatable, Identifiable, Sendable {
     public var health: HarnessAuth
     public var quota: AccountQuota
     public var activeTasks: UInt32
+    /// False once the person disabled the account for Quark. Absent from a
+    /// quarkd older than account enable/disable, where every account is on.
+    public var enabled: Bool?
 }
 
 public struct HarnessAuth: Codable, Equatable, Sendable {

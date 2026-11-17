@@ -25,6 +25,8 @@ final class QuarkKitTests: XCTestCase {
         XCTAssertEqual(accounts[2].health.state, .unknown)
         XCTAssertEqual(accounts[2].quota.state, .unknown)
         XCTAssertEqual(lowestRemaining(accounts), 38)
+        // Disabled accounts are left out; a quarkd without the field means enabled.
+        XCTAssertEqual(accounts.map(\.isEnabled), [true, false, true])
     }
 
     func testHealthContract() throws {

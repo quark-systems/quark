@@ -22,7 +22,7 @@ A `404` with an `ErrorBody` is a real "not found".
 | Project creation | `POST /v1/projects` with `repos`, `agent_config`, `dispatch_preset`, `delivery`; `Project.status`; `POST /v1/projects/{id}:provision` | quark#10 |
 | Archive and delete | `GET /v1/projects?include_archived=true`, `Project.archived_at`, `POST /v1/projects/{id}:archive`, `:unarchive`, `DELETE /v1/projects/{id}` with `confirm_name` (409 `unlanded_work` keeps it, archived); `project.deleted` events | project lifecycle |
 | Project memory | `GET /v1/projects/{id}/memory/proposals[?state=]`, `POST .../memory/proposals/{proposal_id}:accept` with optional `text` and `decided_by`, `:reject` with optional `decided_by`, `GET /v1/projects/{id}/memory`; `memory.proposed`, `memory.accepted`, `memory.rejected` events | quark#29 |
-| Accounts and pools | `GET/POST /v1/accounts`, `GET/PATCH/DELETE /v1/accounts/{id}`, `account.quota_changed` events; `AgentConfig.pool`, `Task.account_id`, `RelaunchTask.pool`, `HarnessInfo.account_env` | quark#23 |
+| Accounts and pools | `GET/POST /v1/accounts`, `GET/PATCH/DELETE /v1/accounts/{id}`, `account.quota_changed` and `account.changed` events; `AgentConfig.pool`, `Task.account_id`, `RelaunchTask.pool`, `HarnessInfo.account_env` | quark#23 |
 | Why this agent | `GET /v1/tasks/{id}/dispatch`, `dispatch.recorded` events | quark#27 |
 | Worker brief | `GET /v1/tasks/{id}/brief` (`TaskBrief`) | quark-ctx |
 | Failover on rate limits | `DispatchRecord.failover`, `Task.failovers` (`AccountFailover`: `from_account_id`, `to_account_id`, `pool`, `outcome`, `signal`, `detail`, `at`), a `failover` entry in `GET /v1/tasks/{id}/events`; a decision the daemon opens itself, answered through `POST /v1/decisions/{id}:answer` | quark#26 |
