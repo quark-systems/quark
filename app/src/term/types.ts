@@ -32,13 +32,20 @@ export const ANSI_DARK = {
   brightBlack: "#64748b", brightRed: "#fca5a5", brightGreen: "#86efac", brightYellow: "#fde68a",
   brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#f8fafc",
 };
-/** One Light family, tuned for a near-white page. */
+/** GitHub Light's terminal colors: every hue clears 4.5:1 on a near-white page. */
 export const ANSI_LIGHT = {
-  black: "#383a42", red: "#e45649", green: "#50a14f", yellow: "#c18401",
-  blue: "#4078f2", magenta: "#a626a4", cyan: "#0184bc", white: "#fafafa",
-  brightBlack: "#7c8591", brightRed: "#df6b60", brightGreen: "#68b567", brightYellow: "#d19a2f",
-  brightBlue: "#5c89f5", brightMagenta: "#b54bb3", brightCyan: "#1f9cc9", brightWhite: "#ffffff",
+  black: "#24292f", red: "#cf222e", green: "#116329", yellow: "#7d4e00",
+  blue: "#0969da", magenta: "#8250df", cyan: "#1b7c83", white: "#6e7781",
+  brightBlack: "#57606a", brightRed: "#a40e26", brightGreen: "#1a7f37", brightYellow: "#633c01",
+  brightBlue: "#218bff", brightMagenta: "#a475f9", brightCyan: "#3192aa", brightWhite: "#8c959f",
 };
+
+/**
+ * The contrast xterm enforces per cell, adjusting any color (ANSI, 256 or truecolor) that falls
+ * short. Harnesses such as Kiro and Bob pick pale truecolors for a dark terminal, which wash out
+ * on the light theme. xterm halves it for dim (faint) text, so dim stays visibly dim but legible.
+ */
+export function minimumContrast(light: boolean) { return light ? 7 : 4.5; }
 
 /**
  * The terminal theme for a scheme. The background is the page color, opaque: the WebGL renderer
