@@ -60,6 +60,9 @@ export const projectsApi = {
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { standing_approval: on }),
   setProjectHidden: (projectId: string, hidden: boolean) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { hidden }),
+  /** Renames the project. Only what you read changes: everything else is keyed by its id. */
+  renameProject: (projectId: string, name: string) =>
+    req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { name }),
 };
 
 /** A GitHub repository the daemon's `gh` account can reach. */

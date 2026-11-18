@@ -21,6 +21,9 @@ page lists every merged pull request.
   menu brings them back until Quark is reopened. A hidden project's coordinator and workers keep
   running, unlike an archived project's.
 
+- A project can be renamed. Settings › Name takes a new one; nothing moves on disk, since the
+  workspace, issues, pull requests and the coordinator's window are all keyed by the project's id.
+
 - An app menu (the gear in the left list's head) with Appearance: System, Light or Dark.
   System follows the computer and stays the default. Updates and Setup moved into it from the
   left list's footer; a dot on the gear says an update is ready.
