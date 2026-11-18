@@ -2,9 +2,9 @@
 // the coordinator's agent and compaction and each source's holdout tests change here; delivery is shown as chosen at creation;
 // issue sync rules are edited here; dispatch rules, pools and memory are summarized with a link to the screen that edits them.
 import React, { useEffect, useState } from "react";
-import { api, ApiError, CompactionSettings, NotAvailable, ProjectSettings, SourceVerification } from "../../api";
+import { api, ApiError, CompactionSettings, NotAvailable, Project, ProjectSettings, SourceVerification } from "../../api";
 import { href } from "../../nav";
-import { useStore } from "../../store";
+import { addProject, useStore } from "../../store";
 import { errText } from "../../util";
 import { Unavailable } from "../../components/Unavailable";
 import { StandingApproval } from "../../components/StandingApproval";
@@ -58,6 +58,10 @@ export function Settings({ project: pid }: { project: string }) {
         {unavailable && <Unavailable what="Project settings" endpoint={`GET /v1/projects/${pid}/settings`} />}
         {loadErr && <div className="set-error" role="alert">{loadErr} <button className="btn" onClick={() => void load()}>Retry</button></div>}
         <div className="set-body">
+          <Section title="Name" testId="settings-name-section">
+            <Rename project={project} />
+          </Section>
+
           <Section title="Merging" testId="settings-merging">
             <StandingApproval project={project} />
             <p className="faint">When on, the coordinator merges this Project's pull requests as soon as their checks pass.</p>
@@ -149,6 +153,37 @@ export function Settings({ project: pid }: { project: string }) {
 }
 
 /** The coordinator's automatic compaction: on or off, and the context size that sets it off. */
+function Rename({ project }: { project: Project }) {
+  const [name, setName] = useState(project.name);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setName(project.name); }, [project.name]);
+  const trimmed = name.trim();
+  const changed = trimmed !== "" && trimmed !== project.name;
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const p = await api.renameProject(project.id, trimmed);
+      addProject(p && typeof p === "object" ? { ...project, ...p } : { ...project, name: trimmed });
+    } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <div className="set-row">
+        <TextInput value={name} disabled={busy} invalid={trimmed === ""} style={{ minWidth: 240 }}
+          aria-label="Project name" data-testid="settings-name"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && changed) void save(); }} />
+        {changed && <Button disabled={busy} onClick={() => void save()} data-testid="settings-name-save">Save</Button>}
+      </div>
+      {trimmed === "" && <div className="set-error" role="alert">A project needs a name.</div>}
+      {err && <div className="set-error" role="alert">{err}</div>}
+      <p className="faint">Only what you read changes. The workspace folder, issues, pull requests and the coordinator's
+        window are keyed by the project's id, so nothing moves.</p>
+    </>
+  );
+}
+
 function Compaction({ pid, value, onSaved }: { pid: string; value: CompactionSettings; onSaved: (s: ProjectSettings) => void }) {
   const [pct, setPct] = useState(String(value.at_percent));
   const [busy, setBusy] = useState(false);
