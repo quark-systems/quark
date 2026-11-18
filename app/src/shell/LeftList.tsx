@@ -5,7 +5,7 @@ import React, { useMemo, useState } from "react";
 import { href, Route, useRoute } from "../nav";
 import { api } from "../api";
 import { setCollections, useStore } from "../store";
-import { CoordinatorMark, CountBadge, Menu, Row, StatusDot, TextInput } from "../ui";
+import { CoordinatorMark, CountBadge, Menu, MenuGroup, Row, StatusDot, TextInput } from "../ui";
 import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup, visibleProjects } from "./groups";
 import { useShowHidden } from "./reveal";
@@ -28,6 +28,16 @@ export function LeftList({ mod }: { mod: string }) {
   const byCollection = useGroupByCollection();
   const grouped = byCollection && collections.length > 0;
   const sections = useMemo(() => collectionSections(collections, groups), [collections, groups]);
+  /** Moves a collection among the others and saves each one's new place. */
+  const moveCollection = async (id: string, delta: number) => {
+    const was = collections.map((c) => c.id);
+    const order = moved(was, id, delta);
+    if (order.join("\u0000") === was.join("\u0000")) return;
+    try {
+      for (const [at, cid] of order.entries()) await api.updateCollection(cid, { position: at });
+      setCollections(await api.collections());
+    } catch { /* the order stays as it was */ }
+  };
 
   return (
     <nav className="left-list sidebar" aria-label="Projects">
@@ -51,7 +61,10 @@ export function LeftList({ mod }: { mod: string }) {
       </div>
       <div className="ll-projects">
         {grouped
-          ? sections.map((s) => <CollectionRows key={s.id ?? "ungrouped"} section={s} route={route} />)
+          ? sections.map((s) => (
+              <CollectionRows key={s.id ?? "ungrouped"} section={s} route={route}
+                reorder={{ move: moveCollection, count: collections.length }} />
+            ))
           : groups.map((g) => <ProjectSection key={g.project.id} g={g} route={route} />)}
         {!groups.length && <div className="ll-empty">No projects yet. <a href={href({ name: "new" })}>Create one</a>.</div>}
       </div>
@@ -88,13 +101,21 @@ function ProjectSection({ g, route }: { g: ProjectGroup; route: Route }) {
  *  reordered by dragging, or with Alt and the arrow keys for anyone not using a mouse; the order
  *  is saved on the collection. Ungrouped projects have no order of their own, so they are not
  *  draggable. */
-function CollectionRows({ section, route }: { section: CollectionSection; route: Route }) {
+/** How a collection is moved among the others, from its heading's menu. */
+interface CollectionReorder {
+  move: (id: string, delta: number) => Promise<void>;
+  /** How many collections there are: with one there is nothing to reorder. */
+  count: number;
+}
+
+function CollectionRows({ section, route, reorder }: { section: CollectionSection; route: Route; reorder: CollectionReorder }) {
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(section.name);
   // Ungrouped has no collection behind it, so its fold is only for this run.
   const [ungroupedFolded, setUngroupedFolded] = useState(false);
+
   const collapsed = section.id ? section.collapsed : ungroupedFolded;
   const sortable = section.id !== null && section.groups.length > 1;
 
@@ -160,10 +181,7 @@ function CollectionRows({ section, route }: { section: CollectionSection; route:
               <button type="button" className="ll-collection-menu" aria-label={`${section.name} collection`} data-testid="ll-collection-menu">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
               </button>
-            } groups={[{ actions: [
-              { label: "Rename", onSelect: () => { setDraft(section.name); setRenaming(true); } },
-              { label: "Remove collection", onSelect: () => void remove() },
-            ] }]} />
+            } groups={menuGroups(section.id, section.name, reorder, () => { setDraft(section.name); setRenaming(true); }, remove)} />
           )}
         </>)}
       </div>
@@ -185,4 +203,18 @@ function CollectionRows({ section, route }: { section: CollectionSection; route:
       ))}
     </section>
   );
+}
+
+/** A collection heading's menu: rename it, move it among the others, or remove it. The Reorder
+ *  group is left out while it is the only collection. */
+function menuGroups(id: string, name: string, reorder: CollectionReorder, rename: () => void, remove: () => Promise<void>): MenuGroup[] {
+  const groups: MenuGroup[] = [{ actions: [{ label: "Rename", onSelect: rename }] }];
+  if (reorder.count > 1) {
+    groups.push({ label: "Reorder", actions: [
+      { label: "Move up", testid: "ll-collection-up", onSelect: () => void reorder.move(id, -1) },
+      { label: "Move down", testid: "ll-collection-down", onSelect: () => void reorder.move(id, 1) },
+    ] });
+  }
+  groups.push({ actions: [{ label: "Remove collection", onSelect: () => void remove() }] });
+  return groups;
 }
