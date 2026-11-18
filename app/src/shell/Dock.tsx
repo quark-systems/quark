@@ -10,6 +10,7 @@ import { fromSlash } from "../commands";
 import { runCommand } from "../components/CoordinatorCommand";
 import { AttachButton, AttachmentList, Button, CoordinatorMark, Kbd } from "../ui";
 import { useAttachments, withAttachments } from "../attachments";
+import { useShowHidden } from "./reveal";
 import { BeadText } from "../ui/BeadText";
 
 export interface DockContext {
@@ -57,7 +58,8 @@ export const Dock = forwardRef<HTMLInputElement, { mod?: string }>(function Dock
   const tasks = useStore((s) => s.tasks);
   const pullRequests = useStore((s) => s.pullRequests);
   const decisions = useStore((s) => s.decisions);
-  const sorted = useMemo(() => Object.values(projects).filter((p) => !p.archived_at).sort((a, b) => a.name.localeCompare(b.name)), [projects]);
+  const showHidden = useShowHidden();
+  const sorted = useMemo(() => Object.values(projects).filter((p) => !p.archived_at && (!p.hidden || showHidden)).sort((a, b) => a.name.localeCompare(b.name)), [projects, showHidden]);
   const fallback = lastProject && projects[lastProject] ? lastProject : sorted[0]?.id ?? null;
   const ctx = dockContext(route, { tasks, pullRequests, decisions }, fallback);
   const [picked, setPicked] = useState<string | null>(null);

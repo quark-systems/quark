@@ -11,6 +11,7 @@ import { StandingApproval } from "../../components/StandingApproval";
 import { PersonaPicker } from "../../components/PersonaPicker";
 import { IssueSync } from "./IssueSync";
 import { ProjectLifecycle } from "../../components/ProjectLifecycle";
+import { HideProject } from "../../components/HideProject";
 import { ChangeAgent } from "../../components/ChangeAgent";
 import { Button, TextInput } from "../../ui";
 import "./settings.css";
@@ -130,6 +131,12 @@ export function Settings({ project: pid }: { project: string }) {
           <Section title="Persona" testId="settings-persona">
             <PersonaPicker projectId={pid} />
             <p className="faint">Role names, how agents address you and some labels. It changes how the Project reads, not what it does.</p>
+          </Section>
+
+          <Section title="Visibility" testId="settings-visibility">
+            <HideProject project={project} />
+            <p className="faint">A hidden project is left out of the left list, All projects, decisions, the PR center and the palette until
+              you turn on Show hidden projects in the app menu. Its coordinator and workers keep running.</p>
           </Section>
 
           <Section title="Archive or delete" testId="settings-lifecycle">

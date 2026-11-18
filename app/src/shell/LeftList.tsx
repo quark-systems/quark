@@ -6,7 +6,8 @@ import { href, Route, useRoute } from "../nav";
 import { useStore } from "../store";
 import { CoordinatorMark, CountBadge, Row, StatusDot } from "../ui";
 import { useLabels } from "../persona";
-import { leftListGroups, ProjectGroup } from "./groups";
+import { leftListGroups, ProjectGroup, visibleProjects } from "./groups";
+import { useShowHidden } from "./reveal";
 import { NextAttention } from "./NextAttention";
 import "./shell.css";
 import { BeadText } from "../ui/BeadText";
@@ -17,7 +18,8 @@ export function LeftList({ mod }: { mod: string }) {
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
-  const groups = useMemo(() => leftListGroups(projects, tasks, decisions), [projects, tasks, decisions]);
+  const showHidden = useShowHidden();
+  const groups = useMemo(() => leftListGroups(visibleProjects(projects, showHidden), tasks, decisions), [projects, tasks, decisions, showHidden]);
   const openPrs = useStore((s) => Object.values(s.pullRequests).filter((p) => p.state === "open" || p.state === "draft").length);
 
   return (

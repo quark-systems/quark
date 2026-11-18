@@ -18,7 +18,7 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: chat bar, omnibox, prompt bar.
 - **Setup**: the page listing what this Mac still needs before Quark can run a project (tools, sign-ins), with a button for each fix Quark can make itself. It opens on its own the first time something is missing; the app menu reaches it after that.
   _Avoid_: onboarding, wizard, doctor (in copy).
-- **App menu**: the gear in the left list's head, for what belongs to the whole app rather than one project: Appearance, Updates and Setup.
+- **App menu**: the gear in the left list's head, for what belongs to the whole app rather than one project: Appearance, Show hidden projects, Updates and Setup.
   _Avoid_: preferences, app settings (Settings is a project's).
 - **Appearance**: System, Light or Dark. System follows the computer's setting and is the default.
   _Avoid_: theme, color scheme, dark mode (as a setting's name).
@@ -43,6 +43,9 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: migrate, convert, sync.
 - **Archived project**: a project whose coordinator and workers are stopped and which is hidden from the left list and All projects, with everything kept. Unarchive brings it back. Deleting a project removes it from Quark for good; its repositories are never touched.
   _Avoid_: closed, hidden, paused (for projects).
+- **Hidden project**: a project left out of the left list, All projects, decisions, the PR center, next attention and the palette, set in its Settings. Its coordinator and workers keep running, unlike an archived project's. **Show hidden projects** in the app menu reveals them until Quark is reopened.
+  _Avoid_: incognito, private, secret, invisible, stealth.
+
 - **Issue**: a piece of work not yet started, tracked in Beads.
   _Avoid_: ticket, bead (in copy), backlog item, card.
 - **PR**: a pull request a worker opened.

@@ -454,6 +454,7 @@ mod tests {
             project_repo_path: None,
             standing_approval: false,
             archived_at: None,
+            hidden: false,
             created_at: "2026-10-02T00:00:00Z".into(),
             updated_at: "2026-10-02T00:00:00Z".into(),
         }

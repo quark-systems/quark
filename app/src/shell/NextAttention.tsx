@@ -4,7 +4,8 @@ import { go, parseRoute, Route, useRoute } from "../nav";
 import { useStore } from "../store";
 import { Kbd } from "../ui";
 import { attentionQueue, AttentionItem, nextAttention } from "./attention";
-import { archivedIds } from "./groups";
+import { unlistedIds } from "./groups";
+import { useShowHidden } from "./reveal";
 import { BeadText } from "../ui/BeadText";
 
 export function useAttention(): AttentionItem[] {
@@ -12,7 +13,8 @@ export function useAttention(): AttentionItem[] {
   const prs = useStore((s) => s.pullRequests);
   const tasks = useStore((s) => s.tasks);
   const projects = useStore((s) => s.projects);
-  return useMemo(() => attentionQueue(decisions, prs, tasks, archivedIds(projects)), [decisions, prs, tasks, projects]);
+  const showHidden = useShowHidden();
+  return useMemo(() => attentionQueue(decisions, prs, tasks, unlistedIds(projects, showHidden)), [decisions, prs, tasks, projects, showHidden]);
 }
 
 /** Opens the next item; returns false when nothing waits. */

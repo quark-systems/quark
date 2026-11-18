@@ -12558,6 +12558,10 @@
               "null"
             ]
           },
+          "hidden": {
+            "type": "boolean",
+            "description": "Hidden from the left list, All projects and everything that spans\nProjects (the decisions inbox, the PR center, next attention and the\npalette) until the app menu's \"Show hidden projects\" is turned on.\nIts coordinator and workers keep running: this is what the person\nsees, not a lifecycle state like `archived_at`."
+          },
           "id": {
             "type": "string"
           },
@@ -15339,6 +15343,13 @@
               "string",
               "null"
             ]
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Hide the Project from the app's lists, or bring it back."
           },
           "name": {
             "type": [

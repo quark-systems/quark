@@ -74,6 +74,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     migration!("0026_default_account_keys"),
     migration!("0027_coordinator_outbox", additive),
     migration!("0028_account_states", additive),
+    migration!("0029_project_hidden", additive),
 ];
 
 /// The schema version a fully migrated database has.

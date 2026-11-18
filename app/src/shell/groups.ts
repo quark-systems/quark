@@ -38,6 +38,28 @@ export function archivedIds(projects: Record<string, Project>): Set<string> {
   return new Set(Object.values(projects).filter((p) => p.archived_at).map((p) => p.id));
 }
 
+/** Ids of hidden projects: their Settings turned "Hide this project" on. */
+export function hiddenIds(projects: Record<string, Project>): Set<string> {
+  return new Set(Object.values(projects).filter((p) => p.hidden).map((p) => p.id));
+}
+
+/** Ids the left list, home, attention queue and palette leave out: archived projects always,
+ *  hidden ones until the app menu reveals them. */
+export function unlistedIds(projects: Record<string, Project>, showHidden = false): Set<string> {
+  const out = archivedIds(projects);
+  if (!showHidden) for (const id of hiddenIds(projects)) out.add(id);
+  return out;
+}
+
+/** The projects a list shows: hidden ones only while revealed. Archived ones are left to each
+ *  screen, which shows them under its own control. */
+export function visibleProjects(projects: Record<string, Project>, showHidden: boolean): Record<string, Project> {
+  if (showHidden) return projects;
+  const out: Record<string, Project> = {};
+  for (const [id, p] of Object.entries(projects)) if (!p.hidden) out[id] = p;
+  return out;
+}
+
 /** Projects by name, each with its listed workers, newest activity first. Archived projects are left out. */
 export function leftListGroups(projects: Record<string, Project>, tasks: Record<string, Task>, decisions: Record<string, Decision>, now = Date.now()): ProjectGroup[] {
   const byProject: Record<string, Task[]> = {};

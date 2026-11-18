@@ -345,6 +345,7 @@ impl Store {
                 project_repo_path: None,
                 standing_approval: false,
                 archived_at: None,
+                hidden: false,
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -474,10 +475,13 @@ impl Store {
             if let Some(on) = input.standing_approval {
                 project.standing_approval = on;
             }
+            if let Some(on) = input.hidden {
+                project.hidden = on;
+            }
             project.updated_at = now_rfc3339();
             tx.execute(
                 "UPDATE projects SET name = ?2, goal = ?3, workspace_path = ?4, updated_at = ?5,
-                     standing_approval = ?6
+                     standing_approval = ?6, hidden = ?7
                  WHERE id = ?1",
                 params![
                     project.id,
@@ -485,7 +489,8 @@ impl Store {
                     project.goal,
                     project.workspace_path,
                     project.updated_at,
-                    project.standing_approval
+                    project.standing_approval,
+                    project.hidden
                 ],
             )?;
             append_event(
@@ -1849,7 +1854,7 @@ fn new_id(prefix: &str) -> String {
 
 const PROJECT_SELECT: &str = "SELECT id, name, goal, workspace_path, created_at, updated_at, \
                               status, status_detail, spec, project_repo_path, \
-                              standing_approval, archived_at FROM projects";
+                              standing_approval, archived_at, hidden FROM projects";
 
 /// The creation inputs kept with a Project row.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -1901,6 +1906,7 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         project_repo_path: r.get(9)?,
         standing_approval: r.get(10)?,
         archived_at: r.get(11)?,
+        hidden: r.get(12)?,
     })
 }
 

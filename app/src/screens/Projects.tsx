@@ -8,7 +8,8 @@ import { ago, isActive } from "../util";
 import { CountBadge, SectionLabel, StatusDot } from "../ui";
 import { useAttention } from "../shell/NextAttention";
 import { AttentionKind } from "../shell/attention";
-import { archivedIds, swatchFor } from "../shell/groups";
+import { archivedIds, unlistedIds, swatchFor } from "../shell/groups";
+import { useShowHidden } from "../shell/reveal";
 import { UnarchiveButton } from "../components/ProjectLifecycle";
 import { BeadText } from "../ui/BeadText";
 
@@ -28,6 +29,8 @@ export function Projects() {
   const [filter, setFilter] = useState<Filter>("all");
   const [showArchived, setShowArchived] = useState(false);
   const archived = useMemo(() => archivedIds(projects), [projects]);
+  const showHidden = useShowHidden();
+  const unlisted = useMemo(() => unlistedIds(projects, showHidden), [projects, showHidden]);
   const pname = (id: string) => projects[id]?.name ?? id;
 
   const counts = useMemo(() => {
@@ -36,13 +39,13 @@ export function Projects() {
     return c;
   }, [queue]);
   const shown = filter === "all" ? queue : queue.filter((i) => i.kind === filter);
-  const openPrs = useMemo(() => Object.values(prs).filter((p) => (p.state === "open" || p.state === "draft") && !archived.has(p.project_id))
-    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs, archived]);
+  const openPrs = useMemo(() => Object.values(prs).filter((p) => (p.state === "open" || p.state === "draft") && !unlisted.has(p.project_id))
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs, unlisted]);
   const archivedShown = showArchived && archived.size > 0;
-  const rows = useMemo(() => Object.values(projects).filter((p) => !!p.archived_at === archivedShown).map((p) => {
+  const rows = useMemo(() => Object.values(projects).filter((p) => !!p.archived_at === archivedShown && (!p.hidden || showHidden)).map((p) => {
     const ts = Object.values(tasks).filter((t) => t.project_id === p.id);
     return { p, active: ts.filter((t) => isActive(t.state)).length, waiting: queue.filter((i) => i.projectId === p.id).length };
-  }).sort((a, b) => b.p.updated_at.localeCompare(a.p.updated_at)), [projects, tasks, queue, archivedShown]);
+  }).sort((a, b) => b.p.updated_at.localeCompare(a.p.updated_at)), [projects, tasks, queue, archivedShown, showHidden]);
 
   return (
     <>
