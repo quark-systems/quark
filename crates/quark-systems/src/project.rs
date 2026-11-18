@@ -33,6 +33,13 @@ pub struct Project {
     /// asked for; its data is kept until it is unarchived or deleted.
     #[serde(default)]
     pub archived_at: Option<String>,
+    /// Hidden from the left list, All projects and everything that spans
+    /// Projects (the decisions inbox, the PR center, next attention and the
+    /// palette) until the app menu's "Show hidden projects" is turned on.
+    /// Its coordinator and workers keep running: this is what the person
+    /// sees, not a lifecycle state like `archived_at`.
+    #[serde(default)]
+    pub hidden: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -85,6 +92,8 @@ pub struct UpdateProject {
     /// Turn standing approval on or off. Needs the Project's workspace when
     /// the Project has repos.
     pub standing_approval: Option<bool>,
+    /// Hide the Project from the app's lists, or bring it back.
+    pub hidden: Option<bool>,
 }
 
 /// Where a Project is in its lifecycle.

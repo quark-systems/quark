@@ -32,9 +32,11 @@ const SAMPLE: Decision = {
 
 function MenuExample() {
   const [size, setSize] = useState("comfortable");
+  const [dense, setDense] = useState(false);
   return (
     <Menu label="View options" trigger={<Button>View: {size}</Button>} groups={[
       { label: "Density", value: size, onChange: setSize, options: [{ value: "comfortable", label: "Comfortable" }, { value: "compact", label: "Compact" }] },
+      { checkbox: { label: "Show archived", checked: dense, onCheckedChange: setDense } },
       { actions: [{ label: "Reset to defaults", onSelect: () => setSize("comfortable") }] },
     ]} />
   );
@@ -121,7 +123,7 @@ export const CATALOGUE: CatalogueEntry[] = [
   {
     name: "Menu",
     when: "Offer a few app-wide actions or one choice from a small set behind a button, such as the app menu's Appearance. Not for picking a form value (use Select).",
-    contract: "trigger is a button element with its own aria-label; label names the menu; groups are either a choice (value, options, onChange: the picked one shows a check and the menu stays open) or actions (label, icon, detail, onSelect). Groups are split by a line and may carry an uppercase label.",
+    contract: "trigger is a button element with its own aria-label; label names the menu; a group is a choice (value, options, onChange: the picked one shows a check and the menu stays open), a checkbox (label, checked, onCheckedChange: a switch that also keeps the menu open) or actions (label, icon, detail, onSelect). Groups are split by a line and may carry an uppercase label.",
     example: () => <MenuExample />,
   },
   {

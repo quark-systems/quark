@@ -16,6 +16,11 @@ page lists every merged pull request.
 
 ### Added
 
+- A project can be hidden. Settings › Visibility keeps it out of the left list, All projects,
+  decisions, the PR center, next attention and the palette; **Show hidden projects** in the app
+  menu brings them back until Quark is reopened. A hidden project's coordinator and workers keep
+  running, unlike an archived project's.
+
 - An app menu (the gear in the left list's head) with Appearance: System, Light or Dark.
   System follows the computer and stays the default. Updates and Setup moved into it from the
   left list's footer; a dot on the gear says an update is ready.

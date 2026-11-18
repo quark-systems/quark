@@ -22,6 +22,8 @@ export interface Project {
   standing_approval?: boolean | null;
   /** When it was archived: its agents are stopped and it is hidden until unarchived. */
   archived_at?: string | null;
+  /** Hidden from the lists until the app menu reveals it; its agents keep running. */
+  hidden?: boolean | null;
 }
 
 export interface CreateProject {
@@ -56,6 +58,8 @@ export const projectsApi = {
     req<void>("DELETE", `/v1/projects/${enc(id)}`, { confirm_name: confirmName }),
   setStandingApproval: (projectId: string, on: boolean) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { standing_approval: on }),
+  setProjectHidden: (projectId: string, hidden: boolean) =>
+    req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { hidden }),
 };
 
 /** A GitHub repository the daemon's `gh` account can reach. */

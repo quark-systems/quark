@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { leftListGroups, swatchFor } from "./groups";
+import { hiddenIds, leftListGroups, swatchFor, unlistedIds, visibleProjects } from "./groups";
 
 const p = (id: string, name: string) => ({ id, name, created_at: "", updated_at: "" });
 const t = (id: string, project_id: string, state: any, updated_at = "2026-10-08T00:00:00Z", state_note?: string) =>
@@ -31,5 +31,27 @@ describe("leftListGroups", () => {
   });
   it("gives each project a stable color", () => {
     expect(swatchFor("quark")).toBe(swatchFor("quark"));
+  });
+});
+
+describe("hidden projects", () => {
+  const projects = {
+    a: p("a", "A"),
+    h: { ...p("h", "Hidden"), hidden: true },
+    z: { ...p("z", "Archived"), archived_at: "2026-10-18T00:00:00Z" },
+  };
+
+  it("names the hidden ones", () => {
+    expect([...hiddenIds(projects)]).toEqual(["h"]);
+  });
+
+  it("leaves archived and hidden out of the lists, and reveals only the hidden ones", () => {
+    expect([...unlistedIds(projects)].sort()).toEqual(["h", "z"]);
+    expect([...unlistedIds(projects, true)]).toEqual(["z"]);
+  });
+
+  it("keeps a hidden project out of the left list until it is revealed", () => {
+    expect(leftListGroups(visibleProjects(projects, false), {}, {}).map((g) => g.project.id)).toEqual(["a"]);
+    expect(leftListGroups(visibleProjects(projects, true), {}, {}).map((g) => g.project.id)).toEqual(["a", "h"]);
   });
 });

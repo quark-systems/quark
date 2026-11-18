@@ -6,9 +6,12 @@ import { cx } from "./cx";
 
 export interface MenuOption { value: string; label: string; icon?: React.ReactNode }
 export interface MenuAction { label: string; icon?: React.ReactNode; onSelect: () => void; detail?: React.ReactNode; testid?: string }
+/** A switch that stays in the menu: checked shows a tick, and picking it does not close the menu. */
+export interface MenuCheckbox { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void; icon?: React.ReactNode; testid?: string }
 /** One group of the menu: a choice from a set (shown with a check) or a list of actions. */
 export type MenuGroup = { label?: string } & (
   | { value: string; options: MenuOption[]; onChange: (value: string) => void }
+  | { checkbox: MenuCheckbox }
   | { actions: MenuAction[] }
 );
 
@@ -48,6 +51,13 @@ export function Menu({ trigger, groups, align = "start", label }: {
                       </DropdownMenu.RadioItem>
                     ))}
                   </DropdownMenu.RadioGroup>
+                ) : "checkbox" in g ? (
+                  <DropdownMenu.CheckboxItem checked={g.checkbox.checked} onCheckedChange={g.checkbox.onCheckedChange}
+                    className={ITEM} onSelect={(e) => e.preventDefault()} data-testid={g.checkbox.testid}>
+                    <span className={ICON}>{g.checkbox.icon}</span>
+                    <span className="flex-1">{g.checkbox.label}</span>
+                    <DropdownMenu.ItemIndicator className="inline-flex text-fg"><Check /></DropdownMenu.ItemIndicator>
+                  </DropdownMenu.CheckboxItem>
                 ) : g.actions.map((a) => (
                   <DropdownMenu.Item key={a.label} className={cx(ITEM)} onSelect={a.onSelect} data-testid={a.testid}>
                     <span className={ICON}>{a.icon}</span>

@@ -8,6 +8,7 @@ import { useStore } from "./store";
 import { stateMeta } from "./util";
 import { setThemePreference, themePreference, ThemePreference } from "./theme";
 import { BeadText } from "./ui/BeadText";
+import { useShowHidden } from "./shell/reveal";
 
 export function Palette({ onClose }: { onClose: () => void }) {
   const projects = useStore((s) => s.projects);
@@ -16,6 +17,9 @@ export function Palette({ onClose }: { onClose: () => void }) {
   const prs = useStore((s) => s.pullRequests);
   const proposals = useStore((s) => s.memoryProposals);
   const toReview = (pid: string) => Object.values(proposals).filter((m) => m.project_id === pid && m.state === "proposed").length;
+  const showHidden = useShowHidden();
+  // A hidden project stays out of the palette too, or its name would surface in search.
+  const listed = Object.values(projects).filter((p) => !p.hidden || showHidden);
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -81,14 +85,14 @@ export function Palette({ onClose }: { onClose: () => void }) {
               </Command.Group>
             )}
             <Command.Group heading="Projects">
-              {Object.values(projects).map((p) => (
+              {listed.map((p) => (
                 <Command.Item key={p.id} value={`project ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "project", id: p.id }))}>
                   <span className="mono faint">#</span>{p.name}<span className="sub">{p.goal ?? ""}</span>
                 </Command.Item>
               ))}
             </Command.Group>
             <Command.Group heading="Memory">
-              {Object.values(projects).map((p) => (
+              {listed.map((p) => (
                 <Command.Item key={p.id} value={`memory learnings review ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "memory", project: p.id }))}>
                   <span className="ellipsis">Memory: {p.name}</span>
                   <span className="sub">{toReview(p.id)} to review</span>
@@ -96,14 +100,14 @@ export function Palette({ onClose }: { onClose: () => void }) {
               ))}
             </Command.Group>
             <Command.Group heading="Issues">
-              {Object.values(projects).map((p) => (
+              {listed.map((p) => (
                 <Command.Item key={p.id} value={`issues beads bugs ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "issues", project: p.id }))}>
                   <span className="ellipsis">Issues: {p.name}</span>
                 </Command.Item>
               ))}
             </Command.Group>
             <Command.Group heading="Dispatch">
-              {Object.values(projects).map((p) => (
+              {listed.map((p) => (
                 <Command.Item key={p.id} value={`dispatch rules agents ${p.name} ${p.id}`} onSelect={() => pick(() => go({ name: "dispatch", project: p.id }))}>
                   <span className="ellipsis">Dispatch: {p.name}</span>
                 </Command.Item>
