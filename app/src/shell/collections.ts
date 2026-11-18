@@ -13,6 +13,8 @@ export interface CollectionSection {
   name: string;
   /** The projects shown under the heading. */
   groups: ProjectGroup[];
+  /** Whether it is folded shut, showing its heading alone. */
+  collapsed: boolean;
   /** The collection's whole membership, including projects the list is not showing. Reordering
    *  is applied to this, so an archived or hidden member is never dropped from the collection. */
   members: string[];
@@ -38,10 +40,10 @@ export function collectionSections(collections: Collection[], groups: ProjectGro
       inside.push(g);
       placed.add(id);
     }
-    return { id: c.id, name: c.name, groups: inside, members: c.projects };
+    return { id: c.id, name: c.name, groups: inside, members: c.projects, collapsed: c.collapsed };
   });
   const rest = groups.filter((g) => !placed.has(g.project.id));
-  if (rest.length > 0) sections.push({ id: null, name: UNGROUPED, groups: rest, members: [] });
+  if (rest.length > 0) sections.push({ id: null, name: UNGROUPED, groups: rest, members: [], collapsed: false });
   return sections;
 }
 

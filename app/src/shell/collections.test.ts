@@ -3,7 +3,7 @@ import { collectionSections, dropped, moved, UNGROUPED } from "./collections";
 
 const g = (id: string) => ({ project: { id, name: id, created_at: "", updated_at: "" }, swatch: "", waiting: 0, coordSub: "", workers: [] }) as any;
 const c = (id: string, name: string, projects: string[]) =>
-  ({ id, name, position: 0, projects, created_at: "", updated_at: "" });
+  ({ id, name, position: 0, collapsed: false, projects, created_at: "", updated_at: "" });
 
 describe("collectionSections", () => {
   it("puts each project under every collection it is in, then the rest under Ungrouped", () => {

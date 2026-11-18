@@ -7,6 +7,8 @@ export interface Collection {
   id: string; name: string;
   /** Where it sits among the collections, ascending. */
   position: number;
+  /** Whether it is folded shut in the left list, showing its heading alone. */
+  collapsed: boolean;
   /** The projects in it, in the order the left list shows them. */
   projects: string[];
   created_at: string; updated_at: string;
@@ -15,6 +17,7 @@ export interface Collection {
 export interface UpdateCollection {
   name?: string;
   position?: number;
+  collapsed?: boolean;
   /** Replaces the whole membership, in the order given. */
   projects?: string[];
 }

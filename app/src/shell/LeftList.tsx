@@ -93,6 +93,9 @@ function CollectionRows({ section, route }: { section: CollectionSection; route:
   const [over, setOver] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(section.name);
+  // Ungrouped has no collection behind it, so its fold is only for this run.
+  const [ungroupedFolded, setUngroupedFolded] = useState(false);
+  const collapsed = section.id ? section.collapsed : ungroupedFolded;
   const sortable = section.id !== null && section.groups.length > 1;
 
   const reload = async () => setCollections(await api.collections());
@@ -100,6 +103,10 @@ function CollectionRows({ section, route }: { section: CollectionSection; route:
     const name = next.trim();
     if (!section.id || name === "" || name === section.name) return;
     try { await api.updateCollection(section.id, { name }); await reload(); } catch { /* name kept */ }
+  };
+  const fold = async (next: boolean) => {
+    if (!section.id) { setUngroupedFolded(next); return; }
+    try { await api.updateCollection(section.id, { collapsed: next }); await reload(); } catch { /* stays open */ }
   };
   const remove = async () => {
     if (!section.id) return;
@@ -134,7 +141,20 @@ function CollectionRows({ section, route }: { section: CollectionSection; route:
               if (e.key === "Enter") { setRenaming(false); void rename(draft); }
             }} />
         ) : (<>
-          <h2 className="ll-collection-name">{section.name}</h2>
+          <h2 className="ll-collection-name">
+            <button type="button" className="ll-collection-toggle" aria-expanded={!collapsed}
+              onClick={() => void fold(!collapsed)} data-testid="ll-collection-toggle">
+              <svg className={"ll-chevron" + (collapsed ? " folded" : "")} width="12" height="12" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+              {section.name}
+            </button>
+          </h2>
+          <span className="ll-collection-rule" aria-hidden="true" />
+          {collapsed && section.groups.length > 0 && (
+            <span className="ll-collection-count">{section.groups.length}</span>
+          )}
           {section.id && (
             <Menu label={`${section.name} collection`} align="end" trigger={
               <button type="button" className="ll-collection-menu" aria-label={`${section.name} collection`} data-testid="ll-collection-menu">
@@ -147,8 +167,8 @@ function CollectionRows({ section, route }: { section: CollectionSection; route:
           )}
         </>)}
       </div>
-      {section.groups.length === 0 && <p className="ll-collection-empty">Nothing in here yet.</p>}
-      {section.groups.map((g) => (
+      {!collapsed && section.groups.length === 0 && <p className="ll-collection-empty">Nothing in here yet.</p>}
+      {!collapsed && section.groups.map((g) => (
         <div key={g.project.id} className={"ll-collection-item" + (over === g.project.id ? " ll-drop-before" : "")}
           draggable={sortable}
           onDragStart={(e) => { setDragging(g.project.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", g.project.id); }}

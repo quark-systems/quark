@@ -11,16 +11,18 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use super::{new_id, Result, Store, StoreError};
 use crate::now_rfc3339;
 
-const SELECT: &str = "SELECT id, name, position, created_at, updated_at FROM collections";
+const SELECT: &str =
+    "SELECT id, name, position, collapsed, created_at, updated_at FROM collections";
 
 fn from_row(r: &Row) -> rusqlite::Result<Collection> {
     Ok(Collection {
         id: r.get(0)?,
         name: r.get(1)?,
         position: r.get(2)?,
+        collapsed: r.get(3)?,
         projects: Vec::new(),
-        created_at: r.get(3)?,
-        updated_at: r.get(4)?,
+        created_at: r.get(4)?,
+        updated_at: r.get(5)?,
     })
 }
 
@@ -85,6 +87,7 @@ impl Store {
                 id: new_id("col"),
                 name,
                 position: next,
+                collapsed: false,
                 projects: Vec::new(),
                 created_at: now.clone(),
                 updated_at: now,
@@ -116,13 +119,19 @@ impl Store {
             if let Some(position) = input.position {
                 collection.position = position;
             }
+            if let Some(collapsed) = input.collapsed {
+                collection.collapsed = collapsed;
+            }
             collection.updated_at = now_rfc3339();
             tx.execute(
-                "UPDATE collections SET name = ?2, position = ?3, updated_at = ?4 WHERE id = ?1",
+                "UPDATE collections SET name = ?2, position = ?3, collapsed = ?4,
+                     updated_at = ?5
+                 WHERE id = ?1",
                 params![
                     collection.id,
                     collection.name,
                     collection.position,
+                    collection.collapsed,
                     collection.updated_at
                 ],
             )?;
