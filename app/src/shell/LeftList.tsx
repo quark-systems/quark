@@ -144,17 +144,17 @@ function CollectionRows({ section, route }: { section: CollectionSection; route:
           <h2 className="ll-collection-name">
             <button type="button" className="ll-collection-toggle" aria-expanded={!collapsed}
               onClick={() => void fold(!collapsed)} data-testid="ll-collection-toggle">
-              <svg className={"ll-chevron" + (collapsed ? " folded" : "")} width="12" height="12" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg className={"ll-chevron" + (collapsed ? " folded" : "")} width="10" height="10" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M6 9l6 6 6-6" />
               </svg>
               {section.name}
+              {collapsed && section.groups.length > 0 && (
+                <span className="ll-collection-count">({section.groups.length})</span>
+              )}
             </button>
           </h2>
           <span className="ll-collection-rule" aria-hidden="true" />
-          {collapsed && section.groups.length > 0 && (
-            <span className="ll-collection-count">{section.groups.length}</span>
-          )}
           {section.id && (
             <Menu label={`${section.name} collection`} align="end" trigger={
               <button type="button" className="ll-collection-menu" aria-label={`${section.name} collection`} data-testid="ll-collection-menu">
