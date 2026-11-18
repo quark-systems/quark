@@ -20,7 +20,8 @@ page lists every merged pull request.
   several, or none — and the left list groups them under a heading, with whatever is in no
   collection under Ungrouped. Projects are ordered within a collection by dragging them, or with
   Alt and the arrow keys, collections themselves are moved with Reorder in a heading's menu, and a
-  collection folds shut to its heading alone. **Group by collection**
+  collection folds shut to its heading alone. Removing a collection asks for its name first, as
+  deleting a project does; the projects in it are untouched. **Group by collection**
   in the app menu turns the grouping off and shows every project flat; the daemon keeps both that
   choice and which collections are folded, so every client it serves opens the same way.
 

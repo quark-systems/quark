@@ -171,13 +171,18 @@ impl Store {
         })
     }
 
-    /// Removes a collection. Its Projects are untouched.
-    pub fn delete_collection(&self, id: &str) -> Result<()> {
+    /// Removes a collection, once `confirm_name` is its name. Its Projects
+    /// are untouched.
+    pub fn delete_collection(&self, id: &str, confirm_name: &str) -> Result<()> {
         self.write(|tx, _events| {
-            let n = tx.execute("DELETE FROM collections WHERE id = ?1", [id])?;
-            if n == 0 {
-                return Err(StoreError::NotFound);
+            let collection = get(tx, id)?;
+            if confirm_name.trim() != collection.name {
+                return Err(StoreError::Invalid(format!(
+                    "confirm_name must be the collection's name, {}",
+                    collection.name
+                )));
             }
+            tx.execute("DELETE FROM collections WHERE id = ?1", [id])?;
             Ok(())
         })
     }

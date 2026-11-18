@@ -32,6 +32,14 @@ pub struct CreateCollection {
     pub name: String,
 }
 
+/// Remove a collection. `confirm_name` must be its name exactly, so a
+/// collection is never removed by a stray click. The Projects in it are
+/// untouched.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct DeleteCollection {
+    pub confirm_name: String,
+}
+
 /// Partial update; absent fields are left unchanged.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct UpdateCollection {

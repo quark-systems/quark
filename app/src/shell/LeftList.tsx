@@ -9,6 +9,7 @@ import { CoordinatorMark, CountBadge, Menu, MenuGroup, Row, StatusDot, TextInput
 import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup, visibleProjects } from "./groups";
 import { useShowHidden } from "./reveal";
+import { RemoveCollection } from "./RemoveCollection";
 import { CollectionSection, collectionSections, dropped, moved } from "./collections";
 import { useGroupByCollection } from "./grouping";
 import { NextAttention } from "./NextAttention";
@@ -112,6 +113,7 @@ function CollectionRows({ section, route, reorder }: { section: CollectionSectio
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [draft, setDraft] = useState(section.name);
   // Ungrouped has no collection behind it, so its fold is only for this run.
   const [ungroupedFolded, setUngroupedFolded] = useState(false);
@@ -128,10 +130,6 @@ function CollectionRows({ section, route, reorder }: { section: CollectionSectio
   const fold = async (next: boolean) => {
     if (!section.id) { setUngroupedFolded(next); return; }
     try { await api.updateCollection(section.id, { collapsed: next }); await reload(); } catch { /* stays open */ }
-  };
-  const remove = async () => {
-    if (!section.id) return;
-    try { await api.deleteCollection(section.id); await reload(); } catch { /* kept */ }
   };
 
   const save = async (next: string[]) => {
@@ -170,7 +168,7 @@ function CollectionRows({ section, route, reorder }: { section: CollectionSectio
                 <path d="M6 9l6 6 6-6" />
               </svg>
               {section.name}
-              {collapsed && section.groups.length > 0 && (
+              {section.groups.length > 0 && (
                 <span className="ll-collection-count">({section.groups.length})</span>
               )}
             </button>
@@ -181,10 +179,11 @@ function CollectionRows({ section, route, reorder }: { section: CollectionSectio
               <button type="button" className="ll-collection-menu" aria-label={`${section.name} collection`} data-testid="ll-collection-menu">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
               </button>
-            } groups={menuGroups(section.id, section.name, reorder, () => { setDraft(section.name); setRenaming(true); }, remove)} />
+            } groups={menuGroups(section.id, section.name, reorder, () => { setDraft(section.name); setRenaming(true); }, () => setRemoving(true))} />
           )}
         </>)}
       </div>
+      {removing && section.id && <RemoveCollection id={section.id} name={section.name} onClose={() => setRemoving(false)} />}
       {!collapsed && section.groups.length === 0 && <p className="ll-collection-empty">Nothing in here yet.</p>}
       {!collapsed && section.groups.map((g) => (
         <div key={g.project.id} className={"ll-collection-item" + (over === g.project.id ? " ll-drop-before" : "")}
@@ -207,7 +206,7 @@ function CollectionRows({ section, route, reorder }: { section: CollectionSectio
 
 /** A collection heading's menu: rename it, move it among the others, or remove it. The Reorder
  *  group is left out while it is the only collection. */
-function menuGroups(id: string, name: string, reorder: CollectionReorder, rename: () => void, remove: () => Promise<void>): MenuGroup[] {
+function menuGroups(id: string, name: string, reorder: CollectionReorder, rename: () => void, remove: () => void): MenuGroup[] {
   const groups: MenuGroup[] = [{ actions: [{ label: "Rename", onSelect: rename }] }];
   if (reorder.count > 1) {
     groups.push({ label: "Reorder", actions: [
@@ -215,6 +214,6 @@ function menuGroups(id: string, name: string, reorder: CollectionReorder, rename
       { label: "Move down", testid: "ll-collection-down", onSelect: () => void reorder.move(id, 1) },
     ] });
   }
-  groups.push({ actions: [{ label: "Remove collection", onSelect: () => void remove() }] });
+  groups.push({ actions: [{ label: "Remove collection", onSelect: remove }] });
   return groups;
 }

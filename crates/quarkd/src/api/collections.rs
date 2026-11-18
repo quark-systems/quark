@@ -6,7 +6,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use quark_systems::{Collection, CreateCollection, ErrorBody, UpdateCollection};
+use quark_systems::{Collection, CreateCollection, DeleteCollection, ErrorBody, UpdateCollection};
 
 use super::{db, ApiError, AppState};
 
@@ -63,22 +63,29 @@ pub async fn update(
     ))
 }
 
-/// Remove a collection. The Projects in it are untouched.
+/// Remove a collection. `confirm_name` must be its name exactly. The
+/// Projects in it are untouched.
 #[utoipa::path(
     delete,
     path = "/v1/collections/{id}",
     tag = "collections",
     params(("id" = String, Path, description = "Collection id")),
+    request_body = DeleteCollection,
     responses(
         (status = 204, description = "Removed"),
+        (status = 400, description = "`confirm_name` is not the collection's name", body = ErrorBody),
         (status = 404, body = ErrorBody)
     )
 )]
 pub async fn delete(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Json(input): Json<DeleteCollection>,
 ) -> Result<StatusCode, ApiError> {
-    db(&state, move |s| s.delete_collection(&id)).await?;
+    db(&state, move |s| {
+        s.delete_collection(&id, &input.confirm_name)
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

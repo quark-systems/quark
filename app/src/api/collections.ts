@@ -27,5 +27,7 @@ export const collectionsApi = {
   createCollection: (name: string) => req<Collection>("POST", "/v1/collections", { name }),
   updateCollection: (id: string, patch: UpdateCollection) =>
     req<Collection>("PATCH", `/v1/collections/${enc(id)}`, patch),
-  deleteCollection: (id: string) => req<void>("DELETE", `/v1/collections/${enc(id)}`),
+  /** `confirmName` must be the collection's name exactly. The projects in it are untouched. */
+  deleteCollection: (id: string, confirmName: string) =>
+    req<void>("DELETE", `/v1/collections/${enc(id)}`, { confirm_name: confirmName }),
 };
