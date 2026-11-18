@@ -608,6 +608,158 @@
         }
       }
     },
+    "/v1/collections": {
+      "get": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Every collection with the Projects in it, in the order they are shown.",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Collection"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Add an empty collection, after the ones that exist.",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCollection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}": {
+      "delete": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Remove a collection. The Projects in it are untouched.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Collection id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Rename a collection, move it among the others, or replace what is in it.\n`projects` is the whole membership, in the order the left list shows.",
+        "operationId": "update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Collection id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCollection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty name, or a project id that names no Project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/coordinators/{id}/agent": {
       "put": {
         "tags": [
@@ -2234,6 +2386,63 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PersonaList"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/preferences": {
+      "get": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Every app-wide preference, with its default where none is set.",
+        "operationId": "get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "daemon"
+        ],
+        "summary": "Change the preferences named, leaving the rest as they are.",
+        "operationId": "patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePreferences"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
                 }
               }
             }
@@ -7932,6 +8141,44 @@
           }
         }
       },
+      "Collection": {
+        "type": "object",
+        "description": "A named set of Projects.",
+        "required": [
+          "id",
+          "name",
+          "position",
+          "projects",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Where it sits among the collections, ascending. Ties break by name."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The Projects in it, in the order the left list shows them. Ids of\nProjects that no longer exist are left out."
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
       "CommentUpdated": {
         "type": "object",
         "description": "Payload of `comment.updated`: one comment that appeared, changed or was\ndeleted on the forge.",
@@ -8393,6 +8640,18 @@
               "null"
             ],
             "description": "The key's team, e.g. for an IBM Bob key of type \"general\"."
+          }
+        }
+      },
+      "CreateCollection": {
+        "type": "object",
+        "description": "A new collection. It starts empty, after the collections that exist.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -12498,6 +12757,19 @@
           }
         }
       },
+      "Preferences": {
+        "type": "object",
+        "description": "Every app-wide preference, with its default when the person has set none.",
+        "required": [
+          "group_by_collection"
+        ],
+        "properties": {
+          "group_by_collection": {
+            "type": "boolean",
+            "description": "Whether the left list groups projects under their collections.\nOff shows every project flat, whatever the collections say."
+          }
+        }
+      },
       "Project": {
         "type": "object",
         "description": "A Project: a goal-driven workspace that owns tasks, decisions and PRs.",
@@ -15331,6 +15603,48 @@
             "items": {
               "$ref": "#/components/schemas/AwayRoute"
             }
+          }
+        }
+      },
+      "UpdateCollection": {
+        "type": "object",
+        "description": "Partial update; absent fields are left unchanged.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Where it sits among the collections."
+          },
+          "projects": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Replaces what is in the collection, in the order given. An id that\nnames no Project is refused; a repeated one is kept once."
+          }
+        }
+      },
+      "UpdatePreferences": {
+        "type": "object",
+        "description": "Partial update; absent fields are left unchanged.",
+        "properties": {
+          "group_by_collection": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },

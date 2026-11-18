@@ -14,7 +14,11 @@ impl Store {
             Ok(c.query_row(
                 "SELECT group_by_collection FROM preferences WHERE id = 1",
                 [],
-                |r| Ok(Preferences { group_by_collection: r.get(0)? }),
+                |r| {
+                    Ok(Preferences {
+                        group_by_collection: r.get(0)?,
+                    })
+                },
             )
             .optional()?
             .unwrap_or_default())
@@ -28,7 +32,11 @@ impl Store {
                 .query_row(
                     "SELECT group_by_collection FROM preferences WHERE id = 1",
                     [],
-                    |r| Ok(Preferences { group_by_collection: r.get(0)? }),
+                    |r| {
+                        Ok(Preferences {
+                            group_by_collection: r.get(0)?,
+                        })
+                    },
                 )
                 .optional()?
                 .unwrap_or_default();
