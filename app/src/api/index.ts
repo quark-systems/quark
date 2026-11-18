@@ -22,6 +22,8 @@ export * from "./overview";
 export * from "./personas";
 export * from "./hosts";
 export * from "./beads";
+export * from "./collections";
+export * from "./preferences";
 export * from "./imports";
 export * from "./setup";
 export * from "./update";
@@ -43,6 +45,8 @@ import { overviewApi } from "./overview";
 import { personasApi } from "./personas";
 import { hostsApi } from "./hosts";
 import { beadsApi } from "./beads";
+import { collectionsApi } from "./collections";
+import { preferencesApi } from "./preferences";
 import { importsApi } from "./imports";
 import { setupApi } from "./setup";
 import { updateApi } from "./update";
@@ -65,6 +69,8 @@ export const api = {
   ...personasApi,
   ...hostsApi,
   ...beadsApi,
+  ...collectionsApi,
+  ...preferencesApi,
   ...importsApi,
   ...setupApi,
   ...updateApi,
