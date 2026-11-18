@@ -16,6 +16,12 @@ page lists every merged pull request.
 
 ### Added
 
+- A project whose setup failed can be set up again without hunting for the button. The bar at
+  the top of the screen keeps its action in a column of its own, so **Retry setup** stays
+  visible however many lines the error runs to, and the Repositories step in a new project's
+  welcome carries Retry too, beside what went wrong. Whatever cloned is kept and a clone that
+  failed leaves nothing behind, so retrying fetches only what is still missing — which is what
+  you want when a repository was simply behind a VPN.
 - Projects can be put into collections. A project's Settings › Collections says which it is in —
   several, or none — and the left list groups them under a heading, with whatever is in no
   collection under Ungrouped. Projects are ordered within a collection by dragging them, or with

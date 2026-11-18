@@ -50,7 +50,8 @@ export const projectsApi = {
   projects: () => req<Project[]>("GET", "/v1/projects?include_archived=true"),
   project: (id: string) => req<Project>("GET", `/v1/projects/${enc(id)}`),
   createProject: (p: CreateProject) => req<Project>("POST", "/v1/projects", p),
-  provision: (id: string) => req<void>("POST", `/v1/projects/${enc(id)}:provision`),
+  /** Sets a failed project up again. Answers the project, now `provisioning`. */
+  provision: (id: string) => req<Project>("POST", `/v1/projects/${enc(id)}:provision`),
   archiveProject: (id: string) => req<Project>("POST", `/v1/projects/${enc(id)}:archive`),
   unarchiveProject: (id: string) => req<Project>("POST", `/v1/projects/${enc(id)}:unarchive`),
   /** Deletes the project and what Quark keeps for it; `confirmName` must be its name. */
