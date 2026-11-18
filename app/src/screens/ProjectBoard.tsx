@@ -7,6 +7,7 @@ import { useOutboxPrompts } from "../components/CoordinatorOutbox";
 import { errText, STATES } from "../util";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
+import { Button } from "../ui";
 import { WorkerCard } from "../components/WorkerCard";
 import { CommandCard, duration, groupTurns, lastId, liveStatus, LiveStatus, PendingMessage, PendingPrompt, stillPending, stillPendingCommands, Transcript, useNow } from "../components/transcript";
 import { PersonaPicker } from "../components/PersonaPicker";
@@ -167,11 +168,17 @@ function ProvisionBar({ project }: { project: Project }) {
     try { await api.provision(project.id); } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
   };
   return (
-    <div className={"state-note" + (project.status === "failed" ? " bad" : "")} data-testid="provision-bar">
-      {project.status === "failed" ? "Setting up this project failed" : "Setting up this project"}
-      {project.status_detail && <>: {project.status_detail}</>}
-      {project.status === "failed" && <button className="btn small" style={{ marginLeft: 8 }} onClick={retry} disabled={busy}>Retry</button>}
-      {err && <span className="bad"> {err}</span>}
+    <div className={"state-note provision-bar" + (project.status === "failed" ? " bad" : "")} data-testid="provision-bar">
+      <div className="provision-bar-text">
+        {project.status === "failed" ? "Setting up this project failed" : "Setting up this project"}
+        {project.status_detail && <>: {project.status_detail}</>}
+        {err && <span className="bad"> {err}</span>}
+      </div>
+      {project.status === "failed" && (
+        <Button kind="secondary" onClick={() => void retry()} disabled={busy} data-testid="provision-retry">
+          {busy ? "Retrying…" : "Retry setup"}
+        </Button>
+      )}
     </div>
   );
 }

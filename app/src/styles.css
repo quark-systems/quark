@@ -498,6 +498,11 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 .st-added { color: var(--green); } .st-deleted { color: var(--red); } .st-modified { color: var(--yellow); } .st-renamed { color: var(--blue); }
 .adds { color: var(--green); font: 11px var(--mono); } .dels { color: var(--red); font: 11px var(--mono); }
 .state-note.bad { color: var(--red); }
+/* The setting-up bar: its message can run to several lines, so the action keeps its own
+   column at the end rather than trailing off the last one. */
+.provision-bar { display: flex; align-items: flex-start; gap: 12px; padding-top: 8px; padding-bottom: 8px; }
+.provision-bar-text { flex: 1; min-width: 0; }
+.provision-bar button { flex: none; }
 
 /* ---------- decisions inbox ---------- */
 .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; }
