@@ -7,7 +7,7 @@ import { Menu } from "../ui";
 import { setThemePreference, useThemePreference, type ThemePreference } from "../theme";
 import { useUpdateStatus } from "../appUpdate";
 import { setShowHidden, useShowHidden } from "./reveal";
-import { setGroupByCollection, useGroupByCollection } from "./collections";
+import { setGroupByCollection, useGroupByCollection } from "./grouping";
 
 const svg = (d: React.ReactNode) => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d}</svg>;
 

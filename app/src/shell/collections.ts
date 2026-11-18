@@ -1,38 +1,10 @@
 // How the left list groups projects: under the collections they are in, or flat.
 //
 // A project may be in several collections, so it appears under each of them. Projects in no
-// collection fall into a trailing "Ungrouped" section. Grouping is a view preference, kept per
-// device: the collections themselves live on the daemon.
-import { useSyncExternalStore } from "react";
+// collection fall into a trailing "Ungrouped" section. Whether the list is grouped at all is a
+// preference the daemon keeps (see ./grouping).
 import type { Collection } from "../api";
 import type { ProjectGroup } from "./groups";
-
-const KEY = "quark.group-by-collection";
-const EVENT = "quark:group-by-collection";
-
-/** Whether the left list groups projects under their collections. On unless turned off. */
-export function groupByCollection(): boolean {
-  try { return localStorage.getItem(KEY) !== "0"; } catch { return true; }
-}
-
-/** Groups the left list by collection, or shows every project flat. */
-export function setGroupByCollection(on: boolean) {
-  try {
-    if (on) localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, "0");
-  } catch { /* private mode */ }
-  window.dispatchEvent(new CustomEvent<boolean>(EVENT, { detail: on }));
-}
-
-function onChange(cb: () => void) {
-  window.addEventListener(EVENT, cb);
-  return () => window.removeEventListener(EVENT, cb);
-}
-
-/** Whether the left list is grouped right now, re-rendering when that changes. */
-export function useGroupByCollection(): boolean {
-  return useSyncExternalStore(onChange, groupByCollection, () => true);
-}
 
 /** A heading in the left list with the projects under it. `id` is null for the trailing
  *  "Ungrouped" section, which has no collection behind it. */

@@ -22,6 +22,7 @@ mod metrics;
 mod openapi;
 mod overview;
 mod personas;
+mod preferences;
 pub mod pull_requests;
 mod repositories;
 mod routes;
@@ -189,6 +190,10 @@ const MODULES: &[Module] = &[
     Module {
         router: collections::router,
         openapi: <collections::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: preferences::router,
+        openapi: <preferences::Api as OpenApi>::openapi,
     },
 ];
 

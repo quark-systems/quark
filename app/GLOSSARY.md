@@ -43,7 +43,7 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: migrate, convert, sync.
 - **Archived project**: a project whose coordinator and workers are stopped and which is hidden from the left list and All projects, with everything kept. Unarchive brings it back. Deleting a project removes it from Quark for good; its repositories are never touched.
   _Avoid_: closed, hidden, paused (for projects).
-- **Collection**: a named set of projects the left list groups under a heading, set in a project's Settings. A project can be in several, or none; ones in none fall under **Ungrouped**. Projects are ordered within a collection by dragging them. **Group by collection** in the app menu turns the grouping off, showing every project flat.
+- **Collection**: a named set of projects the left list groups under a heading, set in a project's Settings. A project can be in several, or none; ones in none fall under **Ungrouped**. Projects are ordered within a collection by dragging them. **Group by collection** in the app menu turns the grouping off, showing every project flat; the daemon remembers it.
   _Avoid_: group (that is a project with its workers), folder, tag, category, workspace.
 
 - **Hidden project**: a project left out of the left list, All projects, decisions, the PR center, next attention and the palette, set in its Settings. Its coordinator and workers keep running, unlike an archived project's. **Show hidden projects** in the app menu reveals them until Quark is reopened.

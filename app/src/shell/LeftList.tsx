@@ -9,7 +9,8 @@ import { CoordinatorMark, CountBadge, Menu, Row, StatusDot, TextInput } from "..
 import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup, visibleProjects } from "./groups";
 import { useShowHidden } from "./reveal";
-import { CollectionSection, collectionSections, dropped, moved, useGroupByCollection } from "./collections";
+import { CollectionSection, collectionSections, dropped, moved } from "./collections";
+import { useGroupByCollection } from "./grouping";
 import { NextAttention } from "./NextAttention";
 import "./shell.css";
 import { BeadText } from "../ui/BeadText";
