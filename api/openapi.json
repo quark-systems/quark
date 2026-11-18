@@ -673,7 +673,7 @@
         "tags": [
           "collections"
         ],
-        "summary": "Remove a collection. The Projects in it are untouched.",
+        "summary": "Remove a collection. `confirm_name` must be its name exactly. The\nProjects in it are untouched.",
         "operationId": "delete",
         "parameters": [
           {
@@ -686,9 +686,29 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCollection"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "204": {
             "description": "Removed"
+          },
+          "400": {
+            "description": "`confirm_name` is not the collection's name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -8935,6 +8955,18 @@
           "answered",
           "acted"
         ]
+      },
+      "DeleteCollection": {
+        "type": "object",
+        "description": "Remove a collection. `confirm_name` must be its name exactly, so a\ncollection is never removed by a stray click. The Projects in it are\nuntouched.",
+        "required": [
+          "confirm_name"
+        ],
+        "properties": {
+          "confirm_name": {
+            "type": "string"
+          }
+        }
       },
       "DeleteProject": {
         "type": "object",
