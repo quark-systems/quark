@@ -5,6 +5,7 @@ mod attachments;
 pub(crate) mod automation;
 mod beads;
 mod clear;
+mod collections;
 mod dashboard;
 mod decision_beads;
 mod decisions;
@@ -21,6 +22,7 @@ mod metrics;
 mod openapi;
 mod overview;
 mod personas;
+mod preferences;
 pub mod pull_requests;
 mod repositories;
 mod routes;
@@ -184,6 +186,14 @@ const MODULES: &[Module] = &[
     Module {
         router: update::router,
         openapi: <update::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: collections::router,
+        openapi: <collections::Api as OpenApi>::openapi,
+    },
+    Module {
+        router: preferences::router,
+        openapi: <preferences::Api as OpenApi>::openapi,
     },
 ];
 

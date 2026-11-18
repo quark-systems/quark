@@ -24,12 +24,14 @@ use crate::now_rfc3339;
 
 mod accounts;
 mod beads;
+mod collections;
 mod coordinator;
 mod decisions;
 mod failover;
 mod memory;
 mod migrations;
 mod outbox;
+mod preferences;
 mod pull_requests;
 mod screen_prompts;
 mod switches;

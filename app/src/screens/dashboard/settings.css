@@ -6,6 +6,8 @@
 .set-section p { margin: 0; }
 .set-section .standing { padding: 0; }
 .set-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Rows inside one control, spaced as the section spaces its own children. */
+.set-stack { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; align-self: stretch; }
 .set-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; font-size: 12px; }
 .set-kv dt { color: var(--fg-faint); }
 .set-kv dd { margin: 0; }

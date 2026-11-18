@@ -12,6 +12,7 @@ import { PersonaPicker } from "../../components/PersonaPicker";
 import { IssueSync } from "./IssueSync";
 import { ProjectLifecycle } from "../../components/ProjectLifecycle";
 import { HideProject } from "../../components/HideProject";
+import { ProjectCollections } from "../../components/ProjectCollections";
 import { ChangeAgent } from "../../components/ChangeAgent";
 import { Button, TextInput } from "../../ui";
 import "./settings.css";
@@ -135,6 +136,12 @@ export function Settings({ project: pid }: { project: string }) {
           <Section title="Persona" testId="settings-persona">
             <PersonaPicker projectId={pid} />
             <p className="faint">Role names, how agents address you and some labels. It changes how the Project reads, not what it does.</p>
+          </Section>
+
+          <Section title="Collections" testId="settings-collections">
+            <ProjectCollections project={project} />
+            <p className="faint">Collections group the left list. A project can be in several, or none; turn the grouping
+              off in the app menu to see every project flat.</p>
           </Section>
 
           <Section title="Visibility" testId="settings-visibility">
