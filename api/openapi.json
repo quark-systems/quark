@@ -8153,6 +8153,10 @@
           "updated_at"
         ],
         "properties": {
+          "collapsed": {
+            "type": "boolean",
+            "description": "Whether it is folded shut in the left list, showing its heading alone."
+          },
           "created_at": {
             "type": "string"
           },
@@ -15610,6 +15614,13 @@
         "type": "object",
         "description": "Partial update; absent fields are left unchanged.",
         "properties": {
+          "collapsed": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Fold it shut in the left list, or open it again."
+          },
           "name": {
             "type": [
               "string",
