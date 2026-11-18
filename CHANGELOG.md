@@ -16,6 +16,12 @@ page lists every merged pull request.
 
 ### Added
 
+- A project whose setup failed can be set up again from where the failure is reported: the
+  Repositories step in a new project's welcome now carries Retry, beside what went wrong,
+  rather than only the bar at the top of the screen. Whatever cloned is kept and a clone that
+  failed leaves nothing behind, so retrying fetches only what is still missing — which is what
+  you want when a repository was simply behind a VPN.
+
 - A project can be hidden. Settings › Visibility keeps it out of the left list, All projects,
   decisions, the PR center, next attention and the palette; **Show hidden projects** in the app
   menu brings them back until Quark is reopened. A hidden project's coordinator and workers keep

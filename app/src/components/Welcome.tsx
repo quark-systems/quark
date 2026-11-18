@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 import { api, type Issue, type Project, type SetupReport } from "../api";
 import { go, href } from "../nav";
 import { useLabels } from "../persona";
-import { setIssueSeed, loadBeads, useStore } from "../store";
+import { addProject, setIssueSeed, loadBeads, useStore } from "../store";
 import { Button, ButtonLink, CoordinatorMark, Kbd, cx } from "../ui";
 import { MOD } from "../shell/Dock";
 import { Icon } from "./transcript/Icon";
+import { errText } from "../util";
 
 type StepState = "done" | "todo" | "waiting";
 
@@ -33,6 +34,29 @@ export function suggestions(project: Pick<Project, "goal" | "repos" | "workspace
 /** A repository's short name: its own name, or the last part of its URL. */
 export function repoName(r: { url: string; name?: string | null }): string {
   return r.name || r.url.replace(/\.git$/, "").split(/[/:]/).filter(Boolean).pop() || r.url;
+}
+
+/** Sets a failed project up again. The repositories that cloned are kept, and a clone that
+ *  failed left nothing behind, so this is safe to press as often as it takes. */
+function RetrySetup({ project }: { project: Project }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const retry = async () => {
+    setBusy(true); setErr(null);
+    try {
+      addProject(await api.provision(project.id));
+    } catch (e) {
+      setErr(errText(e)); setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button kind="secondary" disabled={busy} onClick={() => void retry()} data-testid="welcome-retry-setup">
+        {busy ? "Retrying…" : "Retry"}
+      </Button>
+      {err && <span className="text-xs text-danger-fg" role="alert">{err}</span>}
+    </div>
+  );
 }
 
 function Step({ state, title, children, action, testid }: {
@@ -108,9 +132,15 @@ export function Welcome({ project, onSuggest }: { project: Project; onSuggest: (
 
         <Step testid="welcome-sources" title="Repositories and folder"
           state={project.status === "failed" ? "waiting" : project.status === "provisioning" ? "todo" : repos.length || project.workspace_path ? "done" : "todo"}
-          action={<ButtonLink kind="quiet" href={href({ name: "settings", project: pid })}>Settings</ButtonLink>}>
+          action={project.status === "failed"
+            ? <RetrySetup project={project} />
+            : <ButtonLink kind="quiet" href={href({ name: "settings", project: pid })}>Settings</ButtonLink>}>
           {project.status === "provisioning" ? <div>Cloning repositories…</div>
-            : project.status === "failed" ? <div>Setting up this project failed{project.status_detail ? `: ${project.status_detail}` : ""}.</div> : null}
+            : project.status === "failed" ? <>
+              <div>Setting up this project failed{project.status_detail ? `: ${project.status_detail}` : ""}.</div>
+              <div className="mt-1">Whatever cloned is kept, so Retry only fetches what is still missing. If a repository
+                is behind a VPN, connect first.</div>
+            </> : null}
           {repos.length > 0 ? (
             <ul className="m-0 mt-1 flex list-none flex-col gap-0.5 p-0" aria-label="Repositories">
               {repos.map((r) => (
