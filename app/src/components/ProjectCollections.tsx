@@ -39,7 +39,7 @@ export function ProjectCollections({ project }: { project: Project }) {
 
   if (available === false) return <p className="faint">This daemon does not serve collections yet.</p>;
   return (
-    <div data-testid="project-collections">
+    <div className="set-stack" data-testid="project-collections">
       {collections.map((c) => (
         <div className="set-row" key={c.id}>
           <Toggle checked={c.projects.includes(project.id)} disabled={busy !== null}
