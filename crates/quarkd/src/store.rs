@@ -24,6 +24,7 @@ use crate::now_rfc3339;
 
 mod accounts;
 mod beads;
+mod collections;
 mod coordinator;
 mod decisions;
 mod failover;

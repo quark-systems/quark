@@ -16,6 +16,12 @@ page lists every merged pull request.
 
 ### Added
 
+- Projects can be put into collections. A project's Settings › Collections says which it is in —
+  several, or none — and the left list groups them under a heading, with whatever is in no
+  collection under Ungrouped. Projects are ordered within a collection by dragging them, or with
+  Alt and the arrow keys. **Group by collection** in the app menu turns the grouping off and shows
+  every project flat.
+
 - A project can be hidden. Settings › Visibility keeps it out of the left list, All projects,
   decisions, the PR center, next attention and the palette; **Show hidden projects** in the app
   menu brings them back until Quark is reopened. A hidden project's coordinator and workers keep

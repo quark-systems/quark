@@ -1,13 +1,15 @@
 // The left list: All projects, then each project with its coordinator pinned on top and its
 // workers under it, then Accounts and Hosts in the footer (plans/ui-shell-design.md). The app menu
 // (Appearance, Updates, Setup) is the gear in its head.
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { href, Route, useRoute } from "../nav";
-import { useStore } from "../store";
-import { CoordinatorMark, CountBadge, Row, StatusDot } from "../ui";
+import { api } from "../api";
+import { setCollections, useStore } from "../store";
+import { CoordinatorMark, CountBadge, Menu, Row, StatusDot, TextInput } from "../ui";
 import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup, visibleProjects } from "./groups";
 import { useShowHidden } from "./reveal";
+import { CollectionSection, collectionSections, dropped, moved, useGroupByCollection } from "./collections";
 import { NextAttention } from "./NextAttention";
 import "./shell.css";
 import { BeadText } from "../ui/BeadText";
@@ -21,6 +23,10 @@ export function LeftList({ mod }: { mod: string }) {
   const showHidden = useShowHidden();
   const groups = useMemo(() => leftListGroups(visibleProjects(projects, showHidden), tasks, decisions), [projects, tasks, decisions, showHidden]);
   const openPrs = useStore((s) => Object.values(s.pullRequests).filter((p) => p.state === "open" || p.state === "draft").length);
+  const collections = useStore((s) => s.collections);
+  const byCollection = useGroupByCollection();
+  const grouped = byCollection && collections.length > 0;
+  const sections = useMemo(() => collectionSections(collections, groups), [collections, groups]);
 
   return (
     <nav className="left-list sidebar" aria-label="Projects">
@@ -43,7 +49,9 @@ export function LeftList({ mod }: { mod: string }) {
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>} />
       </div>
       <div className="ll-projects">
-        {groups.map((g) => <ProjectSection key={g.project.id} g={g} route={route} />)}
+        {grouped
+          ? sections.map((s) => <CollectionRows key={s.id ?? "ungrouped"} section={s} route={route} />)
+          : groups.map((g) => <ProjectSection key={g.project.id} g={g} route={route} />)}
         {!groups.length && <div className="ll-empty">No projects yet. <a href={href({ name: "new" })}>Create one</a>.</div>}
       </div>
       <div className="ll-foot">
@@ -70,6 +78,89 @@ function ProjectSection({ g, route }: { g: ProjectGroup; route: Route }) {
           current={route.name === "task" && route.id === w.id}
           lead={<StatusDot tone={w.tone} />} title={<BeadText text={w.title} project={g.project.id} />} sub={<BeadText text={w.sub} project={g.project.id} />}
           trail={w.needsYou ? <span className="ll-needs-you" role="img" aria-label="Needs you" /> : undefined} />
+      ))}
+    </section>
+  );
+}
+
+/** One collection's heading with its projects under it. Inside a collection the projects can be
+ *  reordered by dragging, or with Alt and the arrow keys for anyone not using a mouse; the order
+ *  is saved on the collection. Ungrouped projects have no order of their own, so they are not
+ *  draggable. */
+function CollectionRows({ section, route }: { section: CollectionSection; route: Route }) {
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(section.name);
+  const sortable = section.id !== null && section.groups.length > 1;
+
+  const reload = async () => setCollections(await api.collections());
+  const rename = async (next: string) => {
+    const name = next.trim();
+    if (!section.id || name === "" || name === section.name) return;
+    try { await api.updateCollection(section.id, { name }); await reload(); } catch { /* name kept */ }
+  };
+  const remove = async () => {
+    if (!section.id) return;
+    try { await api.deleteCollection(section.id); await reload(); } catch { /* kept */ }
+  };
+
+  const save = async (next: string[]) => {
+    if (!section.id || next.join("\u0000") === section.members.join("\u0000")) return;
+    try {
+      await api.updateCollection(section.id, { projects: next });
+      setCollections(await api.collections());
+    } catch { /* the daemon refused it; the list stays as it was */ }
+  };
+  const drop = (before: string | null) => {
+    const id = dragging;
+    setDragging(null); setOver(null);
+    // The whole membership is reordered, so a member the list is not showing keeps its place.
+    if (id && id !== before) void save(dropped(section.members, id, before));
+  };
+
+  return (
+    <section className="ll-collection" data-testid="ll-collection" aria-label={section.name}
+      onDragOver={(e) => { if (sortable && dragging) { e.preventDefault(); setOver(null); } }}
+      onDrop={(e) => { if (sortable && dragging) { e.preventDefault(); drop(null); } }}>
+      <div className="ll-collection-head">
+        {renaming ? (
+          <TextInput autoFocus value={draft} aria-label={`Rename ${section.name}`} data-testid="ll-collection-rename"
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => setRenaming(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setRenaming(false);
+              if (e.key === "Enter") { setRenaming(false); void rename(draft); }
+            }} />
+        ) : (<>
+          <h2 className="ll-collection-name">{section.name}</h2>
+          {section.id && (
+            <Menu label={`${section.name} collection`} align="end" trigger={
+              <button type="button" className="ll-collection-menu" aria-label={`${section.name} collection`} data-testid="ll-collection-menu">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
+              </button>
+            } groups={[{ actions: [
+              { label: "Rename", onSelect: () => { setDraft(section.name); setRenaming(true); } },
+              { label: "Remove collection", onSelect: () => void remove() },
+            ] }]} />
+          )}
+        </>)}
+      </div>
+      {section.groups.length === 0 && <p className="ll-collection-empty">Nothing in here yet.</p>}
+      {section.groups.map((g) => (
+        <div key={g.project.id} className={"ll-collection-item" + (over === g.project.id ? " ll-drop-before" : "")}
+          draggable={sortable}
+          onDragStart={(e) => { setDragging(g.project.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", g.project.id); }}
+          onDragEnd={() => { setDragging(null); setOver(null); }}
+          onDragOver={(e) => { if (sortable && dragging) { e.preventDefault(); e.stopPropagation(); setOver(g.project.id); } }}
+          onDrop={(e) => { if (sortable && dragging) { e.preventDefault(); e.stopPropagation(); drop(g.project.id); } }}
+          onKeyDown={(e) => {
+            if (!sortable || !e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+            e.preventDefault();
+            void save(moved(section.members, g.project.id, e.key === "ArrowUp" ? -1 : 1));
+          }}>
+          <ProjectSection g={g} route={route} />
+        </div>
       ))}
     </section>
   );

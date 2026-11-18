@@ -18,6 +18,18 @@
 .ll-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 .ll-needs-you { width: 7px; height: 7px; border-radius: 50%; background: var(--tone-needs-you); flex: none; }
 .ll-empty { padding: 12px 10px; color: var(--fg-faint); }
+
+/* A collection's heading and the projects under it. */
+.ll-collection { margin-bottom: 6px; }
+.ll-collection-head { display: flex; align-items: center; gap: 4px; }
+.ll-collection-head > input { margin: 8px 10px 2px; }
+.ll-collection-menu { flex: none; margin: 10px 8px 2px 0; padding: 2px; border: 0; background: none; border-radius: var(--radius-s); color: var(--fg-faint); opacity: 0; }
+.ll-collection:hover .ll-collection-menu, .ll-collection-menu:focus-visible, .ll-collection-menu[data-state="open"] { opacity: 1; color: var(--fg); }
+.ll-collection-name { flex: 1; margin: 10px 0 2px; padding: 0 10px; font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-faint); }
+.ll-collection-empty { margin: 0; padding: 2px 10px 6px; font: 12px var(--sans); color: var(--fg-faint); }
+.ll-collection-item { border-top: 2px solid transparent; }
+.ll-collection-item[draggable="true"] { cursor: grab; }
+.ll-collection-item.ll-drop-before { border-top-color: var(--accent); }
 .ll-foot { border-top: 1px solid var(--line); padding: 6px; display: flex; flex-direction: column; gap: 1px; }
 .left-list .ui-row-lead svg { color: var(--fg-dim); }
 

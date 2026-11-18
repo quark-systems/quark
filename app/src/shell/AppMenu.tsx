@@ -7,6 +7,7 @@ import { Menu } from "../ui";
 import { setThemePreference, useThemePreference, type ThemePreference } from "../theme";
 import { useUpdateStatus } from "../appUpdate";
 import { setShowHidden, useShowHidden } from "./reveal";
+import { setGroupByCollection, useGroupByCollection } from "./collections";
 
 const svg = (d: React.ReactNode) => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d}</svg>;
 
@@ -18,18 +19,22 @@ export const APPEARANCE_ICONS: Record<ThemePreference, React.ReactNode> = {
 
 const GEAR = svg(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></>);
 
+const STACK = svg(<><rect x="3" y="4" width="18" height="5" rx="1.5" /><rect x="3" y="12" width="18" height="5" rx="1.5" /><path d="M6 20h12" /></>);
 const EYE = svg(<><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></>);
 
 export function AppMenu() {
   const pref = useThemePreference();
   const showHidden = useShowHidden();
+  const byCollection = useGroupByCollection();
   const update = useUpdateStatus();
   const ready = update?.state === "ready" ? update.offer?.version : undefined;
   return (
     <Menu label="App menu" groups={[
       { label: "Appearance", value: pref, onChange: (v) => setThemePreference(v as ThemePreference),
         options: (["system", "light", "dark"] as const).map((t) => ({ value: t, label: t === "system" ? "System" : t === "light" ? "Light" : "Dark", icon: APPEARANCE_ICONS[t] })) },
-      { label: "Projects", checkbox: { label: "Show hidden projects", checked: showHidden, onCheckedChange: setShowHidden,
+      { label: "Projects", checkbox: { label: "Group by collection", checked: byCollection, onCheckedChange: setGroupByCollection,
+        icon: STACK, testid: "menu-group-by-collection" } },
+      { checkbox: { label: "Show hidden projects", checked: showHidden, onCheckedChange: setShowHidden,
         icon: EYE, testid: "menu-show-hidden" } },
       { actions: [
         { label: "Updates", testid: "nav-updates", detail: ready, onSelect: () => go({ name: "updates" }),

@@ -2,7 +2,7 @@
 // `applyEvent`, a pure function, so replays after a reconnect are idempotent.
 import { useSyncExternalStore } from "react";
 import {
-  Account, AccountQuotaChanged, api, apiMismatch, BeadsStatus, CheckUpdated, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Notice, Project, PullRequest,
+  Account, AccountQuotaChanged, api, apiMismatch, BeadsStatus, CheckUpdated, Collection, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Notice, Project, PullRequest,
   OutboxMessage, ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
 } from "./api";
 
@@ -41,6 +41,10 @@ export interface AppState {
   accountOrder: string[];
   /** Whether the daemon serves accounts; null until the first load answers. */
   accountsAvailable: boolean | null;
+  /** Collections in the daemon's order, each with its projects in theirs. */
+  collections: Collection[];
+  /** Whether the daemon serves collections; null until the first load answers. */
+  collectionsAvailable: boolean | null;
   /** Each Project's Beads database, by Project id. Absent until loaded. */
   beads: Record<string, BeadsStatus>;
   /** Count of `beads.changed` events per Project, so views can refetch its issues and memories. */
@@ -60,6 +64,7 @@ export const initialState: AppState = {
   projects: {}, tasks: {}, decisions: {}, rules: {}, memoryProposals: {}, chat: {}, outbox: {}, transcripts: {}, taskActivity: {}, dispatch: {},
   pullRequests: {}, prsAvailable: null, prActivity: {}, merges: {},
   accounts: {}, accountOrder: [], accountsAvailable: null,
+  collections: [], collectionsAvailable: null,
   beads: {}, beadsActivity: {}, issueDrafts: {}, issueSeed: null, notices: [],
 };
 
@@ -263,10 +268,12 @@ export function handleEvent(e: DaemonEvent) {
 
 // ---- loading ----
 export async function refreshSnapshots() {
-  const [projects, decisions, rules] = await Promise.all([
+  const [projects, decisions, rules, collections] = await Promise.all([
     api.projects(),
     api.decisions().catch(() => [] as Decision[]),
     api.rules(true).catch(() => [] as StandingRule[]),
+    // An older daemon serves no collections; the left list then stays flat.
+    api.collections().catch(() => null),
   ]);
   const [lists, proposed] = await Promise.all([
     Promise.all(projects.map((p) => api.tasks(p.id).catch(() => [] as Task[]))),
@@ -282,6 +289,8 @@ export async function refreshSnapshots() {
     decisions: Object.fromEntries(decisions.map((d) => [d.id, d])),
     rules: Object.fromEntries(rules.map((r) => [r.id, r])),
     memoryProposals,
+    collections: collections ?? [],
+    collectionsAvailable: collections !== null,
     error: null,
   });
   await loadPullRequests().catch(() => undefined);
@@ -470,6 +479,11 @@ export function upsertIssueDraft(d: IssueDraft) {
 
 export function setIssueSeed(seed: AppState["issueSeed"]) {
   set({ issueSeed: seed });
+}
+
+/** Replaces the collections, after creating, renaming, reordering or removing one. */
+export function setCollections(list: Collection[]) {
+  set({ collections: list, collectionsAvailable: true });
 }
 
 export function addProject(p: Project) {
