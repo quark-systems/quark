@@ -13,6 +13,7 @@ import { IssueSync } from "./IssueSync";
 import { ProjectLifecycle } from "../../components/ProjectLifecycle";
 import { HideProject } from "../../components/HideProject";
 import { ProjectCollections } from "../../components/ProjectCollections";
+import { ProjectIconPicker } from "../../components/ProjectIconPicker";
 import { ChangeAgent } from "../../components/ChangeAgent";
 import { ProjectRepos } from "../../components/ProjectRepos";
 import { Button, TextInput } from "../../ui";
@@ -144,6 +145,11 @@ export function Settings({ project: pid }: { project: string }) {
           <Section title="Persona" testId="settings-persona">
             <PersonaPicker projectId={pid} />
             <p className="faint">Role names, how agents address you and some labels. It changes how the Project reads, not what it does.</p>
+          </Section>
+
+          <Section title="Icon" testId="settings-icon">
+            <ProjectIconPicker project={project} />
+            <p className="faint">The glyph the left list shows this project with. Without one it uses the default.</p>
           </Section>
 
           <Section title="Collections" testId="settings-collections">

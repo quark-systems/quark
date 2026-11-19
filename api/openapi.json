@@ -13233,6 +13233,20 @@
             "type": "boolean",
             "description": "Hidden from the left list, All projects and everything that spans\nProjects (the decisions inbox, the PR center, next attention and the\npalette) until the app menu's \"Show hidden projects\" is turned on.\nIts coordinator and workers keep running: this is what the person\nsees, not a lifecycle state like `archived_at`."
           },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The glyph the app shows this Project with, by the name the app knows\nit as. Absent means the app's default."
+          },
+          "icon_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The colour that glyph is drawn in, as the app names its colours.\nAbsent means the app's default."
+          },
           "id": {
             "type": "string"
           },
@@ -16090,6 +16104,20 @@
               "null"
             ],
             "description": "Hide the Project from the app's lists, or bring it back."
+          },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The glyph the Project is shown with; an empty string clears it back\nto the app's default."
+          },
+          "icon_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The colour that glyph is drawn in; an empty string clears it."
           },
           "name": {
             "type": [

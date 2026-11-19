@@ -5,7 +5,8 @@ import React, { useMemo, useState } from "react";
 import { href, Route, useRoute } from "../nav";
 import { api } from "../api";
 import { setCollections, useStore } from "../store";
-import { CoordinatorMark, CountBadge, Menu, MenuGroup, Row, StatusDot, TextInput } from "../ui";
+import { CountBadge, Menu, MenuGroup, Row, TextInput } from "../ui";
+import { ProjectIconMark } from "../ui/projectIcons";
 import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup, visibleProjects } from "./groups";
 import { useShowHidden } from "./reveal";
@@ -88,7 +89,7 @@ function ProjectSection({ g, route }: { g: ProjectGroup; route: Route }) {
           row went to the same place, so naming it on a row of its own cost a row per project.
           What it has to say stays, as the line under the project's name. */}
       <Row href={href({ name: "project", id: g.project.id })} current={coordCurrent} testid="ll-coordinator"
-        lead={<CoordinatorMark />}
+        lead={<ProjectIconMark icon={g.project.icon} color={g.project.icon_color} />}
         title={<span title={`${g.project.name} — ${l.Role("coordinator")}`}>{g.project.name}</span>}
         sub={g.coordSub}
         trail={<CountBadge n={g.waiting} tone="needs-you" label={`${g.waiting} waiting on you`} />} />

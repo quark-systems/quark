@@ -24,6 +24,10 @@ export interface Project {
   archived_at?: string | null;
   /** Hidden from the lists until the app menu reveals it; its agents keep running. */
   hidden?: boolean | null;
+  /** The glyph the app shows it with (see ui/projectIcons); absent is the default. */
+  icon?: string | null;
+  /** The colour that glyph is drawn in; absent is the default. */
+  icon_color?: string | null;
 }
 
 export interface CreateProject {
@@ -61,6 +65,9 @@ export const projectsApi = {
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { standing_approval: on }),
   setProjectHidden: (projectId: string, hidden: boolean) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { hidden }),
+  /** Sets the project's glyph and/or its colour; an empty string clears one to the default. */
+  setProjectIcon: (projectId: string, patch: { icon?: string; icon_color?: string }) =>
+    req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, patch),
   /** Renames the project. Only what you read changes: everything else is keyed by its id. */
   renameProject: (projectId: string, name: string) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { name }),

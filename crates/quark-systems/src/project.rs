@@ -40,6 +40,14 @@ pub struct Project {
     /// sees, not a lifecycle state like `archived_at`.
     #[serde(default)]
     pub hidden: bool,
+    /// The glyph the app shows this Project with, by the name the app knows
+    /// it as. Absent means the app's default.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// The colour that glyph is drawn in, as the app names its colours.
+    /// Absent means the app's default.
+    #[serde(default)]
+    pub icon_color: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -94,6 +102,11 @@ pub struct UpdateProject {
     pub standing_approval: Option<bool>,
     /// Hide the Project from the app's lists, or bring it back.
     pub hidden: Option<bool>,
+    /// The glyph the Project is shown with; an empty string clears it back
+    /// to the app's default.
+    pub icon: Option<String>,
+    /// The colour that glyph is drawn in; an empty string clears it.
+    pub icon_color: Option<String>,
 }
 
 /// Where a Project is in its lifecycle.
