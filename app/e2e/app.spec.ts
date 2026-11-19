@@ -1164,6 +1164,42 @@ test("settings: every Project switch in one place, holdout and standing approval
   await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
 });
 
+test("settings: repositories and local folders are added and removed after creation", async ({ page }) => {
+  await open(page, "#/");
+  const p = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Repos later", repos: [{ url: "https://github.com/quark-systems/website.git" }], agent_config: { harness: "claude-code" } }),
+  })).json());
+  await open(page, `#/p/${p.id}/settings`);
+  const repos = page.getByTestId("project-repos");
+  const chosen = repos.getByRole("list", { name: "Chosen repositories" }).locator("li");
+  await expect(chosen).toHaveCount(1);
+  await expect(chosen).toContainText("quark-systems/website");
+
+  // A local folder typed as a path is cloned into the project and listed.
+  const find = repos.getByRole("combobox", { name: "Find a repository" });
+  await find.fill("/Users/matt/notes");
+  await page.getByRole("option", { name: /Use \/Users\/matt\/notes/ }).click();
+  await expect(chosen).toHaveCount(2);
+  await expect(chosen.nth(1)).toContainText("local folder");
+  let got = await page.evaluate(async (id) => (await fetch(`http://127.0.0.1:7392/v1/projects/${id}`)).json(), p.id);
+  expect(got.repos.map((r: { name: string }) => r.name)).toEqual(["website", "notes"]);
+
+  // Removing takes it out again.
+  await repos.getByRole("button", { name: "Remove /Users/matt/notes" }).click();
+  await expect(chosen).toHaveCount(1);
+  got = await page.evaluate(async (id) => (await fetch(`http://127.0.0.1:7392/v1/projects/${id}`)).json(), p.id);
+  expect(got.repos.map((r: { name: string }) => r.name)).toEqual(["website"]);
+
+  // A repo with work on no remote is kept, and says why.
+  await find.fill("/Users/matt/dirty");
+  await page.getByRole("option", { name: /Use \/Users\/matt\/dirty/ }).click();
+  await expect(chosen).toHaveCount(2);
+  await repos.getByRole("button", { name: "Remove /Users/matt/dirty" }).click();
+  await expect(page.getByTestId("project-repos-error")).toContainText("Kept:");
+  await expect(chosen).toHaveCount(2);
+});
+
 test("metrics: the dashboard's Metrics tab shows how the work went and changes its window", async ({ page }) => {
   await open(page, "#/p/quark");
   await page.getByTestId("nav-metrics").click();

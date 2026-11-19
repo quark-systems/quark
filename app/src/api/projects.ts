@@ -64,6 +64,12 @@ export const projectsApi = {
   /** Renames the project. Only what you read changes: everything else is keyed by its id. */
   renameProject: (projectId: string, name: string) =>
     req<Project>("PATCH", `/v1/projects/${enc(projectId)}`, { name }),
+  /** Adds a repo or local folder to the project and clones it into its workspace. Answers the project. */
+  addProjectRepo: (projectId: string, repo: RepoSource) =>
+    req<Project>("POST", `/v1/projects/${enc(projectId)}/repos`, repo),
+  /** Takes a repo out of the project; its clone is kept aside. Refused with `unlanded_work` while work in it is on no remote. */
+  removeProjectRepo: (projectId: string, name: string) =>
+    req<Project>("DELETE", `/v1/projects/${enc(projectId)}/repos/${enc(name)}`),
 };
 
 /** A GitHub repository the daemon's `gh` account can reach. */

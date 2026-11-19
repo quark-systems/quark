@@ -1,4 +1,4 @@
-// Project dashboard, Settings tab: every per-Project switch in one place. Standing approval,
+// Project dashboard, Settings tab: every per-Project switch in one place. Repositories, standing approval,
 // the coordinator's agent and compaction and each source's holdout tests change here; delivery is shown as chosen at creation;
 // issue sync rules are edited here; dispatch rules, pools and memory are summarized with a link to the screen that edits them.
 import React, { useEffect, useState } from "react";
@@ -14,6 +14,7 @@ import { ProjectLifecycle } from "../../components/ProjectLifecycle";
 import { HideProject } from "../../components/HideProject";
 import { ProjectCollections } from "../../components/ProjectCollections";
 import { ChangeAgent } from "../../components/ChangeAgent";
+import { ProjectRepos } from "../../components/ProjectRepos";
 import { Button, TextInput } from "../../ui";
 import "./settings.css";
 import "./overview.css";
@@ -61,6 +62,12 @@ export function Settings({ project: pid }: { project: string }) {
         <div className="set-body">
           <Section title="Name" testId="settings-name-section">
             <Rename project={project} />
+          </Section>
+
+          <Section title="Repositories" testId="settings-repos">
+            <ProjectRepos project={project} />
+            <p className="faint">An added repository or local folder is cloned into the project's workspace and its coordinator is told.
+              A removed one is set aside in the workspace, never deleted; the repository itself is never touched.</p>
           </Section>
 
           <Section title="Merging" testId="settings-merging">

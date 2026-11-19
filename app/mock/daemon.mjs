@@ -1654,6 +1654,39 @@ const server = http.createServer(async (req, res) => {
     const since = url.searchParams.get("since");
     return send(res, 200, overviewOf(proj, since == null ? null : Number(since)));
   }
+  // POST /v1/projects/{id}/repos and DELETE .../repos/{name}: a project's repos after creation.
+  // The mock clones nothing; a repo named "dirty" stands in for one with unpushed work.
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/repos$/)) && req.method === "POST") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const b = await readJson(req);
+    const url = String(b?.url ?? "").trim();
+    if (!url || url.startsWith("-") || /\s/.test(url)) return invalid(res, `repo url ${JSON.stringify(url)} is not a clone URL`);
+    const name = (b.name ?? "").trim() || url.replace(/\/+$/, "").split(/[/:]/).pop().replace(/\.git$/, "");
+    if (proj.repos.some((x) => x.name === name)) {
+      return send(res, 409, { error: { code: "repo_exists", message: `the Project already has a repo named "${name}"; give this one another name` } });
+    }
+    proj.repos = [...proj.repos, { url, name }];
+    verificationOf(proj).sources.push({ source: name, checks: [], journeys: null, holdout: { enabled: true, categories: [], timeout_s: null } });
+    proj.updated_at = now();
+    emit("project.updated", { ...proj }, proj.id);
+    return send(res, 200, proj);
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/repos\/([^/]+)$/)) && req.method === "DELETE") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const name = decodeURIComponent(r[2]);
+    if (!proj.repos.some((x) => x.name === name)) return notFound(res);
+    if (name === "dirty") {
+      return send(res, 409, { error: { code: "unlanded_work", message: `${name} has work that is on no remote, so it was kept: 1 unpushed commit in /home/demo/.quark/workspaces/${proj.id}/repos/${name}. Push or discard it, then remove the repo again.` } });
+    }
+    proj.repos = proj.repos.filter((x) => x.name !== name);
+    const v = verificationOf(proj);
+    v.sources = v.sources.filter((x) => x.source !== name);
+    proj.updated_at = now();
+    emit("project.updated", { ...proj }, proj.id);
+    return send(res, 200, proj);
+  }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/settings$/)) && (req.method === "GET" || req.method === "PATCH")) {
     const proj = projects.get(decodeURIComponent(r[1]));
     if (!proj) return notFound(res);

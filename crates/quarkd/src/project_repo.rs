@@ -407,7 +407,7 @@ fn instructions_md(p: &Project) -> String {
 }
 
 /// `owner/repo` for a github.com clone URL.
-fn github_repo(url: &str) -> Option<String> {
+pub(crate) fn github_repo(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))

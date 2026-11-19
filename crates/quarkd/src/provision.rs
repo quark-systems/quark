@@ -125,35 +125,42 @@ pub fn normalize(mut input: CreateProject) -> Result<CreateProject, String> {
     }
     let mut seen = Vec::new();
     for repo in &mut input.repos {
-        repo.url = repo.url.trim().to_string();
-        if repo.url.is_empty()
-            || repo.url.starts_with('-')
-            || repo
-                .url
-                .chars()
-                .any(|c| c.is_whitespace() || c.is_control())
-        {
-            return Err(format!("repo url {:?} is not a clone URL", repo.url));
-        }
-        let name = match repo.name.as_deref().map(str::trim) {
-            Some(n) if !n.is_empty() => n.to_string(),
-            _ => name_from_url(&repo.url)
-                .ok_or_else(|| format!("cannot derive a name from {:?}; give one", repo.url))?,
-        };
-        if !repo_name(&name) {
-            return Err(format!(
-                "repo name {name:?} must match [A-Za-z0-9._-]+ without a leading dot or dash"
-            ));
-        }
-        if seen.contains(&name) {
-            return Err(format!("repo name {name:?} is used twice"));
-        }
-        seen.push(name.clone());
-        repo.name = Some(name);
+        *repo = normalize_repo(repo.clone(), &seen)?;
+        seen.push(repo.name.clone().unwrap_or_default());
     }
     input.dispatch_preset.get_or_insert(DispatchPreset::Single);
     input.delivery.get_or_insert(DeliveryPolicy::Gated);
     Ok(input)
+}
+
+/// Validate one repo and fill in its name from the URL when it has none.
+/// `taken` are the names already used in the Project.
+pub fn normalize_repo(mut repo: RepoSource, taken: &[String]) -> Result<RepoSource, String> {
+    repo.url = repo.url.trim().to_string();
+    if repo.url.is_empty()
+        || repo.url.starts_with('-')
+        || repo
+            .url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(format!("repo url {:?} is not a clone URL", repo.url));
+    }
+    let name = match repo.name.as_deref().map(str::trim) {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => name_from_url(&repo.url)
+            .ok_or_else(|| format!("cannot derive a name from {:?}; give one", repo.url))?,
+    };
+    if !repo_name(&name) {
+        return Err(format!(
+            "repo name {name:?} must match [A-Za-z0-9._-]+ without a leading dot or dash"
+        ));
+    }
+    if taken.contains(&name) {
+        return Err(format!("repo name {name:?} is used twice"));
+    }
+    repo.name = Some(name);
+    Ok(repo)
 }
 
 /// The last path segment of a clone URL, without `.git`.
@@ -373,7 +380,7 @@ impl Provisioner {
     }
 }
 
-fn sources(repos: &[RepoSource]) -> Result<Vec<SourceRepo>, String> {
+pub(crate) fn sources(repos: &[RepoSource]) -> Result<Vec<SourceRepo>, String> {
     repos
         .iter()
         .map(|r| {

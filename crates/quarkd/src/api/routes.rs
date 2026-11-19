@@ -138,7 +138,7 @@ pub(super) async fn create_and_provision(
     Ok(project)
 }
 
-fn start_provisioning(state: &AppState, project_id: &str) {
+pub(super) fn start_provisioning(state: &AppState, project_id: &str) {
     tokio::spawn(provision::provision(
         state.store.clone(),
         state.engine.clone(),
@@ -1442,7 +1442,7 @@ pub async fn coordinator_context(
 }
 
 /// Whether `agent` can run a coordinator, and its pool has accounts.
-async fn check_coordinator_agent(
+pub(super) async fn check_coordinator_agent(
     state: &AppState,
     agent: &quark_systems::AgentConfig,
 ) -> Result<(), ApiError> {

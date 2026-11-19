@@ -16,6 +16,12 @@ page lists every merged pull request.
 
 ### Added
 
+- A project's repositories can change after it is created. Settings › Repositories adds a
+  GitHub repository, a clone URL or a local folder, and clones it into the project's workspace
+  (a project created without one is set up by its first), or removes one. A removed repository's
+  clone is set aside in the workspace, never deleted, and removing is refused while work in it is
+  on no remote. The coordinator is told either way. API: `POST /v1/projects/{id}/repos`,
+  `DELETE /v1/projects/{id}/repos/{name}`.
 - A project whose setup failed can be set up again without hunting for the button. The bar at
   the top of the screen keeps its action in a column of its own, so **Retry setup** stays
   visible however many lines the error runs to, and the Repositories step in a new project's

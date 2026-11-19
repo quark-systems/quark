@@ -457,6 +457,45 @@ impl Store {
         })
     }
 
+    /// Replace the Project's repos. With `provision`, the Project also moves
+    /// to `provisioning`, for a Project that gets its first repo after
+    /// creation: the caller then provisions it.
+    pub fn set_project_repos(
+        &self,
+        id: &str,
+        repos: Vec<RepoSource>,
+        provision: bool,
+    ) -> Result<Project> {
+        self.write(|tx, events| {
+            let mut project = get_project(tx, id)?;
+            project.repos = repos;
+            if provision {
+                project.status = ProjectStatus::Provisioning;
+                project.status_detail = Some("Setting up the workspace".into());
+            }
+            project.updated_at = now_rfc3339();
+            tx.execute(
+                "UPDATE projects SET spec = ?2, status = ?3, status_detail = ?4, updated_at = ?5
+                 WHERE id = ?1",
+                params![
+                    project.id,
+                    spec_json(&project)?,
+                    project.status.as_str(),
+                    project.status_detail,
+                    project.updated_at
+                ],
+            )?;
+            append_event(
+                tx,
+                events,
+                Some(&project.id),
+                EventType::ProjectUpdated,
+                serde_json::to_value(&project)?,
+            )?;
+            Ok(project)
+        })
+    }
+
     pub fn update_project(&self, id: &str, input: UpdateProject) -> Result<Project> {
         if let Some(name) = &input.name {
             if name.trim().is_empty() {
