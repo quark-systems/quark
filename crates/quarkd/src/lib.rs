@@ -47,6 +47,7 @@ pub mod outbox;
 pub mod overview;
 pub mod pr_center;
 pub mod project_repo;
+pub mod project_sources;
 pub mod projector;
 pub mod provision;
 pub mod recovery;

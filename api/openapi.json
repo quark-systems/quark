@@ -4396,6 +4396,150 @@
         }
       }
     },
+    "/v1/projects/{id}/repos": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Add a repo or local folder to a Project.",
+        "description": "`url` is a clone URL or an absolute path to a local repo; `name`, unique\nin the Project, is derived from it when absent. The repo is cloned into\nthe workspace before the call answers. A Project that has no workspace\nyet (created without repos) is provisioned instead, as `POST\n/v1/projects` does, and is answered `provisioning`.",
+        "operationId": "add",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepoSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Added; the Project as it is now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a clone URL or path, or a bad name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken (`repo_exists`), the Project is archived or provisioning (`project_busy`), uses a workspace Quark did not create (`not_provisioned`), has no agent to provision with (`no_agent`), or `project.yaml` has an uncommitted edit (`uncommitted_changes`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Cloning failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/repos/{name}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Take a repo or local folder out of a Project.",
+        "description": "Refused while the workspace clone or one of its worktrees has\nuncommitted changes or commits on no remote (`unlanded_work`). Otherwise\nthe clone is moved to `<workspace>/.quark/removed-repos/`, not deleted,\nand the repo leaves `project.yaml` and the Project. The source it came\nfrom is never touched.",
+        "operationId": "remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The repo's name in the Project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed; the Project as it is now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Project or repo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Work in the clone is on no remote (`unlanded_work`), the Project is archived or provisioning (`project_busy`), or `project.yaml` has an uncommitted edit (`uncommitted_changes`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{id}/settings": {
       "get": {
         "tags": [
