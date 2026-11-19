@@ -133,4 +133,38 @@ final class QuarkKitTests: XCTestCase {
         XCTAssertEqual(QuarkClient.configuredBase(["QUARK_DAEMON": "http://10.0.0.2:9000"]).absoluteString, "http://10.0.0.2:9000")
         XCTAssertEqual(QuarkClient.configuredBase([:]), QuarkClient.defaultBase)
     }
+
+    func testHidesHiddenProjectsAndGroupsByCollection() throws {
+        func project(_ id: String, _ name: String, hidden: Bool? = nil, needsYou: Int = 0) -> String {
+            let h = hidden.map { #","hidden":\#($0)"# } ?? ""
+            return #"{"id":"\#(id)","name":"\#(name)","status":"ready","status_detail":null,"attention":\#(needsYou),"open_decisions":0,"open_pull_requests":0,"failing_pull_requests":0,"counts":{"busy":1,"needs_you":\#(needsYou),"ready":0,"failed":0,"parked":0,"idle":0},"workers":[],"last_activity":"2026-11-19T10:00:00Z"\#(h)}"#
+        }
+        let json = #"{"attention":[{"key":"decision:d1","kind":"decision","target_id":"d1","title":"Q","project_id":"h","project_name":"Secret","since":""}],"counts":{"busy":4,"needs_you":1,"ready":0,"failed":0,"parked":0,"idle":0},"projects":["#
+            + [project("a", "Alpha"), project("b", "Beta", hidden: false), project("h", "Secret", hidden: true, needsYou: 1), project("c", "Gamma")].joined(separator: ",")
+            + "]}"
+        let full = try JSONDecoder.quark.decode(StatusView.self, from: Data(json.utf8))
+        XCTAssertEqual(full.hiddenIds, ["h"])
+        let status = full.withoutHidden()
+        XCTAssertEqual(status.projects.map(\.id), ["a", "b", "c"])
+        XCTAssertTrue(status.attention.isEmpty)
+        XCTAssertEqual(status.counts.busy, 3)
+        XCTAssertEqual(status.counts.needsYou, 0)
+
+        let prefs = try JSONDecoder.quark.decode(Preferences.self, from: Data(#"{"group_by_collection":true}"#.utf8))
+        XCTAssertEqual(prefs.groupByCollection, true)
+        let collections = try JSONDecoder.quark.decode([ProjectCollection].self, from: Data(#"""
+            [{"id":"c2","name":"Work","position":2,"collapsed":true,"projects":["c","a"],"created_at":"t","updated_at":"t"},
+             {"id":"c1","name":"Home","position":1,"collapsed":false,"projects":["h","a"],"created_at":"t","updated_at":"t"},
+             {"id":"c3","name":"Empty","position":3,"projects":["h"],"created_at":"t","updated_at":"t"}]
+            """#.utf8))
+        let sections = projectSections(status.projects, collections: collections, grouped: true)
+        // In position order, each in its own order; a project in two appears under both; a
+        // collection holding only hidden projects is left out; the rest fall into Ungrouped.
+        XCTAssertEqual(sections.map(\.name), ["Home", "Work", "Ungrouped"])
+        XCTAssertEqual(sections.map { $0.projects.map(\.id) }, [["a"], ["c", "a"], ["b"]])
+        XCTAssertEqual(sections.map(\.collapsed), [false, true, false])
+        // Grouping off, or no collections: one flat list.
+        XCTAssertEqual(projectSections(status.projects, collections: collections, grouped: false).map(\.name), [nil])
+        XCTAssertEqual(projectSections(status.projects, collections: [], grouped: true).first?.projects.count, 3)
+    }
 }

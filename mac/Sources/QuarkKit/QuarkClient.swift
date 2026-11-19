@@ -31,6 +31,16 @@ public struct QuarkClient: Sendable {
         try await get("/v1/status")
     }
 
+    /// The collections the Projects list groups by.
+    public func collections() async throws -> [ProjectCollection] {
+        try await get("/v1/collections")
+    }
+
+    /// App-wide preferences, such as whether Projects are grouped.
+    public func preferences() async throws -> Preferences {
+        try await get("/v1/preferences")
+    }
+
     /// Every account with its latest quota reading. `refresh` reads each
     /// account's quota now instead of returning the last reading.
     /// Every account. `refresh` has quarkd read each one's quota first,

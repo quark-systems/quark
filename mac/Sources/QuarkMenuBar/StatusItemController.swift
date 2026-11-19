@@ -113,18 +113,41 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func addProjects(_ status: StatusView) {
         menu.addItem(.separator())
-        menu.addItem(.sectionHeader(title: "Projects"))
         if status.projects.isEmpty {
+            menu.addItem(.sectionHeader(title: "Projects"))
             let mi = NSMenuItem(title: "No projects yet", action: nil, keyEquivalent: "")
             mi.isEnabled = false
             menu.addItem(mi)
             return
         }
-        for p in status.projects {
-            let mi = action(twoLine(p.name, p.line(), dot: p.tone.nsColor)) { Opener.open(.project(p.id)) }
-            mi.submenu = projectMenu(p)
-            menu.addItem(mi)
+        // Grouped under the desktop app's collections when it groups its list.
+        let sections = projectSections(status.projects, collections: store.collections, grouped: store.groupByCollection)
+        for (i, section) in sections.enumerated() {
+            if i > 0 { menu.addItem(.separator()) }
+            let title = section.name ?? "Projects"
+            if section.collapsed {
+                // Folded shut in the app: its heading alone, its Projects a level down.
+                let n = section.projects.count
+                let waiting = section.projects.reduce(0) { $0 + Int($1.attention) }
+                let detail = "\(n) project\(n == 1 ? "" : "s")" + (waiting > 0 ? " · \(waiting) waiting on you" : "")
+                let mi = NSMenuItem()
+                mi.attributedTitle = twoLine(title, detail, dot: waiting > 0 ? .systemPurple : .tertiaryLabelColor)
+                let sub = NSMenu()
+                sub.autoenablesItems = false
+                for p in section.projects { sub.addItem(projectItem(p)) }
+                mi.submenu = sub
+                menu.addItem(mi)
+                continue
+            }
+            menu.addItem(.sectionHeader(title: title))
+            for p in section.projects { menu.addItem(projectItem(p)) }
         }
+    }
+
+    private func projectItem(_ p: ProjectSummary) -> NSMenuItem {
+        let mi = action(twoLine(p.name, p.line(), dot: p.tone.nsColor)) { Opener.open(.project(p.id)) }
+        mi.submenu = projectMenu(p)
+        return mi
     }
 
     private func projectMenu(_ p: ProjectSummary) -> NSMenu {

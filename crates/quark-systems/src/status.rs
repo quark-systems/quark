@@ -127,6 +127,11 @@ pub struct ProjectSummary {
     /// The newest change to the Project, its workers, decisions or pull
     /// requests (RFC 3339).
     pub last_activity: String,
+    /// Whether the Project is hidden (`Project.hidden`). Its items stay in
+    /// `attention` and `counts`; a client that leaves hidden Projects out
+    /// drops them itself, as the desktop app does until they are revealed.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// One listed worker.

@@ -36,7 +36,7 @@ struct Snapshot: TimelineEntry {
         let client = QuarkClient(base: QuarkClient.defaultBase)
         var s = Snapshot(date: Date())
         do {
-            s.status = try await client.status()
+            s.status = try await client.status().withoutHidden()
         } catch {
             s.error = "quarkd isn't running"
             return s
