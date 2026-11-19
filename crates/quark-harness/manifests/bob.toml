@@ -24,11 +24,11 @@ enter_again_ms = 4000
 
 [account]
 config_dir = ".bob"
-auth_env = ["BOB_API_KEY"]
+auth_env = ["BOBSHELL_API_KEY", "BOB_API_KEY"]
 auth_files = ["settings/auth-secrets.json"]
 auth_exhaustive = true
 # Extra accounts are API keys: Bob always keeps its login in ~/.bob.
-key_env = "BOB_API_KEY"
+key_env = "BOBSHELL_API_KEY"
 team_env = "BOB_TEAM_ID"
 
 [hooks]

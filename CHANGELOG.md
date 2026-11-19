@@ -17,6 +17,16 @@ Download `Quark_0.2.0_aarch64.dmg` and drag Quark to Applications; macOS opens i
 quarantine warning. A beta on either channel offers 0.2.0 on its own. From 0.1.0, which
 predates the updater, install it by hand once; from here on Quark updates itself.
 
+### Fixed
+
+- IBM Bob reads its API key from `BOBSHELL_API_KEY`, but Quark passed it as `BOB_API_KEY`, so a
+  key set on a Bob account never reached Bob: workers signed in from whatever the daemon's own
+  shell held, and quota was readable only when `BOBSHELL_API_KEY` happened to be exported for
+  quarkd itself. Without a reading, dispatch cannot rank Bob and parks the task to ask which
+  agent should run it. Quark now passes the key under the name Bob reads, and the quota reader
+  signs in with the key the account keeps in the Keychain, as Kiro CLI's already did — so
+  **Use API key** on Bob's Default row in Accounts is enough, whatever started quarkd.
+
 ### Added
 
 - A coordinator can be restarted in the same conversation: Settings › Agent › Restart

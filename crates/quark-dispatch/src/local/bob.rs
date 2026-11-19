@@ -2,7 +2,8 @@
 //!
 //! Two sources, tried in order:
 //!
-//! 1. **Live API**, when `BOBSHELL_API_KEY` is set (the variable Bob itself
+//! 1. **Live API**, with the key the Bob account keeps in the Keychain, else
+//!    `BOBSHELL_API_KEY` in quarkd's own environment (the variable Bob itself
 //!    reads): `GET /admin/v1/profile` on `api.us-east.bob.ibm.com`, then each
 //!    team's `/admin/v1/teams/<team>/users/<user>` on its region, summing
 //!    `usage` and `budget_limit` across teams. The key reaches curl on
@@ -26,6 +27,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -139,7 +141,7 @@ pub struct Anchor {
 }
 
 /// Reads Bob's allowance.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BobUsage {
     pub config: PathBuf,
     pub anchor: PathBuf,
@@ -147,8 +149,26 @@ pub struct BobUsage {
     pub db: PathBuf,
     pub curl: String,
     pub api_timeout: Duration,
-    /// The API key; read from [`KEY_ENV`] by [`Self::for_home`].
+    /// The API key quarkd's own environment holds; read from [`KEY_ENV`] by
+    /// [`Self::for_home`]. A key kept for the account wins over it.
     pub api_key: Option<String>,
+    /// Where the Bob account's API key may be kept, and its service name.
+    /// A key found there signs the read in; none leaves the environment's.
+    pub secrets: Option<(Arc<dyn quark_supervisor::Secrets>, String)>,
+}
+
+impl std::fmt::Debug for BobUsage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BobUsage")
+            .field("config", &self.config)
+            .field("anchor", &self.anchor)
+            .field("db", &self.db)
+            .field("curl", &self.curl)
+            .field("api_timeout", &self.api_timeout)
+            .field("api_key", &self.api_key.is_some())
+            .field("key_service", &self.secrets.as_ref().map(|(_, s)| s))
+            .finish()
+    }
 }
 
 impl BobUsage {
@@ -164,7 +184,27 @@ impl BobUsage {
             curl: "curl".into(),
             api_timeout: Duration::from_secs(10),
             api_key: std::env::var(KEY_ENV).ok().and_then(|k| clean_key(&k)),
+            secrets: None,
         }
+    }
+
+    /// Sign the read in with the key kept for the Bob account in `secrets`
+    /// under `service`, as the app stores it. Without one the environment's
+    /// [`KEY_ENV`] is used, so a daemon started with the variable set keeps
+    /// working.
+    pub fn with_secrets(
+        mut self,
+        secrets: Arc<dyn quark_supervisor::Secrets>,
+        service: impl Into<String>,
+    ) -> Self {
+        self.secrets = Some((secrets, service.into()));
+        self
+    }
+
+    /// The account's kept key, if any.
+    async fn kept_key(&self) -> Option<String> {
+        let (secrets, service) = self.secrets.as_ref()?;
+        secrets.get(service).await.ok().and_then(|k| clean_key(&k))
     }
 
     fn load_config(&self) -> Result<(BobConfig, UtcOffset), String> {
@@ -208,7 +248,11 @@ impl BobUsage {
         bob["periodEnd"] = json!(utc_iso(end));
 
         let mut api_error = None;
-        if let Some(key) = &self.api_key {
+        let key = match self.kept_key().await {
+            Some(k) => Some(k),
+            None => self.api_key.clone(),
+        };
+        if let Some(key) = &key {
             match self.fetch_api(key).await {
                 Ok(api) => {
                     let allowance = api.limit.unwrap_or(cfg.monthly_coins);
@@ -1537,11 +1581,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn the_api_wins_and_falls_back() {
-        let f = fixture(ROWS);
-        let dir = f.dir.path();
-        // A stub curl answering the profile and team calls.
+    /// A stub `curl` answering the profile and team calls, as the API path needs.
+    #[cfg(unix)]
+    fn api_curl(dir: &Path) -> PathBuf {
         let curl = dir.join("curl");
         std::fs::write(
             &curl,
@@ -1559,6 +1601,14 @@ esac
         .unwrap();
         std::fs::set_permissions(&curl, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        curl
+    }
+
+    #[tokio::test]
+    async fn the_api_wins_and_falls_back() {
+        let f = fixture(ROWS);
+        let dir = f.dir.path();
+        let curl = api_curl(dir);
         let mut r = f.reader.clone();
         r.curl = curl.to_string_lossy().into_owned();
         r.api_key = Some("sekret".into());
@@ -1580,6 +1630,54 @@ esac
             v["providers"][0]["bob"]["apiError"],
             "profile API key rejected (HTTP 401)"
         );
+    }
+
+    /// The key the Bob account keeps signs the read in, so a daemon started
+    /// without BOBSHELL_API_KEY in its own environment still measures Bob.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_accounts_kept_key_signs_the_read_in() {
+        struct Kept(Option<&'static str>);
+
+        #[async_trait]
+        impl quark_supervisor::Secrets for Kept {
+            async fn get(&self, service: &str) -> Result<String, String> {
+                assert_eq!(service, "quark/accounts/default-bob");
+                self.0
+                    .map(String::from)
+                    .ok_or_else(|| "no such item".into())
+            }
+        }
+
+        let f = fixture(ROWS);
+        let dir = f.dir.path();
+        let mut r = f.reader.clone();
+        r.curl = api_curl(dir).to_string_lossy().into_owned();
+        // Nothing in quarkd's own environment: the ledger alone is all there is.
+        r.api_key = None;
+        let when = at("2026-10-16T00:00:00Z");
+        assert_eq!(parse(&r.reading_at(when).await).status, "partial");
+
+        // The account's key is read from the Keychain and signs the live read in.
+        let kept = r.clone().with_secrets(
+            Arc::new(Kept(Some("sk-kept\n"))),
+            "quark/accounts/default-bob",
+        );
+        let v = kept.reading_at(when).await;
+        assert_eq!(parse(&v).status, "known");
+        assert_eq!(v["providers"][0]["bob"]["source"], "api");
+        let stdin = std::fs::read_to_string(dir.join("curl.stdin")).unwrap();
+        assert_eq!(stdin, "header = \"Authorization: Apikey sk-kept\"\n");
+        assert!(!v.to_string().contains("sk-kept"));
+
+        // No key kept for the account falls back to the environment's.
+        let none = r
+            .clone()
+            .with_secrets(Arc::new(Kept(None)), "quark/accounts/default-bob");
+        assert_eq!(parse(&none.reading_at(when).await).status, "partial");
+        let mut env = none.clone();
+        env.api_key = Some("sk-env".into());
+        assert_eq!(parse(&env.reading_at(when).await).status, "known");
     }
 
     #[test]
