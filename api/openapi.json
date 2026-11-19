@@ -13683,6 +13683,10 @@
             "description": "Open pull requests with a failing check.",
             "minimum": 0
           },
+          "hidden": {
+            "type": "boolean",
+            "description": "Whether the Project is hidden (`Project.hidden`). Its items stay in\n`attention` and `counts`; a client that leaves hidden Projects out\ndrops them itself, as the desktop app does until they are revealed."
+          },
           "id": {
             "type": "string"
           },

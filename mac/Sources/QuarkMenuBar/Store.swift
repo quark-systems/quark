@@ -15,7 +15,14 @@ final class Store: ObservableObject {
     }
 
     @Published private(set) var connection: Connection = .connecting
+    /// The status without hidden Projects (see `StatusView.withoutHidden`).
     @Published private(set) var status: StatusView?
+    /// Hidden Projects' ids; their notices are not shown either.
+    private(set) var hiddenProjects: Set<String> = []
+    /// The collections the Projects list groups by, and whether it groups:
+    /// the desktop app's own settings, read from quarkd.
+    @Published private(set) var collections: [ProjectCollection] = []
+    @Published private(set) var groupByCollection = false
     @Published private(set) var accounts: [Account] = []
     @Published private(set) var hosts: HostsView?
     @Published private(set) var harnessNames: [String: String] = [:]
@@ -40,7 +47,7 @@ final class Store: ObservableObject {
     private var pending: Task<Void, Never>?
 
     /// Event types after which the status, accounts or hosts are read again.
-    private static let reloadOn = ["task.", "decision.", "pr.", "check.", "project.", "account.", "host."]
+    private static let reloadOn = ["task.", "decision.", "pr.", "check.", "project.", "account.", "host.", "collection.", "preferences."]
 
     init(client: QuarkClient = QuarkClient()) {
         self.client = client
@@ -63,7 +70,7 @@ final class Store: ObservableObject {
         events = Task { [weak self, client] in
             for await event in quarkEvents(client) {
                 guard let self else { return }
-                if let notice = event.notice { self.onNotice?(notice) }
+                if let notice = event.notice, !self.hiddenProjects.contains(notice.projectId) { self.onNotice?(notice) }
                 if Self.reloadOn.contains(where: event.type.hasPrefix) { self.loadSoon() }
             }
         }
@@ -84,7 +91,17 @@ final class Store: ObservableObject {
         async let accounts = client.accounts()
         async let hosts = client.hosts()
         async let harnesses = client.harnesses()
-        if let s = try? await status { self.status = s }
+        async let collections = client.collections()
+        async let preferences = client.preferences()
+        if let s = try? await status {
+            hiddenProjects = s.hiddenIds
+            self.status = s.withoutHidden()
+        }
+        // A quarkd without collections or preferences lists Projects flat.
+        let c = (try? await collections) ?? []
+        if c != self.collections { self.collections = c }
+        let grouped = (try? await preferences)?.groupByCollection ?? false
+        if grouped != groupByCollection { groupByCollection = grouped }
         if let a = try? await accounts { self.accounts = a.filter(\.isEnabled) }
         if let h = try? await hosts { self.hosts = h }
         if let hs = try? await harnesses, !hs.isEmpty {

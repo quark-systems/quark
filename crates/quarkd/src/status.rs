@@ -181,6 +181,7 @@ pub fn fold(
                 counts: c,
                 workers,
                 last_activity: last,
+                hidden: p.hidden,
             }
         })
         .collect();
@@ -383,5 +384,27 @@ mod tests {
         assert_eq!(keys, ["worker:t2"]);
         assert_eq!(v.counts.ready, 1);
         assert_eq!(v.projects[0].status, ProjectStatus::Ready);
+    }
+
+    #[test]
+    fn marks_hidden_projects_and_keeps_their_items() {
+        let mut hidden = project("h", "Hidden", false);
+        hidden.hidden = true;
+        let v = fold(
+            &[project("p", "Shown", false), hidden],
+            &[task("t1", "h", TaskState::Blocked, "2026-10-08T11:00:00Z")],
+            &[],
+            &[],
+            now(),
+        );
+        let flags: Vec<(&str, bool)> = v
+            .projects
+            .iter()
+            .map(|p| (p.name.as_str(), p.hidden))
+            .collect();
+        assert_eq!(flags, [("Hidden", true), ("Shown", false)]);
+        // Clients drop a hidden Project's items themselves.
+        assert_eq!(v.attention.len(), 1);
+        assert_eq!(v.attention[0].project_id, "h");
     }
 }

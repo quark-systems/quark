@@ -102,6 +102,25 @@ public struct StatusView: Codable, Equatable, Sendable {
     public var attention: [AttentionItem]
     public var counts: ToneCounts
     public var projects: [ProjectSummary]
+
+    /// Ids of the hidden Projects.
+    public var hiddenIds: Set<String> { Set(projects.filter(\.isHidden).map(\.id)) }
+
+    /// The view without hidden Projects: their rows, what of theirs waits on
+    /// you, and their workers in the counts. The desktop app leaves them out
+    /// the same way until "Show hidden projects" reveals them.
+    public func withoutHidden() -> StatusView {
+        let hidden = hiddenIds
+        guard !hidden.isEmpty else { return self }
+        let shown = projects.filter { !hidden.contains($0.id) }
+        var total = ToneCounts(busy: 0, needsYou: 0, ready: 0, failed: 0, parked: 0, idle: 0)
+        for p in shown { total.add(p.counts) }
+        return StatusView(
+            attention: attention.filter { !hidden.contains($0.projectId) },
+            counts: total,
+            projects: shown
+        )
+    }
 }
 
 public struct AttentionItem: Codable, Equatable, Identifiable, Sendable {
@@ -140,6 +159,11 @@ public struct ToneCounts: Codable, Equatable, Sendable {
     public var failed: UInt32
     public var parked: UInt32
     public var idle: UInt32
+
+    mutating func add(_ o: ToneCounts) {
+        busy += o.busy; needsYou += o.needsYou; ready += o.ready
+        failed += o.failed; parked += o.parked; idle += o.idle
+    }
 }
 
 public struct ProjectSummary: Codable, Equatable, Identifiable, Sendable {
@@ -155,6 +179,11 @@ public struct ProjectSummary: Codable, Equatable, Identifiable, Sendable {
     public var counts: ToneCounts
     public var workers: [WorkerSummary]
     public var lastActivity: Date?
+    /// Hidden in the desktop app ("Hide this project"); absent from a quarkd
+    /// older than the field, which means shown.
+    public var hidden: Bool?
+
+    public var isHidden: Bool { hidden ?? false }
 }
 
 public struct WorkerSummary: Codable, Equatable, Identifiable, Sendable {
