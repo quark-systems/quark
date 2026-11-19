@@ -328,12 +328,14 @@ impl GuardedMerge {
     }
 
     /// Record a merge that happened on the forge, outside [`Self::land`],
-    /// so whoever waits on [`kinds::MERGED`] hears of it. Returns false,
-    /// recording nothing, when the forge does not report it merged.
+    /// so whoever waits on [`kinds::MERGED`] hears of it. `task` is `None`
+    /// for a pull request no task opened (the coordinator opened it itself).
+    /// Returns false, recording nothing, when the forge does not report it
+    /// merged.
     pub async fn record_outside(
         &self,
         project: &ProjectId,
-        task: &TaskId,
+        task: Option<&TaskId>,
         pull_request: &str,
     ) -> Result<bool> {
         let (repo, number) = parse_pull_url(pull_request)?;
@@ -351,7 +353,7 @@ impl GuardedMerge {
         let event = NewEvent::typed(
             self.host.clone(),
             project.clone(),
-            Some(task.clone()),
+            task.cloned(),
             kinds::MERGED,
             &merged,
         )?;

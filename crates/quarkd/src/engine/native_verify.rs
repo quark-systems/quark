@@ -168,6 +168,29 @@ impl NativeVerify {
         Ok(())
     }
 
+    /// The forge reports `url` merged, a pull request the Project's
+    /// coordinator opened itself: no task owns it, so only the merge is
+    /// recorded, and the coordinator wakes for it as it does for a task's.
+    pub async fn coordinator_merged(
+        &self,
+        ws: &WorkspaceRef,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        let project = ProjectId::new(ws.project_id.clone());
+        if self
+            .merge
+            .record_outside(&project, None, url)
+            .await
+            .map_err(core)?
+        {
+            Ok(())
+        } else {
+            Err(EngineError::Command(format!(
+                "the forge does not report {url} merged"
+            )))
+        }
+    }
+
     /// Record the merge first: a lost completion is retried, a lost record
     /// would leave the coordinator waiting.
     async fn land_outside(
@@ -179,7 +202,7 @@ impl NativeVerify {
     ) -> Result<(), EngineError> {
         if self
             .merge
-            .record_outside(project, task, url)
+            .record_outside(project, Some(task), url)
             .await
             .map_err(core)?
         {

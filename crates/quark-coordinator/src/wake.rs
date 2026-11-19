@@ -397,6 +397,26 @@ mod tests {
     }
 
     #[test]
+    fn a_merged_pull_request_no_task_opened_wakes() {
+        let m = judgment(
+            &ev(
+                9,
+                None,
+                "verify.merged",
+                json!({"pull_request": "https://x/pr/4", "repo": "o/r", "head": "abc", "method": "squash", "outside": true}),
+            ),
+            &AwayState::default(),
+        )
+        .unwrap();
+        assert_eq!(m.need, Need::Merged);
+        assert_eq!(m.task, None);
+        assert_eq!(
+            m.summary,
+            "merged: https://x/pr/4. Start any work that was waiting on it."
+        );
+    }
+
+    #[test]
     fn the_user_s_answer_wakes_and_the_coordinator_s_own_records_do_not() {
         let away = AwayState::default();
         let answered = CoordinatorEvent::Answered {

@@ -495,6 +495,14 @@ impl EngineAdapter for NativeEngine {
             .await
     }
 
+    async fn coordinator_pull_request_merged(
+        &self,
+        ws: &WorkspaceRef,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        self.verify.coordinator_merged(ws, url).await
+    }
+
     async fn set_standing_approval(
         &self,
         ws: &WorkspaceRef,

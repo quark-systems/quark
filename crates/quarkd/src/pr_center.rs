@@ -80,6 +80,7 @@ impl PrCenter {
             }
         }
         self.merged_outside().await;
+        self.coordinator_merges().await;
         self.tell_workers().await;
         self.standing_approval().await;
     }
@@ -116,6 +117,50 @@ impl PrCenter {
                 Err(e) => {
                     tracing::warn!(pr = %pr.url, error = %e, "engine not told of a merge")
                 }
+            }
+        }
+    }
+
+    /// Tells each Project's coordinator of a merged pull request it opened
+    /// itself. No task owns those, so nothing else would wake it, and work
+    /// it held for the merge would wait for good. Told once; a failed call is
+    /// retried next pass.
+    async fn coordinator_merges(&self) {
+        let store = self.store.clone();
+        let merged =
+            match tokio::task::spawn_blocking(move || store.coordinator_merges_untold()).await {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => {
+                    tracing::error!(error = %e, "listing coordinator merges failed");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "coordinator merge listing panicked");
+                    return;
+                }
+            };
+        for m in merged {
+            let Some(root) = m.workspace_path.as_ref() else {
+                continue;
+            };
+            let ws = WorkspaceRef {
+                project_id: m.project_id.clone(),
+                root: root.into(),
+            };
+            if let Err(e) = self
+                .engine
+                .coordinator_pull_request_merged(&ws, &m.url)
+                .await
+            {
+                tracing::warn!(pr = %m.url, error = %e, "coordinator not told of a merge");
+                continue;
+            }
+            let store = self.store.clone();
+            let id = m.id.clone();
+            match tokio::task::spawn_blocking(move || store.mark_merge_told(&id)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!(pr = %m.url, error = %e, "merge not marked told"),
+                Err(e) => tracing::warn!(pr = %m.url, error = %e, "merge marking panicked"),
             }
         }
     }
