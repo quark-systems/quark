@@ -1322,7 +1322,9 @@ test("switching a project's persona relabels its board, chat and workers", async
 
   await page.getByTestId("persona-picker").selectOption("kitchen-brigade");
   await expect(chat.getByLabel("Message the expo")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("region", { name: "Quark MVP" }).getByTestId("ll-coordinator")).toContainText("Expo");
+  // The left list names the project on its one row; who that row opens is in the row's hover text.
+  const row = page.getByRole("navigation", { name: "Projects" }).getByRole("region", { name: "Quark MVP" }).getByTestId("ll-coordinator");
+  await expect(row.getByTitle("Quark MVP — Expo")).toBeVisible();
   await expect(page.getByTestId("nav-memory")).toContainText("Recipe book");
   await page.getByTestId("nav-work").click();
   await expect(page.getByTestId("col-needs_decision")).toContainText("Needs chef's call");

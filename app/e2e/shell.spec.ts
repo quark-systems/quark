@@ -20,11 +20,12 @@ test("catalogue: every shared part with when to use it, searchable, reached from
   await expect(entries).toContainText("Kbd");
 });
 
-test("left list: each project's coordinator on top with what waits on you, its workers under it", async ({ page }) => {
+test("left list: each project is one row that opens its coordinator, with what waits on you; its workers are beside the conversation", async ({ page }) => {
   await open(page, "#/");
   const list = page.getByRole("navigation", { name: "Projects" });
   const quark = list.getByRole("region", { name: "Quark MVP" });
-  await expect(quark.getByTestId("ll-worker").first()).toBeVisible();
+  const coord = quark.getByTestId("ll-coordinator");
+  await expect(coord).toBeVisible();
   // Other journeys share the demo daemon and answer its decisions, so read what the list should show back from it.
   const { openDecisions, unfinished, asking } = await page.evaluate(async () => {
     const get = async (p: string) => (await fetch("http://127.0.0.1:7392" + p)).json();
@@ -35,27 +36,43 @@ test("left list: each project's coordinator on top with what waits on you, its w
       asking: ts.filter((t: any) => t.state === "needs_decision").map((t: any) => t.title),
     };
   });
-  const coord = quark.getByTestId("ll-coordinator");
+  // One row per project: its name, how many workers it has, and what waits on you. No worker has a row here.
+  await expect(quark.getByRole("link")).toHaveCount(1);
+  await expect(coord).toContainText("Quark MVP");
+  await expect(coord.getByTitle("Quark MVP — Coordinator")).toBeVisible();
   await expect(coord).toContainText(`${unfinished} workers`);
   if (openDecisions) await expect(coord.getByLabel(`${openDecisions} waiting on you`)).toHaveText(String(openDecisions));
   else await expect(coord.getByLabel(/waiting on you/)).toHaveCount(0);
-  // Unfinished workers only; done work leaves the list, a recent failure stays.
-  await expect(quark.getByTestId("ll-worker")).toHaveCount(unfinished);
-  await expect(quark).not.toContainText("Daemon skeleton");
-  await expect(list.getByRole("region", { name: "Website refresh" }).getByTestId("ll-worker").filter({ hasText: "Changelog feed" }).getByRole("img", { name: "Failed" })).toBeVisible();
-  for (const title of asking) {
-    await expect(quark.getByTestId("ll-worker").filter({ hasText: title }).getByRole("img", { name: "Needs you" })).toHaveCount(2);
-  }
-  const busy = quark.getByTestId("ll-worker").filter({ hasText: "Event stream: resync slow clients" });
-  await expect(busy.getByRole("img", { name: "Busy" })).toBeVisible();
+  await expect(list.getByTestId("ll-project").filter({ hasText: /Event stream: resync slow clients|Changelog feed/ })).toHaveCount(0);
 
-  // A worker row opens the worker and stays marked; the coordinator row opens the project.
-  await busy.click();
-  await expect(page).toHaveURL(/#\/t\//);
-  await expect(busy).toHaveAttribute("aria-current", "page");
+  // The project's row opens its coordinator and stays marked.
   await coord.click();
   await expect(page).toHaveURL(/#\/p\/quark$/);
   await expect(coord).toHaveAttribute("aria-current", "page");
+
+  // The workers are in the right-hand pane, under Workers: unfinished ones only, each with its state.
+  const workers = page.getByRole("complementary", { name: "Since you looked" }).getByTestId("since-workers");
+  await expect(workers).toContainText("Workers");
+  await expect(workers.getByRole("link")).toHaveCount(unfinished);
+  await expect(workers).not.toContainText("Daemon skeleton");
+  for (const title of asking) {
+    await expect(workers.getByRole("link").filter({ hasText: title }).getByRole("img", { name: "Needs you" })).toBeVisible();
+  }
+  const busy = workers.getByRole("link").filter({ hasText: "Event stream: resync slow clients" });
+  await expect(busy.getByRole("img", { name: "Busy" })).toBeVisible();
+
+  // Done work leaves the pane; a recent failure stays, with what went wrong.
+  await list.getByRole("region", { name: "Website refresh" }).getByTestId("ll-coordinator").click();
+  await expect(page).toHaveURL(/#\/p\/website$/);
+  const failed = workers.getByRole("link").filter({ hasText: "Changelog feed" });
+  await expect(failed.getByRole("img", { name: "Failed" })).toBeVisible();
+  await expect(failed).toContainText("Build failed: missing RSS dependency");
+
+  // A worker's row opens the worker.
+  await coord.click();
+  await busy.click();
+  await expect(page).toHaveURL(/#\/t\//);
+  await expect(page.locator(".worker-center").getByTestId("terminal")).toBeVisible();
 });
 
 test("next attention: one button and Ctrl+J walk what waits on you, oldest first", async ({ page }) => {
@@ -101,7 +118,10 @@ test("dock: Ctrl+K asks the coordinator, and on a worker the worker's own box sw
   // A pull request's page has the dock, about that pull request.
   await open(page, "#/p/quark/prs");
   await expect(page.getByTestId("dock")).toBeVisible();
-  await page.getByRole("navigation", { name: "Projects" }).getByTestId("ll-worker").filter({ hasText: "Terminal sessions over tmux" }).click();
+  // Workers are reached from the project's Conversation, under Workers in the right-hand pane.
+  await open(page, "#/p/quark");
+  await page.getByRole("complementary", { name: "Since you looked" }).getByTestId("since-workers").getByRole("link").filter({ hasText: "Terminal sessions over tmux" }).click();
+  await expect(page.getByTestId("worker-composer").getByRole("textbox", { name: "Message the worker" })).toBeVisible();
   // On a worker, its one message box takes Ctrl+K: no second box.
   await expect(page.getByTestId("dock")).toHaveCount(0);
   await page.keyboard.press("Control+k");
