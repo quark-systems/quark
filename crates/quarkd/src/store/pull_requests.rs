@@ -55,6 +55,54 @@ pub struct CoordinatorMerge {
     pub workspace_path: Option<String>,
 }
 
+/// SQL: the pull request `pr` merged and its change reached the default
+/// branch. A merge into another branch lands only when that branch's own
+/// pull request merged into the default branch at or after it; merged
+/// before, it never carries the change. A row whose default branch was
+/// never read counts as landed.
+pub(super) const LANDED: &str = "(pr.state = 'merged' AND (pr.default_branch IS NULL
+    OR pr.base_ref IS NULL OR pr.base_ref = pr.default_branch
+    OR EXISTS (SELECT 1 FROM pull_requests parent
+        WHERE parent.project_id = pr.project_id AND parent.repo = pr.repo
+          AND parent.head_ref = pr.base_ref AND parent.state = 'merged'
+          AND parent.base_ref = parent.default_branch
+          AND parent.merged_at >= pr.merged_at)))";
+
+/// SQL: the pull request `pr` merged into another branch and its change
+/// will not reach the default branch: no pull request of that branch is
+/// still open to carry it there.
+const STRANDED: &str = "(pr.state = 'merged' AND pr.default_branch IS NOT NULL
+    AND pr.base_ref IS NOT NULL AND pr.base_ref <> pr.default_branch
+    AND NOT EXISTS (SELECT 1 FROM pull_requests parent
+        WHERE parent.project_id = pr.project_id AND parent.repo = pr.repo
+          AND parent.head_ref = pr.base_ref
+          AND (parent.state IN ('open', 'draft')
+               OR (parent.state = 'merged' AND parent.base_ref = parent.default_branch
+                   AND parent.merged_at >= pr.merged_at))))";
+
+/// A merged pull request whose change missed the default branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrandedMerge {
+    pub id: String,
+    pub project_id: String,
+    pub url: String,
+    /// The branch it merged into.
+    pub base: String,
+    pub default_branch: String,
+    /// The owning task's engine id, when a task owns it.
+    pub task: Option<String>,
+    pub workspace_path: Option<String>,
+}
+
+/// An open pull request whose base branch's own pull request already
+/// merged, so it would merge into a branch nothing carries any further.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Retarget {
+    pub owner: PrOwner,
+    pub base: String,
+    pub default_branch: String,
+}
+
 const PR_COLUMNS: &str = "id, project_id, task_id, url, provider, repo, number, title, author, \
     state, head_ref, base_ref, head_sha, mergeable, checks_state, review_decision, additions, \
     deletions, changed_files, opened_at, updated_at, merged_at, closed_at, synced_at, sync_error, \
@@ -148,7 +196,8 @@ impl Store {
                      base_ref = ?6, head_sha = ?7, mergeable = ?8, checks_state = ?9,
                      review_decision = ?10, additions = ?11, deletions = ?12,
                      changed_files = ?13, opened_at = ?14, updated_at = ?15, merged_at = ?16,
-                     closed_at = ?17, synced_at = ?18, sync_error = NULL, body = ?19
+                     closed_at = ?17, synced_at = ?18, sync_error = NULL, body = ?19,
+                     default_branch = COALESCE(?20, default_branch)
                  WHERE id = ?1",
                 params![
                     id,
@@ -170,6 +219,7 @@ impl Store {
                     pr.closed_at,
                     now_rfc3339(),
                     pr.body,
+                    pr.default_branch,
                 ],
             )?;
 
@@ -269,7 +319,7 @@ impl Store {
             let new = get_pr(tx, id)?;
             // A merge finishes the task that opened the pull request. The
             // snapshot projection does the same for merges it sees later.
-            if new.state == PullRequestState::Merged {
+            if new.state == PullRequestState::Merged && landed(tx, id)? {
                 if let Some(task_id) = &new.task_id {
                     let task = tx
                         .query_row(
@@ -411,11 +461,11 @@ impl Store {
     /// merges made outside it.
     pub fn merged_with_task(&self) -> Result<Vec<PrOwner>> {
         let ids: Vec<String> = self.read(|c| {
-            let mut stmt = c.prepare(
-                "SELECT id FROM pull_requests
-                 WHERE state = 'merged' AND task_id IS NOT NULL
-                 ORDER BY created_at, id",
-            )?;
+            let mut stmt = c.prepare(&format!(
+                "SELECT pr.id FROM pull_requests pr
+                     WHERE pr.task_id IS NOT NULL AND {LANDED}
+                     ORDER BY pr.created_at, pr.id"
+            ))?;
             let rows = stmt.query_map([], |r| r.get(0))?;
             Ok(rows.collect::<std::result::Result<_, _>>()?)
         })?;
@@ -449,6 +499,7 @@ impl Store {
                    AND pr.mergeable = 'mergeable' AND pr.checks_state = 'passing'
                    AND pr.review_decision IN ('approved', 'none')
                    AND pr.task_id IS NOT NULL AND pr.sync_error IS NULL
+                   AND (pr.default_branch IS NULL OR pr.base_ref = pr.default_branch)
                  ORDER BY pr.created_at, pr.id",
             )?;
             let rows = stmt.query_map([], |r| r.get(0))?;
@@ -462,13 +513,13 @@ impl Store {
     /// [`Store::mark_merge_told`]).
     pub fn coordinator_merges_untold(&self) -> Result<Vec<CoordinatorMerge>> {
         self.read(|c| {
-            let mut stmt = c.prepare(
+            let mut stmt = c.prepare(&format!(
                 "SELECT pr.id, pr.project_id, pr.url, p.workspace_path
                  FROM pull_requests pr JOIN projects p ON p.id = pr.project_id
-                 WHERE pr.state = 'merged' AND pr.task_id IS NULL
-                   AND pr.opened_by = 'coordinator' AND pr.merge_told_at IS NULL
-                 ORDER BY pr.created_at, pr.id",
-            )?;
+                 WHERE pr.task_id IS NULL AND pr.opened_by = 'coordinator'
+                   AND pr.merge_told_at IS NULL AND {LANDED}
+                 ORDER BY pr.created_at, pr.id"
+            ))?;
             let rows = stmt.query_map([], |r| {
                 Ok(CoordinatorMerge {
                     id: r.get(0)?,
@@ -478,6 +529,119 @@ impl Store {
                 })
             })?;
             Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    /// Tasks whose pull request landed but are not done yet: a pull request
+    /// merged into another branch lands when that branch's own pull request
+    /// merges later, which no forge read of the first one shows.
+    pub fn finish_landed(&self) -> Result<()> {
+        self.write(|tx, events| {
+            let tasks: Vec<quark_systems::Task> = {
+                let mut stmt = tx.prepare(&format!(
+                    "{TASK_SELECT} WHERE state <> 'done' AND id IN (
+                         SELECT pr.task_id FROM pull_requests pr
+                         WHERE pr.task_id = tasks.id AND pr.url = tasks.pull_request_url
+                           AND {LANDED})"
+                ))?;
+                let rows = stmt.query_map([], task_from_row)?;
+                rows.collect::<std::result::Result<_, _>>()?
+            };
+            for task in &tasks {
+                finish_task(tx, events, task)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Merged pull requests whose change missed the default branch, that
+    /// the coordinator has not been told of (see
+    /// [`Store::mark_stranded_told`]).
+    pub fn stranded_untold(&self) -> Result<Vec<StrandedMerge>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT pr.id, pr.project_id, pr.url, pr.base_ref, pr.default_branch,
+                        t.engine_id, p.workspace_path
+                 FROM pull_requests pr JOIN projects p ON p.id = pr.project_id
+                 LEFT JOIN tasks t ON t.id = pr.task_id
+                 WHERE pr.stranded_told_at IS NULL AND {STRANDED}
+                 ORDER BY pr.created_at, pr.id"
+            ))?;
+            let rows = stmt.query_map([], |r| {
+                Ok(StrandedMerge {
+                    id: r.get(0)?,
+                    project_id: r.get(1)?,
+                    url: r.get(2)?,
+                    base: r.get(3)?,
+                    default_branch: r.get(4)?,
+                    task: r.get(5)?,
+                    workspace_path: r.get(6)?,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    /// Records that the coordinator was told the pull request's merge
+    /// missed the default branch.
+    pub fn mark_stranded_told(&self, id: &str) -> Result<()> {
+        self.write(|tx, _| {
+            tx.execute(
+                "UPDATE pull_requests SET stranded_told_at = ?2
+                 WHERE id = ?1 AND stranded_told_at IS NULL",
+                params![id, now_rfc3339()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Open pull requests a task owns whose base is not the default branch
+    /// and whose base branch's own pull request already merged: merged as
+    /// they are, their change would never reach the default branch.
+    pub fn needing_retarget(&self) -> Result<Vec<Retarget>> {
+        let rows: Vec<(String, String, String)> = self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT pr.id, pr.base_ref, pr.default_branch FROM pull_requests pr
+                 WHERE pr.state IN ('open', 'draft') AND pr.task_id IS NOT NULL
+                   AND pr.default_branch IS NOT NULL AND pr.base_ref <> pr.default_branch
+                   AND EXISTS (SELECT 1 FROM pull_requests parent
+                       WHERE parent.project_id = pr.project_id AND parent.repo = pr.repo
+                         AND parent.head_ref = pr.base_ref
+                         AND parent.state IN ('merged', 'closed'))
+                 ORDER BY pr.created_at, pr.id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })?;
+        rows.into_iter()
+            .map(|(id, base, default_branch)| {
+                Ok(Retarget {
+                    owner: self.pull_request_owner(&id)?,
+                    base,
+                    default_branch,
+                })
+            })
+            .collect()
+    }
+
+    /// The branch the pull request merges into and the repository's default
+    /// branch, when merged now its change would miss the default branch:
+    /// they differ, and no open pull request of that branch would carry it
+    /// on.
+    pub fn off_default(&self, id: &str) -> Result<Option<(String, String)>> {
+        self.read(|c| {
+            Ok(c.query_row(
+                "SELECT pr.base_ref, pr.default_branch FROM pull_requests pr
+                 WHERE pr.id = ?1 AND pr.base_ref IS NOT NULL
+                   AND pr.default_branch IS NOT NULL AND pr.base_ref <> pr.default_branch
+                   AND NOT EXISTS (SELECT 1 FROM pull_requests parent
+                       WHERE parent.project_id = pr.project_id AND parent.repo = pr.repo
+                         AND parent.head_ref = pr.base_ref
+                         AND parent.state IN ('open', 'draft'))",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
         })
     }
 
@@ -630,6 +794,16 @@ pub fn artifact_path(id: &str) -> Option<String> {
         .decode(id)
         .ok()?;
     String::from_utf8(bytes).ok()
+}
+
+/// Whether the pull request `id` merged and its change reached the default
+/// branch (see [`LANDED`]).
+fn landed(tx: &Transaction, id: &str) -> Result<bool> {
+    Ok(tx.query_row(
+        &format!("SELECT EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.id = ?1 AND {LANDED})"),
+        [id],
+        |r| r.get(0),
+    )?)
 }
 
 fn emit_pr(tx: &Transaction, events: &mut Vec<quark_systems::Event>, id: &str) -> Result<()> {
@@ -1108,6 +1282,7 @@ mod tests {
             title: "PR center".into(),
             body: String::new(),
             comments: None,
+            default_branch: None,
             author: Some("claude".into()),
             state: PullRequestState::Open,
             head_ref: Some("f".into()),

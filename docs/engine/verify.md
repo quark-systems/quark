@@ -16,6 +16,14 @@ It implements `VerifyPipeline` and `MergeGuard` from `quark-core`, ported from f
 Main's health is read from its tip: the newest run of each check and every commit status. A failure, timeout, startup failure or required action is red; cancelled, neutral, skipped and stale are not. Otherwise anything running is pending, any checks are green, and no checks at all count as green.
 An episode opens on the first red read and closes on the first green one; a pending or unreadable read keeps it open with its recorded failing checks.
 
+### Landing on the default branch
+
+A merge counts as landed only when its change reaches the repository's default branch, which the PR center reads from the forge. A pull request stacked on another branch lands when that branch's own pull request merges into the default branch at or after it. Until then its task stays open and nothing tells the coordinator it merged.
+
+- **Stranded.** It merged after its base branch's pull request had already merged, or no pull request of that branch remains open. The PR center records `verify.stranded` once, which wakes the coordinator to land the change on the default branch.
+- **Before merge.** The worker is told once to retarget an open pull request whose base branch's pull request already merged. Quark's merge refuses it (`off_default_branch`), and standing approval merges only pull requests based on the default branch.
+- **Unknown default branch.** A row whose default branch was never read counts as landed, as before.
+
 ## Pieces
 
 | Type | Does |
@@ -32,6 +40,7 @@ An episode opens on the first red read and closes on the first green one; a pend
 | `verify.override` | `Override`: a person answered a decision |
 | `verify.decision` | `GuardDecision`: one native merge or dispatch answer |
 | `verify.merged` | `Merged`: a task's pull request merged; `outside` when it merged on the forge (a person, or its worker) and the PR center told the engine |
+| `verify.stranded` | `Stranded`: a pull request merged into a branch other than the default, and nothing will carry its change there |
 | `verify.standing_approval` | `StandingApproval`: green pull requests for a repo merge without asking, or stop doing so |
 
 Logs from while slice 2 ran in shadow beside firstmate may also hold `verify.shadow` and `shadow.divergence` events; nothing reads them now.

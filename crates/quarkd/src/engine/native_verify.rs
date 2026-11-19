@@ -191,6 +191,32 @@ impl NativeVerify {
         }
     }
 
+    /// `url` merged into `base`, not the default branch, and nothing will
+    /// carry it on: the task stays open, and the coordinator wakes to get
+    /// the change onto the default branch.
+    pub async fn stranded(
+        &self,
+        ws: &WorkspaceRef,
+        task: Option<&TaskId>,
+        url: &str,
+        base: &str,
+        default_branch: &str,
+    ) -> Result<(), EngineError> {
+        let project = ProjectId::new(ws.project_id.clone());
+        self.merge
+            .record_stranded(
+                &project,
+                task,
+                &quark_verify::Stranded {
+                    pull_request: url.to_string(),
+                    base: base.to_string(),
+                    default_branch: default_branch.to_string(),
+                },
+            )
+            .await
+            .map_err(core)
+    }
+
     /// Record the merge first: a lost completion is retried, a lost record
     /// would leave the coordinator waiting.
     async fn land_outside(

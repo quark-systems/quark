@@ -35,6 +35,7 @@ fn pr_error(e: PrError) -> ApiError {
         PrError::Engine(e) => e.into(),
         PrError::Forge(e) => forge_error(e),
         PrError::NoOwner(m) => ApiError::new(StatusCode::CONFLICT, "no_owner", m),
+        PrError::OffDefault(m) => ApiError::new(StatusCode::CONFLICT, "off_default_branch", m),
     }
 }
 

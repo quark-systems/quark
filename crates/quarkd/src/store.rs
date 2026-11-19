@@ -41,7 +41,9 @@ pub use accounts::{default_account_id, AccountRow, AccountState, KEYCHAIN_PREFIX
 pub use coordinator::{coordinator_decision_id, coordinator_decision_key};
 pub use failover::is_daemon_decision;
 pub use memory::{NewProposal, PendingLearning};
-pub use pull_requests::{artifact_id, artifact_path, CoordinatorMerge, PrOwner, PrSyncTarget};
+pub use pull_requests::{
+    artifact_id, artifact_path, CoordinatorMerge, PrOwner, PrSyncTarget, Retarget, StrandedMerge,
+};
 pub use screen_prompts::{coordinator_prompt_key, CoordinatorPrompt};
 
 /// One `worker.output` event to append.
@@ -1798,10 +1800,13 @@ impl Store {
     }
 }
 
-/// URLs of the Project's pull requests that merged.
+/// URLs of the Project's pull requests that merged and landed on the
+/// default branch.
 fn merged_pull_requests(tx: &Transaction, project_id: &str) -> Result<HashSet<String>> {
-    let mut stmt =
-        tx.prepare("SELECT url FROM pull_requests WHERE project_id = ?1 AND state = 'merged'")?;
+    let mut stmt = tx.prepare(&format!(
+        "SELECT pr.url FROM pull_requests pr WHERE pr.project_id = ?1 AND {}",
+        pull_requests::LANDED
+    ))?;
     let rows = stmt.query_map([project_id], |r| r.get(0))?;
     Ok(rows.collect::<std::result::Result<_, _>>()?)
 }

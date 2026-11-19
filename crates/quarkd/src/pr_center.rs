@@ -79,9 +79,12 @@ impl PrCenter {
                 tracing::debug!(pr = %t.url, error = %e, "gate evidence not refreshed");
             }
         }
+        self.finish_landed().await;
         self.merged_outside().await;
         self.coordinator_merges().await;
+        self.stranded().await;
         self.tell_workers().await;
+        self.retargets().await;
         self.standing_approval().await;
     }
 
@@ -161,6 +164,97 @@ impl PrCenter {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => tracing::warn!(pr = %m.url, error = %e, "merge not marked told"),
                 Err(e) => tracing::warn!(pr = %m.url, error = %e, "merge marking panicked"),
+            }
+        }
+    }
+
+    /// Finishes the tasks whose pull request landed since a forge read: one
+    /// merged into another branch lands when that branch's pull request
+    /// merges later.
+    async fn finish_landed(&self) {
+        let store = self.store.clone();
+        match tokio::task::spawn_blocking(move || store.finish_landed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::error!(error = %e, "finishing landed tasks failed"),
+            Err(e) => tracing::error!(error = %e, "finishing landed tasks panicked"),
+        }
+    }
+
+    /// Tells the engine of each merge that missed the default branch, so the
+    /// coordinator learns the change never landed instead of starting work
+    /// that waited on it. Told once; a failed call is retried next pass.
+    async fn stranded(&self) {
+        let store = self.store.clone();
+        let stranded = match tokio::task::spawn_blocking(move || store.stranded_untold()).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "listing stranded merges failed");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "stranded merge listing panicked");
+                return;
+            }
+        };
+        for s in stranded {
+            let Some(root) = s.workspace_path.as_ref() else {
+                continue;
+            };
+            let ws = WorkspaceRef {
+                project_id: s.project_id.clone(),
+                root: root.into(),
+            };
+            tracing::warn!(pr = %s.url, base = %s.base, "merge missed the default branch");
+            if let Err(e) = self
+                .engine
+                .pull_request_stranded(&ws, s.task.as_deref(), &s.url, &s.base, &s.default_branch)
+                .await
+            {
+                tracing::warn!(pr = %s.url, error = %e, "coordinator not told of a stranded merge");
+                continue;
+            }
+            let store = self.store.clone();
+            let id = s.id.clone();
+            match tokio::task::spawn_blocking(move || store.mark_stranded_told(&id)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!(pr = %s.url, error = %e, "stranded merge not marked"),
+                Err(e) => tracing::warn!(pr = %s.url, error = %e, "stranded marking panicked"),
+            }
+        }
+    }
+
+    /// Tells each worker whose open pull request sits on a branch whose own
+    /// pull request already merged to retarget it, before a merge strands
+    /// it. Once per pull request and base.
+    async fn retargets(&self) {
+        let store = self.store.clone();
+        let list = match tokio::task::spawn_blocking(move || store.needing_retarget()).await {
+            Ok(Ok(l)) => l,
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "listing pull requests to retarget failed");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "retarget listing panicked");
+                return;
+            }
+        };
+        for r in list {
+            let pr = &r.owner.pull_request;
+            let key = (pr.id.clone(), r.base.clone(), "retarget");
+            if self.flagged.lock().unwrap().contains(&key) {
+                continue;
+            }
+            let Ok((ws, task)) = owner_target(&r.owner) else {
+                continue;
+            };
+            let message = retarget_message(&pr.url, &r.base, &r.default_branch);
+            match self.engine.send_message(&ws, &task, &message).await {
+                Ok(()) => {
+                    tracing::info!(pr = %pr.url, "told the worker to retarget");
+                    self.flagged.lock().unwrap().insert(key);
+                }
+                Err(e) => tracing::warn!(pr = %pr.url, error = %e, "worker not told to retarget"),
             }
         }
     }
@@ -288,6 +382,10 @@ pub enum PrError {
     /// The pull request has no task, or the task's Project no workspace.
     #[error("{0}")]
     NoOwner(&'static str),
+    /// The pull request targets a branch other than the default, so merging
+    /// it would not land its change.
+    #[error("{0}")]
+    OffDefault(String),
 }
 
 /// What stands in `pr`'s way, and the steering message that says so. A
@@ -316,6 +414,17 @@ fn worker_problem(pr: &PullRequest) -> Option<(&'static str, String)> {
     })
 }
 
+/// What a worker is told when its pull request's base branch already
+/// merged into `default_branch`.
+pub fn retarget_message(url: &str, base: &str, default_branch: &str) -> String {
+    format!(
+        "Your pull request {url} targets {base}, whose own pull request has already merged. \
+         Merged as it is, its change lands on {base} and never reaches {default_branch}. \
+         Rebase it onto the latest {default_branch}, force-push the same branch with a lease, \
+         and change its base to {default_branch} (gh pr edit {url} --base {default_branch})."
+    )
+}
+
 /// Reads one pull request from its forge and projects it. A failed read is
 /// recorded on the pull request and returned.
 pub async fn sync(
@@ -324,7 +433,14 @@ pub async fn sync(
     id: &str,
     url: &str,
 ) -> Result<PullRequest, PrError> {
-    let read = forge.pull_request(url).await;
+    let mut read = forge.pull_request(url).await;
+    // A failed read of the default branch keeps the one recorded.
+    if let Ok(pr) = read.as_mut() {
+        match forge.default_branch(url).await {
+            Ok(b) => pr.default_branch = b,
+            Err(e) => tracing::debug!(pr = url, error = %e, "default branch not read"),
+        }
+    }
     let store = store.clone();
     let id = id.to_string();
     let res = tokio::task::spawn_blocking(move || match read {
@@ -367,6 +483,20 @@ pub async fn merge(
 ) -> Result<PullRequest, PrError> {
     let (ws, task) = owner_target(owner)?;
     let pr = &owner.pull_request;
+    let off = {
+        let store = store.clone();
+        let id = pr.id.clone();
+        tokio::task::spawn_blocking(move || store.off_default(&id))
+            .await
+            .map_err(|e| PrError::Store(StoreError::Invalid(e.to_string())))??
+    };
+    if let Some((base, default_branch)) = off {
+        return Err(PrError::OffDefault(format!(
+            "{} targets {base}, not {default_branch}: merged now, its change would not reach \
+             {default_branch}. Change its base to {default_branch} first.",
+            pr.url
+        )));
+    }
     engine
         .merge_pull_request(&ws, &task, &pr.url, method)
         .await?;

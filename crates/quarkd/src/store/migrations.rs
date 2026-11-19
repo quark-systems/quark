@@ -80,6 +80,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     migration!("0032_collection_collapsed", additive),
     migration!("0033_project_icon", additive),
     migration!("0034_coordinator_pull_requests", additive),
+    migration!("0035_pull_request_landing", additive),
 ];
 
 /// The schema version a fully migrated database has.

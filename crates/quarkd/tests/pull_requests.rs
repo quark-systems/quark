@@ -125,6 +125,7 @@ fn forge_pr(state: PullRequestState, check: CheckStatus) -> ForgePr {
         title: "PR center".into(),
         body: String::new(),
         comments: None,
+        default_branch: None,
         author: Some("claude".into()),
         state,
         head_ref: Some("claude/pr-center".into()),
@@ -977,4 +978,168 @@ async fn a_pull_request_the_coordinator_opens_itself_is_tracked_and_its_merge_to
     );
     h.center.refresh().await;
     assert_eq!(told(&h), 1);
+}
+
+const PARENT: &str = "https://github.com/quark-systems/quark/pull/15";
+
+/// The harness plus a second task whose pull request [`PARENT`] is the
+/// branch `w1` into `main`, with [`URL`] stacked on it (base `w1`).
+async fn stacked() -> Harness {
+    let h = harness().await;
+    let task = |id: &str, url: &str| EngineTask {
+        id: id.into(),
+        title: id.into(),
+        kind: Some(TaskKind::Ship),
+        state: TaskState::InReview,
+        state_note: None,
+        state_source: None,
+        harness: Some("claude".into()),
+        pull_request_url: Some(url.into()),
+        terminal: None,
+        worktree: None,
+        worktree_at: None,
+        unhealthy: None,
+        unanswered_since: None,
+    };
+    h.store
+        .apply_snapshot(
+            &h.project_id,
+            &FleetSnapshot {
+                tasks: vec![task("ship-pr-center", URL), task("w1-stack", PARENT)],
+            },
+        )
+        .unwrap();
+    let mut child = forge_pr(PullRequestState::Open, CheckStatus::Success);
+    child.base_ref = Some("w1".into());
+    let mut parent = forge_pr(PullRequestState::Open, CheckStatus::Success);
+    parent.head_ref = Some("w1".into());
+    h.forge.set(URL, child);
+    h.forge.set(PARENT, parent);
+    h.forge.set_default_branch(URL, "main");
+    h.forge.set_default_branch(PARENT, "main");
+    h.center.refresh().await;
+    h
+}
+
+fn merged_at(url: &str, h: &Harness, at: &str) {
+    let mut pr = forge_pr(PullRequestState::Merged, CheckStatus::Success);
+    pr.merged_at = Some(at.into());
+    if url == URL {
+        pr.base_ref = Some("w1".into());
+    } else {
+        pr.head_ref = Some("w1".into());
+    }
+    h.forge.set(url, pr);
+}
+
+fn task_state(h: &Harness, engine_id: &str) -> TaskState {
+    let tasks = h.store.list_tasks(&h.project_id).unwrap();
+    let ids = h.store.task_ids_by_engine(&h.project_id).unwrap();
+    tasks
+        .into_iter()
+        .find(|t| t.id == ids[engine_id])
+        .unwrap()
+        .state
+}
+
+fn merges_told(h: &Harness, engine_id: &str) -> usize {
+    h.engine
+        .writes()
+        .into_iter()
+        .filter(
+            |w| matches!(w, StubWrite::PullRequestMerged { task_id, .. } if task_id == engine_id),
+        )
+        .count()
+}
+
+fn stranded_told(h: &Harness) -> Vec<StubWrite> {
+    h.engine
+        .writes()
+        .into_iter()
+        .filter(|w| matches!(w, StubWrite::PullRequestStranded { .. }))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_stacked_pull_request_merged_after_its_base_s_did_not_land() {
+    let h = stacked().await;
+    // The base's pull request merges first; the stacked one lands on `w1`
+    // ten seconds later, where nothing carries it to `main`.
+    merged_at(PARENT, &h, "2026-10-02T17:00:00Z");
+    h.center.refresh().await;
+    merged_at(URL, &h, "2026-10-02T17:00:10Z");
+    h.center.refresh().await;
+    h.center.refresh().await;
+
+    assert_eq!(task_state(&h, "w1-stack"), TaskState::Done);
+    assert_eq!(merges_told(&h, "w1-stack"), 1);
+    assert_eq!(task_state(&h, "ship-pr-center"), TaskState::InReview);
+    assert_eq!(merges_told(&h, "ship-pr-center"), 0);
+    assert_eq!(
+        stranded_told(&h),
+        vec![StubWrite::PullRequestStranded {
+            task_id: Some("ship-pr-center".into()),
+            url: URL.into(),
+            base: "w1".into(),
+            default_branch: "main".into(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn a_stacked_pull_request_lands_when_its_base_s_merges_after_it() {
+    let h = stacked().await;
+    merged_at(URL, &h, "2026-10-02T17:00:00Z");
+    h.center.refresh().await;
+    // Merged into `w1` while `w1`'s own pull request is open: not landed,
+    // and not stranded either.
+    assert_eq!(task_state(&h, "ship-pr-center"), TaskState::InReview);
+    assert_eq!(merges_told(&h, "ship-pr-center"), 0);
+    assert!(stranded_told(&h).is_empty());
+
+    merged_at(PARENT, &h, "2026-10-02T17:05:00Z");
+    h.center.refresh().await;
+    assert_eq!(task_state(&h, "ship-pr-center"), TaskState::Done);
+    assert_eq!(merges_told(&h, "ship-pr-center"), 1);
+    assert!(stranded_told(&h).is_empty());
+}
+
+#[tokio::test]
+async fn a_pull_request_on_a_merged_base_is_flagged_and_not_merged() {
+    let h = stacked().await;
+    let (_, list) = call(&h.app, "GET", "/v1/pull-requests", None).await;
+    let child = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["url"] == URL)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    merged_at(PARENT, &h, "2026-10-02T17:00:00Z");
+    h.center.refresh().await;
+    h.center.refresh().await;
+    let told: Vec<String> = h
+        .engine
+        .writes()
+        .into_iter()
+        .filter_map(|w| match w {
+            StubWrite::Message { task_id, text } if task_id == "ship-pr-center" => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(told[0].contains("targets w1"), "{}", told[0]);
+
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &format!("/v1/pull-requests/{child}:merge"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "off_default_branch");
 }

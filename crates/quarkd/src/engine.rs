@@ -427,6 +427,21 @@ pub trait EngineAdapter: Send + Sync {
         Ok(())
     }
 
+    /// The pull request at `url` (opened by `task_id`, when a task opened
+    /// it) merged into `base`, not the repository's default branch, and
+    /// nothing will carry its change there. The engine keeps the task open
+    /// and wakes the coordinator. Called once per such merge.
+    async fn pull_request_stranded(
+        &self,
+        _ws: &WorkspaceRef,
+        _task_id: Option<&str>,
+        _url: &str,
+        _base: &str,
+        _default_branch: &str,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
+
     /// Set whether green pull requests for the workspace's `repos` merge
     /// without asking a person (standing approval).
     async fn set_standing_approval(
@@ -766,6 +781,12 @@ pub enum StubWrite {
     CoordinatorPullRequestMerged {
         project_id: String,
         url: String,
+    },
+    PullRequestStranded {
+        task_id: Option<String>,
+        url: String,
+        base: String,
+        default_branch: String,
     },
     StandingApproval {
         repos: Vec<String>,
@@ -1177,6 +1198,22 @@ impl EngineAdapter for StubEngine {
         self.accept(StubWrite::CoordinatorPullRequestMerged {
             project_id: ws.project_id.clone(),
             url: url.into(),
+        })
+    }
+
+    async fn pull_request_stranded(
+        &self,
+        _ws: &WorkspaceRef,
+        task_id: Option<&str>,
+        url: &str,
+        base: &str,
+        default_branch: &str,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::PullRequestStranded {
+            task_id: task_id.map(str::to_string),
+            url: url.into(),
+            base: base.into(),
+            default_branch: default_branch.into(),
         })
     }
 
