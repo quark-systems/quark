@@ -118,7 +118,8 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
       )}
       {workers.length > 0 && (
         <section data-testid="since-workers">
-          <SectionLabel right={<a href={href({ name: "work", project: pid })}>All</a>}>Workers</SectionLabel>
+          {/* No "All" here: the Work tab is a board of issues, not a list of these workers. */}
+          <SectionLabel>Workers</SectionLabel>
           {workers.map((t) => (
             <a key={t.id} className="since-item" href={href({ name: "task", id: t.id })}>
               <StatusDot tone={taskTone(t.state)} />
