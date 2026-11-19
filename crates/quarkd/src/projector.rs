@@ -53,12 +53,14 @@ pub struct Projector {
     coordinators: Mutex<HashMap<String, Option<String>>>,
     /// The Project repo declaration last applied as gate config, by Project id.
     gates: Mutex<HashMap<String, String>>,
-    /// The `dispatch.yaml` blob and user-level settings last applied as
+    /// The dispatch rules in effect and user-level settings last applied as
     /// dispatch profiles, by Project id.
     dispatch: Mutex<HashMap<String, (String, String)>>,
     /// The user-level settings file whose `classifier` block is the default
     /// for every Project.
     user_config: Option<PathBuf>,
+    /// The default dispatch rules, for Projects that list none of their own.
+    defaults: Option<crate::dispatch_defaults::Source>,
 }
 
 impl Projector {
@@ -76,6 +78,7 @@ impl Projector {
             gates: Mutex::default(),
             dispatch: Mutex::default(),
             user_config: None,
+            defaults: None,
         }
     }
 
@@ -83,6 +86,13 @@ impl Projector {
     /// `path` (`~/.quark/config.yaml`).
     pub fn with_user_config(mut self, path: PathBuf) -> Self {
         self.user_config = Some(path);
+        self
+    }
+
+    /// Applies the default dispatch rules from `source` to every Project
+    /// whose `dispatch.yaml` lists no rules of its own.
+    pub fn with_dispatch_defaults(mut self, source: crate::dispatch_defaults::Source) -> Self {
+        self.defaults = Some(source);
         self
     }
 
@@ -135,6 +145,16 @@ impl Projector {
             .map(|p| p.id.clone())
             .collect();
         self.sync_coordinators(&ids).await;
+        let defaults = match &self.defaults {
+            Some(source) => match source.load().await {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    tracing::warn!(error = %e, "default dispatch rules unreadable");
+                    None
+                }
+            },
+            None => None,
+        };
         let mut workspaces = Vec::new();
         for project in projects {
             let Some(path) = project.workspace_path else {
@@ -147,7 +167,8 @@ impl Projector {
             self.refresh(&ws).await;
             if let Some(repo) = &project.project_repo_path {
                 self.sync_gates(&ws, PathBuf::from(repo)).await;
-                self.sync_dispatch(&ws, PathBuf::from(repo)).await;
+                self.sync_dispatch(&ws, PathBuf::from(repo), defaults.as_ref())
+                    .await;
             }
             workspaces.push(ws);
         }
@@ -249,17 +270,24 @@ impl Projector {
     }
 
     /// Compile the Project repo's `dispatch.yaml` and hand it to the engine
-    /// when it, or the user-level default classifier, changed since it was
-    /// last applied. A file that does not compile,
+    /// when it, the default rules it follows, or the user-level default
+    /// classifier changed since it was last applied. A file that lists no
+    /// rules of its own, or no file, takes `defaults` when given. A file that does not compile,
     /// or that the engine refuses as invalid, is recorded once and waits for
     /// the next change, leaving the last good config in place; any other
     /// engine failure is recorded and retried next tick.
-    pub async fn sync_dispatch(&self, ws: &WorkspaceRef, repo: PathBuf) {
+    pub async fn sync_dispatch(
+        &self,
+        ws: &WorkspaceRef,
+        repo: PathBuf,
+        defaults: Option<&crate::dispatch_defaults::Defaults>,
+    ) {
         let started = Instant::now();
         let declared =
             tokio::task::spawn_blocking(move || crate::crew_dispatch::read_declared(&repo)).await;
         let declared = match declared {
-            Ok(Ok(Some(d))) => d,
+            Ok(Ok(Some(d))) => Some(d),
+            Ok(Ok(None)) if defaults.is_some() => None,
             Ok(Ok(None)) => return,
             Ok(Err(e)) => {
                 let err = EngineError::Command(e);
@@ -275,9 +303,18 @@ impl Projector {
             Some(path) => crate::classifier::read_user_file(path),
             None => Ok(String::new()),
         };
-        // An unreadable settings file is applied as its error, once.
+        let project = declared.as_ref().map(|d| d.dispatch_yaml.as_str());
+        let text = match defaults {
+            Some(d) => crate::crew_dispatch::effective(project, &d.yaml).map(|(text, _)| text),
+            None => Ok(project.unwrap_or_default().to_string()),
+        };
+        // An unreadable settings file is applied as its error, once. The
+        // rules are keyed by the text in effect, which covers the defaults.
         let applied = (
-            declared.blob,
+            match &text {
+                Ok(t) => t.clone(),
+                Err(e) => format!("\0{e}"),
+            },
             user.clone().unwrap_or_else(|e| format!("\0{e}")),
         );
         if self.dispatch.lock().unwrap().get(&ws.project_id) == Some(&applied) {
@@ -285,7 +322,7 @@ impl Projector {
         }
         let res = match user
             .and_then(|text| crate::classifier::user_default(&text))
-            .and_then(|user| crate::crew_dispatch::compile(&declared.dispatch_yaml, user.as_ref()))
+            .and_then(|user| text.and_then(|t| crate::crew_dispatch::compile(&t, user.as_ref())))
             .and_then(|c| serde_json::to_string(&c).map_err(|e| e.to_string()))
         {
             Ok(json) => self.engine.set_crew_dispatch(ws, &json).await,

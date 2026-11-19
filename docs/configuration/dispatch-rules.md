@@ -3,6 +3,17 @@
 Dispatch rules (ADR-11, `crates/quarkd/src/crew_dispatch.rs`) decide which harness, model and account run each task.
 They live in the Project repo's `dispatch.yaml`, and the app's Settings › Dispatch edits them. The [Dispatch API](../api/dispatch.md) reads, saves and tests them.
 
+## Default rules
+
+Every Project whose `dispatch.yaml` lists no `rules` or `default` of its own follows the default rules, kept in `~/.quark/dispatch.yaml` and edited in the app under Default rules.
+A new Project starts that way. Saving rules for a Project writes them to its `dispatch.yaml`, where they apply instead; Reset to defaults drops them again (in a commit, so they stay in the history).
+Its `classifier` block is the Project's own either way.
+
+Until default rules are saved, Quark ships recommended tiers: Trivial, Standard, Complex and Scout, and a default for any other task.
+The tiers' names and conditions are fixed; their candidates are picked from the harnesses installed here that have an enabled, signed-in account (Bob and Kiro, then Claude Code and Codex, for cheap work; Kiro, Claude Code and Codex for complex work and scouting), with Claude Code standing in when none of those is available.
+
+In the rule editor, Copy from… fills the editor with another Project's rules or the default rules, to save as this Project's own (or as the defaults).
+
 ## dispatch.yaml
 
 - `rules`: each a `when` with one profile or an ordered list of candidates in `use`.

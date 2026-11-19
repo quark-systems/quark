@@ -8,7 +8,7 @@ export interface AgentConfig {
   pool?: string | null;
 }
 export interface RepoSource { url: string; name?: string | null }
-export type DispatchPreset = "single" | "light_trivial";
+export type DispatchPreset = "defaults" | "single" | "light_trivial";
 export type DeliveryPolicy = "gated" | "direct";
 export type ProjectStatus = "provisioning" | "ready" | "failed";
 

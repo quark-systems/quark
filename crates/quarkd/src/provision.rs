@@ -83,7 +83,7 @@ impl Layout {
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Validate a create request and fill in defaults: repo names derived from
-/// URLs, preset `single`, delivery `gated`. A request without repos is only
+/// URLs, preset `defaults`, delivery `gated`. A request without repos is only
 /// recorded, as before.
 pub fn normalize(mut input: CreateProject) -> Result<CreateProject, String> {
     input.name = input.name.trim().to_string();
@@ -128,7 +128,9 @@ pub fn normalize(mut input: CreateProject) -> Result<CreateProject, String> {
         *repo = normalize_repo(repo.clone(), &seen)?;
         seen.push(repo.name.clone().unwrap_or_default());
     }
-    input.dispatch_preset.get_or_insert(DispatchPreset::Single);
+    input
+        .dispatch_preset
+        .get_or_insert(DispatchPreset::Defaults);
     input.delivery.get_or_insert(DeliveryPolicy::Gated);
     Ok(input)
 }
@@ -462,7 +464,7 @@ mod tests {
         let names: Vec<_> = n.repos.iter().map(|r| r.name.clone().unwrap()).collect();
         assert_eq!(names, ["quark", "firstmate", "tooling"]);
         assert_eq!(n.name, "Quark");
-        assert_eq!(n.dispatch_preset, Some(DispatchPreset::Single));
+        assert_eq!(n.dispatch_preset, Some(DispatchPreset::Defaults));
         assert_eq!(n.delivery, Some(DeliveryPolicy::Gated));
     }
 

@@ -164,6 +164,7 @@ async fn read(state: &AppState, project: Project) -> Result<ProjectSettings, Api
     let user_config = state.layout.user_config();
     let bare = project.project_repo_path.clone().map(PathBuf::from);
     let pid = project.id.clone();
+    let defaults = super::dispatch::load_defaults(state).await;
     let (verification, dispatch, entries) = tokio::task::spawn_blocking(move || {
         let Some(bare) = bare else {
             return (
@@ -172,8 +173,11 @@ async fn read(state: &AppState, project: Project) -> Result<ProjectSettings, Api
                 0,
             );
         };
-        let dispatch = match super::dispatch::read_rules(&pid, &bare, &user_config) {
+        let rules =
+            defaults.and_then(|d| super::dispatch::read_rules(&pid, &bare, &user_config, &d));
+        let dispatch = match rules {
             Ok(r) => DispatchSummary {
+                source: r.source,
                 rules: r.rules.len() as u32,
                 default_candidates: r.default.len() as u32,
                 classifier: r

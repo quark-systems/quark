@@ -1748,3 +1748,59 @@ test("Stop interrupts the coordinator from its header", async ({ page }) => {
   await expect(stop).toBeDisabled();
   await expect(stop).toHaveText("Stopped");
 });
+
+test("dispatch: projects follow the default rules until they have their own, copy rules and reset", async ({ page }) => {
+  await open(page, "#/p/website/dispatch");
+  const origin = page.getByTestId("dispatch-origin");
+  const rows = page.getByTestId("dispatch-row");
+  const detail = page.getByTestId("dispatch-detail");
+  const save = page.getByTestId("dispatch-save");
+  const reset = page.getByTestId("dispatch-reset");
+
+  // A project created without rules of its own follows the default rules: the recommended tiers.
+  await expect(origin).toContainText("This project follows your default rules");
+  await expect(rows).toHaveText([/Trivial/, /Standard/, /Complex/, /Scout/, /Default/]);
+  await expect(reset).toHaveCount(0);
+
+  // The default rules are edited on their own screen; saving them makes them yours.
+  await page.getByTestId("dispatch-defaults-link").click();
+  await expect(page).toHaveURL(/#\/dispatch$/);
+  await expect(page.getByRole("heading", { name: "Default rules" })).toBeVisible();
+  await expect(origin).toContainText("Quark's recommended tiers");
+  await expect(page.getByRole("tab", { name: "Test" })).toHaveCount(0);
+  await expect(detail.getByLabel("Candidate 1 model")).toHaveValue("haiku");
+  await detail.getByLabel("Candidate 1 effort").selectOption("low");
+  await save.click();
+  await expect(origin).toContainText("Your default rules.");
+  await expect(reset).toHaveText("Restore recommended tiers");
+
+  // The project that follows them sees the change.
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/p\/website\/dispatch$/);
+  await page.reload();
+  await expect(detail.getByLabel("Candidate 1 effort")).toHaveValue("low");
+
+  // Rules copied from another project become this project's own once saved.
+  await page.getByTestId("dispatch-copy").selectOption({ label: "Quark MVP" });
+  await expect(page.getByTestId("dispatch-copied")).toContainText("Copied from Quark MVP. Save to keep them.");
+  const quark = await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark/dispatch")).json());
+  await expect(rows).toHaveCount(quark.rules.length + 1);
+  await save.click();
+  await expect(page.getByTestId("dispatch-dirty")).toHaveCount(0);
+  await expect(origin).toContainText("This project has its own rules");
+
+  // Reset to defaults asks for a second press, then the project follows the default rules again.
+  await reset.click();
+  await expect(reset).toHaveText("Press again to confirm");
+  await reset.click();
+  await expect(origin).toContainText("This project follows your default rules");
+  await expect(rows).toHaveCount(5);
+
+  // Restoring the recommended tiers forgets the saved defaults.
+  await page.getByTestId("nav-defaults").click();
+  await expect(origin).toContainText(/\d+ projects? follows? them/);
+  await reset.click();
+  await reset.click();
+  await expect(origin).toContainText("Quark's recommended tiers");
+  await expect(detail.getByLabel("Candidate 1 effort")).toHaveValue("high");
+});

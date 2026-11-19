@@ -223,10 +223,28 @@ pub struct DispatchRulesDraft {
     pub default: Vec<DispatchProfile>,
 }
 
-/// A Project's dispatch rules: `dispatch.yaml` on the Project repo's `main`.
+/// Where the dispatch rules in effect for a Project come from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchRulesSource {
+    /// The Project's own: its `dispatch.yaml` lists rules or a default.
+    Project,
+    /// The default rules (`GET /v1/dispatch/defaults`): the Project's
+    /// `dispatch.yaml` lists none of its own.
+    #[default]
+    Defaults,
+}
+
+/// A Project's dispatch rules: `dispatch.yaml` on the Project repo's `main`,
+/// or the default rules while that file lists none of its own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DispatchRules {
     pub project_id: String,
+    /// `project` when the Project owns its rules, `defaults` when it follows
+    /// the default rules. Saving rules makes them the Project's own;
+    /// `POST /v1/projects/{id}/dispatch:reset` goes back to the defaults.
+    #[serde(default)]
+    pub source: DispatchRulesSource,
     /// Names this version of the file (its git blob id); absent when `main`
     /// has no `dispatch.yaml`. Send it back when saving.
     pub revision: Option<String>,
@@ -241,6 +259,36 @@ pub struct DispatchRules {
     pub default_select: Option<DispatchSelect>,
     pub rules: Vec<DispatchRuleSpec>,
     pub default: Vec<DispatchProfile>,
+}
+
+/// The default dispatch rules: every Project whose `dispatch.yaml` lists no
+/// rules of its own follows them. Kept in `~/.quark/dispatch.yaml`; until
+/// that file is saved, Quark's shipped tiers (Trivial, Standard, Complex,
+/// Scout and the default) with candidates picked from the harnesses and
+/// accounts on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DispatchDefaults {
+    /// Names this version of the defaults; send it back when saving.
+    pub revision: String,
+    /// True while no defaults have been saved and the shipped tiers apply.
+    pub shipped: bool,
+    pub default_select: Option<DispatchSelect>,
+    pub rules: Vec<DispatchRuleSpec>,
+    pub default: Vec<DispatchProfile>,
+    /// Projects that follow these rules (their `dispatch.yaml` lists none of
+    /// their own), by id.
+    pub projects: Vec<String>,
+}
+
+/// Request body for `PUT /v1/dispatch/defaults`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PutDispatchDefaults {
+    /// The `revision` the edit started from. When the defaults have another
+    /// by now, nothing is saved. Absent saves over whatever is there.
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(flatten)]
+    pub rules: DispatchRulesDraft,
 }
 
 /// Request body for `PUT /v1/projects/{id}/dispatch`.

@@ -10,7 +10,10 @@ export interface HoldoutSettings { enabled: boolean; categories: string[]; timeo
 export interface SourceVerification { source: string; checks: GateCheck[]; journeys?: GateJourneys | null; holdout: HoldoutSettings }
 /** `project.yaml` on the Project repo's `main`. `revision` goes back with a holdout change. */
 export interface VerificationSettings { revision?: string | null; sources: SourceVerification[]; error?: string | null }
-export interface DispatchSummary { rules: number; default_candidates: number; classifier?: string | null; error?: string | null }
+export interface DispatchSummary {
+  /** "defaults" while the Project follows the default rules; absent from an older daemon. */
+  source?: "project" | "defaults";
+  rules: number; default_candidates: number; classifier?: string | null; error?: string | null }
 export interface MemorySummary { entries: number; proposals_to_review: number }
 /** With `auto` on, Quark compacts the coordinator (a wrap up, then `/compact`) when a turn ends with its context window `at_percent` full. */
 export interface CompactionSettings { auto: boolean; at_percent: number }

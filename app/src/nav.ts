@@ -24,6 +24,7 @@ export const ROUTES = {
   prs: "prs", // PR center
   pr: "pr/:id", // one pull request: checks, reviews, diff
   accounts: "accounts", // harness accounts, pools and quota
+  defaults: "dispatch", // the default dispatch rules every project follows until it has its own
   hosts: "hosts", // every host: health, telemetry, what runs there, worktree pools
   updates: "updates/:action?", // Quark updates: what's available, install, roll back, settings; `check` checks on open
   setup: "setup", // what this machine still needs before Quark can run a project, with fixes

@@ -77,7 +77,7 @@ pub struct CreateProject {
     #[serde(default)]
     pub repos: Vec<RepoSource>,
     pub agent_config: Option<AgentConfig>,
-    /// One of the presets listed by `DispatchPreset`; default `single`.
+    /// One of the presets listed by `DispatchPreset`; default `defaults`.
     pub dispatch_preset: Option<DispatchPreset>,
     /// Default `gated`.
     pub delivery: Option<DeliveryPolicy>,
@@ -164,6 +164,9 @@ pub enum DeliveryPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DispatchPreset {
+    /// The Project follows the default dispatch rules until it saves rules of
+    /// its own.
+    Defaults,
     /// Every task uses the agent config.
     Single,
     /// Trivial mechanical edits run at low effort; everything else uses the
@@ -174,6 +177,7 @@ pub enum DispatchPreset {
 impl DispatchPreset {
     pub fn as_str(self) -> &'static str {
         match self {
+            DispatchPreset::Defaults => "defaults",
             DispatchPreset::Single => "single",
             DispatchPreset::LightTrivial => "light_trivial",
         }

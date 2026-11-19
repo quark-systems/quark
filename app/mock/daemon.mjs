@@ -127,7 +127,7 @@ function addProject(p) {
     id: p.id ?? nextId("prj"), name: p.name, goal: p.goal ?? null, workspace_path: p.workspace_path ?? null,
     created_at: p.created_at ?? now(), updated_at: p.updated_at ?? now(),
     repos: (p.repos ?? []).map((r) => ({ url: r.url, name: r.name ?? r.url.replace(/\.git$/, "").split(/[/:]/).pop() })),
-    agent_config: p.agent_config ?? null, dispatch_preset: p.dispatch_preset ?? "single", delivery: p.delivery ?? "gated",
+    agent_config: p.agent_config ?? null, dispatch_preset: p.dispatch_preset ?? "defaults", delivery: p.delivery ?? "gated",
     status: p.status ?? "ready", status_detail: p.status_detail ?? null, standing_approval: p.standing_approval ?? false,
     archived_at: p.archived_at ?? null,
   };
@@ -259,17 +259,41 @@ function recordDispatch(task, how, { silent = false, ts = now(), model = null, e
 const dispatchRules = new Map(); // project id -> DispatchRules
 const hex40 = () => crypto.randomBytes(20).toString("hex");
 const TRIVIAL_WHEN = "A trivial mechanical edit such as a rename, typo or one-line fix.";
+// The default rules (GET/PUT/DELETE /v1/dispatch/defaults): Quark's shipped tiers until saved.
+const cc = (model, effort) => ({ harness: "claude-code", model, effort, pool: null });
+const tier = (name, when, why, candidates) => ({ name, when, select: "ordered", why, candidates });
+const SHIPPED_DEFAULTS = {
+  default_select: "ordered",
+  rules: [
+    tier("Trivial", "The task is a trivial mechanical edit: a rote rename, formatting sweep, targeted typo fix, simple config change, or single-line bug fix with an obvious cause.", "Cheap and fast for narrow work.", [cc("haiku", "high")]),
+    tier("Standard", "The task is a standard single-concern feature, a well-scoped bug fix with a known root cause, adding tests, or a focused refactor within one module.", "The workhorse tier: a capable model at moderate cost.", [cc("sonnet", "medium")]),
+    tier("Complex", "The task is a large multi-file feature, a risky refactor touching shared seams, a new subsystem, or work that requires holding many moving parts and making design decisions.", "Complex work benefits from the strongest model.", [cc("opus", "medium")]),
+    tier("Scout", "The task is a scout investigation, bug diagnosis, architecture research, or exploratory analysis that needs deep reading and reasoning but produces a report rather than code.", "Scouts need deep reading and strong reasoning, and write a report rather than code.", [cc("opus", "high")]),
+  ],
+  default: [cc("sonnet", "medium")],
+};
+let savedDefaults = null; // { default_select, rules, default, revision } once saved
+let shippedRevision = hex40();
+function defaultsBody() {
+  const d = savedDefaults ?? { ...SHIPPED_DEFAULTS, revision: shippedRevision };
+  const following = [...projects.values()].filter((p) => !p.archived_at && rulesOf(p).source === "defaults").map((p) => p.id);
+  return { revision: d.revision, shipped: !savedDefaults, ...structuredClone({ default_select: d.default_select, rules: d.rules, default: d.default }), projects: following };
+}
 function rulesOf(proj) {
   if (!dispatchRules.has(proj.id)) {
     const agent = proj.agent_config ?? { harness: "claude-code", model: "claude-sonnet-5", effort: "medium" };
     const profile = (effort) => ({ harness: agent.harness, model: agent.model ?? null, effort: effort ?? agent.effort ?? null, pool: agent.pool ?? null });
+    const follows = (proj.dispatch_preset ?? "defaults") === "defaults";
     dispatchRules.set(proj.id, {
-      project_id: proj.id, revision: hex40(), commit: hex40(), classifier: { provider: "none" }, default_select: "ordered",
+      project_id: proj.id, source: follows ? "defaults" : "project", revision: hex40(), commit: hex40(), classifier: { provider: "none" }, default_select: "ordered",
       rules: proj.dispatch_preset === "light_trivial" ? [{ name: "trivial-edit", when: TRIVIAL_WHEN, select: null, candidates: [profile("low")] }] : [],
       default: [profile()],
     });
   }
-  return dispatchRules.get(proj.id);
+  const r = dispatchRules.get(proj.id);
+  if (r.source !== "defaults") return r;
+  const d = structuredClone(savedDefaults ?? SHIPPED_DEFAULTS);
+  return { ...r, default_select: d.default_select, rules: d.rules, default: d.default };
 }
 const blank = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
 const cleanProfile = (c) => ({
@@ -410,7 +434,7 @@ function settingsOf(proj) {
   return {
     project_id: proj.id, standing_approval: proj.standing_approval, delivery: proj.delivery ?? "gated",
     agent_config: proj.agent_config, compaction: compactionOf(proj.id), verification: verificationOf(proj),
-    dispatch: { rules: rules.rules.length, default_candidates: rules.default.length, classifier: "none", error: null },
+    dispatch: { source: rules.source, rules: rules.rules.length, default_candidates: rules.default.length, classifier: "none", error: null },
     memory: {
       entries: (memoryEntries.get(proj.id) ?? []).length,
       proposals_to_review: [...memoryProposals.values()].filter((m) => m.project_id === proj.id && m.state === "proposed").length,
@@ -947,7 +971,7 @@ function seed() {
   const quark = addProject({
     id: "quark", name: "Quark MVP", goal: "Ship Phase 1: one Project end to end, from creation to a reviewed PR.",
     repos: [{ url: "https://github.com/quark-systems/quark.git" }, { url: "https://github.com/quark-systems/firstmate.git" }],
-    agent_config: { harness: "claude-code", model: null, effort: "high" },
+    agent_config: { harness: "claude-code", model: null, effort: "high" }, dispatch_preset: "single",
     created_at: minutesAgo(600), updated_at: minutesAgo(3),
   });
   // One rule with a second candidate that cannot run here, so the editor and the test have something to show.
@@ -1742,8 +1766,29 @@ const server = http.createServer(async (req, res) => {
     const next = compileDraft(b);
     if (next.error) return send(res, 400, { error: { code: "dispatch_invalid", message: next.error } });
     // Like quarkd: rules that are what main has already make no commit.
-    if (!sameRules(next, current)) dispatchRules.set(proj.id, { ...current, ...next, revision: hex40(), commit: hex40() });
-    return send(res, 200, dispatchRules.get(proj.id));
+    if (current.source === "defaults" || !sameRules(next, current)) dispatchRules.set(proj.id, { ...current, ...next, source: "project", revision: hex40(), commit: hex40() });
+    return send(res, 200, rulesOf(proj));
+  }
+  if ((r = m(/^\/v1\/projects\/([^/]+)\/dispatch:reset$/)) && req.method === "POST") {
+    const proj = projects.get(decodeURIComponent(r[1]));
+    if (!proj) return notFound(res);
+    const current = rulesOf(proj);
+    if (current.source !== "defaults") dispatchRules.set(proj.id, { ...dispatchRules.get(proj.id), source: "defaults", revision: hex40(), commit: hex40() });
+    return send(res, 200, rulesOf(proj));
+  }
+  if (url.pathname === "/v1/dispatch/defaults") {
+    if (req.method === "GET") return send(res, 200, defaultsBody());
+    if (req.method === "DELETE") { savedDefaults = null; shippedRevision = hex40(); return send(res, 200, defaultsBody()); }
+    if (req.method === "PUT") {
+      const b = await readJson(req);
+      if (b?.revision != null && b.revision !== defaultsBody().revision) {
+        return send(res, 409, { error: { code: "dispatch_changed", message: "the default dispatch rules changed since they were loaded; load them again and repeat the edit" } });
+      }
+      const next = compileDraft(b);
+      if (next.error) return send(res, 400, { error: { code: "dispatch_invalid", message: next.error } });
+      savedDefaults = { default_select: next.default_select, rules: next.rules, default: next.default, revision: hex40() };
+      return send(res, 200, defaultsBody());
+    }
   }
   if ((r = m(/^\/v1\/projects\/([^/]+)\/tasks$/)) && req.method === "GET") {
     const id = decodeURIComponent(r[1]);

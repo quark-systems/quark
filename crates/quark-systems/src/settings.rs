@@ -87,6 +87,9 @@ pub struct HoldoutSettings {
 /// The Project's dispatch rules, in brief; the Dispatch screen edits them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DispatchSummary {
+    /// `defaults` while the Project follows the default rules.
+    #[serde(default)]
+    pub source: crate::DispatchRulesSource,
     /// Rules besides the default.
     pub rules: u32,
     /// Candidates of the default.

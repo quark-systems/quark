@@ -21,6 +21,7 @@ export const FALLBACK_HARNESSES: HarnessInfo[] = [
 }));
 
 export const PRESETS: { id: DispatchPreset; label: string; description: string }[] = [
+  { id: "defaults", label: "Your default rules", description: "Workers follow your default dispatch rules: Trivial, Standard, Complex and Scout tiers unless you changed them. You can give this project its own rules later." },
   { id: "single", label: "Same for every worker", description: "Every worker runs the agent above, at the effort above." },
   { id: "light_trivial", label: "Low effort for small edits", description: "Renames, typo fixes and one-line changes run at low effort, which is faster and cheaper. Everything else runs as above." },
 ];
@@ -36,7 +37,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
   const [effort, setEffort] = useState("");
   const [pool, setPool] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [preset, setPreset] = useState<DispatchPreset>("single");
+  const [preset, setPreset] = useState<DispatchPreset>("defaults");
   const [delivery, setDelivery] = useState<DeliveryPolicy>("gated");
   const [workspace, setWorkspace] = useState("");
   const [busy, setBusy] = useState(false);
@@ -170,7 +171,7 @@ export function NewProject({ onCreated }: { onCreated: (id: string) => void }) {
             </ControlRow>
           </Field>
 
-          <Field group label="Workers" hint="You can add your own rules later in Settings, under Dispatch.">
+          <Field group label="Workers" hint="You can give this project its own rules later in Settings, under Dispatch.">
             <OptionCards name="preset" value={preset} onChange={setPreset}
               options={PRESETS.map((p) => ({ value: p.id, label: p.label, description: p.description }))} />
           </Field>
