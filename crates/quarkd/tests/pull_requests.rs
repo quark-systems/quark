@@ -873,3 +873,108 @@ async fn a_merge_made_outside_the_engine_is_handed_to_it_once() {
     h.center.refresh().await;
     assert_eq!(told(&h), 1);
 }
+
+/// A coordinator transcript entry, as the transcript tap records it.
+fn coordinator_entry(
+    role: quark_systems::TranscriptRole,
+    text: &str,
+    call: &str,
+) -> quark_systems::TranscriptEntry {
+    quark_systems::TranscriptEntry {
+        role,
+        text: text.into(),
+        tool_name: Some("Bash".into()),
+        tool_call_id: Some(call.into()),
+        is_error: false,
+        truncated: false,
+        ts: None,
+        tool: None,
+        turn_end: false,
+    }
+}
+
+#[tokio::test]
+async fn a_pull_request_the_coordinator_opens_itself_is_tracked_and_its_merge_told_once() {
+    use quark_systems::TranscriptRole::{ToolCall, ToolResult};
+    use quarkd::store::TranscriptSource;
+    let h = harness().await;
+    let own = "https://github.com/quark-systems/proto/pull/4";
+    let source = TranscriptSource::Coordinator {
+        project_id: h.project_id.clone(),
+    };
+    // The call in one read of the log, its result in the next; a `gh pr
+    // view` printing a URL is not an opening.
+    h.store
+        .apply_transcript(
+            &h.project_id,
+            &source,
+            "/log.jsonl",
+            10,
+            &[
+                coordinator_entry(
+                    ToolCall,
+                    r#"{"command":"git push -u origin x && gh pr create --base main --title t"}"#,
+                    "c1",
+                ),
+                coordinator_entry(ToolCall, r#"{"command":"gh pr view 9"}"#, "c2"),
+                coordinator_entry(
+                    ToolResult,
+                    "https://github.com/quark-systems/proto/pull/9",
+                    "c2",
+                ),
+            ],
+        )
+        .unwrap();
+    h.store
+        .apply_transcript(
+            &h.project_id,
+            &source,
+            "/log.jsonl",
+            20,
+            &[coordinator_entry(
+                ToolResult,
+                &format!("remote: \n{own}\n"),
+                "c1",
+            )],
+        )
+        .unwrap();
+    let (_, list) = call(&h.app, "GET", "/v1/pull-requests", None).await;
+    let urls: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["url"].as_str().unwrap())
+        .collect();
+    assert!(urls.contains(&own), "{urls:?}");
+    assert!(!urls.contains(&"https://github.com/quark-systems/proto/pull/9"));
+
+    let told = |h: &Harness| {
+        h.engine
+            .writes()
+            .into_iter()
+            .filter(|w| matches!(w, StubWrite::CoordinatorPullRequestMerged { .. }))
+            .count()
+    };
+    h.forge
+        .set(own, forge_pr(PullRequestState::Open, CheckStatus::Success));
+    h.center.refresh().await;
+    assert_eq!(told(&h), 0);
+
+    let mut merged = forge_pr(PullRequestState::Merged, CheckStatus::Success);
+    merged.merged_at = Some("2026-10-02T17:00:00Z".into());
+    h.forge.set(own, merged);
+    h.engine.fail_writes(Some("busy"));
+    h.center.refresh().await;
+    assert_eq!(told(&h), 0);
+    h.engine.fail_writes(None);
+    h.center.refresh().await;
+    assert_eq!(
+        h.engine.writes().last(),
+        Some(&StubWrite::CoordinatorPullRequestMerged {
+            project_id: h.project_id.clone(),
+            url: own.into(),
+        })
+    );
+    h.center.refresh().await;
+    assert_eq!(told(&h), 1);
+}

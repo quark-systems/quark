@@ -415,6 +415,18 @@ pub trait EngineAdapter: Send + Sync {
         Ok(())
     }
 
+    /// The forge reports the pull request at `url` merged, one the
+    /// workspace's coordinator opened itself rather than through a task. The
+    /// engine tells the coordinator, as it does for a task's merge. Called
+    /// once per merge.
+    async fn coordinator_pull_request_merged(
+        &self,
+        _ws: &WorkspaceRef,
+        _url: &str,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
+
     /// Set whether green pull requests for the workspace's `repos` merge
     /// without asking a person (standing approval).
     async fn set_standing_approval(
@@ -749,6 +761,10 @@ pub enum StubWrite {
     },
     PullRequestMerged {
         task_id: String,
+        url: String,
+    },
+    CoordinatorPullRequestMerged {
+        project_id: String,
         url: String,
     },
     StandingApproval {
@@ -1149,6 +1165,17 @@ impl EngineAdapter for StubEngine {
     ) -> Result<(), EngineError> {
         self.accept(StubWrite::PullRequestMerged {
             task_id: task_id.into(),
+            url: url.into(),
+        })
+    }
+
+    async fn coordinator_pull_request_merged(
+        &self,
+        ws: &WorkspaceRef,
+        url: &str,
+    ) -> Result<(), EngineError> {
+        self.accept(StubWrite::CoordinatorPullRequestMerged {
+            project_id: ws.project_id.clone(),
             url: url.into(),
         })
     }

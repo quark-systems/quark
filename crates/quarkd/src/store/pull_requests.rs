@@ -5,11 +5,14 @@
 //! change emits `pr.updated`, `check.updated` or `review.updated` in the same
 //! transaction.
 
+use std::collections::HashSet;
+
 use base64::Engine as _;
 use quark_systems::{
     Check, CheckStatus, CheckUpdated, ChecksState, CommentUpdated, DiffSide, EventType, Evidence,
     Mergeability, PrComment, PrCommentKind, PrConversation, PrConversationEntry, PrEntryKind,
     PrThread, PullRequest, PullRequestState, Review, ReviewDecision, ReviewState, ReviewUpdated,
+    TranscriptEntry, TranscriptRole,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde::de::DeserializeOwned;
@@ -39,6 +42,17 @@ pub struct PrOwner {
     pub pull_request: PullRequest,
     /// The owning task's engine coordinates; `None` when no task owns it.
     pub task: Option<TaskTarget>,
+}
+
+/// A merged pull request the Project's coordinator opened itself and has
+/// not yet been told merged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinatorMerge {
+    pub id: String,
+    pub project_id: String,
+    pub url: String,
+    /// The Project's workspace root; `None` when it has none attached.
+    pub workspace_path: Option<String>,
 }
 
 const PR_COLUMNS: &str = "id, project_id, task_id, url, provider, repo, number, title, author, \
@@ -442,6 +456,167 @@ impl Store {
         })?;
         ids.iter().map(|id| self.pull_request_owner(id)).collect()
     }
+    /// Merged pull requests the Project's coordinator opened itself and has
+    /// not been told of. No task owns them, so the engine has no task to
+    /// land: the coordinator is told directly, once (see
+    /// [`Store::mark_merge_told`]).
+    pub fn coordinator_merges_untold(&self) -> Result<Vec<CoordinatorMerge>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT pr.id, pr.project_id, pr.url, p.workspace_path
+                 FROM pull_requests pr JOIN projects p ON p.id = pr.project_id
+                 WHERE pr.state = 'merged' AND pr.task_id IS NULL
+                   AND pr.opened_by = 'coordinator' AND pr.merge_told_at IS NULL
+                 ORDER BY pr.created_at, pr.id",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok(CoordinatorMerge {
+                    id: r.get(0)?,
+                    project_id: r.get(1)?,
+                    url: r.get(2)?,
+                    workspace_path: r.get(3)?,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })
+    }
+
+    /// Records that the coordinator was told the pull request merged.
+    pub fn mark_merge_told(&self, id: &str) -> Result<()> {
+        self.write(|tx, _| {
+            tx.execute(
+                "UPDATE pull_requests SET merge_told_at = ?2
+                 WHERE id = ?1 AND merge_told_at IS NULL",
+                params![id, now_rfc3339()],
+            )?;
+            Ok(())
+        })
+    }
+}
+
+/// Watches a coordinator's transcript for a pull request it opened from its
+/// own shell (`gh pr create`, `glab mr create`) rather than through a task,
+/// and records it, so the PR center tracks it and its merge wakes the
+/// coordinator. `calls` holds the pull-request-opening calls seen earlier in
+/// the same batch, by call id; a call from an earlier batch is looked up in
+/// the recorded transcript.
+pub(super) fn note_coordinator_entry(
+    tx: &Transaction,
+    events: &mut Vec<quark_systems::Event>,
+    project_id: &str,
+    entry: &TranscriptEntry,
+    calls: &mut HashSet<String>,
+) -> Result<()> {
+    let Some(call_id) = entry.tool_call_id.as_deref() else {
+        return Ok(());
+    };
+    match entry.role {
+        TranscriptRole::ToolCall => {
+            if opens_pull_request(call_command(entry)) {
+                calls.insert(call_id.to_string());
+            }
+        }
+        TranscriptRole::ToolResult if !entry.is_error => {
+            let Some(url) = opened_url(&entry.text) else {
+                return Ok(());
+            };
+            if calls.contains(call_id) || recorded_call_opens(tx, project_id, call_id)? {
+                record_coordinator_pr(tx, events, project_id, &url)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The shell command a tool call ran, or its raw input when the harness
+/// records no command.
+fn call_command(entry: &TranscriptEntry) -> &str {
+    entry
+        .tool
+        .as_ref()
+        .and_then(|t| t.command.as_deref())
+        .unwrap_or(&entry.text)
+}
+
+/// Whether a shell command opens a pull request.
+pub fn opens_pull_request(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    words.windows(3).any(|w| {
+        matches!(
+            (w[0].rsplit('/').next().unwrap_or(w[0]), w[1], w[2]),
+            ("gh", "pr", "create") | ("glab", "mr", "create")
+        )
+    })
+}
+
+/// The pull request URL a `gh pr create` or `glab mr create` printed: the
+/// last word of its output that names one.
+pub fn opened_url(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .rev()
+        .map(|w| w.trim_matches(|c: char| matches!(c, '"' | '\'' | '<' | '>' | '(' | ')' | ',')))
+        .find(|w| PrRef::parse(w).is_some())
+        .map(str::to_string)
+}
+
+fn recorded_call_opens(tx: &Transaction, project_id: &str, call_id: &str) -> Result<bool> {
+    let payload: Option<String> = tx
+        .query_row(
+            "SELECT payload FROM events
+             WHERE type = ?1 AND project_id = ?2
+               AND json_extract(payload, '$.entry.role') = 'tool_call'
+               AND json_extract(payload, '$.entry.tool_call_id') = ?3
+             ORDER BY seq DESC LIMIT 1",
+            params![EventType::CoordinatorMessage.as_str(), project_id, call_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(payload) = payload else {
+        return Ok(false);
+    };
+    let value: serde_json::Value = serde_json::from_str(&payload)?;
+    let entry: TranscriptEntry = serde_json::from_value(value["entry"].clone())?;
+    Ok(opens_pull_request(call_command(&entry)))
+}
+
+/// Records the pull request at `url` as opened by `project_id`'s coordinator,
+/// unless the Project already tracks it.
+fn record_coordinator_pr(
+    tx: &Transaction,
+    events: &mut Vec<quark_systems::Event>,
+    project_id: &str,
+    url: &str,
+) -> Result<()> {
+    let Some(r) = PrRef::parse(url) else {
+        return Ok(());
+    };
+    let known: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pull_requests WHERE project_id = ?1 AND url = ?2)",
+        params![project_id, url],
+        |r| r.get(0),
+    )?;
+    if known {
+        return Ok(());
+    }
+    let id = new_id("pr");
+    tx.execute(
+        "INSERT INTO pull_requests (id, project_id, task_id, url, provider, repo, number,
+             state, mergeable, checks_state, review_decision, created_at, opened_by)
+         VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 'open', 'unknown', 'none', 'none', ?7,
+             'coordinator')",
+        params![
+            id,
+            project_id,
+            url,
+            r.provider,
+            r.repo,
+            r.number as i64,
+            now_rfc3339()
+        ],
+    )?;
+    emit_pr(tx, events, &id)
 }
 
 /// The public id of a gate artifact: its relative path, base64url-encoded.

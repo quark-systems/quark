@@ -41,7 +41,7 @@ pub use accounts::{default_account_id, AccountRow, AccountState, KEYCHAIN_PREFIX
 pub use coordinator::{coordinator_decision_id, coordinator_decision_key};
 pub use failover::is_daemon_decision;
 pub use memory::{NewProposal, PendingLearning};
-pub use pull_requests::{artifact_id, artifact_path, PrOwner, PrSyncTarget};
+pub use pull_requests::{artifact_id, artifact_path, CoordinatorMerge, PrOwner, PrSyncTarget};
 pub use screen_prompts::{coordinator_prompt_key, CoordinatorPrompt};
 
 /// One `worker.output` event to append.
@@ -1481,9 +1481,17 @@ impl Store {
         entries: &[TranscriptEntry],
     ) -> Result<()> {
         self.write(|tx, events| {
+            let mut opening = HashSet::new();
             for entry in entries {
                 let (event_type, payload) = match source {
                     TranscriptSource::Coordinator { project_id } => {
+                        pull_requests::note_coordinator_entry(
+                            tx,
+                            events,
+                            project_id,
+                            entry,
+                            &mut opening,
+                        )?;
                         // A message the daemon typed in is recorded once,
                         // with its id, where it was sent.
                         match outbox::claim_logged_message(tx, project_id, entry)? {
