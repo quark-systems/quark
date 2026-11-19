@@ -53,7 +53,7 @@ pub fn local_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
     let readers: Vec<Arc<dyn LocalReading>> = vec![
         Arc::new(ClaudeUsage::from_env()),
         Arc::new(CodexUsage::from_env()),
-        Arc::new(BobUsage::for_home(&config.home, user_home.as_deref())),
+        Arc::new(bob_usage(&config.home, user_home.as_deref())),
         Arc::new(kiro_usage(&config.home)),
         Arc::new(GrokUsage::from_env()),
         Arc::new(KimiUsage::from_env()),
@@ -85,6 +85,15 @@ pub fn account_readings(config: &Config) -> Vec<Arc<dyn LocalReading>> {
 
 /// Kiro CLI's reader for a Quark home, signing the default login in with
 /// the API key kept for it in the Keychain when there is one.
+pub fn bob_usage(home: &std::path::Path, user_home: Option<&std::path::Path>) -> BobUsage {
+    BobUsage::for_home(home, user_home).with_secrets(
+        Arc::new(crate::secrets::Keychain::default()),
+        crate::accounts::key_service(&crate::store::default_account_id(
+            quark_dispatch::local::bob::PROVIDER,
+        )),
+    )
+}
+
 pub fn kiro_usage(home: &std::path::Path) -> KiroUsage {
     KiroUsage::for_home(home).with_secrets(
         Arc::new(crate::secrets::Keychain::default()),

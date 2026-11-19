@@ -810,7 +810,7 @@ async fn single_account_harnesses_list_their_default_login_with_quota() {
 async fn bob_takes_more_accounts_as_api_keys_kept_out_of_the_database() {
     let s = setup_with(&[
         "CLAUDE_CONFIG_DIR",
-        "QUARK_SECRET_BOB_API_KEY",
+        "QUARK_SECRET_BOBSHELL_API_KEY",
         "BOB_TEAM_ID",
     ]);
     exe(&s.dir.path().join("bin/bob"), "echo 2.0.8");
@@ -893,7 +893,7 @@ async fn bob_takes_more_accounts_as_api_keys_kept_out_of_the_database() {
         lease.env,
         [
             (
-                "QUARK_SECRET_BOB_API_KEY".to_string(),
+                "QUARK_SECRET_BOBSHELL_API_KEY".to_string(),
                 format!("keychain:{service}")
             ),
             ("BOB_TEAM_ID".to_string(), "team-7".to_string()),
@@ -1013,7 +1013,7 @@ async fn a_coordinator_shell_gets_every_kept_key() {
     let s = setup_with(&[
         "CLAUDE_CONFIG_DIR",
         "QUARK_SECRET_KIRO_API_KEY",
-        "QUARK_SECRET_BOB_API_KEY",
+        "QUARK_SECRET_BOBSHELL_API_KEY",
         "BOB_TEAM_ID",
     ]);
     exe(&s.dir.path().join("bin/kiro-cli"), "echo 1.20.0");
@@ -1043,7 +1043,7 @@ async fn a_coordinator_shell_gets_every_kept_key() {
     assert_eq!(
         env,
         [
-            ("BOB_API_KEY".to_string(), "bob_ak_bob1".to_string()),
+            ("BOBSHELL_API_KEY".to_string(), "bob_ak_bob1".to_string()),
             ("BOB_TEAM_ID".to_string(), "team-7".to_string()),
             ("CLAUDE_CONFIG_DIR".to_string(), "/c".to_string()),
             ("KIRO_API_KEY".to_string(), "ksk_kiro1".to_string()),
@@ -1052,14 +1052,14 @@ async fn a_coordinator_shell_gets_every_kept_key() {
 
     // A coordinator running on a key account keeps its own account's key.
     let own = vec![(
-        "QUARK_SECRET_BOB_API_KEY".to_string(),
+        "QUARK_SECRET_BOBSHELL_API_KEY".to_string(),
         format!("keychain:quark/accounts/{}", bob["id"].as_str().unwrap()),
     )];
     let env = s.accounts.coordinator_env(own).await.unwrap();
-    assert!(env.contains(&("BOB_API_KEY".to_string(), "bob_ak_bob1".to_string())));
+    assert!(env.contains(&("BOBSHELL_API_KEY".to_string(), "bob_ak_bob1".to_string())));
     assert_eq!(
         env.iter()
-            .filter(|(k, _)| k.contains("BOB_API_KEY"))
+            .filter(|(k, _)| k.contains("BOBSHELL_API_KEY"))
             .count(),
         1
     );

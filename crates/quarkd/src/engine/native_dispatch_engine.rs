@@ -67,7 +67,7 @@ pub const ACCOUNT_ENVS: &[&str] = &[
     "GROK_HOME",
     "PI_CODING_AGENT_DIR",
     // IBM Bob key accounts: the key's reference and its team.
-    "QUARK_SECRET_BOB_API_KEY",
+    "QUARK_SECRET_BOBSHELL_API_KEY",
     // Kiro CLI keys, the default login's included.
     "QUARK_SECRET_KIRO_API_KEY",
     "BOB_TEAM_ID",

@@ -14,6 +14,16 @@ page lists every merged pull request.
   Catppuccin Latte colors, and every cell is held to a minimum contrast (3:1 on light, 4.5:1 on
   dark; half for dim text), which lifts the pale truecolors Kiro and Bob pick for dark terminals.
 
+### Fixed
+
+- IBM Bob reads its API key from `BOBSHELL_API_KEY`, but Quark passed it as `BOB_API_KEY`, so a
+  key set on a Bob account never reached Bob: workers signed in from whatever the daemon's own
+  shell held, and quota was readable only when `BOBSHELL_API_KEY` happened to be exported for
+  quarkd itself. Without a reading, dispatch cannot rank Bob and parks the task to ask which
+  agent should run it. Quark now passes the key under the name Bob reads, and the quota reader
+  signs in with the key the account keeps in the Keychain, as Kiro CLI's already did — so
+  **Use API key** on Bob's Default row in Accounts is enough, whatever started quarkd.
+
 ### Added
 
 - A project's repositories can change after it is created. Settings › Repositories adds a

@@ -530,7 +530,7 @@ async fn quota(home: &std::path::Path, provider: QuotaCommand) -> anyhow::Result
             anchor,
             budget,
         } => {
-            let reader = bob::BobUsage::for_home(home, user_home.as_deref());
+            let reader = quarkd::native_dispatch::bob_usage(home, user_home.as_deref());
             if let Some(used) = anchor {
                 let line = reader
                     .record_anchor(used, budget, "manual", time::OffsetDateTime::now_utc())

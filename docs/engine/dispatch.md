@@ -61,7 +61,7 @@ Overage is a budget, never a block: when it is allowed (that file, or `/usage` s
 
 **Bob** reads, in order:
 
-1. the live Bob admin API when `BOBSHELL_API_KEY` is set in quarkd's environment (the profile, then each team's usage, summed; the key goes to curl on stdin, never on its command line), which is exact;
+1. the live Bob admin API with the key the Bob account keeps in the Keychain, else `BOBSHELL_API_KEY` in quarkd's environment (the profile, then each team's usage, summed; the key goes to curl on stdin, never on its command line), which is exact;
 2. otherwise this machine's ledger, the per-session coins in `~/.bob/db/bob.db` (opened read-only), plus an anchor: one "Monthly Usage" figure from Bob's `/status`, recorded with `quarkd quota bob --anchor <coins> [--budget <coins>]`. The estimate is the anchor plus ledger growth since, while the anchor is from this charge month and younger than `anchor_max_age_hours`. Without a fresh anchor the reading is `partial`: a floor on Bob is unverifiable, so an `ordered` list escalates rather than skipping past Bob, and a ledger that alone reaches the allowance reads `exhausted_now`.
 
 `<home>/quota/bob.json` is optional; an unknown key is refused:
@@ -80,7 +80,7 @@ The Accounts view shows the same readings: each installed harness's default logi
 Kiro keeps one login (`kiro-cli login`) and Bob always keeps its login in `~/.bob`, so both take extra accounts as API keys instead of config directories (manifest `account.key_env`, `account.team_env`):
 
 - `POST /v1/accounts` with `api_key` (and `team_id` for a key of type "general") stores the key in the macOS Keychain under `quark/accounts/<account id>` (`quarkd::secrets`, through `security -i` on stdin so the key is never on a command line). The database keeps only that Keychain name; the API never returns the key; removing the account removes the Keychain item.
-- A worker starts under it with `QUARK_SECRET_<KEY_ENV>=keychain:<service>` (e.g. `QUARK_SECRET_BOB_API_KEY`) and `BOB_TEAM_ID=<team>` in its environment, which is what dispatch and the event log record. The supervisor reads the key only when it starts the session (`quark_supervisor::secrets`), and the manifest passes the team as `--team-id`.
+- A worker starts under it with `QUARK_SECRET_<KEY_ENV>=keychain:<service>` (e.g. `QUARK_SECRET_BOBSHELL_API_KEY`) and `BOB_TEAM_ID=<team>` in its environment, which is what dispatch and the event log record. The supervisor reads the key only when it starts the session (`quark_supervisor::secrets`), and the manifest passes the team as `--team-id`.
 - Its quota is the live Bob API read with its own key; the ledger and anchor belong to the default login.
 
 Key accounts join pools like any other, so a profile naming a pool balances Bob tasks across keys.
