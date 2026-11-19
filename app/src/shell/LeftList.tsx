@@ -5,7 +5,8 @@ import React, { useMemo, useState } from "react";
 import { href, Route, useRoute } from "../nav";
 import { api } from "../api";
 import { setCollections, useStore } from "../store";
-import { CoordinatorMark, CountBadge, Menu, MenuGroup, Row, StatusDot, TextInput } from "../ui";
+import { CountBadge, Menu, MenuGroup, Row, TextInput } from "../ui";
+import { ProjectIconMark } from "../ui/projectIcons";
 import { useLabels } from "../persona";
 import { leftListGroups, ProjectGroup, visibleProjects } from "./groups";
 import { useShowHidden } from "./reveal";
@@ -84,16 +85,14 @@ function ProjectSection({ g, route }: { g: ProjectGroup; route: Route }) {
   const coordCurrent = route.name === "project" && route.id === g.project.id;
   return (
     <section className="ll-project" aria-label={g.project.name} data-testid="ll-project">
-      <div className="ll-project-name"><span className="ll-swatch" style={{ background: g.swatch }} />{g.project.name}</div>
+      {/* The project row is the coordinator's: there is one coordinator per project and its
+          row went to the same place, so naming it on a row of its own cost a row per project.
+          What it has to say stays, as the line under the project's name. */}
       <Row href={href({ name: "project", id: g.project.id })} current={coordCurrent} testid="ll-coordinator"
-        lead={<CoordinatorMark />} title={l.Role("coordinator")} sub={g.coordSub}
+        lead={<ProjectIconMark icon={g.project.icon} color={g.project.icon_color} />}
+        title={<span title={`${g.project.name} — ${l.Role("coordinator")}`}>{g.project.name}</span>}
+        sub={g.coordSub}
         trail={<CountBadge n={g.waiting} tone="needs-you" label={`${g.waiting} waiting on you`} />} />
-      {g.workers.map((w) => (
-        <Row key={w.id} indent dim={w.tone === "parked"} href={href({ name: "task", id: w.id })} testid="ll-worker"
-          current={route.name === "task" && route.id === w.id}
-          lead={<StatusDot tone={w.tone} />} title={<BeadText text={w.title} project={g.project.id} />} sub={<BeadText text={w.sub} project={g.project.id} />}
-          trail={w.needsYou ? <span className="ll-needs-you" role="img" aria-label="Needs you" /> : undefined} />
-      ))}
     </section>
   );
 }

@@ -4,10 +4,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, Notice, OverviewDigest } from "../api";
 import { href } from "../nav";
 import { useStore } from "../store";
-import { ago, workerNamed } from "../util";
+import { ago, stateMeta, workerNamed } from "../util";
 import { SectionLabel, StatusDot, taskTone } from "../ui";
 import { lastSeen, summarize } from "../screens/dashboard/summary";
 import { useAttention } from "./NextAttention";
+import { listed } from "./groups";
 import { describeUpdate } from "./updates";
 import { CommandButton } from "../components/CoordinatorCommand";
 import { BeadMarkdown, BeadText } from "../ui/BeadText";
@@ -60,6 +61,7 @@ const KIND = { decision: "decision", pr: "check failed", worker: "worker stuck" 
 export function SinceYouLooked({ project: pid }: { project: string }) {
   const queue = useAttention();
   const prs = useStore((s) => s.pullRequests);
+  const tasks = useStore((s) => s.tasks);
   const decisions = useStore((s) => s.decisions);
   const connected = useStore((s) => s.connected);
   const [digest, setDigest] = useState<OverviewDigest | null>(null);
@@ -76,6 +78,9 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
     .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs, pid]);
   const allNotices = useStore((s) => s.notices);
   const notices = useMemo(() => allNotices.filter((n) => n.project_id === pid).slice(-5).reverse(), [allNotices, pid]);
+  // The project's workers live here rather than in the left list, which is for getting around.
+  const workers = useMemo(() => Object.values(tasks).filter((t) => t.project_id === pid && listed(t, Date.now()))
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at)), [tasks, pid]);
   const recent = useMemo(() => Object.values(decisions).filter((d) => d.project_id === pid && d.state === "answered")
     .sort((a, b) => (b.answered_at ?? "").localeCompare(a.answered_at ?? "")).slice(0, 3), [decisions, pid]);
 
@@ -109,6 +114,19 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
         <section data-testid="since-updates">
           <SectionLabel right={<a href={href({ name: "automation", project: pid })} title="Choose what you hear about and how">Choose updates</a>}>Updates</SectionLabel>
           {notices.map((n) => <Update key={n.seq} notice={n} />)}
+        </section>
+      )}
+      {workers.length > 0 && (
+        <section data-testid="since-workers">
+          {/* No "All" here: the Work tab is a board of issues, not a list of these workers. */}
+          <SectionLabel>Workers</SectionLabel>
+          {workers.map((t) => (
+            <a key={t.id} className="since-item" href={href({ name: "task", id: t.id })}>
+              <StatusDot tone={taskTone(t.state)} />
+              <span className="since-title"><BeadText text={t.title} project={pid} /></span>
+              <span className="since-kind">{t.state_note || stateMeta(t.state).label}</span>
+            </a>
+          ))}
         </section>
       )}
       {recent.length > 0 && (

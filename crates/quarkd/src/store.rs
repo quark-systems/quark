@@ -348,6 +348,8 @@ impl Store {
                 standing_approval: false,
                 archived_at: None,
                 hidden: false,
+                icon: None,
+                icon_color: None,
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -519,10 +521,17 @@ impl Store {
             if let Some(on) = input.hidden {
                 project.hidden = on;
             }
+            // An empty string clears the choice back to the app's default.
+            if let Some(icon) = input.icon {
+                project.icon = Some(icon).filter(|s| !s.trim().is_empty());
+            }
+            if let Some(color) = input.icon_color {
+                project.icon_color = Some(color).filter(|s| !s.trim().is_empty());
+            }
             project.updated_at = now_rfc3339();
             tx.execute(
                 "UPDATE projects SET name = ?2, goal = ?3, workspace_path = ?4, updated_at = ?5,
-                     standing_approval = ?6, hidden = ?7
+                     standing_approval = ?6, hidden = ?7, icon = ?8, icon_color = ?9
                  WHERE id = ?1",
                 params![
                     project.id,
@@ -531,7 +540,9 @@ impl Store {
                     project.workspace_path,
                     project.updated_at,
                     project.standing_approval,
-                    project.hidden
+                    project.hidden,
+                    project.icon,
+                    project.icon_color
                 ],
             )?;
             append_event(
@@ -1895,7 +1906,8 @@ fn new_id(prefix: &str) -> String {
 
 const PROJECT_SELECT: &str = "SELECT id, name, goal, workspace_path, created_at, updated_at, \
                               status, status_detail, spec, project_repo_path, \
-                              standing_approval, archived_at, hidden FROM projects";
+                              standing_approval, archived_at, hidden, icon, icon_color \
+                              FROM projects";
 
 /// The creation inputs kept with a Project row.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -1948,6 +1960,8 @@ fn project_from_row(r: &Row) -> rusqlite::Result<Project> {
         standing_approval: r.get(10)?,
         archived_at: r.get(11)?,
         hidden: r.get(12)?,
+        icon: r.get(13)?,
+        icon_color: r.get(14)?,
     })
 }
 
