@@ -1353,6 +1353,46 @@ test("settings: pick the project's persona", async ({ page }) => {
   await expect(page.getByTestId("coordinator-chat").getByLabel("Message the coordinator")).toBeVisible();
 });
 
+test("settings: pick the project's icon and its colour, see them in the left list, and reset them", async ({ page }) => {
+  await open(page, "#/p/quark/settings");
+  const picker = page.getByTestId("settings-icon").getByTestId("project-icon");
+  const mark = page.getByRole("navigation", { name: "Projects" }).getByRole("region", { name: "Quark MVP" }).getByTestId("ll-coordinator").locator("svg.project-icon");
+  const saved = () => page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/projects/quark")).json());
+
+  // Nothing chosen: the default glyph in the default colour, and nothing to reset.
+  await expect(picker.getByRole("radio", { name: "cube" })).toBeChecked();
+  await expect(picker.getByRole("radio", { name: "slate" })).toBeChecked();
+  await expect(picker.getByTestId("project-icon-reset")).toHaveCount(0);
+  await expect(mark).toHaveAttribute("stroke", "var(--fg-dim)");
+  await expect(mark.locator("circle")).toHaveCount(0);
+
+  // Search finds a glyph by what it stands for; each pick is saved as it is made and the left list follows.
+  const glyphs = picker.getByRole("radiogroup", { name: "Icon", exact: true }).getByRole("radio");
+  await picker.getByLabel("Search icons").fill("launch");
+  await expect(glyphs).toHaveCount(1);
+  await picker.getByRole("radio", { name: "rocket" }).click();
+  await expect(picker.getByRole("radio", { name: "rocket" })).toBeChecked();
+  await picker.getByRole("radio", { name: "violet" }).click();
+  await expect(picker.getByRole("radio", { name: "violet" })).toBeChecked();
+  await expect(picker.getByRole("alert")).toHaveCount(0);
+  expect(await saved()).toMatchObject({ icon: "rocket", icon_color: "violet" });
+  await expect(mark).toHaveAttribute("stroke", "var(--violet)");
+  await expect(mark.locator("circle")).toHaveCount(1); // the rocket's window
+
+  // A search that finds nothing says so; clearing it brings every glyph back.
+  await picker.getByLabel("Search icons").fill("zeppelin");
+  await expect(picker).toContainText("No icon matches “zeppelin”.");
+  await picker.getByLabel("Search icons").fill("");
+  await expect(glyphs).toHaveCount(37);
+
+  // Reset puts the default back, in the daemon and in the left list.
+  await picker.getByTestId("project-icon-reset").click();
+  await expect(picker.getByTestId("project-icon-reset")).toHaveCount(0);
+  await expect(picker.getByRole("radio", { name: "cube" })).toBeChecked();
+  expect(await saved()).toMatchObject({ icon: null, icon_color: null });
+  await expect(mark).toHaveAttribute("stroke", "var(--fg-dim)");
+});
+
 test("hosts: every host's health, telemetry, Projects and worktrees, and a Project's slice on its dashboard", async ({ page }) => {
   await open(page, "#/");
   await page.getByTestId("nav-hosts").click();

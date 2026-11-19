@@ -129,7 +129,7 @@ function addProject(p) {
     repos: (p.repos ?? []).map((r) => ({ url: r.url, name: r.name ?? r.url.replace(/\.git$/, "").split(/[/:]/).pop() })),
     agent_config: p.agent_config ?? null, dispatch_preset: p.dispatch_preset ?? "defaults", delivery: p.delivery ?? "gated",
     status: p.status ?? "ready", status_detail: p.status_detail ?? null, standing_approval: p.standing_approval ?? false,
-    archived_at: p.archived_at ?? null,
+    archived_at: p.archived_at ?? null, icon: p.icon ?? null, icon_color: p.icon_color ?? null,
   };
   projects.set(proj.id, proj);
   chats.set(proj.id, []);
@@ -1586,6 +1586,11 @@ const server = http.createServer(async (req, res) => {
       const b = await readJson(req);
       if (!b || (b.standing_approval !== undefined && typeof b.standing_approval !== "boolean")) return invalid(res, "standing_approval must be a boolean");
       if (b.standing_approval !== undefined) proj.standing_approval = b.standing_approval;
+      // The glyph and colour the app shows the project with; an empty string clears one to the default.
+      for (const k of ["icon", "icon_color"]) {
+        if (b[k] != null && typeof b[k] !== "string") return invalid(res, `${k} must be a string`);
+        if (b[k] != null) proj[k] = b[k].trim() ? b[k] : null;
+      }
       proj.updated_at = now();
       emit("project.updated", { ...proj }, proj.id);
       return send(res, 200, proj);
