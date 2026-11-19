@@ -6,16 +6,24 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
-## Unreleased
+## 0.2.0
 
-### Fixed
+Quark now updates itself, and the Mac build is signed and notarized. This release collects
+0.2.0-beta.1 to beta.7 (listed below) plus the changes in this section.
 
-- Worker terminals are no longer washed out in light mode. The light terminal uses the
-  Catppuccin Latte colors, and every cell is held to a minimum contrast (3:1 on light, 4.5:1 on
-  dark; half for dim text), which lifts the pale truecolors Kiro and Bob pick for dark terminals.
+### Install
+
+Download `Quark_0.2.0_aarch64.dmg` and drag Quark to Applications; macOS opens it without a
+quarantine warning. A beta on either channel offers 0.2.0 on its own. From 0.1.0, which
+predates the updater, install it by hand once; from here on Quark updates itself.
 
 ### Added
 
+- A coordinator can be restarted in the same conversation: Settings › Agent › Restart
+  coordinator, for a harness that stopped taking input. API:
+  `POST /v1/coordinators/{id}:restart`.
+- A prompt on the coordinator's screen (such as IBM Bob's outside-the-workspace approval) shows
+  in the coordinator pane above its message box, with its choices as buttons, as a worker's does.
 - A project's repositories can change after it is created. Settings › Repositories adds a
   GitHub repository, a clone URL or a local folder, and clones it into the project's workspace
   (a project created without one is set up by its first), or removes one. A removed repository's
@@ -51,6 +59,11 @@ page lists every merged pull request.
 
 ### Fixed
 
+- Worker terminals are no longer washed out in light mode. The light terminal uses the
+  Catppuccin Latte colors, and every cell is held to a minimum contrast (3:1 on light, 4.5:1 on
+  dark; half for dim text), which lifts the pale truecolors Kiro and Bob pick for dark terminals.
+- IBM Bob 2.1's approval menus are read as screen prompts, unnumbered and with the footer lines
+  it draws under them, so a Bob coordinator or worker waiting on one asks instead of sitting stuck.
 - Small secondary text (subtitles, labels, timestamps) is crisp and readable in both themes: it
   was drawn see-through at 2.6 to 3.3:1 contrast and now uses solid colors that clear 4.5:1.
   Light mode keeps the system's text smoothing, the terminal draws on a solid background,
