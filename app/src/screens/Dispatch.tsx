@@ -1,13 +1,15 @@
-// J9: a Project's dispatch rules. Each rule says when it applies and lists its candidates in
-// order; the default covers every other task. Saving commits dispatch.yaml to the Project repo,
-// and the test pane shows what the rules would do with a task description.
+// J9: a Project's dispatch rules, or the default rules every Project follows until it has its
+// own. Each rule says when it applies and lists its candidates in order; the default covers every
+// other task. Saving commits dispatch.yaml to the Project repo (or writes the default rules), and
+// the test pane shows what a Project's rules would do with a task description. Rules can be copied
+// from another Project or the defaults, and a Project can be reset to the defaults.
 //
 // Keys: r and t switch between rules and test, ⌘/Ctrl+Enter saves (rules) or runs the test.
 // Rules: j/k or ↑/↓ move, Enter or e edits, n adds a rule, J/K move the rule down or up,
 // x twice deletes it, Esc leaves a field.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Account, api, ApiError, DispatchFloor, DispatchProfile, DispatchRules, DispatchRulesDraft, DispatchRuleSpec, DispatchSelect, DispatchTest,
+  Account, api, ApiError, DispatchDefaults, DispatchFloor, DispatchProfile, DispatchRules, DispatchRulesDraft, DispatchRuleSpec, DispatchSelect, DispatchTest,
   HarnessInfo, HarnessValidation, NotAvailable,
 } from "../api";
 import { poolsFor } from "../accounts";
@@ -25,17 +27,24 @@ const CHECKS: Record<string, string> = {
   harness_installed: "Harness installed", model_accepted: "Model accepted", account_health: "Account health", quota_headroom: "Quota headroom",
 };
 
-export function Dispatch({ project: pid }: { project: string }) {
-  const project = useStore((s) => s.projects[pid]);
-  const connected = useStore((s) => s.connected);
+/** What the editor loaded: a Project's rules, or the default rules. */
+type Saved = (DispatchRules & { shipped?: undefined; projects?: undefined }) | (DispatchDefaults & { project_id?: undefined; source?: undefined; commit?: undefined; classifier?: undefined });
 
-  const [saved, setSaved] = useState<DispatchRules | null>(null);
+/** `project` absent edits the default rules. */
+export function Dispatch({ project: pid }: { project?: string }) {
+  const project = useStore((s) => (pid ? s.projects[pid] : undefined));
+  const projects = useStore((s) => s.projects);
+  const connected = useStore((s) => s.connected);
+  const isDefaults = !pid;
+
+  const [saved, setSaved] = useState<Saved | null>(null);
   const [draft, setDraft] = useState<DispatchRulesDraft | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  const loaded = (r: Saved) => { setSaved(r); setDraft(cleanDraft(r)); setErr(null); setStale(false); setCopied(null); };
   const load = () => {
     setLoadErr(null);
-    return api.dispatchRules(pid).then((r) => { setSaved(r); setDraft(cleanDraft(r)); setErr(null); setStale(false); })
+    return (pid ? api.dispatchRules(pid) : api.dispatchDefaults()).then(loaded)
       .catch((e) => { if (e instanceof NotAvailable) setUnavailable(true); else setLoadErr(errText(e)); });
   };
   // Loaded once; a reconnect tries again only while there is nothing to edit, so it never replaces an edit in progress.
@@ -108,8 +117,8 @@ export function Dispatch({ project: pid }: { project: string }) {
     try {
       const answers = await Promise.all(allProfiles(next).map(validate));
       if (answers.some((v) => !v.valid)) { setErr("A harness refuses one of the candidates. Fix it, then save."); return; }
-      const now = await api.saveDispatchRules(pid, next, saved.revision ?? null);
-      setSaved(now); setDraft(cleanDraft(now)); setCommit(now.commit ?? null);
+      const now: Saved = pid ? await api.saveDispatchRules(pid, next, saved.revision ?? null) : await api.saveDispatchDefaults(next, saved.revision);
+      loaded(now); setCommit(now.commit ?? null);
     } catch (e) {
       setErr(errText(e));
       if (e instanceof ApiError && e.code === "dispatch_changed") setStale(true);
@@ -118,12 +127,45 @@ export function Dispatch({ project: pid }: { project: string }) {
     }
   };
 
-  const [description, setDescription] = useDraft(`dispatch-test:${pid}`);
+  // Rules copied into the editor from another Project or the defaults, until saved or reverted.
+  const [copied, setCopied] = useState<string | null>(null);
+  const others = useMemo(() => Object.values(projects).filter((p) => p.id !== pid && !p.archived_at)
+    .sort((a, b) => a.name.localeCompare(b.name)), [projects, pid]);
+  const copyFrom = async (from: string) => {
+    if (!from || !draft || busy) return;
+    setErr(null);
+    try {
+      const r: DispatchRulesDraft = from === DEFAULTS ? await api.dispatchDefaults() : await api.dispatchRules(from);
+      edit(() => cleanDraft(r));
+      setSel(0);
+      setCopied(from === DEFAULTS ? "the default rules" : projects[from]?.name ?? from);
+    } catch (e) {
+      setErr(errText(e));
+    }
+  };
+
+  // Reset to defaults (a Project) or restore the shipped defaults; pressed twice.
+  const [resetArmed, setResetArmed] = useState(false);
+  const resetRules = async () => {
+    if (busy || !saved) return;
+    if (!resetArmed) { setResetArmed(true); return; }
+    setBusy(true); setErr(null); setResetArmed(false);
+    try {
+      const now: Saved = pid ? await api.resetDispatchRules(pid) : await api.forgetDispatchDefaults();
+      loaded(now); setCommit(now.commit ?? null);
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const [description, setDescription] = useDraft(`dispatch-test:${pid ?? "defaults"}`);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<{ result: DispatchTest; draft: boolean } | null>(null);
   const [testErr, setTestErr] = useState<string | null>(null);
   const runTest = async () => {
-    if (!draft || testing || !description.trim() || (dirty && issues.length > 0)) return;
+    if (!pid || !draft || testing || !description.trim() || (dirty && issues.length > 0)) return;
     setTesting(true); setTestErr(null);
     try {
       // Edited rules are tested as they stand, without saving them.
@@ -158,7 +200,7 @@ export function Dispatch({ project: pid }: { project: string }) {
         return;
       }
       if (e.key === "r") { e.preventDefault(); show("rules"); return; }
-      if (e.key === "t") { e.preventDefault(); show("test"); return; }
+      if (e.key === "t" && pid) { e.preventDefault(); show("test"); return; }
       if (tab !== "rules" || !draft) return;
       const to = (i: number) => { e.preventDefault(); setSel(Math.max(0, Math.min(count, i))); };
       switch (e.key) {
@@ -176,7 +218,7 @@ export function Dispatch({ project: pid }: { project: string }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  if (!project) {
+  if (pid && !project) {
     return <div className="empty">{connected ? "This project does not exist on the daemon." : "Waiting for the daemon…"}</div>;
   }
 
@@ -188,25 +230,33 @@ export function Dispatch({ project: pid }: { project: string }) {
   return (
     <>
       <div className="header">
-        <h1>Dispatch</h1>
-        <a className="crumb" href={href({ name: "project", id: pid })}>{project.name}</a>
+        <h1>{isDefaults ? "Default rules" : "Dispatch"}</h1>
+        {project && <a className="crumb" href={href({ name: "project", id: project.id })}>{project.name}</a>}
         <span className="spacer" />
+        {draft && saved && (
+          <select className="dx-copy" value="" aria-label="Copy rules from" data-testid="dispatch-copy" disabled={busy}
+            onChange={(e) => void copyFrom(e.target.value)}>
+            <option value="">Copy from…</option>
+            {!isDefaults && <option value={DEFAULTS}>Default rules</option>}
+            {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        )}
         {commit && !dirty && <span className="faint small-text" data-testid="dispatch-commit">Saved as commit <span className="mono">{commit.slice(0, 10)}</span></span>}
         {dirty && <span className="pill yellow" data-testid="dispatch-dirty">unsaved changes</span>}
-        {dirty && <button className="link" type="button" onClick={() => { setDraft(cleanDraft(saved!)); setErr(null); }}>Revert</button>}
-        <div className="seg" role="tablist" aria-label="Dispatch">
+        {dirty && <button className="link" type="button" onClick={() => { setDraft(cleanDraft(saved!)); setErr(null); setCopied(null); }}>Revert</button>}
+        {pid && <div className="seg" role="tablist" aria-label="Dispatch">
           <button role="tab" aria-selected={tab === "rules"} className={tab === "rules" ? "on" : ""} onClick={() => show("rules")}>
             Rules{draft && <> <span className="n">{count}</span></>}
           </button>
           <button role="tab" aria-selected={tab === "test"} className={tab === "test" ? "on" : ""} onClick={() => show("test")}>Test</button>
-        </div>
+        </div>}
         <button className="btn on" type="button" disabled={!dirty || busy || blocked} onClick={() => void save()} data-testid="dispatch-save"
-          title={blocked ? "Fix what is marked before saving" : "Commit dispatch.yaml to the Project repo"}>
+          title={blocked ? "Fix what is marked before saving" : isDefaults ? "Save the default rules" : "Commit dispatch.yaml to the Project repo"}>
           {busy ? "Saving…" : "Save"}
         </button>
       </div>
       <div className="screen inbox">
-        {unavailable ? <div className="dx-wide"><Unavailable what="The dispatch rule editor" endpoint={`GET /v1/projects/${pid}/dispatch`} /></div>
+        {unavailable ? <div className="dx-wide"><Unavailable what={isDefaults ? "Default rules" : "The dispatch rule editor"} endpoint={pid ? `GET /v1/projects/${pid}/dispatch` : "GET /v1/dispatch/defaults"} /></div>
           : !draft ? (
             <div className="dx-wide empty">
               {loadErr ? <><div className="bad">{loadErr}</div><button className="btn" type="button" onClick={() => void load()}>Try again</button></>
@@ -215,6 +265,7 @@ export function Dispatch({ project: pid }: { project: string }) {
           ) : tab === "rules" ? (
             <>
               <div className="inbox-list" data-testid="dispatch-list">
+                <Origin saved={saved!} copied={dirty ? copied : null} armed={resetArmed} busy={busy} onReset={() => void resetRules()} />
                 {draft.rules.map((r, i) => (
                   <button key={i} type="button" className={"decision-row dx-row" + (i === at ? " on" : "")} onClick={() => setSel(i)}
                     data-testid="dispatch-row" aria-current={i === at ? "true" : undefined}>
@@ -344,6 +395,38 @@ export function Dispatch({ project: pid }: { project: string }) {
           )}
       </div>
     </>
+  );
+}
+
+/** The Copy from… value for the default rules. */
+const DEFAULTS = "\u0000defaults";
+
+/** Where the rules come from, and the way back to the defaults. */
+function Origin({ saved, copied, armed, busy, onReset }: {
+  saved: Saved; copied: string | null; armed: boolean; busy: boolean; onReset: () => void;
+}) {
+  const isDefaults = saved.project_id === undefined;
+  const follows = !isDefaults && saved.source === "defaults";
+  const resettable = isDefaults ? !saved.shipped : !follows;
+  const n = saved.projects?.length ?? 0;
+  return (
+    <div className="dx-note dx-origin small-text" data-testid="dispatch-origin">
+      {copied && <div className="pill yellow" data-testid="dispatch-copied">Copied from {copied}. Save to keep them.</div>}
+      <div>
+        {isDefaults
+          ? <>{saved.shipped ? "Quark's recommended tiers, with candidates from the harnesses on this computer. Save to make them your own." : "Your default rules."}{" "}
+              {n === 1 ? "1 project follows them." : `${n} projects follow them.`} A project follows them until you save rules for it.</>
+          : follows
+            ? <>This project follows your <a href={href({ name: "defaults" })} data-testid="dispatch-defaults-link">default rules</a>. Saving changes here gives it rules of its own.</>
+            : <>This project has its own rules. Reset to defaults to follow your <a href={href({ name: "defaults" })} data-testid="dispatch-defaults-link">default rules</a> again.</>}
+      </div>
+      {resettable && (
+        <button type="button" className={"btn" + (armed ? " danger" : "")} disabled={busy} onClick={onReset} data-testid="dispatch-reset"
+          title={isDefaults ? "Forget your default rules and use Quark's recommended tiers" : "Drop this project's own rules; the change is committed and kept in its history"}>
+          {armed ? "Press again to confirm" : isDefaults ? "Restore recommended tiers" : "Reset to defaults"}
+        </button>
+      )}
+    </div>
   );
 }
 

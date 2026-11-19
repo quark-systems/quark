@@ -50,6 +50,7 @@ export const SCREENS: Screens = {
   prs: () => <PullRequests />,
   pr: (r) => <PullRequestView key={r.id} id={r.id} />,
   accounts: () => <Accounts />,
+  defaults: () => <Dispatch key="defaults" />,
   hosts: () => <Hosts />,
   setup: () => <Setup />,
   updates: (r) => <Updates key={r.action ?? ""} check={r.action === "check"} />,

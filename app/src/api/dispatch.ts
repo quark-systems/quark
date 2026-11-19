@@ -64,14 +64,28 @@ export interface DispatchRuleSpec {
   why?: string | null; approval?: string | null; floor?: DispatchFloor | null;
 }
 export interface DispatchRulesDraft { default_select?: DispatchSelect | null; rules: DispatchRuleSpec[]; default: DispatchProfile[] }
+/** "project" when the Project owns its rules; "defaults" while it follows the default rules. */
+export type DispatchRulesSource = "project" | "defaults";
 export interface DispatchRules extends DispatchRulesDraft {
   project_id: string;
+  /** Absent from an older daemon, whose Projects always own their rules. */
+  source?: DispatchRulesSource;
   /** Names this version of the file; sent back when saving. Null when `main` has no `dispatch.yaml`. */
   revision?: string | null;
   /** The commit on `main` that last changed the file. */
   commit?: string | null;
   /** The classifier in effect: the file's block over the user-level default. Saving keeps the file's own block. */
   classifier?: Record<string, unknown> | null;
+}
+
+/** The default rules (`~/.quark/dispatch.yaml`): every Project that lists none of its own follows them. */
+export interface DispatchDefaults extends DispatchRulesDraft {
+  /** Names this version; sent back when saving. */
+  revision: string;
+  /** True while nothing is saved and Quark's shipped tiers apply. */
+  shipped: boolean;
+  /** Ids of the Projects that follow these rules. */
+  projects: string[];
 }
 
 export const dispatchApi = {
@@ -83,6 +97,14 @@ export const dispatchApi = {
   /** Commits `dispatch.yaml` to the Project repo. 400 `dispatch_invalid` with the compile error; 409 `dispatch_changed` when `main` moved on from `revision`. */
   saveDispatchRules: (pid: string, draft: DispatchRulesDraft, revision?: string | null) =>
     req<DispatchRules>("PUT", `/v1/projects/${enc(pid)}/dispatch`, { revision: revision ?? null, ...draft }),
+  /** Drops the Project's own rules in a commit of their own, so it follows the default rules again. */
+  resetDispatchRules: (pid: string) => req<DispatchRules>("POST", `/v1/projects/${enc(pid)}/dispatch:reset`, {}),
+  dispatchDefaults: () => req<DispatchDefaults>("GET", "/v1/dispatch/defaults"),
+  /** 400 `dispatch_invalid` with the compile error; 409 `dispatch_changed` when the defaults moved on from `revision`. */
+  saveDispatchDefaults: (draft: DispatchRulesDraft, revision?: string | null) =>
+    req<DispatchDefaults>("PUT", "/v1/dispatch/defaults", { revision: revision ?? null, ...draft }),
+  /** Forgets the saved defaults, so Quark's shipped tiers apply again. */
+  forgetDispatchDefaults: () => req<DispatchDefaults>("DELETE", "/v1/dispatch/defaults"),
   /** Every dispatch of the task, oldest first: its first spawn, then each relaunch. */
   dispatch: (id: string) => req<DispatchRecord[]>("GET", `/v1/tasks/${enc(id)}/dispatch`),
 };

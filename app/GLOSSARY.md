@@ -60,6 +60,9 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
 - **Changes**: what a worker changed in its working copy, file by file.
   _Avoid_: diff (as a tab name), patch.
 
+- **Default rules**: the dispatch rules every project follows until you save rules for it; then they are the project's own until **Reset to defaults**. Until you save default rules, Quark's recommended tiers apply: Trivial, Standard, Complex, Scout, and the default for any other task. **Copy from…** fills the editor with another project's rules or the default rules.
+  _Avoid_: global rules, template, inherited rules.
+
 ## Asking and answering
 
 - **Decision**: a question that waits on you, with its options and the coordinator's recommendation. Lifecycle: asked, answered, acted on, in the log.

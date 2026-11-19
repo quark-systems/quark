@@ -54,6 +54,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
               </Command.Item>
               <Command.Item value="pull requests pr center" onSelect={() => pick(() => go({ name: "prs" }))}>Pull requests</Command.Item>
               <Command.Item value="accounts logins pools quota" onSelect={() => pick(() => go({ name: "accounts" }))}>Accounts</Command.Item>
+              <Command.Item value="default dispatch rules tiers agents" onSelect={() => pick(() => go({ name: "defaults" }))}>Default rules</Command.Item>
               <Command.Item value="component catalogue design system ui parts" onSelect={() => pick(() => go({ name: "catalogue" }))}>Component catalogue</Command.Item>
             </Command.Group>
             {here && projects[here] && (

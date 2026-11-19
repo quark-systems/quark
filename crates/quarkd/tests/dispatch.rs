@@ -1021,3 +1021,107 @@ async fn disabling_an_account_moves_the_rules_that_need_it_once_confirmed() {
     assert_eq!(a["enabled"], true);
     assert_eq!(a["availability"], "enabled");
 }
+
+#[tokio::test]
+async fn projects_follow_the_default_rules_until_they_save_their_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let Served {
+        app,
+        store,
+        engine,
+        project,
+        bare,
+        ..
+    } = served(dir.path());
+    let uri = format!("/v1/projects/{}/dispatch", project.id);
+    let names = |v: &Value| -> Vec<String> {
+        v["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["name"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+
+    // Nothing saved: the shipped tiers, seeded from what is installed here
+    // (Claude Code only). The Project owns the rules its preset wrote.
+    let (status, d) = call(&app, "GET", "/v1/dispatch/defaults", None).await;
+    assert_eq!(status, 200, "{d}");
+    assert_eq!(d["shipped"], true);
+    assert_eq!(names(&d), ["Trivial", "Standard", "Complex", "Scout"]);
+    assert_eq!(
+        d["rules"][0]["candidates"],
+        json!([{"harness": "claude-code", "model": "haiku", "effort": "high", "pool": null}])
+    );
+    assert_eq!(d["default"][0]["model"], "sonnet");
+    assert_eq!(d["projects"], json!([]));
+    let (_, rules) = call(&app, "GET", &uri, None).await;
+    assert_eq!(rules["source"], "project");
+
+    // Reset: the Project's own rules go, in a commit of their own, and the
+    // defaults apply.
+    let (status, rules) = post(&app, &format!("{uri}:reset"), json!({})).await;
+    assert_eq!(status, 200, "{rules}");
+    assert_eq!(rules["source"], "defaults");
+    assert_eq!(names(&rules), ["Trivial", "Standard", "Complex", "Scout"]);
+    assert_eq!(
+        out(&bare, &["log", "-1", "--format=%s", "main"]).trim(),
+        "Reset dispatch rules to the defaults"
+    );
+    let (_, d) = call(&app, "GET", "/v1/dispatch/defaults", None).await;
+    assert_eq!(d["projects"], json!([project.id]));
+
+    // Saved defaults reach the Project that follows them, and the engine.
+    let one = json!({
+        "revision": d["revision"],
+        "default_select": "ordered",
+        "rules": [{"name": "Trivial", "when": "A typo.", "candidates": [{"harness": "claude-code", "effort": "low"}]}],
+        "default": [{"harness": "claude-code"}],
+    });
+    let (status, saved) = call(&app, "PUT", "/v1/dispatch/defaults", Some(one.clone())).await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(saved["shipped"], false);
+    assert!(dir.path().join("dispatch.yaml").exists());
+    let (status, stale) = call(&app, "PUT", "/v1/dispatch/defaults", Some(one)).await;
+    assert_eq!(status, 409, "{stale}");
+    assert_eq!(stale["error"]["code"], "dispatch_changed");
+    let (_, rules) = call(&app, "GET", &uri, None).await;
+    assert_eq!(names(&rules), ["Trivial"]);
+
+    let registry = Arc::new(quarkd::harness::HarnessRegistry::builtin());
+    let projector = Projector::new(store.clone(), engine.clone())
+        .with_session_roots(Default::default())
+        .with_dispatch_defaults(quarkd::dispatch_defaults::Source {
+            home: dir.path().to_path_buf(),
+            harnesses: registry.clone(),
+            accounts: Arc::new(quarkd::accounts::Accounts::new(
+                store.clone(),
+                registry,
+                Arc::new(quarkd::accounts::StubQuota::new()),
+                &["CLAUDE_CONFIG_DIR"],
+            )),
+        });
+    projector.refresh_all().await.unwrap();
+    let last = configs(&engine).pop().unwrap();
+    assert_eq!(last["rules"][0]["when"], "A typo.", "{last}");
+    assert_eq!(last["default"], json!([{"harness": "claude"}]));
+
+    // Saving rules for the Project makes them its own.
+    let own = json!({
+        "revision": rules["revision"],
+        "rules": [{"name": "big", "when": "A big feature.", "candidates": [{"harness": "claude-code", "effort": "high"}]}],
+        "default": [{"harness": "claude-code"}],
+    });
+    let (status, rules) = call(&app, "PUT", &uri, Some(own)).await;
+    assert_eq!(status, 200, "{rules}");
+    assert_eq!(rules["source"], "project");
+    assert_eq!(names(&rules), ["big"]);
+    let (_, d) = call(&app, "GET", "/v1/dispatch/defaults", None).await;
+    assert_eq!(d["projects"], json!([]));
+
+    // Forgetting the saved defaults brings the shipped tiers back.
+    let (status, d) = call(&app, "DELETE", "/v1/dispatch/defaults", None).await;
+    assert_eq!(status, 200, "{d}");
+    assert_eq!(d["shipped"], true);
+    assert!(!dir.path().join("dispatch.yaml").exists());
+}

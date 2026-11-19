@@ -23,6 +23,7 @@ pub mod coordinator_prompt;
 pub mod crew_dispatch;
 pub mod diagnose;
 pub mod dispatch;
+pub mod dispatch_defaults;
 pub mod dispatch_test;
 pub mod engine;
 pub mod failover;
@@ -236,6 +237,11 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
         .with_sessions(sessions.clone())
         .with_command(layout.command_workspace())
         .with_user_config(layout.user_config())
+        .with_dispatch_defaults(dispatch_defaults::Source {
+            home: layout.home.clone(),
+            harnesses: harnesses.clone(),
+            accounts: accounts.clone(),
+        })
         .with_failover(Arc::new(failover));
     let log: Arc<dyn quark_core::EventLog> = Arc::new(events.clone());
     // Host telemetry feeds the Hosts view and admission control.

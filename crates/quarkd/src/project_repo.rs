@@ -348,7 +348,14 @@ fn profile(a: Option<&AgentConfig>, effort: Option<&str>) -> String {
 }
 
 fn dispatch_yaml(p: &Project) -> String {
-    let preset = p.dispatch_preset.unwrap_or(DispatchPreset::Single);
+    let preset = p.dispatch_preset.unwrap_or(DispatchPreset::Defaults);
+    if preset == DispatchPreset::Defaults {
+        return format!(
+            "{}{}",
+            crate::crew_dispatch::FOLLOWS_DEFAULTS,
+            crate::crew_dispatch::NO_CLASSIFIER
+        );
+    }
     let agent = p.agent_config.as_ref();
     let mut y = String::new();
     y.push_str(&format!(
@@ -362,7 +369,7 @@ fn dispatch_yaml(p: &Project) -> String {
     y.push_str("# A classifier block in this file overrides that default field by field.\n");
     y.push_str("default_select: \"ordered\"\n");
     match preset {
-        DispatchPreset::Single => y.push_str("rules: []\n"),
+        DispatchPreset::Single | DispatchPreset::Defaults => y.push_str("rules: []\n"),
         DispatchPreset::LightTrivial => {
             y.push_str("rules:\n");
             y.push_str("  - name: \"trivial-edit\"\n");
@@ -485,8 +492,11 @@ mod tests {
             "{y}"
         );
         assert!(y.ends_with("default:\n  - { harness: \"claude-code\", model: \"claude-sonnet-5\", effort: \"medium\" }\n"), "{y}");
-        p.dispatch_preset = None;
+        p.dispatch_preset = Some(DispatchPreset::Single);
         assert!(dispatch_yaml(&p).contains("rules: []\n"));
+        p.dispatch_preset = None;
+        let y = dispatch_yaml(&p);
+        assert!(!crate::crew_dispatch::owns_rules(&y).unwrap(), "{y}");
     }
 
     #[test]

@@ -1826,6 +1826,106 @@
         }
       }
     },
+    "/v1/dispatch/defaults": {
+      "get": {
+        "tags": [
+          "dispatch"
+        ],
+        "summary": "The default dispatch rules.",
+        "description": "Every Project whose `dispatch.yaml` lists no rules of its own follows\nthese; `projects` names them. They are kept in `~/.quark/dispatch.yaml`.\nUntil that is saved (`shipped` is true), they are Quark's shipped tiers:\nTrivial, Standard, Complex and Scout, and a default for a task none\nmatches, with candidates from the harnesses installed here that have an\nenabled, signed-in account.",
+        "operationId": "get_defaults",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchDefaults"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`~/.quark/dispatch.yaml` does not compile (`dispatch_invalid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "dispatch"
+        ],
+        "summary": "Save the default dispatch rules.",
+        "description": "Writes `~/.quark/dispatch.yaml`. The rules are compiled first, as a\nProject's are, and refused with the compile error when they do not\ncompile. Every Project that follows the defaults takes them on the\ndaemon's next refresh.",
+        "operationId": "put_defaults",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutDispatchDefaults"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchDefaults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The rules do not compile (`dispatch_invalid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The defaults have another `revision` by now (`dispatch_changed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "dispatch"
+        ],
+        "summary": "Go back to the shipped default dispatch rules.",
+        "description": "Removes `~/.quark/dispatch.yaml`, so the shipped tiers apply again to\nevery Project that follows the defaults.",
+        "operationId": "delete_defaults",
+        "responses": {
+          "200": {
+            "description": "The shipped defaults",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchDefaults"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/events": {
       "get": {
         "tags": [
@@ -3356,6 +3456,58 @@
           },
           "409": {
             "description": "`main` has another `revision` (`dispatch_changed`), the file there does not compile (`dispatch_invalid`), the checkout has an uncommitted edit of it (`uncommitted_changes`), or the Project has no Project repo (`no_project_repo`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{id}/dispatch:reset": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Reset the Project's dispatch rules to the defaults.",
+        "description": "Rewrites `dispatch.yaml` on the Project repo's `main` without rules of its\nown, keeping its `classifier` block, and commits it, so the Project\nfollows the default rules (`GET /v1/dispatch/defaults`) again. The rules\nit had stay in the repo's history. A Project already following the\ndefaults makes no commit.",
+        "operationId": "reset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rules now in effect: the defaults",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchRules"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The file on `main` does not compile (`dispatch_invalid`), the checkout has an uncommitted edit of it (`uncommitted_changes`), or the Project has no Project repo (`no_project_repo`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8855,7 +9007,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/DispatchPreset",
-                "description": "One of the presets listed by `DispatchPreset`; default `single`."
+                "description": "One of the presets listed by `DispatchPreset`; default `defaults`."
               },
               {
                 "type": "null"
@@ -9417,6 +9569,56 @@
           "relaunch"
         ]
       },
+      "DispatchDefaults": {
+        "type": "object",
+        "description": "The default dispatch rules: every Project whose `dispatch.yaml` lists no\nrules of its own follows them. Kept in `~/.quark/dispatch.yaml`; until\nthat file is saved, Quark's shipped tiers (Trivial, Standard, Complex,\nScout and the default) with candidates picked from the harnesses and\naccounts on this machine.",
+        "required": [
+          "revision",
+          "shipped",
+          "rules",
+          "default",
+          "projects"
+        ],
+        "properties": {
+          "default": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchProfile"
+            }
+          },
+          "default_select": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DispatchSelect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projects that follow these rules (their `dispatch.yaml` lists none of\ntheir own), by id."
+          },
+          "revision": {
+            "type": "string",
+            "description": "Names this version of the defaults; send it back when saving."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DispatchRuleSpec"
+            }
+          },
+          "shipped": {
+            "type": "boolean",
+            "description": "True while no defaults have been saved and the shipped tiers apply."
+          }
+        }
+      },
       "DispatchFloor": {
         "type": "object",
         "description": "A quota floor; the engine applies it only under typed resolution.",
@@ -9445,6 +9647,7 @@
         "type": "string",
         "description": "Starting dispatch rules for a new Project. Both route to the Project's\nagent config; rules can be edited afterwards.",
         "enum": [
+          "defaults",
           "single",
           "light_trivial"
         ]
@@ -9705,7 +9908,7 @@
       },
       "DispatchRules": {
         "type": "object",
-        "description": "A Project's dispatch rules: `dispatch.yaml` on the Project repo's `main`.",
+        "description": "A Project's dispatch rules: `dispatch.yaml` on the Project repo's `main`,\nor the default rules while that file lists none of its own.",
         "required": [
           "project_id",
           "rules",
@@ -9757,6 +9960,10 @@
             "items": {
               "$ref": "#/components/schemas/DispatchRuleSpec"
             }
+          },
+          "source": {
+            "$ref": "#/components/schemas/DispatchRulesSource",
+            "description": "`project` when the Project owns its rules, `defaults` when it follows\nthe default rules. Saving rules makes them the Project's own;\n`POST /v1/projects/{id}/dispatch:reset` goes back to the defaults."
           }
         }
       },
@@ -9789,6 +9996,14 @@
             }
           }
         }
+      },
+      "DispatchRulesSource": {
+        "type": "string",
+        "description": "Where the dispatch rules in effect for a Project come from.",
+        "enum": [
+          "project",
+          "defaults"
+        ]
       },
       "DispatchSelect": {
         "type": "string",
@@ -9842,6 +10057,10 @@
             "format": "int32",
             "description": "Rules besides the default.",
             "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/DispatchRulesSource",
+            "description": "`defaults` while the Project follows the default rules."
           }
         }
       },
@@ -13871,6 +14090,26 @@
           "done",
           "failed"
         ]
+      },
+      "PutDispatchDefaults": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DispatchRulesDraft"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The `revision` the edit started from. When the defaults have another\nby now, nothing is saved. Absent saves over whatever is there."
+              }
+            }
+          }
+        ],
+        "description": "Request body for `PUT /v1/dispatch/defaults`."
       },
       "PutDispatchRules": {
         "allOf": [

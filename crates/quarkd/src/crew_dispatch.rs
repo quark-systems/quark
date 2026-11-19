@@ -450,6 +450,58 @@ fn classifier_block(file: &str, classifier: &serde_json::Value) -> Result<String
         .map_err(|e| format!("{FILE}: classifier: {e}"))
 }
 
+/// The comment that opens a Project's `dispatch.yaml` while it follows the
+/// default rules.
+pub const FOLLOWS_DEFAULTS: &str = "\
+# Dispatch rules for this Project.
+# It lists no rules of its own, so the default dispatch rules apply (Dispatch
+# defaults in the app, kept in ~/.quark/dispatch.yaml). Rules saved for this
+# Project are written here and apply instead, until it is reset to the defaults.
+";
+
+/// The comment for a `dispatch.yaml` without a `classifier` block.
+pub const NO_CLASSIFIER: &str = "\
+# No classifier block here: the default in ~/.quark/config.yaml applies, and with
+# none there (provider: none) the coordinator picks the rule for each task.
+# A classifier block in this file overrides that default field by field.
+";
+
+/// Whether `dispatch.yaml` lists rules of its own: a `rules` or a `default`
+/// key. A file without either follows the default rules.
+pub fn owns_rules(dispatch_yaml: &str) -> Result<bool, String> {
+    let doc: Option<DispatchYaml> =
+        serde_yaml_ng::from_str(dispatch_yaml).map_err(|e| format!("{FILE}: {e}"))?;
+    Ok(doc.is_some_and(|d| d.rules.is_some() || d.default.is_some()))
+}
+
+/// The `dispatch.yaml` in effect for a Project: its own file when that lists
+/// rules, else the default rules (`defaults`, as `~/.quark/dispatch.yaml`
+/// would hold them) under the file's opening comments and `classifier`
+/// block. Returns whether the Project owns the rules.
+pub fn effective(project: Option<&str>, defaults: &str) -> Result<(String, bool), String> {
+    if let Some(text) = project {
+        if owns_rules(text)? {
+            return Ok((text.to_string(), true));
+        }
+    }
+    let rules = draft(&as_written(defaults).map_err(|e| format!("default rules: {e}"))?);
+    Ok((render(&rules, project)?, false))
+}
+
+/// The file a Project's `dispatch.yaml` becomes when it goes back to the
+/// default rules: [`FOLLOWS_DEFAULTS`] and the file's own `classifier` block.
+pub fn reset(previous: Option<&str>) -> Result<String, String> {
+    let mut y = FOLLOWS_DEFAULTS.to_string();
+    match previous
+        .map(|p| as_written(p).map(|w| (p, w.classifier)))
+        .transpose()?
+    {
+        Some((prev, Some(classifier))) => y.push_str(&classifier_block(prev, &classifier)?),
+        _ => y.push_str(NO_CLASSIFIER),
+    }
+    Ok(y)
+}
+
 /// What `main` of a bare Project repo declares: the `dispatch.yaml` blob id
 /// and text. `None` when `main` has no such file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -743,5 +795,38 @@ default:
         let d = read_declared(&bare).unwrap().unwrap();
         assert!(d.dispatch_yaml.contains("trivial-edit"));
         assert_eq!(d.blob.len(), 40);
+    }
+
+    #[test]
+    fn a_file_without_rules_follows_the_defaults() {
+        let defaults = "rules:\n  - name: \"Trivial\"\n    when: \"A typo.\"\n    use: { harness: \"codex\" }\ndefault:\n  - { harness: \"claude-code\" }\n";
+        // Project files with rules of their own keep them.
+        assert!(owns_rules(YAML).unwrap());
+        assert!(owns_rules("rules: []\n").unwrap());
+        assert_eq!(
+            effective(Some(YAML), defaults).unwrap(),
+            (YAML.to_string(), true)
+        );
+        // No file, or one with only comments and a classifier, follows them.
+        assert!(!owns_rules("# nothing\n").unwrap());
+        let (text, owned) = effective(None, defaults).unwrap();
+        assert!(!owned);
+        assert_eq!(
+            as_written(&text).unwrap().rules[0].name.as_deref(),
+            Some("Trivial")
+        );
+        let reset_file = reset(Some(YAML)).unwrap();
+        assert!(reset_file.starts_with(FOLLOWS_DEFAULTS), "{reset_file}");
+        assert!(!owns_rules(&reset_file).unwrap());
+        let (text, owned) = effective(Some(&reset_file), defaults).unwrap();
+        assert!(!owned);
+        let c = compile(&text, None).unwrap();
+        assert_eq!(c.rules.len(), 1);
+        // The Project's classifier block is kept over the default rules.
+        assert_eq!(
+            as_written(&text).unwrap().classifier,
+            Some(json!({"provider": "none", "confidence_floor": 0.6}))
+        );
+        assert!(reset(None).unwrap().contains(NO_CLASSIFIER));
     }
 }

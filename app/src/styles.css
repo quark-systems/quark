@@ -700,6 +700,8 @@ details.why-record > summary.why-head { cursor: pointer; }
 .dx-row { width: 100%; text-align: left; background: none; cursor: pointer; font: inherit; color: inherit; }
 .dx-add { margin: 6px 4px; }
 .dx-note { margin-top: auto; padding: 8px 10px; }
+.dx-note.dx-origin { margin: 0 0 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; border-bottom: 1px solid var(--line); }
+.dx-copy { max-width: 180px; }
 .form.dx-form { max-width: 900px; margin: 0; padding: 18px 22px; gap: 14px; }
 .inbox-list .form.dx-form { padding: 10px; }
 .dx-form .d-actions { margin-top: 0; }

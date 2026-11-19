@@ -358,17 +358,22 @@ async fn gather(
         .ok_or_else(ApiError::not_found)?;
     let projects = db(state, |s| s.list_projects()).await?;
     let user_config = state.layout.user_config();
+    let defaults = super::dispatch::load_defaults(state).await?;
     let mut profiles = Vec::with_capacity(projects.len());
     for p in &projects {
         let rules = match p.project_repo_path.clone() {
             Some(bare) => {
-                let (pid, user_config) = (p.id.clone(), user_config.clone());
+                let (pid, user_config, defaults) =
+                    (p.id.clone(), user_config.clone(), defaults.clone());
                 let read = tokio::task::spawn_blocking(move || {
-                    super::dispatch::read_rules(&pid, &PathBuf::from(bare), &user_config)
+                    super::dispatch::read_rules(&pid, &PathBuf::from(bare), &user_config, &defaults)
                 })
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
                 match read {
+                    // A Project following the default rules has none of its
+                    // own to change.
+                    Ok(r) if r.source == quark_systems::DispatchRulesSource::Defaults => None,
                     Ok(r) => Some(quark_systems::DispatchRulesDraft {
                         default_select: r.default_select,
                         rules: r.rules,
