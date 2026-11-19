@@ -84,6 +84,16 @@ impl Landing {
     }
 }
 
+/// Payload of a [`kinds::STRANDED`] event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stranded {
+    pub pull_request: String,
+    /// The branch it merged into.
+    pub base: String,
+    /// The repository's default branch, which its change never reached.
+    pub default_branch: String,
+}
+
 /// Payload of a [`kinds::MERGED`] event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Merged {
@@ -359,6 +369,26 @@ impl GuardedMerge {
         )?;
         self.log.append(event).await?;
         Ok(true)
+    }
+
+    /// Record that `pull_request` merged into a branch other than the
+    /// default and its change will not reach the default branch, so whoever
+    /// waited on its merge hears it did not land.
+    pub async fn record_stranded(
+        &self,
+        project: &ProjectId,
+        task: Option<&TaskId>,
+        stranded: &Stranded,
+    ) -> Result<()> {
+        let event = NewEvent::typed(
+            self.host.clone(),
+            project.clone(),
+            task.cloned(),
+            kinds::STRANDED,
+            stranded,
+        )?;
+        self.log.append(event).await?;
+        Ok(())
     }
 
     /// Record standing approval for each of `repos` in `project`.

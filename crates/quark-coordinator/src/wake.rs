@@ -45,6 +45,9 @@ pub enum Need {
     Answered,
     /// A task's pull request merged, so work that waited on it can start.
     Merged,
+    /// A pull request merged into a branch other than the default, and its
+    /// change will not reach the default branch.
+    Stranded,
     /// An occasion a Project's away policy routes to the coordinator
     /// although the default does not (progress, paused, stale, a rule that
     /// fired).
@@ -80,6 +83,7 @@ impl Need {
             Need::Requested => "requested",
             Need::Answered => "answered",
             Need::Merged => "merged",
+            Need::Stranded => "not landed",
             Need::Policy => "policy",
         }
     }
@@ -174,6 +178,31 @@ pub fn judgment(e: &Event, away: &AwayState) -> Option<WakeItem> {
         return Some(item(
             Need::Merged,
             format!("{task_prefix}merged: {pr}. Start any work that was waiting on it."),
+            by_event(),
+        ));
+    }
+    // `quark_verify::kinds::STRANDED`: a merge that never reached the
+    // default branch. Nothing waiting on it can start yet.
+    if kind == "verify.stranded" {
+        let field = |name: &str| {
+            e.payload
+                .get(name)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let (pr, base, default) = (
+            field("pull_request"),
+            field("base"),
+            field("default_branch"),
+        );
+        return Some(item(
+            Need::Stranded,
+            format!(
+                "{task_prefix}{pr} merged into {base}, not {default}, and nothing will carry \
+                 it to {default}: its change is not on {default}. Work waiting on it cannot \
+                 start yet. Start a task to land the change on {default}."
+            ),
             by_event(),
         ));
     }
@@ -393,6 +422,27 @@ mod tests {
         assert_eq!(
             m.summary,
             "t1: merged: https://x/pr/1. Start any work that was waiting on it."
+        );
+    }
+
+    #[test]
+    fn a_merge_that_missed_the_default_branch_wakes() {
+        let m = judgment(
+            &ev(
+                10,
+                Some("t1"),
+                "verify.stranded",
+                json!({"pull_request": "https://x/pr/1", "base": "w1", "default_branch": "main"}),
+            ),
+            &AwayState::default(),
+        )
+        .unwrap();
+        assert_eq!(m.need, Need::Stranded);
+        assert!(
+            m.summary
+                .starts_with("t1: https://x/pr/1 merged into w1, not main"),
+            "{}",
+            m.summary
         );
     }
 

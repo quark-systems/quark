@@ -495,6 +495,20 @@ impl EngineAdapter for NativeEngine {
             .await
     }
 
+    async fn pull_request_stranded(
+        &self,
+        ws: &WorkspaceRef,
+        task: Option<&str>,
+        url: &str,
+        base: &str,
+        default_branch: &str,
+    ) -> Result<(), EngineError> {
+        let task = task.map(task_id).transpose()?;
+        self.verify
+            .stranded(ws, task.as_ref(), url, base, default_branch)
+            .await
+    }
+
     async fn coordinator_pull_request_merged(
         &self,
         ws: &WorkspaceRef,

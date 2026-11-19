@@ -99,6 +99,9 @@ pub struct ForgePr {
     /// Every comment, on the conversation and inline; `None` when they were
     /// not read, which keeps the ones recorded.
     pub comments: Option<Vec<PrComment>>,
+    /// The repository's default branch, where a change has landed; `None`
+    /// when it was not read, which keeps the one recorded.
+    pub default_branch: Option<String>,
 }
 
 impl ForgePr {
@@ -140,6 +143,12 @@ pub enum ForgeError {
 pub trait Forge: Send + Sync {
     /// The pull request at `url` as it is now.
     async fn pull_request(&self, url: &str) -> Result<ForgePr, ForgeError>;
+
+    /// The default branch of the repository the pull request at `url`
+    /// belongs to; `None` when the forge cannot say.
+    async fn default_branch(&self, _url: &str) -> Result<Option<String>, ForgeError> {
+        Ok(None)
+    }
 
     /// The pull request's whole unified diff, cut at [`MAX_PATCH_BYTES`].
     /// Returns the patch and whether it was cut.
@@ -196,6 +205,8 @@ pub fn parse_gh_repos(out: &[u8]) -> Result<Vec<ForgeRepository>, ForgeError> {
 pub struct GhForge {
     gh: String,
     repos: std::sync::Arc<Mutex<Option<CachedRepos>>>,
+    /// Default branches by `host/owner/repo`; a repository's rarely changes.
+    default_branches: std::sync::Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Default for GhForge {
@@ -209,6 +220,7 @@ impl GhForge {
         Self {
             gh: gh.into(),
             repos: Default::default(),
+            default_branches: Default::default(),
         }
     }
 
@@ -431,6 +443,40 @@ impl Forge for GhForge {
         Ok(pr)
     }
 
+    async fn default_branch(&self, url: &str) -> Result<Option<String>, ForgeError> {
+        Self::github(url)?;
+        let Some(r) = PrRef::parse(url) else {
+            return Ok(None);
+        };
+        let key = format!("{}/{}", r.host, r.repo);
+        if let Some(b) = self.default_branches.lock().unwrap().get(&key) {
+            return Ok(Some(b.clone()));
+        }
+        let (out, _) = self
+            .run(
+                &[
+                    "repo",
+                    "view",
+                    &key,
+                    "--json",
+                    "defaultBranchRef",
+                    "--jq",
+                    ".defaultBranchRef.name",
+                ],
+                4096,
+            )
+            .await?;
+        let name = String::from_utf8_lossy(&out).trim().to_string();
+        if name.is_empty() {
+            return Ok(None);
+        }
+        self.default_branches
+            .lock()
+            .unwrap()
+            .insert(key, name.clone());
+        Ok(Some(name))
+    }
+
     async fn diff(&self, url: &str) -> Result<(String, bool), ForgeError> {
         Self::github(url)?;
         let (out, cut) = self
@@ -545,6 +591,7 @@ pub struct StubForge {
     reads: Mutex<Vec<String>>,
     repos: Mutex<Option<Vec<ForgeRepository>>>,
     files: Mutex<HashMap<(String, String, PrFileSide), Vec<u8>>>,
+    default_branches: Mutex<HashMap<String, String>>,
 }
 
 impl StubForge {
@@ -574,6 +621,14 @@ impl StubForge {
             .insert((url.into(), path.into(), side), bytes.to_vec());
     }
 
+    /// What [`Forge::default_branch`] answers for the pull request at `url`.
+    pub fn set_default_branch(&self, url: &str, branch: &str) {
+        self.default_branches
+            .lock()
+            .unwrap()
+            .insert(url.into(), branch.into());
+    }
+
     /// URLs read with [`Forge::pull_request`], oldest first.
     pub fn reads(&self) -> Vec<String> {
         self.reads.lock().unwrap().clone()
@@ -590,6 +645,10 @@ impl Forge for StubForge {
             .get(url)
             .cloned()
             .ok_or_else(|| ForgeError::Command(format!("no pull request at {url}")))
+    }
+
+    async fn default_branch(&self, url: &str) -> Result<Option<String>, ForgeError> {
+        Ok(self.default_branches.lock().unwrap().get(url).cloned())
     }
 
     async fn diff(&self, url: &str) -> Result<(String, bool), ForgeError> {
@@ -789,6 +848,7 @@ pub fn parse_gh_view(bytes: &[u8]) -> Result<ForgePr, ForgeError> {
         checks,
         reviews,
         comments: None,
+        default_branch: None,
     })
 }
 

@@ -22,7 +22,7 @@ pub mod rules;
 
 pub use forge::{FakeForge, Forge, GhForge, MergeMethod, PullHead, PullState};
 pub use guard::{EpisodeChange, GuardDecision, NativeGuard, Override, Target};
-pub use merge::{GuardedMerge, LandRequest, Landing, Merged, Outcome, StandingApproval};
+pub use merge::{GuardedMerge, LandRequest, Landing, Merged, Outcome, StandingApproval, Stranded};
 pub use pipeline::{
     check_log, journeys_log_prefix, logs_dir, CheckGate, GatesConfig, HoldoutGate, JourneysGate,
     NativePipeline, PipelineTarget, RepoGates, GATES_SCHEMA, LEGACY_GATES_SCHEMA,
@@ -40,6 +40,10 @@ pub mod kinds {
     /// A native guarded merge landed a pull request. Payload:
     /// [`crate::Merged`].
     pub const MERGED: &str = "verify.merged";
+    /// A pull request merged into a branch other than the default, and
+    /// nothing will carry its change on: it never landed. Payload:
+    /// [`crate::Stranded`].
+    pub const STRANDED: &str = "verify.stranded";
     /// Standing approval was set for a repo. Payload:
     /// [`crate::StandingApproval`].
     pub const STANDING_APPROVAL: &str = "verify.standing_approval";
