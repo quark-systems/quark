@@ -1198,6 +1198,9 @@ function seed() {
 
   // Project memory (quark#29): learnings from finished tasks awaiting review, and one accepted entry.
   const done = [...tasks.values()].find((t) => t.title === "Daemon skeleton");
+  // A finished worker's transcript, kept when it is cleared.
+  transcript(done, "user", `Task contract: ${done.title}.`, { ts: minutesAgo(400) });
+  transcript(done, "assistant", "The daemon skeleton is in place: config, store and the /v1 health route.", { ts: minutesAgo(310) });
   const MP = (id, p, task, text, extra = {}) => memoryProposals.set(id, {
     id, project_id: p.id, text, source: "worker", state: "proposed", proposed_at: minutesAgo(30), decided_at: null, decided_by: null, entry: null,
     evidence: { task_id: task?.id ?? null, task_title: task?.title ?? null, pull_request_url: task?.pull_request_url ?? null, files: [] }, ...extra,
@@ -2410,7 +2413,13 @@ const server = http.createServer(async (req, res) => {
       output(task, `\x1b[1;35m${task.harness}\x1b[0m relaunched on \x1b[1m${task.title}\x1b[0m\r\n$ `);
       return send(res, 204);
     }
-    if (rest === "/transcript" && req.method === "GET") return send(res, 200, transcripts.get(task.id));
+    if (rest === "/transcript" && req.method === "GET") {
+      // As quarkd: `after` reads forward from an entry, oldest first; without it, the latest `limit`.
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 1000, 1), 1000);
+      const after = url.searchParams.get("after");
+      const all = transcripts.get(task.id);
+      return send(res, 200, after == null ? all.slice(-limit) : all.filter((e) => e.id > Number(after)).slice(0, limit));
+    }
     if (rest === "/dispatch" && req.method === "GET") return send(res, 200, dispatches.get(task.id) ?? []);
     if (rest === "/brief" && req.method === "GET") return send(res, 200, taskBrief(task));
     if ((rest === "/changes" || rest === "/diff") && task.state === "queued") {

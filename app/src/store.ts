@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import {
   Account, AccountQuotaChanged, api, apiMismatch, BeadsStatus, CheckUpdated, Collection, DaemonEvent, Decision, DispatchRecord, Health, IssueDraft, MemoryProposal, NotAvailable, Notice, Preferences, Project, PullRequest,
-  OutboxMessage, ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, wsUrl,
+  OutboxMessage, ReviewUpdated, StandingRule, Task, TerminalOutput, TranscriptEntry, TranscriptItem, TRANSCRIPT_PAGE, wsUrl,
 } from "./api";
 
 export interface AppState {
@@ -301,11 +301,11 @@ export async function refreshSnapshots() {
   await loadPullRequests().catch(() => undefined);
 }
 
-/** Loads one task. A cleared one is not added to the lists; its `cleared_at` is returned. */
-export async function refreshTask(id: string): Promise<{ cleared_at?: string | null }> {
+/** Loads one task. A cleared one is not added to the lists, but is returned. */
+export async function refreshTask(id: string): Promise<Task> {
   const t = await api.task(id);
   if (!t.cleared_at) set({ tasks: { ...state.tasks, [t.id]: t } });
-  return { cleared_at: t.cleared_at };
+  return t;
 }
 
 /**
@@ -355,6 +355,31 @@ export async function loadTranscript(taskId: string): Promise<"ok" | "unavailabl
     const entries = await api.transcript(taskId);
     const merged = new Map((state.transcripts[taskId] ?? []).map((m) => [m.id, m]));
     for (const m of entries) merged.set(m.id, m);
+    set({ transcripts: { ...state.transcripts, [taskId]: [...merged.values()] } });
+    return "ok";
+  } catch (e) {
+    if (e instanceof NotAvailable) return "unavailable";
+    throw e;
+  }
+}
+
+/**
+ * Loads a worker's whole transcript from its first entry, a page at a time, for a cleared worker
+ * whose transcript is read back rather than followed.
+ */
+export async function loadFullTranscript(taskId: string): Promise<"ok" | "unavailable"> {
+  try {
+    const all: TranscriptItem[] = [];
+    for (let after = 0; ;) {
+      const page = await api.transcriptPage(taskId, after);
+      all.push(...page);
+      if (page.length < TRANSCRIPT_PAGE) break;
+      const next = Math.max(...page.map((m) => m.id));
+      if (next <= after) break;
+      after = next;
+    }
+    const merged = new Map((state.transcripts[taskId] ?? []).map((m) => [m.id, m]));
+    for (const m of all) merged.set(m.id, m);
     set({ transcripts: { ...state.transcripts, [taskId]: [...merged.values()] } });
     return "ok";
   } catch (e) {

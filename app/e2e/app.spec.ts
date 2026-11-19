@@ -1685,12 +1685,27 @@ test("finished workers can be cleared one at a time or a column at once", async 
 
   // A done worker clears from its view; its page then says so.
   await open(page, `#/t/${ids["Retry the flaky login test"]}`);
-  await expect(page.getByTestId("worker-cleared")).toContainText("This worker was cleared");
+  await expect(page.getByTestId("worker-cleared")).toContainText("Cleared");
   await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Daemon skeleton" }).click();
   await page.getByTestId("clear").click();
   await page.getByTestId("confirm-clear").click();
-  await expect(page.getByTestId("worker-cleared")).toBeVisible();
+  // Cleared, its terminal is gone and its whole transcript fills the center, read only.
+  await expect(page.getByTestId("worker-cleared")).toContainText("Its terminal was closed");
+  const kept = page.getByTestId("cleared-transcript");
+  await expect(kept).toContainText("read only");
+  await expect(kept).toContainText("Task contract: Daemon skeleton.");
+  await expect(kept).toContainText("The daemon skeleton is in place");
+  await expect(page.getByTestId("terminal")).toHaveCount(0);
+  await expect(page.getByTestId("worker-composer")).toHaveCount(0);
+  await expect(page.getByTestId("clear")).toHaveCount(0);
+  await expect(page.getByTestId("task-state")).toHaveText("Done");
+  // Its brief and why this agent stay in the work pane.
+  await page.getByRole("tab", { name: "Why this agent" }).click();
+  await expect(page.getByTestId("why-summary")).toContainText("the coordinator picked claude-code");
+  // Opened again later, it reads the same.
+  await page.reload();
+  await expect(page.getByTestId("cleared-transcript")).toContainText("The daemon skeleton is in place");
   await open(page, "#/p/quark/work");
   await expect(page.getByTestId("col-done")).not.toContainText("Daemon skeleton");
 });
