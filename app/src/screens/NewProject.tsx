@@ -21,7 +21,7 @@ export const FALLBACK_HARNESSES: HarnessInfo[] = [
 }));
 
 export const PRESETS: { id: DispatchPreset; label: string; description: string }[] = [
-  { id: "defaults", label: "Your default rules", description: "Workers follow your default dispatch rules: Trivial, Standard, Complex and Scout tiers unless you changed them. You can give this project its own rules later." },
+  { id: "defaults", label: "App-wide Dispatch rules", description: "Workers follow the rules in the app menu's Dispatch: Trivial, Standard, Complex and Scout tiers unless you changed them. You can give this project its own rules later." },
   { id: "single", label: "Same for every worker", description: "Every worker runs the agent above, at the effort above." },
   { id: "light_trivial", label: "Low effort for small edits", description: "Renames, typo fixes and one-line changes run at low effort, which is faster and cheaper. Everything else runs as above." },
 ];

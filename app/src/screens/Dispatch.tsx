@@ -138,7 +138,7 @@ export function Dispatch({ project: pid }: { project?: string }) {
       const r: DispatchRulesDraft = from === DEFAULTS ? await api.dispatchDefaults() : await api.dispatchRules(from);
       edit(() => cleanDraft(r));
       setSel(0);
-      setCopied(from === DEFAULTS ? "the default rules" : projects[from]?.name ?? from);
+      setCopied(from === DEFAULTS ? "Dispatch" : projects[from]?.name ?? from);
     } catch (e) {
       setErr(errText(e));
     }
@@ -230,14 +230,14 @@ export function Dispatch({ project: pid }: { project?: string }) {
   return (
     <>
       <div className="header">
-        <h1>{isDefaults ? "Default rules" : "Dispatch"}</h1>
+        <h1>Dispatch</h1>
         {project && <a className="crumb" href={href({ name: "project", id: project.id })}>{project.name}</a>}
         <span className="spacer" />
         {draft && saved && (
           <select className="dx-copy" value="" aria-label="Copy rules from" data-testid="dispatch-copy" disabled={busy}
             onChange={(e) => void copyFrom(e.target.value)}>
             <option value="">Copy from…</option>
-            {!isDefaults && <option value={DEFAULTS}>Default rules</option>}
+            {!isDefaults && <option value={DEFAULTS}>Dispatch (app-wide)</option>}
             {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}
@@ -251,12 +251,12 @@ export function Dispatch({ project: pid }: { project?: string }) {
           <button role="tab" aria-selected={tab === "test"} className={tab === "test" ? "on" : ""} onClick={() => show("test")}>Test</button>
         </div>}
         <button className="btn on" type="button" disabled={!dirty || busy || blocked} onClick={() => void save()} data-testid="dispatch-save"
-          title={blocked ? "Fix what is marked before saving" : isDefaults ? "Save the default rules" : "Commit dispatch.yaml to the Project repo"}>
+          title={blocked ? "Fix what is marked before saving" : isDefaults ? "Save the rules every project follows until it has its own" : "Commit dispatch.yaml to the Project repo"}>
           {busy ? "Saving…" : "Save"}
         </button>
       </div>
       <div className="screen inbox">
-        {unavailable ? <div className="dx-wide"><Unavailable what={isDefaults ? "Default rules" : "The dispatch rule editor"} endpoint={pid ? `GET /v1/projects/${pid}/dispatch` : "GET /v1/dispatch/defaults"} /></div>
+        {unavailable ? <div className="dx-wide"><Unavailable what={isDefaults ? "Dispatch" : "The dispatch rule editor"} endpoint={pid ? `GET /v1/projects/${pid}/dispatch` : "GET /v1/dispatch/defaults"} /></div>
           : !draft ? (
             <div className="dx-wide empty">
               {loadErr ? <><div className="bad">{loadErr}</div><button className="btn" type="button" onClick={() => void load()}>Try again</button></>
@@ -414,15 +414,15 @@ function Origin({ saved, copied, armed, busy, onReset }: {
       {copied && <div className="pill yellow" data-testid="dispatch-copied">Copied from {copied}. Save to keep them.</div>}
       <div>
         {isDefaults
-          ? <>{saved.shipped ? "Quark's recommended tiers, with candidates from the harnesses on this computer. Save to make them your own." : "Your default rules."}{" "}
-              {n === 1 ? "1 project follows them." : `${n} projects follow them.`} A project follows them until you save rules for it.</>
+          ? <>{saved.shipped ? "Quark's recommended tiers, with candidates from the harnesses on this computer. Save to make them your own. " : "Your app-wide rules. "}
+              Every project follows them until you save rules for it. {n === 1 ? "1 project follows them." : `${n} projects follow them.`}</>
           : follows
-            ? <>This project follows your <a href={href({ name: "defaults" })} data-testid="dispatch-defaults-link">default rules</a>. Saving changes here gives it rules of its own.</>
-            : <>This project has its own rules. Reset to defaults to follow your <a href={href({ name: "defaults" })} data-testid="dispatch-defaults-link">default rules</a> again.</>}
+            ? <>This project follows the app-wide rules in <a href={href({ name: "defaults" })} data-testid="dispatch-defaults-link">Dispatch</a>. Saving changes here gives it rules of its own.</>
+            : <>This project has its own rules. Reset to defaults to follow the app-wide rules in <a href={href({ name: "defaults" })} data-testid="dispatch-defaults-link">Dispatch</a> again.</>}
       </div>
       {resettable && (
         <button type="button" className={"btn" + (armed ? " danger" : "")} disabled={busy} onClick={onReset} data-testid="dispatch-reset"
-          title={isDefaults ? "Forget your default rules and use Quark's recommended tiers" : "Drop this project's own rules; the change is committed and kept in its history"}>
+          title={isDefaults ? "Forget your app-wide rules and use Quark's recommended tiers" : "Drop this project's own rules; the change is committed and kept in its history"}>
           {armed ? "Press again to confirm" : isDefaults ? "Restore recommended tiers" : "Reset to defaults"}
         </button>
       )}

@@ -118,7 +118,7 @@ export function Settings({ project: pid }: { project: string }) {
             {s && (s.dispatch.error
               ? <div className="set-error" role="alert">{s.dispatch.error}</div>
               : <p data-testid="settings-dispatch-summary">
-                {s.dispatch.source === "defaults" ? "Follows your default rules: " : ""}
+                {s.dispatch.source === "defaults" ? "Follows the app-wide Dispatch rules: " : ""}
                 {plural(s.dispatch.rules, "rule")} and {plural(s.dispatch.default_candidates, "default candidate")}.{" "}
                 {s.dispatch.classifier && s.dispatch.classifier !== "none" ? `Classifier: ${s.dispatch.classifier}.` : "No classifier; the coordinator picks."}
               </p>)}
