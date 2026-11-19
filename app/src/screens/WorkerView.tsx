@@ -2,12 +2,13 @@
 // box in the middle, which writes to the worker or, switched, to the coordinator about it; prompts on
 // the worker's screen show as buttons above the box. The work pane on the right has its transcript,
 // changed files with their diff, its PR, the brief it was dispatched with and why this agent;
-// cancel, relaunch and clear are in the header.
+// cancel, relaunch and clear are in the header. A cleared worker has no terminal: its center is its
+// whole transcript, read only.
 import { KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, Decision, NotAvailable, TaskChanges, TranscriptItem } from "../api";
+import { api, ApiError, Decision, NotAvailable, Task, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
 import { externalLink } from "../links";
-import { loadTranscript, refreshTask, useStore } from "../store";
+import { loadFullTranscript, loadTranscript, refreshTask, useStore } from "../store";
 import { attach, getTerm, resetTerm, setTyping, TermHandle } from "../terminal";
 import { ago, errText, isActive, stateMeta } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
@@ -31,45 +32,33 @@ import { BeadText } from "../ui/BeadText";
 
 export function WorkerView({ id }: { id: string }) {
   const task = useStore((s) => s.tasks[id]);
-  const project = useStore((s) => (task ? s.projects[task.project_id] : undefined));
   const connected = useStore((s) => s.connected);
-  const activity = useStore((s) => s.taskActivity[id] ?? 0);
-  const [tab, setTab] = useState<"transcript" | "changes" | "pr" | "brief" | "why">("transcript");
-  const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
-  const [gone, setGone] = useState<null | "missing" | "cleared">(null);
-  const [paneWidth, setPaneWidth] = useWorkPaneWidth();
+  const [gone, setGone] = useState<null | "missing" | Task>(null);
 
   useEffect(() => {
-    if (!task) refreshTask(id).then((t) => t.cleared_at && setGone("cleared")).catch(() => setGone("missing"));
+    if (!task) refreshTask(id).then((t) => setGone(t.cleared_at ? t : "missing")).catch(() => setGone("missing"));
+    else setGone(null);
   }, [id, task]);
 
-  if (!task) {
-    const why = gone === "cleared" ? "This worker was cleared. Its terminal was closed and its working copy given back."
-      : gone === "missing" ? "This task does not exist on the daemon." : connected ? "Loading…" : "Waiting for the daemon…";
-    return <div className="empty" data-testid={gone === "cleared" ? "worker-cleared" : undefined}>{why}</div>;
-  }
-  const st = stateMeta(task.state);
+  if (task) return <LiveWorker task={task} />;
+  if (gone && gone !== "missing" && gone.id === id) return <ClearedWorker task={gone} />;
+  const why = gone === "missing" ? "This task does not exist on the daemon." : connected ? "Loading…" : "Waiting for the daemon…";
+  return <div className="empty">{why}</div>;
+}
+
+type PaneTab = "transcript" | "changes" | "pr" | "brief" | "why";
+
+function LiveWorker({ task }: { task: Task }) {
+  const id = task.id;
+  const activity = useStore((s) => s.taskActivity[id] ?? 0);
+  const [tab, setTab] = useState<PaneTab>("transcript");
+  const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
+  const [paneWidth, setPaneWidth] = useWorkPaneWidth();
 
   return (
     <div className="screen worker" style={paneWidth ? { ["--work-pane-width" as string]: `${paneWidth}px` } : undefined}>
       <section className="worker-center">
-        <div className="header worker-head">
-          <StatusDot tone={taskTone(task.state)} label={TONE_LABEL[taskTone(task.state)]} />
-          <div className="wh-text">
-            <h1 className="ellipsis" title={task.title}><BeadText text={task.title} project={task.project_id} link /></h1>
-            <span className="wh-sub ellipsis">
-              <a href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
-              {task.branch && <> · branch <span className="mono">{task.branch}</span></>}
-              {" · "}started {ago(task.created_at)}
-            </span>
-          </div>
-          <span className="pill" style={{ color: st.color }} data-testid="task-state">{st.label}</span>
-          {task.harness && (
-            <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}{task.model && <span className="faint"> · {task.model}</span>}</span>
-          )}
-          {task.pull_request_url && <a className="pill green" {...externalLink(task.pull_request_url)} data-testid="worker-pr-link">pull request</a>}
-          <Controls taskId={id} active={isActive(task.state)} />
-        </div>
+        <WorkerHead task={task}><Controls taskId={id} active={isActive(task.state)} /></WorkerHead>
         {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
         <TerminalPanel taskId={id} taskState={task.state} />
         {/* One box under the worker's terminal: to the worker, or to the coordinator about it. */}
@@ -77,19 +66,82 @@ export function WorkerView({ id }: { id: string }) {
       </section>
       <aside className="worker-pane" aria-label="Work">
         <PaneResizer width={paneWidth} onWidth={setPaneWidth} />
-        <div className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}>Transcript</button>
-          <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>Changes</button>
-          {(pr || task.pull_request_url) && <button role="tab" aria-selected={tab === "pr"} className={tab === "pr" ? "on" : ""} onClick={() => setTab("pr")}>PR</button>}
-          <button role="tab" aria-selected={tab === "brief"} className={tab === "brief" ? "on" : ""} onClick={() => setTab("brief")}>Brief</button>
-          <button role="tab" aria-selected={tab === "why"} className={tab === "why" ? "on" : ""} onClick={() => setTab("why")}>Why this agent</button>
-        </div>
+        <PaneTabs tab={tab} setTab={setTab} tabs={["transcript", "changes", ...(pr || task.pull_request_url ? ["pr" as const] : []), "brief", "why"]} />
         {tab === "transcript" && <div className="tab-body"><TranscriptPanel taskId={id} /></div>}
         {tab === "changes" && <div className="tab-body"><ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} /></div>}
         {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
         {tab === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
         {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
       </aside>
+    </div>
+  );
+}
+
+/**
+ * A cleared worker: its terminal is closed and its working copy given back, so the center is its
+ * whole transcript, read only. The work pane keeps what outlives the working copy.
+ */
+function ClearedWorker({ task }: { task: Task }) {
+  const id = task.id;
+  const [tab, setTab] = useState<PaneTab>("brief");
+  const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
+  const [paneWidth, setPaneWidth] = useWorkPaneWidth();
+
+  return (
+    <div className="screen worker" style={paneWidth ? { ["--work-pane-width" as string]: `${paneWidth}px` } : undefined}>
+      <section className="worker-center">
+        <WorkerHead task={task} />
+        <div className="state-note" data-testid="worker-cleared">
+          Cleared{task.cleared_at ? ` ${ago(task.cleared_at)}` : ""}. Its terminal was closed and its working copy given back; its transcript is kept.
+        </div>
+        <div className="pane" data-testid="cleared-transcript">
+          <div className="pane-head"><span>transcript</span><span className="spacer" /><span className="faint">read only</span></div>
+          <TranscriptPanel taskId={id} full projectId={task.project_id} />
+        </div>
+      </section>
+      <aside className="worker-pane" aria-label="Work">
+        <PaneResizer width={paneWidth} onWidth={setPaneWidth} />
+        <PaneTabs tab={tab} setTab={setTab} tabs={[...(pr || task.pull_request_url ? ["pr" as const] : []), "brief", "why"]} />
+        {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
+        {tab === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
+        {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
+      </aside>
+    </div>
+  );
+}
+
+const TAB_LABEL: Record<PaneTab, string> = { transcript: "Transcript", changes: "Changes", pr: "PR", brief: "Brief", why: "Why this agent" };
+
+function PaneTabs({ tab, setTab, tabs }: { tab: PaneTab; setTab: (t: PaneTab) => void; tabs: PaneTab[] }) {
+  return (
+    <div className="tabs" role="tablist">
+      {tabs.map((t) => (
+        <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{TAB_LABEL[t]}</button>
+      ))}
+    </div>
+  );
+}
+
+function WorkerHead({ task, children }: { task: Task; children?: ReactNode }) {
+  const project = useStore((s) => s.projects[task.project_id]);
+  const st = stateMeta(task.state);
+  return (
+    <div className="header worker-head">
+      <StatusDot tone={taskTone(task.state)} label={TONE_LABEL[taskTone(task.state)]} />
+      <div className="wh-text">
+        <h1 className="ellipsis" title={task.title}><BeadText text={task.title} project={task.project_id} link /></h1>
+        <span className="wh-sub ellipsis">
+          <a href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
+          {task.branch && <> · branch <span className="mono">{task.branch}</span></>}
+          {" · "}started {ago(task.created_at)}
+        </span>
+      </div>
+      <span className="pill" style={{ color: st.color }} data-testid="task-state">{st.label}</span>
+      {task.harness && (
+        <span className="harness-chip" data-testid="task-harness"><HarnessLogo harness={task.harness} size={14} />{harnessMark(task.harness).name}{task.model && <span className="faint"> · {task.model}</span>}</span>
+      )}
+      {task.pull_request_url && <a className="pill green" {...externalLink(task.pull_request_url)} data-testid="worker-pr-link">pull request</a>}
+      {children}
     </div>
   );
 }
@@ -401,15 +453,16 @@ function WorkerComposer({ taskId }: { taskId: string }) {
 
 const NO_ENTRIES: TranscriptItem[] = [];
 
-function TranscriptPanel({ taskId }: { taskId: string }) {
+/** A worker's transcript; `full` reads it back from its first entry, for a cleared worker. */
+function TranscriptPanel({ taskId, full = false, projectId }: { taskId: string; full?: boolean; projectId?: string }) {
   const entries = useStore((s) => s.transcripts[taskId]) ?? NO_ENTRIES;
-  const project = useStore((s) => s.tasks[taskId]?.project_id);
+  const project = useStore((s) => s.tasks[taskId]?.project_id) ?? projectId;
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    loadTranscript(taskId).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
-  }, [taskId]);
+    (full ? loadFullTranscript : loadTranscript)(taskId).then(setStatus).catch((e) => { setStatus("error"); setErr(errText(e)); });
+  }, [taskId, full]);
 
   if (status === "unavailable") return <Unavailable what="The transcript" endpoint={`GET /v1/tasks/${taskId}/transcript`} />;
   return (

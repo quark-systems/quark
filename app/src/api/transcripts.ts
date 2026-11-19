@@ -107,5 +107,11 @@ export const transcriptsApi = {
   /** Restarts the coordinator in the same conversation, for a session that stopped taking input. */
   restartCoordinator: (cid: string) => req<CoordinatorSwitch | undefined>("POST", `/v1/coordinators/${enc(cid)}:restart`),
   switchCoordinatorAgent: (cid: string, agent: AgentConfig) => req<CoordinatorSwitch | undefined>("PUT", `/v1/coordinators/${enc(cid)}/agent`, agent),
-  transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=1000`),
+  transcript: (id: string) => req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?limit=${TRANSCRIPT_PAGE}`),
+  /** Up to a page of a worker's transcript entries after `after`, oldest first. */
+  transcriptPage: (id: string, after: number) =>
+    req<TranscriptItem[]>("GET", `/v1/tasks/${enc(id)}/transcript?after=${after}&limit=${TRANSCRIPT_PAGE}`),
 };
+
+/** The most transcript entries quarkd returns in one read. */
+export const TRANSCRIPT_PAGE = 1000;
