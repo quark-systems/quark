@@ -1764,7 +1764,7 @@ test("Stop interrupts the coordinator from its header", async ({ page }) => {
   await expect(stop).toHaveText("Stopped");
 });
 
-test("dispatch: projects follow the default rules until they have their own, copy rules and reset", async ({ page }) => {
+test("dispatch: projects follow the app-wide rules until they have their own, copy rules and reset", async ({ page }) => {
   await open(page, "#/p/website/dispatch");
   const origin = page.getByTestId("dispatch-origin");
   const rows = page.getByTestId("dispatch-row");
@@ -1773,20 +1773,20 @@ test("dispatch: projects follow the default rules until they have their own, cop
   const reset = page.getByTestId("dispatch-reset");
 
   // A project created without rules of its own follows the default rules: the recommended tiers.
-  await expect(origin).toContainText("This project follows your default rules");
+  await expect(origin).toContainText("This project follows the app-wide rules in Dispatch");
   await expect(rows).toHaveText([/Trivial/, /Standard/, /Complex/, /Scout/, /Default/]);
   await expect(reset).toHaveCount(0);
 
   // The default rules are edited on their own screen; saving them makes them yours.
   await page.getByTestId("dispatch-defaults-link").click();
   await expect(page).toHaveURL(/#\/dispatch$/);
-  await expect(page.getByRole("heading", { name: "Default rules" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dispatch" })).toBeVisible();
   await expect(origin).toContainText("Quark's recommended tiers");
   await expect(page.getByRole("tab", { name: "Test" })).toHaveCount(0);
   await expect(detail.getByLabel("Candidate 1 model")).toHaveValue("haiku");
   await detail.getByLabel("Candidate 1 effort").selectOption("low");
   await save.click();
-  await expect(origin).toContainText("Your default rules.");
+  await expect(origin).toContainText("Your app-wide rules.");
   await expect(reset).toHaveText("Restore recommended tiers");
 
   // The project that follows them sees the change.
@@ -1808,11 +1808,14 @@ test("dispatch: projects follow the default rules until they have their own, cop
   await reset.click();
   await expect(reset).toHaveText("Press again to confirm");
   await reset.click();
-  await expect(origin).toContainText("This project follows your default rules");
+  await expect(origin).toContainText("This project follows the app-wide rules in Dispatch");
   await expect(rows).toHaveCount(5);
 
   // Restoring the recommended tiers forgets the saved defaults.
+  // Dispatch is in the app menu, under Projects.
+  await page.getByTestId("app-menu").click();
   await page.getByTestId("nav-defaults").click();
+  await expect(page).toHaveURL(/#\/dispatch$/);
   await expect(origin).toContainText(/\d+ projects? follows? them/);
   await reset.click();
   await reset.click();

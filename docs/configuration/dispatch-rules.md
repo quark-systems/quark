@@ -5,7 +5,7 @@ They live in the Project repo's `dispatch.yaml`, and the app's Settings › Disp
 
 ## Default rules
 
-Every Project whose `dispatch.yaml` lists no `rules` or `default` of its own follows the default rules, kept in `~/.quark/dispatch.yaml` and edited in the app under Default rules.
+Every Project whose `dispatch.yaml` lists no `rules` or `default` of its own follows the default rules, kept in `~/.quark/dispatch.yaml` and edited in the app menu under Projects › Dispatch.
 A new Project starts that way. Saving rules for a Project writes them to its `dispatch.yaml`, where they apply instead; Reset to defaults drops them again (in a commit, so they stay in the history).
 Its `classifier` block is the Project's own either way.
 

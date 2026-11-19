@@ -1,6 +1,6 @@
 // The app menu: the gear in the left list's head. It holds what belongs to the whole app rather
-// than one project: Appearance (System, Light, Dark), whether hidden projects are shown, Updates
-// and Setup.
+// than one project: Appearance (System, Light, Dark), how projects are listed, the dispatch rules
+// every project follows until it has its own, Updates and Setup.
 import React from "react";
 import { go } from "../nav";
 import { Menu } from "../ui";
@@ -20,6 +20,7 @@ export const APPEARANCE_ICONS: Record<ThemePreference, React.ReactNode> = {
 const GEAR = svg(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></>);
 
 const STACK = svg(<><rect x="3" y="4" width="18" height="5" rx="1.5" /><rect x="3" y="12" width="18" height="5" rx="1.5" /><path d="M6 20h12" /></>);
+const DISPATCH = svg(<><path d="M4 6h16M4 12h10M4 18h6" /><circle cx="18" cy="16" r="3" /></>);
 const EYE = svg(<><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></>);
 
 export function AppMenu() {
@@ -35,7 +36,8 @@ export function AppMenu() {
       { label: "Projects", checkbox: { label: "Group by collection", checked: byCollection, onCheckedChange: setGroupByCollection,
         icon: STACK, testid: "menu-group-by-collection" } },
       { checkbox: { label: "Show hidden projects", checked: showHidden, onCheckedChange: setShowHidden,
-        icon: EYE, testid: "menu-show-hidden" } },
+        icon: EYE, testid: "menu-show-hidden" },
+        actions: [{ label: "Dispatch", testid: "nav-defaults", onSelect: () => go({ name: "defaults" }), icon: DISPATCH }] },
       { actions: [
         { label: "Updates", testid: "nav-updates", detail: ready, onSelect: () => go({ name: "updates" }),
           icon: svg(<><path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" /></>) },
@@ -43,7 +45,7 @@ export function AppMenu() {
           icon: svg(<><path d="M9 12l2 2 4-4" /><circle cx="12" cy="12" r="9" /></>) },
       ] },
     ]} trigger={
-      <button type="button" className="ll-new ll-menu" aria-label={ready ? `App menu: update ${ready} ready` : "App menu"} title="Appearance, hidden projects, updates and setup" data-testid="app-menu">
+      <button type="button" className="ll-new ll-menu" aria-label={ready ? `App menu: update ${ready} ready` : "App menu"} title="Appearance, projects, dispatch, updates and setup" data-testid="app-menu">
         {GEAR}
         {ready && <span className="ll-menu-dot" data-testid="ll-update-ready" />}
       </button>

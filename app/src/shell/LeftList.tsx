@@ -72,8 +72,6 @@ export function LeftList({ mod }: { mod: string }) {
       <div className="ll-foot">
         <Row href={href({ name: "accounts" })} current={route.name === "accounts"} testid="nav-accounts" title="Accounts"
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" /></svg>} />
-        <Row href={href({ name: "defaults" })} current={route.name === "defaults"} testid="nav-defaults" title="Default rules"
-          lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6" /><circle cx="18" cy="16" r="3" /></svg>} />
         <Row href={href({ name: "hosts" })} current={route.name === "hosts"} testid="nav-hosts" title="Hosts"
           lead={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /></svg>} />
       </div>
