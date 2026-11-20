@@ -6,7 +6,7 @@ harness a worker runs (nominative use). The marks are trademarks of their owners
 affiliated with or endorsed by them. Don't recolor, combine or restyle them.
 
 Inline paths in `../harnessMarks.ts` without a file here (Claude Code, Cursor Agent, Gemini CLI, Kimi
-Code, OpenCode, Pi) come from [Simple Icons](https://simpleicons.org) under CC0 1.0.
+Code, OpenCode, Pi, Muse Code) come from [Simple Icons](https://simpleicons.org) under CC0 1.0.
 
 | File | Harness | Source | Terms |
 | --- | --- | --- | --- |
@@ -18,6 +18,8 @@ Code, OpenCode, Pi) come from [Simple Icons](https://simpleicons.org) under CC0 
 | `antigravity.svg` | Antigravity CLI | Google Antigravity press assets, "Icon - Full Color" SVG: https://antigravity.google/assets/image/brand/antigravity-icon__full-color.svg from https://antigravity.google/press | Google trademark. See https://about.google/brand-resource-center/. |
 | `omp.svg` | Oh My Pi | https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg | MIT (repo license). Drawn for dark backgrounds, so the app puts it on a dark tile. |
 
-Not found: **Muse Code** (Meta). The product page https://dev.meta.ai/lp/muse-code shows only the
-Meta wordmark, and no Muse Code mark is published. It stays a monogram until an official mark exists
-(quark#317).
+Muse Code (Meta) has no mark of its own: its product page https://dev.meta.ai/lp/muse-code shows only
+the Meta wordmark, and every Muse extension on the VS Code Marketplace is third-party. Matt chose
+(2026-11-20) to show Meta's symbol, drawn from Simple Icons (`meta`, CC0, brand color #0467DF). Meta's
+brand page (https://www.meta.com/brand/resources/meta/company-brand/) says all use of the Meta logo
+requires Meta's approval; none has been requested. Replace it if Meta publishes a Muse mark (quark#317).

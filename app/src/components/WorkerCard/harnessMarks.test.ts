@@ -9,9 +9,9 @@ describe("harnessMark", () => {
     expect(harnessMark("Claude-Code").path).toBeTruthy();
   });
 
-  it("gives every shipped harness a vendor mark except Muse Code", () => {
+  it("gives every shipped harness a vendor mark", () => {
     for (const id of ["claude-code", "codex", "cursor-agent", "gemini", "kimi", "opencode", "pi", "pi-signed",
-      "grok", "bob", "rovo", "kiro", "antigravity", "omp"]) {
+      "grok", "bob", "rovo", "kiro", "antigravity", "omp", "muse"]) {
       const m = harnessMark(id);
       expect(Boolean(m.path || m.src), id).toBe(true);
       expect(m.monogram, id).toBeUndefined();
@@ -20,8 +20,7 @@ describe("harnessMark", () => {
     expect(harnessMark("kiro").src).toMatch(/kiro\.svg|^data:image\/svg/);
   });
 
-  it("draws harnesses without an official mark as a monogram", () => {
-    expect(harnessMark("muse")).toMatchObject({ name: "Muse Code", monogram: "M" });
+  it("draws unknown harnesses as a monogram", () => {
     expect(harnessMark("my-agent")).toEqual({ name: "my-agent", monogram: "MA" });
     expect(harnessMark("zed")).toEqual({ name: "zed", monogram: "Ze" });
   });
