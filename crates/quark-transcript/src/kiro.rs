@@ -5,6 +5,12 @@
 //! `tool_result` are tool use. `turn_start`, `turn_end` and `usage_summary`
 //! are bookkeeping (the last carries the turn's credits, read by
 //! [`crate::read_turns`]).
+//!
+//! A message typed while Kiro works steers the running turn: Kiro records
+//! it wrapped in a `[LIVE STEERING …]` note that asks the model to report
+//! how it handled it as `[STEERING <id>: …]`. The wrapper is read as the
+//! message inside it and those reports are left out of replies, so a wake
+//! or a person's message reads as it was typed, whenever it arrived.
 
 use serde_json::Value;
 
@@ -22,7 +28,7 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
             .or_else(|| str_at(p, "callId"))
     };
     match str_at(p, "type") {
-        Some("user") => entry(TranscriptRole::User, &content, ts)
+        Some("user") => entry(TranscriptRole::User, unsteer(&content), ts)
             .into_iter()
             .collect(),
         Some("assistant") => {
@@ -31,7 +37,9 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
             } else {
                 TranscriptRole::Assistant
             };
-            entry(role, &content, ts).into_iter().collect()
+            entry(role, &drop_steering_reports(&content), ts)
+                .into_iter()
+                .collect()
         }
         Some("tool_call") => vec![tool_call(
             p.get("input")
@@ -74,6 +82,58 @@ fn text(v: &Value) -> String {
     }
 }
 
+/// Opens the note Kiro wraps a steering message in.
+const STEERING: &str = "[LIVE STEERING";
+
+/// The message a steering note wraps (`<user_message id="steer-…">…
+/// </user_message>`), or `text` itself when it is not one.
+fn unsteer(text: &str) -> &str {
+    if !text.trim_start().starts_with(STEERING) {
+        return text;
+    }
+    let inner = text
+        .find("<user_message")
+        .and_then(|i| text[i..].find('>').map(|j| i + j + 1))
+        .and_then(|start| {
+            text[start..]
+                .rfind("</user_message>")
+                .map(|end| &text[start..start + end])
+        });
+    inner.map_or(text, str::trim)
+}
+
+/// `text` without the `[STEERING steer-…: …]` reports a steering note asks
+/// for. A report runs to the first `]` that ends a line.
+fn drop_steering_reports(text: &str) -> String {
+    const REPORT: &str = "[STEERING steer-";
+    if !text.contains(REPORT) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(REPORT) {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        let end = after.match_indices(']').map(|(j, _)| j + 1).find(|&j| {
+            let line = after[j..].split(['\n', '\r']).next().unwrap_or("");
+            line.trim().is_empty()
+        });
+        match end {
+            Some(j) => rest = &after[j..],
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    // Blank lines a report left behind.
+    let mut joined = out.trim().to_string();
+    while joined.contains("\n\n\n") {
+        joined = joined.replace("\n\n\n", "\n\n");
+    }
+    joined
+}
+
 /// The model a session ran, from the `session.json` beside its log; Kiro's
 /// automatic choice reads as `kiro-auto`.
 pub(crate) fn session_model(log: &std::path::Path) -> Option<String> {
@@ -91,6 +151,31 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn reads_a_steering_message_as_the_message_and_drops_its_report() {
+        let steered = "[LIVE STEERING - New message from user]\n\nThe user sent a new message while you are working. As the currently active agent, adjust your approach if necessary based on this guidance.\n\n<user_message id=\"steer-249c\">\nWake prj_1#41: 1 item needs your judgment.\n- [merged] t1: merged.\n</user_message>\n\nIMPORTANT: After completing your work, include a brief note about how you handled this steering message. Use this exact format:\n\n[STEERING steer-249c: <describe what you did or why it wasn't applicable>]";
+        let e = parse(&json!({"payload": {"type": "user", "content": steered}}));
+        assert_eq!(e[0].role, TranscriptRole::User);
+        assert_eq!(
+            e[0].text,
+            "Wake prj_1#41: 1 item needs your judgment.\n- [merged] t1: merged."
+        );
+
+        let reply = "Started t2 now that t1 merged.\n\n[STEERING steer-249c: started the waiting task [t2] after the merge]";
+        let e = parse(&json!({"payload": {"type": "assistant", "content": reply}}));
+        assert_eq!(e[0].text, "Started t2 now that t1 merged.");
+        let middle = "One.\n[STEERING steer-1: noted]\nTwo.";
+        let e = parse(&json!({"payload": {"type": "assistant", "content": middle}}));
+        assert_eq!(e[0].text, "One.\n\nTwo.");
+        // A reply that is only a report leaves nothing to show.
+        let only = "[STEERING steer-1: not applicable]";
+        assert!(parse(&json!({"payload": {"type": "assistant", "content": only}})).is_empty());
+        // Ordinary text is untouched.
+        let plain = "Use [brackets] freely.";
+        let e = parse(&json!({"payload": {"type": "assistant", "content": plain}}));
+        assert_eq!(e[0].text, plain);
+    }
 
     #[test]
     fn reads_prompts_replies_thinking_and_tools() {
