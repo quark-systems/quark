@@ -12,10 +12,11 @@ page lists every merged pull request.
 
 - The Antigravity CLI (`agy`), Google's current CLI, can run a project's coordinator. Pick
   **Antigravity CLI** as the project's agent in Settings. Quark wires its tools, prompt and turn
-  end through the coordinator workspace's `.agents/` folder and leaves `~/.gemini` alone. agy
-  workers now report busy and turn end through hooks instead of the terminal screen, answer
-  agy's folder-trust question on their own, resume their conversation, and show their
-  transcript and token use. Gemini CLI keeps working as a worker.
+  end through the coordinator workspace's `.agents/` folder. agy workers now report busy and
+  turn end through hooks instead of the terminal screen, answer agy's folder-trust question on
+  their own, resume their conversation, and show their transcript and token use. Their hooks
+  are one named entry, `quark-worker`, in `~/.gemini/config/hooks.json`, which does nothing
+  outside a Quark worker. Gemini CLI keeps working as a worker.
 
 ## 0.3.0
 

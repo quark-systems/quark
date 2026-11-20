@@ -1,7 +1,9 @@
 //! Wiring a Project coordinator that runs on the Antigravity CLI (`agy`).
 //!
-//! agy reads a workspace's own customizations from `<cwd>/.agents/`, so the
-//! person's `~/.gemini` is left alone:
+//! agy reads a workspace's own customizations from `<cwd>/.agents/`, which
+//! is where the coordinator's wiring goes (the only thing written under
+//! `~/.gemini` is the worker hook every agy launch gets, a no-op outside a
+//! worker; see `quark_harness::prepare_folder`):
 //!
 //! - `.agents/mcp_config.json`: [`SERVER_NAME`] by URL (streamable HTTP),
 //!   each tool eager, so agy declares it to the model as a tool of its own
@@ -27,7 +29,10 @@
 //!
 //! agy also lists a workspace's MCP tools only from a conversation's second
 //! run on, so the first `Stop` of each start of agy (told apart by
-//! [`LAUNCH_ENV`]) sends the turn back once with [`TOOLS_NOTE`].
+//! [`LAUNCH_ENV`], which agy passes to its hooks) sends the turn back once
+//! with [`TOOLS_NOTE`]. quarkd keeps the starts it has seen in memory, so
+//! after quarkd itself restarts, a coordinator still running gets that
+//! note once more and is told to stop if it has nothing to do.
 
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
