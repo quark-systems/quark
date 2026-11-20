@@ -66,11 +66,12 @@ impl SessionFormat {
     ];
 
     /// The formats of harnesses that can run a coordinator, searched for a
-    /// Project's coordinator log. Kiro CLI runs workers only.
-    pub const COORDINATOR: [SessionFormat; 3] = [
+    /// Project's coordinator log. IBM Bob keeps no log.
+    pub const COORDINATOR: [SessionFormat; 4] = [
         SessionFormat::Claude,
         SessionFormat::Codex,
         SessionFormat::Pi,
+        SessionFormat::Kiro,
     ];
 
     /// The format a harness writes, by the harness name the engine reports:

@@ -75,6 +75,20 @@ pub(crate) fn judge(m: &HarnessManifest, snap: &Snapshot, raw: &str) -> Screen {
     Screen::Unknown
 }
 
+/// The key that answers a start-up dialog `m` names (`launch.dialogs`)
+/// when `screen`, the visible screen as text with one line per row, shows
+/// one whole: an arrow toward the manifest's choice, or Enter once the
+/// selector is on it. `None` when no whole dialog is up or its selector
+/// cannot be read yet. For a harness started outside the supervisor (a
+/// Project's coordinator), whose start-up questions nobody else answers.
+pub fn dialog_key(m: &HarnessManifest, screen: &str) -> Option<&'static [u8]> {
+    m.launch
+        .dialogs
+        .iter()
+        .find(|d| d.detect.iter().all(|t| screen.contains(t.as_str())))
+        .and_then(|d| answer(d, screen))
+}
+
 /// Whether `screen` shows a numbered selection menu (`❯ 1. Yes`), the
 /// shape agents draw for a question or a permission prompt.
 pub(crate) fn shows_menu(screen: &str) -> bool {
@@ -163,6 +177,29 @@ mod tests {
         let ready = "Trust All Tools active, confirmations are off\n\n›  ask a question or describe a task ↵\n";
         assert_eq!(j(ready), Screen::Idle);
         assert_eq!(j("loading…"), Screen::Unknown);
+    }
+
+    #[test]
+    fn answers_a_dialog_from_screen_text() {
+        let reg = ManifestRegistry::builtin();
+        let kiro = reg.get("kiro").unwrap();
+        assert_eq!(dialog_key(kiro, &kiro_dialog("No, exit")), Some(DOWN));
+        assert_eq!(
+            dialog_key(kiro, &kiro_dialog("Yes, I accept")),
+            Some(&b"\r"[..])
+        );
+        assert_eq!(
+            dialog_key(kiro, &kiro_folder_trust("Trust, continue")),
+            Some(&b"\r"[..])
+        );
+        assert_eq!(
+            dialog_key(kiro, "› ask a question or describe a task"),
+            None
+        );
+        assert_eq!(
+            dialog_key(reg.get("claude-code").unwrap(), &kiro_dialog("No, exit")),
+            None
+        );
     }
 
     /// Kiro 2.33's workspace-trust question, as drawn on a fresh worktree.

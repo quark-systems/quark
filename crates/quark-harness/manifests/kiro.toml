@@ -1,7 +1,7 @@
 schema = 1
 id = "kiro"
 name = "Kiro CLI"
-roles = ["worker"]
+roles = ["coordinator", "worker"]
 efforts = ["low", "medium", "high", "xhigh", "max"]
 
 [detect]

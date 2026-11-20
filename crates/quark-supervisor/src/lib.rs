@@ -35,6 +35,7 @@ mod supervisor;
 pub use events::{Assignment, Cause, SupervisorEvent};
 pub use fleet::{Fleet, Generation, Steer, SteerStatus, Unhealthy, Worker};
 pub use launch::WorkerUrls;
+pub use ready::dialog_key;
 pub use secrets::Secrets;
 pub use supervisor::{
     assert_isolated, Config, Conversations, Nudge, Quiet, Relaunch, SpawnRequest, Supervisor, Tick,

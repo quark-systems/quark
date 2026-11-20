@@ -367,8 +367,10 @@ impl Routes {
             .unwrap_or(crate::engine::native_project::COORDINATOR_HARNESS);
         match Wiring::for_harness(harness)? {
             Wiring::Pi => {}
-            // Bob's `Stop` hook cannot send the turn back either.
-            Wiring::Codex | Wiring::Bob => {
+            // Bob's `Stop` hook cannot send the turn back either. Kiro's
+            // can, but only once per prompt: the turn it sends back would
+            // end without another `Stop`, so the nudge goes in as a prompt.
+            Wiring::Codex | Wiring::Bob | Wiring::Kiro => {
                 let chat = self.wrap_up.as_ref()?.chat.clone();
                 let ws = crate::engine::WorkspaceRef {
                     project_id: p.id.clone(),
@@ -412,7 +414,12 @@ impl Routes {
                         .flatten()
                         .unwrap_or_default()
                 }
-                None => return false,
+                // Kiro's `Stop` payload has neither: its session log has
+                // the reply.
+                None => match self.kiro_reply(project).await {
+                    Some(t) => t,
+                    None => return false,
+                },
             },
         };
         if questions::questions(&text).is_empty() {
@@ -422,6 +429,30 @@ impl Routes {
             .coordinator
             .asked_this_turn(&ProjectId::new(project.to_string()))
             .await
+    }
+
+    /// The last thing the Project's coordinator said, from its newest Kiro
+    /// CLI session log, when it runs on Kiro. `None` otherwise.
+    async fn kiro_reply(&self, project: &str) -> Option<String> {
+        let store = self.store.clone();
+        let id = project.to_string();
+        let p = tokio::task::spawn_blocking(move || store.get_project(&id))
+            .await
+            .ok()?
+            .ok()?;
+        let harness = p.agent_config.as_ref()?.harness.clone();
+        if Wiring::for_harness(crate::engine::engine_harness(&harness)) != Some(Wiring::Kiro) {
+            return None;
+        }
+        let root = PathBuf::from(p.workspace_path?);
+        let roots = self.roots.clone();
+        tokio::task::spawn_blocking(move || {
+            let log = locate(SessionFormat::Kiro, &root, &roots)?;
+            last_entry_reply(&log, SessionFormat::Kiro)
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// The token use logged by the coordinator since its last turn end,
@@ -521,6 +552,34 @@ fn last_reply(path: &Path) -> Option<String> {
     })
 }
 
+/// The text of the last assistant reply in a session log of `format`,
+/// read from its tail. A reply that streamed in several entries after the
+/// last prompt is joined.
+fn last_entry_reply(path: &Path, format: SessionFormat) -> Option<String> {
+    use quark_transcript::TranscriptRole;
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 256 * 1024;
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut said: Vec<String> = Vec::new();
+    for line in text.lines() {
+        for e in format.parse_line(line) {
+            match e.role {
+                TranscriptRole::User => said.clear(),
+                TranscriptRole::Assistant if !e.text.trim().is_empty() => said.push(e.text),
+                _ => {}
+            }
+        }
+    }
+    // Only the reply that ended the turn: the text after the turn's last
+    // tool call is what the person reads.
+    said.pop()
+}
+
 fn newest_log(roots: &SessionRoots, cwd: &Path) -> Option<(PathBuf, SessionFormat)> {
     SessionFormat::COORDINATOR
         .iter()
@@ -600,6 +659,7 @@ pub enum Wiring {
     Codex,
     Pi,
     Bob,
+    Kiro,
 }
 
 impl Wiring {
@@ -611,13 +671,15 @@ impl Wiring {
             "codex" => Some(Wiring::Codex),
             "pi" | "pi-signed" => Some(Wiring::Pi),
             "bob" => Some(Wiring::Bob),
+            "kiro" => Some(Wiring::Kiro),
             _ => None,
         }
     }
 }
 
 /// The harnesses a native coordinator runs on, by manifest id.
-pub const COORDINATOR_HARNESSES: &[&str] = &["claude-code", "codex", "pi", "pi-signed", "bob"];
+pub const COORDINATOR_HARNESSES: &[&str] =
+    &["claude-code", "codex", "pi", "pi-signed", "bob", "kiro"];
 
 /// Point the coordinator running `harness` in `root` at quarkd. Codex takes
 /// its wiring on the command line ([`codex_overrides`]), so nothing is
@@ -627,6 +689,7 @@ pub fn install(harness: &str, root: &Path, urls: &CoordinatorUrls) -> std::io::R
         Some(Wiring::Claude) => install_claude(root, urls),
         Some(Wiring::Pi) => install_pi(root, urls),
         Some(Wiring::Bob) => install_bob(root, urls),
+        Some(Wiring::Kiro) => install_kiro(root, urls),
         Some(Wiring::Codex) | None => Ok(false),
     }
 }
@@ -738,6 +801,54 @@ fn write_bob_mode(path: &Path) -> std::io::Result<bool> {
         let modes = list.as_array_mut().expect("array");
         modes.retain(|m| m.get("slug").and_then(Value::as_str) != Some(BOB_MODE));
         modes.push(mode);
+    })
+}
+
+/// The Kiro CLI agent a coordinator runs as (`kiro-cli chat --agent`).
+pub const KIRO_AGENT: &str = "quark-coordinator";
+/// The agent's file, relative to the workspace root: Kiro reads workspace
+/// agents from `<cwd>/.kiro/agents/<name>.json`.
+const KIRO_AGENT_FILE: &str = ".kiro/agents/quark-coordinator.json";
+
+/// Configure the Kiro CLI coordinator running in `root` to reach quarkd,
+/// through a workspace agent ([`KIRO_AGENT`]), so `~/.kiro` is left alone:
+/// - `prompt`: the coordinator's prompt file (`.quark/coordinator.md`),
+///   which Kiro resolves from the agent file's own directory. Kiro has no
+///   system-prompt flag; an agent's prompt is its way in.
+/// - `mcpServers`: [`SERVER_NAME`] by URL (Kiro speaks streamable HTTP to
+///   a remote server), its tools allowed without asking
+///   (`permissions.rules`; Kiro's V3 engine skips a JSON agent that has
+///   `allowedTools` and no `permissions`). `includeMcpJson` is off, so the
+///   user's own MCP servers stay out of the coordinator's tools and context.
+/// - `hooks.stop`: POSTs Kiro's `Stop` payload to `turn_end`. Its output is
+///   dropped, since Kiro would take a printed block decision as "keep
+///   going" and allows only one per prompt.
+///
+/// The Project's memories are in the prompt, as for Codex and Pi: Kiro
+/// does not run its session-start hook again on resume. Kiro's global hooks
+/// and steering (`~/.kiro/hooks`, `~/.kiro/steering`) still load; an agent
+/// cannot leave them out. Returns whether the file changed.
+pub fn install_kiro(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bool> {
+    let post = format!(
+        "curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary @- '{}/turn_end' >/dev/null 2>&1 || true",
+        urls.hooks
+    );
+    edit_json(&root.join(KIRO_AGENT_FILE), |v| {
+        *v = json!({
+            "name": KIRO_AGENT,
+            "description": "The coordinator of a Quark Project. Quark starts and wires it; edits here are replaced.",
+            // From `.kiro/agents/`, the workspace's `.quark/coordinator.md`.
+            "prompt": "file://../../.quark/coordinator.md",
+            "tools": "*",
+            "includeMcpJson": false,
+            "permissions": { "rules": [{
+                "capability": "mcp",
+                "match": [format!("{SERVER_NAME}/*")],
+                "effect": "allow",
+            }]},
+            "hooks": { "stop": [{ "command": post }] },
+        });
+        v["mcpServers"][SERVER_NAME] = json!({ "url": urls.mcp });
     })
 }
 
@@ -1172,6 +1283,162 @@ mod tests {
         assert_eq!(b["decision"], "block");
     }
 
+    #[tokio::test]
+    async fn a_kiro_turn_that_asks_in_text_is_read_from_its_log_and_nudged() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let p = store
+            .create_project(CreateProject {
+                name: "kiro".into(),
+                goal: None,
+                workspace_path: Some(ws.display().to_string()),
+                repos: vec![],
+                agent_config: Some(quark_systems::AgentConfig {
+                    harness: "kiro".into(),
+                    model: None,
+                    effort: None,
+                    pool: None,
+                }),
+                dispatch_preset: None,
+                delivery: None,
+            })
+            .unwrap();
+        // Kiro's V3 session store: the reply is only in the log.
+        let kiro = dir.path().join("kiro-home");
+        let sess = kiro.join("sessions/abc/sess_1");
+        std::fs::create_dir_all(&sess).unwrap();
+        std::fs::write(
+            sess.join("session.json"),
+            json!({"id": "sess_1", "workspacePaths": [ws.display().to_string()]}).to_string(),
+        )
+        .unwrap();
+        let log_line = |v: Value| format!("{v}\n");
+        let asking = "Plan is ready. Should I use Redis or keep it in memory?";
+        std::fs::write(
+            sess.join("messages.jsonl"),
+            [
+                log_line(json!({"id": "u", "payload": {"type": "user", "content": "plan it"}})),
+                log_line(
+                    json!({"id": "a", "payload": {"type": "assistant", "content": "Reading."}}),
+                ),
+                log_line(json!({"id": "t", "payload": {"type": "tool_call", "toolName": "shell"}})),
+                log_line(json!({"id": "b", "payload": {"type": "assistant", "content": asking}})),
+            ]
+            .concat(),
+        )
+        .unwrap();
+        let roots = SessionRoots {
+            kiro: vec![kiro],
+            ..SessionRoots::default()
+        };
+        let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let coordinator = Arc::new(
+            Coordinator::open(
+                Arc::new(log.clone()),
+                quark_core::HostId::from("h"),
+                Config::default(),
+                Arc::new(NoBrain),
+                Arc::new(YesHands),
+            )
+            .await
+            .unwrap(),
+        );
+        let tokens = Tokens::new(dir.path());
+        let typed = Arc::new(Typed::default());
+        let off = quark_systems::CompactionSettings {
+            auto: false,
+            at_percent: 70,
+        };
+        let app = router_wrapping_up(
+            coordinator,
+            tokens.clone(),
+            store,
+            roots.clone(),
+            WrapUp {
+                chat: typed.clone(),
+                events: log.clone(),
+                compactor: Arc::new(Compactor::new(off, roots)),
+            },
+        );
+        let url = format!(
+            "/{}/{}/hooks/turn_end",
+            p.id,
+            tokens.get_or_create(&p.id).unwrap()
+        );
+        // Kiro's `Stop` payload carries no reply.
+        let body =
+            json!({"session_id": "sess_1", "hook_event_name": "Stop", "cwd": ws}).to_string();
+        let (_, b) = send(&app, post(&url, &body)).await;
+        assert_eq!(b["decision"], "block");
+        for _ in 0..50 {
+            if !typed.0.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(*typed.0.lock().unwrap(), [questions::NUDGE.to_string()]);
+        // The turn the nudge started closes at its own `Stop`.
+        let (_, b) = send(&app, post(&url, &body)).await;
+        assert!(b.get("turn").is_some(), "{b}");
+        // A last reply without a question just closes the turn.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(sess.join("messages.jsonl"))
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(
+                    log_line(json!({"id": "c", "payload": {"type": "assistant", "content": "Started t1."}}))
+                        .as_bytes(),
+                )
+            })
+            .unwrap();
+        let (_, b) = send(&app, post(&url, &body)).await;
+        assert!(b.get("turn").is_some(), "{b}");
+        assert_eq!(typed.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn installs_a_kiro_coordinator_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok");
+        assert!(install("kiro", root, &urls).unwrap());
+        assert!(!install("kiro", root, &urls).unwrap(), "idempotent");
+        let agent: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".kiro/agents/quark-coordinator.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(agent["name"], KIRO_AGENT);
+        assert_eq!(agent["prompt"], "file://../../.quark/coordinator.md");
+        assert_eq!(agent["includeMcpJson"], false);
+        assert!(
+            agent.get("allowedTools").is_none(),
+            "V3 skips such an agent"
+        );
+        assert_eq!(
+            agent["mcpServers"][SERVER_NAME]["url"],
+            "http://127.0.0.1:7777/v1/coordinator/p1/tok/mcp"
+        );
+        assert_eq!(
+            agent["permissions"]["rules"][0],
+            json!({"capability": "mcp", "match": ["quark-coordinator/*"], "effect": "allow"})
+        );
+        let stop = agent["hooks"]["stop"][0]["command"].as_str().unwrap();
+        assert!(
+            stop.contains("/v1/coordinator/p1/tok/hooks/turn_end"),
+            "{stop}"
+        );
+        assert!(
+            stop.contains(">/dev/null"),
+            "Kiro must not read a decision: {stop}"
+        );
+        // A new token is written in.
+        let urls = CoordinatorUrls::new("http://127.0.0.1:7777", "p1", "tok2");
+        assert!(install("kiro", root, &urls).unwrap());
+    }
+
     #[test]
     fn installs_the_pi_bridge_and_leaves_codex_to_its_command_line() {
         let dir = tempfile::tempdir().unwrap();
@@ -1192,7 +1459,6 @@ mod tests {
 
         let other = tempfile::tempdir().unwrap();
         assert!(!install("codex", other.path(), &urls).unwrap());
-        assert!(!install("kiro", other.path(), &urls).unwrap());
         assert_eq!(std::fs::read_dir(other.path()).unwrap().count(), 0);
         assert_eq!(Wiring::for_harness("claude"), Some(Wiring::Claude));
         for h in COORDINATOR_HARNESSES {
