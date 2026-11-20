@@ -650,13 +650,7 @@ mod tests {
         )
         .unwrap();
         let curl = dir.join("curl");
-        std::fs::write(
-            &curl,
-            "#!/bin/sh\ncat | grep -q 'Bearer pitok' && printf '{\"rate_limit\":{\"primary_window\":{\"used_percent\":10}}}\\n200' || printf 'x\\n401'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&curl, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        crate::local::support::write_script(&curl, "#!/bin/sh\ncat | grep -q 'Bearer pitok' && printf '{\"rate_limit\":{\"primary_window\":{\"used_percent\":10}}}\\n200' || printf 'x\\n401'\n");
         let mut r = CodexUsage::new(Some(dir.to_path_buf()), None).isolated();
         r.pi_dir = Some(pi);
         r.curl = curl.to_string_lossy().into_owned();

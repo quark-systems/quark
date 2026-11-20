@@ -197,12 +197,10 @@ mod tests {
     async fn runs_the_cli() {
         let tmp = tempfile::tempdir().unwrap();
         let bl = tmp.path().join("bl");
-        std::fs::write(
+        crate::local::support::write_script(
             &bl,
             "#!/bin/sh\necho '{\"planName\":\"Pro\",\"per1WeekPercentage\":12}'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bl, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        );
         let r = AlibabaUsage {
             bl: bl.to_string_lossy().into_owned(),
             cache: Cache::none(),
