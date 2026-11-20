@@ -122,7 +122,8 @@ impl NativeSupervision {
 /// account's config directory when the worker runs on one, else the
 /// harness's default. IBM Bob keeps its conversations in a database
 /// instead, `~/.bob/db/bob.db`; Kiro CLI one directory per session under
-/// `~/.kiro/sessions`.
+/// `~/.kiro/sessions`; the Antigravity CLI one per conversation under
+/// `~/.gemini/antigravity-cli/brain`.
 pub struct Transcripts {
     pub bob_db: PathBuf,
     /// Each harness's default session roots.
@@ -158,7 +159,12 @@ impl Conversations for Transcripts {
             .transcript
             .as_ref()
             .and_then(|t| session_format(&t.format))
-            .or_else(|| (quark_harness::engine_name(m) == "kiro").then_some(SessionFormat::Kiro))
+            .or_else(|| match quark_harness::engine_name(m) {
+                "kiro" => Some(SessionFormat::Kiro),
+                // agy keeps its transcripts under its own app data directory.
+                "agy" => Some(SessionFormat::Antigravity),
+                _ => None,
+            })
         else {
             return false;
         };

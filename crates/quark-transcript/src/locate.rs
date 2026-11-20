@@ -31,6 +31,8 @@ pub struct SessionRoots {
     pub pi: Vec<PathBuf>,
     /// Kiro CLI homes (`~/.kiro`, or `$KIRO_HOME`).
     pub kiro: Vec<PathBuf>,
+    /// Antigravity CLI app data directories (`~/.gemini/antigravity-cli`).
+    pub antigravity: Vec<PathBuf>,
 }
 
 impl SessionRoots {
@@ -51,6 +53,11 @@ impl SessionRoots {
             codex: pick("CODEX_HOME", &[".codex"]),
             pi: pick("PI_CODING_AGENT_DIR", &[".pi", "agent"]),
             kiro: pick("KIRO_HOME", &[".kiro"]),
+            // agy has no variable that moves it.
+            antigravity: home
+                .iter()
+                .map(|h| h.join(".gemini").join("antigravity-cli"))
+                .collect(),
         }
     }
 
@@ -60,6 +67,7 @@ impl SessionRoots {
             SessionFormat::Codex => &self.codex,
             SessionFormat::Pi => &self.pi,
             SessionFormat::Kiro => &self.kiro,
+            SessionFormat::Antigravity => &self.antigravity,
         }
     }
 
@@ -70,6 +78,7 @@ impl SessionRoots {
             SessionFormat::Codex => &mut self.codex,
             SessionFormat::Pi => &mut self.pi,
             SessionFormat::Kiro => &mut self.kiro,
+            SessionFormat::Antigravity => &mut self.antigravity,
         }
     }
 }
@@ -105,6 +114,7 @@ pub fn locate_since(
                 SessionFormat::Pi => newest_jsonl(&root.join("sessions").join(pi_slug(cwd))),
                 SessionFormat::Codex => codex_rollout(&root.join("sessions"), cwd),
                 SessionFormat::Kiro => kiro_session(&root.join("sessions"), cwd),
+                SessionFormat::Antigravity => crate::antigravity::locate(root, cwd),
             };
             if let Some(path) = found {
                 let mtime = modified(&path);

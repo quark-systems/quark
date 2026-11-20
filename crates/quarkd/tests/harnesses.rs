@@ -285,7 +285,7 @@ async fn harness_routes() {
         &app,
         "POST",
         "/v1/harnesses:validate",
-        Some(json!({"config": {"harness": "antigravity", "effort": "max"}})),
+        Some(json!({"config": {"harness": "antigravity", "effort": "turbo"}})),
     )
     .await;
     assert_eq!(body["valid"], json!(false));

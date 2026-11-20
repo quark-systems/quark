@@ -246,7 +246,15 @@ impl ProjectSetup {
         }
         // A first run in a new workspace would open on Claude Code's trust
         // question, where Enter means "No, exit".
-        let env = launch_env(manifest, account_env, &ws.project_id);
+        let mut env = launch_env(manifest, account_env, &ws.project_id);
+        if wiring == Wiring::Antigravity {
+            // Tells this start from the last in the hooks' calls.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            env.push((crate::coordinator_agy::LAUNCH_ENV.into(), nanos.to_string()));
+        }
         if let Err(e) = quark_harness::prepare_folder(
             manifest,
             &ws.root,
@@ -343,7 +351,7 @@ impl ProjectSetup {
         // resume, so their prompt carries the memories as of launch.
         let memories = match wiring {
             Wiring::Claude | Wiring::Bob => None,
-            Wiring::Codex | Wiring::Pi | Wiring::Kiro => {
+            Wiring::Codex | Wiring::Pi | Wiring::Kiro | Wiring::Antigravity => {
                 crate::beads::prime_memories(&self.bd, &layout.home, &pid).await
             }
         };
@@ -440,6 +448,19 @@ fn launch_argv(
         }
         return Ok(argv);
     }
+    if wiring == Wiring::Antigravity {
+        // The worker's launch less its prompt: `--dangerously-skip-permissions`
+        // stays, so the coordinator runs commands and Quark's tools without
+        // asking, as a worker does. agy's folder-trust question is answered
+        // from the manifest's dialogs (`coordinator_prompt`), and the prompt
+        // itself is added by the workspace's `PreInvocation` hook
+        // (`coordinator_agy`).
+        let mut argv = quark_harness::argv(m, &vars);
+        if resume {
+            argv.extend(m.launch.resume.iter().cloned());
+        }
+        return Ok(argv);
+    }
     if wiring == Wiring::Kiro {
         // `--trust-all-tools` stays: the coordinator runs commands without
         // asking, as a worker does. Its confirmation and Kiro's folder-trust
@@ -456,7 +477,7 @@ fn launch_argv(
     let flag = match wiring {
         Wiring::Claude | Wiring::Pi => "--append-system-prompt",
         Wiring::Codex => "-c",
-        Wiring::Bob | Wiring::Kiro => unreachable!("started above"),
+        Wiring::Bob | Wiring::Kiro | Wiring::Antigravity => unreachable!("started above"),
     };
     let mut argv = vec![
         "/bin/sh".to_string(),
@@ -508,7 +529,7 @@ fn launch_argv(
                 harness.push("--continue".into());
             }
         }
-        Wiring::Bob | Wiring::Kiro => unreachable!("started above"),
+        Wiring::Bob | Wiring::Kiro | Wiring::Antigravity => unreachable!("started above"),
     }
     argv.extend(harness);
     Ok(argv)
@@ -1150,6 +1171,41 @@ mod tests {
         let resumed =
             launch_argv(m, Wiring::Kiro, &a, Path::new("/w"), p, &urls(), true, &[]).unwrap();
         assert_eq!(&resumed[8..], ["--agent", KIRO_AGENT, "--resume"]);
+    }
+
+    #[test]
+    fn launches_agy_without_a_prompt_flag() {
+        let reg = ManifestRegistry::builtin();
+        let m = reg.get("antigravity").unwrap();
+        let mut a = agent("antigravity");
+        a.model = Some("gemini-4-neon-high".into());
+        a.effort = Some("high".into());
+        let p = Path::new("/w/.quark/coordinator.md");
+        let argv = launch_argv(m, Wiring::Antigravity, &a, Path::new("/w"), p, &urls(), false, &[])
+            .unwrap();
+        assert_eq!(
+            argv,
+            [
+                "agy",
+                "--dangerously-skip-permissions",
+                "--model",
+                "gemini-4-neon-high",
+                "--effort",
+                "high"
+            ]
+        );
+        let resumed = launch_argv(m, Wiring::Antigravity, &a, Path::new("/w"), p, &urls(), true, &[])
+            .unwrap();
+        assert_eq!(resumed.last().unwrap(), "--continue");
+        // A worker gets its brief in the flag's own argument.
+        let vars = LaunchVars {
+            prompt: Some("-do it".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            quark_harness::argv(m, &vars),
+            ["agy", "--dangerously-skip-permissions", "--prompt-interactive=-do it"]
+        );
     }
 
     #[test]

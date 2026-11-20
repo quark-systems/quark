@@ -179,6 +179,7 @@ fn locates_each_harness_log_by_working_directory() {
         codex: vec![home.path().join(".codex")],
         pi: vec![home.path().join(".pi/agent")],
         kiro: vec![home.path().join(".kiro")],
+        antigravity: vec![home.path().join(".gemini/antigravity-cli")],
     };
     for f in SessionFormat::ALL {
         assert_eq!(locate(f, cwd, &roots), None);

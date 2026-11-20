@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinators_are_the_pi_family_claude_codex_bob_and_kiro() {
+    fn coordinators_are_the_pi_family_claude_codex_bob_kiro_and_antigravity() {
         let c: Vec<_> = builtin()
             .iter()
             .filter(|m| m.roles.iter().any(|r| r == "coordinator"))
@@ -265,7 +265,15 @@ mod tests {
         c.sort_unstable();
         assert_eq!(
             c,
-            ["bob", "claude-code", "codex", "kiro", "pi", "pi-signed"]
+            [
+                "antigravity",
+                "bob",
+                "claude-code",
+                "codex",
+                "kiro",
+                "pi",
+                "pi-signed"
+            ]
         );
     }
 
