@@ -26,6 +26,21 @@ pub struct Agent {
     pub effort: Option<String>,
 }
 
+/// A worker's question, by its task and key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerQuestion {
+    pub task: TaskId,
+    pub key: String,
+}
+
+impl WorkerQuestion {
+    /// The engine's id for the question, as `answer` addresses it.
+    pub fn hold(&self) -> String {
+        format!("{}:{}", self.task, self.key)
+    }
+}
+
 /// One tool call, as recorded in the log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "snake_case", deny_unknown_fields)]
@@ -109,7 +124,14 @@ pub enum ToolCall {
         blocks: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         evidence: Vec<EvidenceLink>,
+        /// The worker's question this frames for the user: the user's
+        /// answer goes to that worker.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answers: Option<WorkerQuestion>,
     },
+    /// Withdraw an open decision the coordinator asked, which no longer
+    /// needs the user.
+    WithdrawDecision { number: i64, reason: String },
     /// Tell the user an outcome.
     TellUser { text: String },
     /// Keep a fact in Project memory (as a proposal the user reviews).
@@ -133,6 +155,7 @@ impl ToolCall {
             ToolCall::Cancel { .. } => "cancel",
             ToolCall::Clear { .. } => "clear",
             ToolCall::AskUser { .. } => "ask_user",
+            ToolCall::WithdrawDecision { .. } => "withdraw_decision",
             ToolCall::TellUser { .. } => "tell_user",
             ToolCall::Remember { .. } => "remember",
             ToolCall::AckMessage { .. } => "ack_message",
@@ -249,9 +272,41 @@ impl ToolCall {
                 blank("task", task.as_str())?;
                 blank("reason", reason)
             }
-            ToolCall::AskUser { key, question, .. } => {
+            ToolCall::AskUser {
+                key,
+                question,
+                context,
+                options,
+                recommended,
+                answers,
+                ..
+            } => {
                 blank("key", key)?;
-                blank("question", question)
+                blank("question", question)?;
+                if let Some(a) = answers {
+                    blank("answers.task", a.task.as_str())?;
+                    blank("answers.key", &a.key)?;
+                }
+                let labels: Vec<&str> = options
+                    .iter()
+                    .map(|o| o.label.trim())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                if labels.len() < 2
+                    || context.as_deref().is_none_or(|c| c.trim().is_empty())
+                    || !recommended
+                        .as_deref()
+                        .is_some_and(|r| labels.contains(&r.trim()))
+                {
+                    return Err(ASK_USER_SHAPE.into());
+                }
+                Ok(())
+            }
+            ToolCall::WithdrawDecision { number, reason } => {
+                if *number < 1 {
+                    return Err("`number` is the decision's number, such as 16 for D-16".into());
+                }
+                blank("reason", reason)
             }
             ToolCall::TellUser { text } => {
                 blank("text", text)?;
@@ -276,6 +331,15 @@ pub const START_TASK_AGENT: &str =
      Project's dispatch rules. Give the rule the task fits as `rule`, or leave it out and dispatch \
      asks you when it needs a pick. Name an agent only when the user asked for one: start the task \
      without it, then give it to choose_profile when dispatch asks, or relaunch the task on it.";
+
+/// Why `ask_user` refuses a bare question, and what it needs.
+pub const ASK_USER_SHAPE: &str =
+    "ask_user needs a decision the user can answer in one tap: `context` (what they need to know, \
+     in plain words), at least two `options` (each a short label with its consequence), and \
+     `recommended` naming one of those labels, with `recommended_why`. The app adds \"Something \
+     else\" for a written answer, so never ask for free text alone. When you cannot offer choices \
+     yet, find out more first (read the task, its screen, the code), or answer the worker \
+     yourself.";
 
 /// Why `tell_user` refuses a question, and what to do instead.
 pub const TELL_USER_QUESTION: &str =
@@ -348,7 +412,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "answer",
-            description: "Answer a worker's question by its key. Answer yourself when the user's intent already settles it; otherwise use ask_user. A question keyed screen-... is a prompt on the worker's screen (a permission or approval request, or a menu): answer with the number of the choice and Quark selects it there. Approve only what the task needs and the user's rules allow; ask the user about anything destructive or outside the task.",
+            description: "Answer a worker's question by its key. A worker's question never reaches the user by itself: it waits on you. Answer it yourself whenever the user's intent, the Project's rules or a sensible default settles it; only a real design choice, or anything destructive, irreversible or outside the task, goes to the user, through ask_user with `answers` set to this task and key. Answering closes the question, including one already framed for the user. A question keyed screen-... is a prompt on the worker's screen (a permission or approval request, or a menu): answer with the number of the choice and Quark selects it there. Approve only what the task needs and the user's rules allow; ask the user about anything destructive or outside the task.",
             input_schema: object(
                 json!({"task": text("Task id."), "key": text("The question's key."), "answer": text("Your answer.")}),
                 &["task", "key", "answer"],
@@ -392,7 +456,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "ask_user",
-            description: "Ask the user something. Every question for the user goes through this tool, one call per question: a design choice, a clarification, a go-ahead, anything destructive, irreversible or security-sensitive, a credential. It files a decision the user answers in the app, and their answer wakes you. Never ask in your reply text or in tell_user instead. Ask once with context, options (each with its consequence), your recommendation and why, and what the answer unblocks.",
+            description: "Ask the user something. Every question for the user goes through this tool, one call per question: a design choice, a clarification, a go-ahead, anything destructive, irreversible or security-sensitive, a credential. It files a decision the user answers in the app with one tap. Never ask in your reply text or in tell_user instead. Required: the question standing alone in plain words (never a worker's shorthand or code names), `context`, at least two `options` each with its consequence, `recommended` (one option's label) and `recommended_why`; the app adds \"Something else\" for a written answer. To put a worker's question to the user, set `answers` to its task and key: the decision replaces the worker's question and the user's answer goes straight to the worker. Asking again with the same key, or the same `answers`, rewrites the open decision in place. Without `answers` the answer wakes you.",
             input_schema: object(
                 json!({
                     "key": text("Stable key; asking again with it updates the same decision."),
@@ -412,6 +476,13 @@ pub fn catalog() -> Vec<ToolSpec> {
                     "recommended": text("The label of the option you recommend."),
                     "recommended_why": text("Why you recommend it."),
                     "blocks": {"type": "array", "items": text("A pull request URL or task id waiting on the answer.")},
+                    "answers": {
+                        "type": "object",
+                        "description": "The worker's question this decision puts to the user; the user's answer goes to that worker.",
+                        "properties": {"task": text("Task id."), "key": text("The question's key.")},
+                        "required": ["task", "key"],
+                        "additionalProperties": false
+                    },
                     "evidence": {
                         "type": "array",
                         "items": {
@@ -421,7 +492,15 @@ pub fn catalog() -> Vec<ToolSpec> {
                         }
                     }
                 }),
-                &["key", "question"],
+                &["key", "question", "context", "options", "recommended", "recommended_why"],
+            ),
+        },
+        ToolSpec {
+            name: "withdraw_decision",
+            description: "Withdraw an open decision you asked that no longer needs the user: another decision covers it, or the work moved on. It closes in the decision log with your reason. A worker's question is closed by answering the worker (`answer`) instead.",
+            input_schema: object(
+                json!({"number": {"type": "integer", "description": "The decision's number, such as 16 for D-16."}, "reason": text("Why it no longer needs the user.")}),
+                &["number", "reason"],
             ),
         },
         ToolSpec {
@@ -497,9 +576,13 @@ mod tests {
             "relaunch" => json!({"task": "t1", "note": "n"}),
             "cancel" => json!({"task": "t1", "reason": "r"}),
             "clear" => json!({"task": "t1", "reason": "r", "discard": true}),
-            "ask_user" => {
-                json!({"key": "k", "question": "q", "options": ["a", {"label": "b", "consequence": "c"}]})
-            }
+            "ask_user" => json!({
+                "key": "k", "question": "q", "context": "c",
+                "options": ["a", {"label": "b", "consequence": "c"}],
+                "recommended": "a", "recommended_why": "w",
+                "answers": {"task": "t1", "key": "schema"}
+            }),
+            "withdraw_decision" => json!({"number": 3, "reason": "covered by D-4"}),
             "tell_user" => json!({"text": "x"}),
             "remember" => json!({"fact": "f"}),
             "ack_message" => json!({"channel": "inbox", "id": "1"}),
@@ -554,5 +637,31 @@ mod tests {
             &json!({"text": "Merged https://x.test/pr/1?tab=files."})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn ask_user_needs_options_context_and_a_recommendation() {
+        let full = json!({
+            "key": "k", "question": "q", "context": "c",
+            "options": ["a", "b"], "recommended": "a", "recommended_why": "w"
+        });
+        assert!(ToolCall::parse("ask_user", &full).is_ok());
+        for (field, value) in [
+            ("options", json!([])),
+            ("options", json!(["a"])),
+            ("context", json!("  ")),
+            ("recommended", json!("c")),
+        ] {
+            let mut bad = full.clone();
+            bad[field] = value;
+            assert_eq!(
+                ToolCall::parse("ask_user", &bad),
+                Err(ASK_USER_SHAPE.to_string()),
+                "{field}"
+            );
+        }
+        // A call logged before these checks still reads.
+        let logged = json!({"tool": "ask_user", "key": "k", "question": "q"});
+        assert!(serde_json::from_value::<ToolCall>(logged).is_ok());
     }
 }

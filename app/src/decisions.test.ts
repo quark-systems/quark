@@ -33,6 +33,7 @@ describe("answeredVia", () => {
     expect(answeredVia("app")).toBe("in the app");
     expect(answeredVia("phone")).toBe("in the phone");
     expect(answeredVia("beads")).toBe("in Beads");
+    expect(answeredVia("coordinator")).toBe("by the coordinator");
     expect(answeredVia("rule")).toBe("under a standing rule");
     expect(answeredVia(null)).toBeNull();
   });

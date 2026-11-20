@@ -70,6 +70,63 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| CoreError::Backend(e.to_string()))
 }
 
+/// [`blocking`], with a missing or conflicting record refused with `refused`
+/// or the store's own words, so the coordinator reads why.
+async fn blocking_refused<T: Send + 'static>(
+    refused: String,
+    f: impl FnOnce() -> crate::store::Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| CoreError::Backend(e.to_string()))?
+        .map_err(|e| match e {
+            StoreError::NotFound => CoreError::Refused(refused),
+            StoreError::Conflict(m) => CoreError::Refused(m),
+            e => CoreError::Backend(e.to_string()),
+        })
+}
+
+/// What the coordinator sees of the questions waiting on it and the
+/// decisions the user sees, for `fleet`.
+fn pending_lines(pending: &[(String, quark_systems::Decision)]) -> String {
+    let mut waiting = Vec::new();
+    let mut open = Vec::new();
+    for (engine_id, d) in pending {
+        let q = one_line(&d.question);
+        if d.state == quark_systems::DecisionState::WithCoordinator {
+            let (task, key) = engine_id.split_once(':').unwrap_or((engine_id, ""));
+            waiting.push(format!("- {task} [key={key}] asked {}: {q}", d.opened_at));
+        } else {
+            let whose = match crate::store::coordinator_decision_key(engine_id) {
+                Some(key) => format!("yours, key={key}"),
+                None => match engine_id.split_once(':') {
+                    Some((task, key)) if d.task_id.is_some() => {
+                        format!("{task}'s question, key={key}")
+                    }
+                    _ => "quarkd's".into(),
+                },
+            };
+            open.push(format!("- D-{} ({whose}): {q}", d.number));
+        }
+    }
+    let mut out = String::new();
+    if !waiting.is_empty() {
+        out.push_str(
+            "\n\nWorker questions waiting on you (the user does not see these): answer each \
+             yourself, or put it to the user with ask_user and `answers`:\n",
+        );
+        out.push_str(&waiting.join("\n"));
+    }
+    if !open.is_empty() {
+        out.push_str(
+            "\n\nOpen decisions the user sees (rewrite one with ask_user, the same key or \
+             `answers`; close a worker's with `answer`, withdraw yours with withdraw_decision):\n",
+        );
+        out.push_str(&open.join("\n"));
+    }
+    out
+}
+
 /// Types each turn's briefing into the coordinator's session.
 pub struct InputBrain {
     store: Arc<Store>,
@@ -269,10 +326,14 @@ impl Hands for EngineHands {
         match call {
             ToolCall::Fleet {} => {
                 let tasks = self.tasks(&ws).await?;
-                if tasks.is_empty() {
-                    return Ok("No tasks.".into());
-                }
-                Ok(tasks.iter().map(task_line).collect::<Vec<_>>().join("\n"))
+                let (store, pid) = (self.store.clone(), ws.project_id.clone());
+                let pending = blocking(move || store.pending_for_coordinator(&pid)).await?;
+                let list = if tasks.is_empty() {
+                    "No tasks.".to_string()
+                } else {
+                    tasks.iter().map(task_line).collect::<Vec<_>>().join("\n")
+                };
+                Ok(format!("{list}{}", pending_lines(&pending)))
             }
             ToolCall::Task { task } => {
                 let tasks = self.tasks(&ws).await?;
@@ -328,7 +389,18 @@ impl Hands for EngineHands {
                     .answer(&ws, &hold, answer, ANSWERED_BY)
                     .await
                     .map_err(core)?;
-                Ok(format!("Answered {task}'s question {key}."))
+                let (store, pid, text) =
+                    (self.store.clone(), ws.project_id.clone(), answer.clone());
+                let closed =
+                    blocking(move || store.coordinator_answered(&pid, &hold, &text, ANSWERED_BY))
+                        .await?;
+                Ok(match closed {
+                    Some(d) if d.number > 0 => format!(
+                        "Answered {task}'s question {key}; decision {} is closed in the log.",
+                        d.number
+                    ),
+                    _ => format!("Answered {task}'s question {key}."),
+                })
             }
             ToolCall::Relaunch { task, note, agent } => {
                 self.engine
@@ -371,15 +443,30 @@ impl Hands for EngineHands {
                     Err(e) => Err(CoreError::Backend(e.to_string())),
                 }
             }
-            ToolCall::AskUser { key, question, .. } => {
+            ToolCall::AskUser {
+                key,
+                question,
+                answers,
+                ..
+            } => {
                 let brief = call.brief().unwrap_or_default();
                 let (store, pid) = (self.store.clone(), ws.project_id.clone());
                 let (key, question) = (key.clone(), question.clone());
-                let d = blocking(move || store.ask_from_coordinator(&pid, &key, &question, brief))
-                    .await?;
+                let hold = answers.as_ref().map(|a| a.hold());
+                let refused = match answers {
+                    Some(a) => format!(
+                        "{} has no pending question {}: it was answered or withdrawn. Read `task {}` for what it asks now.",
+                        a.task, a.key, a.task
+                    ),
+                    None => "nothing to ask".into(),
+                };
+                let d = blocking_refused(refused, move || {
+                    store.ask_from_coordinator(&pid, &key, &question, brief, hold.as_deref())
+                })
+                .await?;
                 Ok(match d.task_id {
                     Some(_) => format!(
-                        "Not asked again: the task already asks the user this as decision {}, still open. Their answer goes to the worker and wakes you; keep the rest of the work moving.",
+                        "Asked the user (decision {}) in place of the worker's question; their answer goes to the worker. Keep the rest of the work moving.",
                         d.number
                     ),
                     None => format!(
@@ -387,6 +474,17 @@ impl Hands for EngineHands {
                         d.number
                     ),
                 })
+            }
+            ToolCall::WithdrawDecision { number, reason } => {
+                let (store, pid) = (self.store.clone(), ws.project_id.clone());
+                let (n, why) = (*number, reason.clone());
+                blocking_refused(format!("there is no decision {n}"), move || {
+                    store.withdraw_decision(&pid, n, &why)
+                })
+                .await?;
+                Ok(format!(
+                    "Withdrew decision {number}; it is closed in the log."
+                ))
             }
             ToolCall::TellUser { text } => {
                 let (store, pid, text) = (self.store.clone(), ws.project_id.clone(), text.clone());
@@ -674,6 +772,7 @@ mod tests {
             &serde_json::json!({
                 "key": "storage",
                 "question": "SQLite or Postgres?",
+                "context": "v1 stores a few thousand rows.",
                 "options": ["SQLite", {"label": "Postgres", "consequence": "needs a server"}],
                 "recommended": "SQLite",
                 "recommended_why": "no server to run"

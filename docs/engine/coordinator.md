@@ -57,7 +57,8 @@ Each call is recorded as `coordinator.tool` before it runs and `coordinator.tool
 | `steer`, `answer` | message a worker; answer its question by key (a `screen-…` question is a prompt on its screen, answered by choice number) |
 | `choose_profile` | pick the agent when dispatch escalated |
 | `relaunch`, `cancel` | replace a worker in the same worktree; stop a task (its worktree and unlanded work are kept) |
-| `ask_user`, `tell_user` | ask the user anything that needs their answer, as a decision (one call per question); report an outcome, which carries no questions |
+| `ask_user`, `tell_user` | ask the user anything that needs their answer, as a decision (one call per question) with context, at least two options and a recommendation, or it is refused; with `answers` (a worker's task and key) the decision replaces that worker's question; report an outcome, which carries no questions |
+| `withdraw_decision` | close one of the coordinator's own open decisions that no longer needs the user, with a reason |
 | `remember`, `ack_message` | propose a memory entry; mark an inbound message handled |
 | `fleet`, `task`, `screen`, `load_skill` | read the work in progress and a worker's terminal screen; load a skill |
 
@@ -171,6 +172,8 @@ The turn-end hook takes the turn's `usage` from its body when it sends one, else
 
 The coordinator's decisions have the engine id `quarkd/coordinator/<key>`, so no engine refresh closes them. Asking again under the same key while one is open updates it in place.
 Answering one through `POST /v1/decisions/{id}:answer` (from the app, the phone, chat or Beads) records `coordinator.answered` instead of calling the engine, and that wakes the coordinator with the answer.
+A worker's question never reaches the user as the worker wrote it. The refresh records it as a decision in state `with_coordinator`, unnumbered and left out of every list and event the app reads, and the worker's ask wakes the coordinator. The coordinator either answers it (`answer`, which also closes the decision in the log, answered via `coordinator`) or frames it with `ask_user` and `answers`: the same decision then takes the coordinator's question and brief, gets its number and opens, and the user's answer goes to the worker with the question as the user saw it and the picked option's consequence. A later refresh never puts the engine's bare brief back over a framed one. `fleet` lists the questions waiting on the coordinator and the open decisions. Migration 0036 moved the raw worker questions that were already open back to the coordinator.
+
 `crates/quarkd/tests/coordinator.rs` runs that whole loop: a worker's question wakes the coordinator, it asks the user over MCP, its hook ends the turn, and the user's answer wakes it again.
 
 ## Not yet

@@ -4,7 +4,7 @@
 import { enc, req } from "./client";
 
 /** Asked (`open`), answered, then acted on once the asker records what it did. */
-export type DecisionState = "open" | "answered" | "acted";
+export type DecisionState = "open" | "answered" | "acted" | "with_coordinator";
 export interface DecisionOption { label: string; /** What happens when it is picked. */ consequence?: string | null }
 export interface EvidenceLink { label: string; url?: string | null }
 /** What the asker attached: the same shape from firstmate's coordinator and the native one. */

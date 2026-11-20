@@ -41,9 +41,9 @@ export function lifecycleStep(d: Decision): 0 | 1 | 2 | 3 {
 
 export const LIFECYCLE = ["Asked", "Answered", "Acted on", "In the log"] as const;
 
-/** Whether an agent decided it under a standing rule rather than a person answering. */
+/** Whether an agent decided it (under a standing rule, or the coordinator answering a worker) rather than a person. */
 export function decidedByAgent(d: Decision): boolean {
-  return !!d.rule_id || d.answered_via === "rule";
+  return !!d.rule_id || d.answered_via === "rule" || d.answered_via === "coordinator";
 }
 
 export type LogFilter = "open" | "all" | "rules" | "agents";
@@ -112,6 +112,7 @@ export function answeredVia(via?: string | null): string | null {
     case null: case undefined: case "": return null;
     case "rule": return "under a standing rule";
     case "beads": return "in Beads";
+    case "coordinator": return "by the coordinator";
     default: return `in the ${via}`;
   }
 }

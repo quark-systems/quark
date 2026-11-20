@@ -1161,6 +1161,8 @@ impl Store {
     }
 
     /// Decisions in one Project (every Project when `None`), oldest first.
+    /// With no `state`, worker questions still with the coordinator are
+    /// left out: no person sees those.
     pub fn list_project_decisions(
         &self,
         project_id: Option<&str>,
@@ -1168,7 +1170,7 @@ impl Store {
     ) -> Result<Vec<Decision>> {
         self.read(|c| {
             let sql = format!(
-                "{DECISION_SELECT} WHERE (?1 IS NULL OR state = ?1)
+                "{DECISION_SELECT} WHERE (state = ?1 OR (?1 IS NULL AND state != 'with_coordinator'))
                    AND (?2 IS NULL OR project_id = ?2)
                  ORDER BY opened_at, id"
             );
@@ -1292,8 +1294,27 @@ impl Store {
                     .optional()?;
                 let brief = api_task_ids(tx, project_id, hold.brief.clone().normalized())?;
                 match existing {
+                    Some(old) if old.state == DecisionState::WithCoordinator => {
+                        if hold.answer.is_some() {
+                            let mut decision = Decision {
+                                state: DecisionState::Answered,
+                                answer: hold.answer.clone(),
+                                answered_by: hold.answered_by.clone(),
+                                answered_at: Some(now_rfc3339()),
+                                ..old
+                            };
+                            number_if_unset(tx, &mut decision)?;
+                            mark_answered(tx, events, &decision)?;
+                        }
+                    }
                     Some(old) if old.state == DecisionState::Open => {
-                        if hold.answer.is_none() && !brief.is_empty() && brief != old.brief {
+                        // Once the coordinator framed it, its brief stands.
+                        let framed = old.brief.asked_by.as_deref() == Some(COORDINATOR);
+                        if hold.answer.is_none()
+                            && !framed
+                            && !brief.is_empty()
+                            && brief != old.brief
+                        {
                             // The asker added or changed its brief.
                             let decision = Decision { brief, ..old };
                             tx.execute(
@@ -1328,7 +1349,8 @@ impl Store {
             let open: Vec<(String, Decision)> = {
                 let mut stmt = tx.prepare(&format!(
                     "SELECT engine_id, {DECISION_COLUMNS}
-                     FROM decisions WHERE project_id = ?1 AND state = 'open'"
+                     FROM decisions WHERE project_id = ?1
+                       AND state IN ('open', 'with_coordinator')"
                 ))?;
                 let rows = stmt.query_map([project_id], |r| {
                     Ok((r.get(0)?, decision_from_row_at(r, 1)?))
@@ -1343,11 +1365,12 @@ impl Store {
                 {
                     continue;
                 }
-                let decision = Decision {
+                let mut decision = Decision {
                     state: DecisionState::Answered,
                     answered_at: Some(now_rfc3339()),
                     ..old
                 };
+                number_if_unset(tx, &mut decision)?;
                 mark_answered(tx, events, &decision)?;
             }
             Ok(())
@@ -2104,6 +2127,7 @@ fn open_decision(
     };
     let now = now_rfc3339();
     let answered = hold.answer.is_some();
+    let for_coordinator = !answered && is_worker_question(hold);
     let mut decision = Decision {
         id: new_id("dec"),
         project_id: project_id.to_string(),
@@ -2111,6 +2135,8 @@ fn open_decision(
         question: hold.question.clone(),
         state: if answered {
             DecisionState::Answered
+        } else if for_coordinator {
+            DecisionState::WithCoordinator
         } else {
             DecisionState::Open
         },
@@ -2122,6 +2148,11 @@ fn open_decision(
         ..Default::default()
     };
     insert_decision(tx, &hold.id, &mut decision)?;
+    if for_coordinator {
+        // The coordinator was woken by the worker's ask; nobody else hears
+        // of it until the coordinator frames it.
+        return Ok(());
+    }
     append_event(
         tx,
         events,
@@ -2139,6 +2170,38 @@ fn open_decision(
         )?;
     }
     Ok(())
+}
+
+/// Who `asked_by` names when the coordinator asked or framed a decision.
+pub(crate) const COORDINATOR: &str = "coordinator";
+
+/// Whether `hold` is a worker's own question (the engine's brief names the
+/// task as its asker). Those go to the coordinator first: it answers them
+/// itself or frames them for a person.
+fn is_worker_question(hold: &Hold) -> bool {
+    hold.task_id.is_some() && hold.brief.asked_by.is_some() && hold.brief.asked_by == hold.task_id
+}
+
+/// Gives `d` the Project's next number when it has none yet: a worker's
+/// question gets one only when a person can see it, in the open or in the
+/// log.
+pub(crate) fn number_if_unset(tx: &Transaction, d: &mut Decision) -> Result<()> {
+    if d.number == 0 {
+        d.number = next_number(tx, &d.project_id)?;
+        tx.execute(
+            "UPDATE decisions SET number = ?2 WHERE id = ?1",
+            params![d.id, d.number],
+        )?;
+    }
+    Ok(())
+}
+
+fn next_number(tx: &Transaction, project_id: &str) -> Result<i64> {
+    Ok(tx.query_row(
+        "SELECT COALESCE(MAX(number), 0) + 1 FROM decisions WHERE project_id = ?1",
+        [project_id],
+        |r| r.get(0),
+    )?)
 }
 
 /// `brief` with each engine task id in `asked_by` and `blocks` replaced by
@@ -2196,13 +2259,13 @@ fn mark_answered(tx: &Transaction, events: &mut Vec<Event>, decision: &Decision)
     Ok(())
 }
 
-/// Inserts `d` under the Project's next number, which it sets on `d`.
+/// Inserts `d` under the Project's next number, which it sets on `d`; a
+/// question still with the coordinator gets its number when it opens.
 fn insert_decision(tx: &Transaction, engine_id: &str, d: &mut Decision) -> Result<()> {
-    d.number = tx.query_row(
-        "SELECT COALESCE(MAX(number), 0) + 1 FROM decisions WHERE project_id = ?1",
-        [&d.project_id],
-        |r| r.get(0),
-    )?;
+    d.number = match d.state {
+        DecisionState::WithCoordinator => 0,
+        _ => next_number(tx, &d.project_id)?,
+    };
     tx.execute(
         &format!(
             "INSERT INTO decisions (engine_id, {DECISION_COLUMNS})
@@ -2357,8 +2420,39 @@ mod tests {
         assert_eq!(store.get_task(&tasks[0].id).unwrap(), tasks[0]);
     }
 
+    fn worker_hold(task: &str, key: &str, question: &str) -> Hold {
+        Hold {
+            id: format!("{task}:{key}"),
+            task_id: Some(task.into()),
+            question: question.into(),
+            answer: None,
+            answered_by: None,
+            brief: crate::engine::worker_brief(task),
+        }
+    }
+
+    fn framed_brief() -> DecisionBrief {
+        DecisionBrief {
+            context: Some("The VM costs money while idle.".into()),
+            options: vec![
+                quark_systems::DecisionOption {
+                    label: "Suspend it".into(),
+                    consequence: Some("stops the bill".into()),
+                },
+                quark_systems::DecisionOption {
+                    label: "Keep it".into(),
+                    consequence: None,
+                },
+            ],
+            recommended: Some("Suspend it".into()),
+            recommended_why: Some("nothing runs on it".into()),
+            asked_by: Some("coordinator".into()),
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn the_coordinator_does_not_copy_a_question_its_task_already_asks() {
+    fn a_workers_question_waits_on_the_coordinator_unseen() {
         let store = Store::open_in_memory().unwrap();
         let p = project(&store);
         store
@@ -2369,35 +2463,188 @@ mod tests {
                 },
             )
             .unwrap();
-        let hold = Hold {
-            id: "a:suspend".into(),
-            task_id: Some("a".into()),
-            question: "Suspend the VM?".into(),
-            answer: None,
-            answered_by: None,
-            brief: crate::engine::worker_brief("a"),
-        };
+        let before = decision_events(&store).len();
+        let hold = worker_hold("a", "suspend", "suspend? vm idle 3h");
         store
             .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
             .unwrap();
-        let worker = store.list_decisions(Some(DecisionState::Open)).unwrap();
-        let brief = DecisionBrief {
-            blocks: vec!["a".into()],
-            asked_by: Some("coordinator".into()),
-            ..Default::default()
-        };
-        let d = store
-            .ask_from_coordinator(&p.id, "suspend", "Suspend the VM, or I will?", brief)
+        assert!(store.list_decisions(None).unwrap().is_empty());
+        assert!(store
+            .list_decisions(Some(DecisionState::Open))
+            .unwrap()
+            .is_empty());
+        assert_eq!(decision_events(&store).len(), before, "nobody is told");
+        let pending = store.pending_for_coordinator(&p.id).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, "a:suspend");
+        assert_eq!(pending[0].1.state, DecisionState::WithCoordinator);
+        assert_eq!(pending[0].1.number, 0);
+        // Reading the holds again changes nothing.
+        store
+            .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
             .unwrap();
-        assert_eq!(d, worker[0], "the task's own decision, unchanged");
-        assert_eq!(store.list_decisions(None).unwrap().len(), 1);
+        assert_eq!(store.pending_for_coordinator(&p.id).unwrap().len(), 1);
+
+        // The coordinator frames it: the same decision opens, numbered,
+        // with the coordinator's words.
+        let d = store
+            .ask_from_coordinator(
+                &p.id,
+                "vm",
+                "Suspend the idle build VM?",
+                framed_brief(),
+                Some("a:suspend"),
+            )
+            .unwrap();
+        assert_eq!(d.id, pending[0].1.id);
+        assert_eq!(d.state, DecisionState::Open);
+        assert_eq!(d.number, 1);
+        assert_eq!(d.question, "Suspend the idle build VM?");
+        assert_eq!(d.brief.options.len(), 2);
+        assert_eq!(d.brief.asked_by.as_deref(), Some("coordinator"));
+        assert!(d.brief.blocks.contains(&d.task_id.clone().unwrap()));
+        assert_eq!(store.list_decisions(None).unwrap(), vec![d.clone()]);
+        // The engine's bare brief does not undo the framing.
+        store
+            .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
+            .unwrap();
+        assert_eq!(store.get_decision(&d.id).unwrap(), d);
+        // Framing again rewrites it in place.
+        let again = store
+            .ask_from_coordinator(
+                &p.id,
+                "vm",
+                "Suspend the build VM now?",
+                framed_brief(),
+                Some("a:suspend"),
+            )
+            .unwrap();
+        assert_eq!((again.id.as_str(), again.number), (d.id.as_str(), 1));
+        assert_eq!(again.question, "Suspend the build VM now?");
 
         // A question that blocks no task is asked as before.
-        let d = store
-            .ask_from_coordinator(&p.id, "other", "Ship?", DecisionBrief::default())
+        let other = store
+            .ask_from_coordinator(&p.id, "other", "Ship?", DecisionBrief::default(), None)
             .unwrap();
-        assert!(d.task_id.is_none());
-        assert_eq!(store.list_decisions(None).unwrap().len(), 2);
+        assert!(other.task_id.is_none());
+        assert_eq!(other.number, 2);
+        // Framing a question nobody asks is refused.
+        assert!(matches!(
+            store.ask_from_coordinator(&p.id, "x", "q", framed_brief(), Some("a:nope")),
+            Err(StoreError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn a_question_that_blocks_a_task_frames_its_pending_one() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_snapshot(
+                &p.id,
+                &FleetSnapshot {
+                    tasks: vec![engine_task("a", TaskState::NeedsDecision)],
+                },
+            )
+            .unwrap();
+        store
+            .apply_holds(
+                &p.id,
+                &[worker_hold("a", "suspend", "suspend?")],
+                &now_rfc3339(),
+            )
+            .unwrap();
+        let brief = DecisionBrief {
+            blocks: vec!["a".into()],
+            ..framed_brief()
+        };
+        let d = store
+            .ask_from_coordinator(&p.id, "suspend", "Suspend the VM?", brief, None)
+            .unwrap();
+        assert_eq!(d.state, DecisionState::Open);
+        assert_eq!(d.question, "Suspend the VM?");
+        assert_eq!(store.list_decisions(None).unwrap().len(), 1, "no copy");
+    }
+
+    #[test]
+    fn the_coordinators_answer_closes_the_question_in_the_log() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_snapshot(
+                &p.id,
+                &FleetSnapshot {
+                    tasks: vec![engine_task("a", TaskState::NeedsDecision)],
+                },
+            )
+            .unwrap();
+        store
+            .apply_holds(
+                &p.id,
+                &[
+                    worker_hold("a", "fold", "which fold?"),
+                    worker_hold("a", "gone", "x?"),
+                ],
+                &now_rfc3339(),
+            )
+            .unwrap();
+        let d = store
+            .coordinator_answered(&p.id, "a:fold", "same_person", "coordinator")
+            .unwrap()
+            .unwrap();
+        assert_eq!(d.state, DecisionState::Answered);
+        assert_eq!(d.number, 1);
+        assert_eq!(d.answer.as_deref(), Some("same_person"));
+        assert_eq!(d.answered_via.as_deref(), Some("coordinator"));
+        assert!(store
+            .coordinator_answered(&p.id, "a:fold", "again", "coordinator")
+            .unwrap()
+            .is_none());
+        // A question that went away with the coordinator closes too.
+        store.apply_holds(&p.id, &[], &now_rfc3339()).unwrap();
+        assert!(store.pending_for_coordinator(&p.id).unwrap().is_empty());
+        let log = store.list_decisions(None).unwrap();
+        assert_eq!(log.iter().map(|d| d.number).collect::<Vec<_>>(), vec![1, 2]);
+    }
+
+    #[test]
+    fn the_coordinator_withdraws_only_its_own_open_decisions() {
+        let store = Store::open_in_memory().unwrap();
+        let p = project(&store);
+        store
+            .apply_snapshot(
+                &p.id,
+                &FleetSnapshot {
+                    tasks: vec![engine_task("a", TaskState::NeedsDecision)],
+                },
+            )
+            .unwrap();
+        store
+            .apply_holds(&p.id, &[worker_hold("a", "k", "q?")], &now_rfc3339())
+            .unwrap();
+        store
+            .ask_from_coordinator(&p.id, "k", "Q?", framed_brief(), Some("a:k"))
+            .unwrap();
+        let mine = store
+            .ask_from_coordinator(&p.id, "ship", "Ship?", framed_brief(), None)
+            .unwrap();
+        assert!(matches!(
+            store.withdraw_decision(&p.id, 1, "covered"),
+            Err(StoreError::Conflict(_))
+        ));
+        let w = store
+            .withdraw_decision(&p.id, mine.number, "covered by D-1")
+            .unwrap();
+        assert_eq!(w.state, DecisionState::Answered);
+        assert_eq!(w.answer_why.as_deref(), Some("Withdrawn: covered by D-1"));
+        assert!(matches!(
+            store.withdraw_decision(&p.id, mine.number, "again"),
+            Err(StoreError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.withdraw_decision(&p.id, 9, "x"),
+            Err(StoreError::NotFound)
+        ));
     }
 
     #[test]
@@ -2423,7 +2670,10 @@ mod tests {
         store
             .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
             .unwrap();
-        let open = store.list_decisions(Some(DecisionState::Open)).unwrap();
+        // A worker's question waits on the coordinator first.
+        let open = store
+            .list_decisions(Some(DecisionState::WithCoordinator))
+            .unwrap();
         assert_eq!(open.len(), 1);
         assert!(open[0].task_id.is_some());
         // The brief names the task by its API id.
@@ -2439,11 +2689,12 @@ mod tests {
             .apply_holds(&p.id, std::slice::from_ref(&hold), &now_rfc3339())
             .unwrap();
         assert!(store
-            .list_decisions(Some(DecisionState::Open))
+            .list_decisions(Some(DecisionState::WithCoordinator))
             .unwrap()
             .is_empty());
         let all = store.list_decisions(None).unwrap();
         assert_eq!(all[0].answered_by.as_deref(), Some("user_1"));
+        assert_eq!(all[0].number, 1);
 
         let answered = store
             .events_after(0, 100)
