@@ -42,11 +42,24 @@ A question asked again under the same key while still waiting replaces the waiti
 `Coordinator::tick` runs on a timer:
 
 1. It evaluates each new event once and queues the wake items.
-2. With no turn open, it opens one for up to 20 waiting items: `coordinator.woken` is recorded first, then the `Brain` delivers the briefing (one line per item) to the coordinator's session.
+2. With no turn open, and the coordinator able to take a wake (`Brain::ready`, below), it opens one for up to 20 waiting items: `coordinator.woken` is recorded first, then the `Brain` delivers the briefing (one line per item) to the coordinator's session.
 3. Items that arrive during a turn wait for the next one. The harness's turn-end hook calls `Coordinator::turn_ended` with the turn's token usage, which closes it.
 4. A turn with no reported end after 30 minutes is closed as `timed_out`, and its items wake the coordinator again in a new turn.
 
 A turn end with no turn open is the user talking to the coordinator directly; it is counted, never as an acknowledgement.
+
+### A wake waits for the coordinator's turn to end
+
+The queue knows the turns it opened. The coordinator is also in a turn when the user writes to it or the engine types it a note (a changed agent, a memory entry, a command, the decision nudge), and the queue has no turn open then.
+A wake typed into such a turn is not delivered the way the queue assumes. Each harness does its own thing with input typed while it works: Claude Code queues it and passes it on inside the running turn, logging a `queue-operation` line and a `queued_command` attachment and never a user message; Kiro CLI steers the running turn with it. Whatever the harness, that turn's end would close the wake's turn before the coordinator had finished with it.
+
+So before a turn is opened or delivered again, the queue asks `Brain::ready` with the time of the harness's last reported turn end, and while the answer is no the items stay waiting: nothing is typed, no `coordinator.woken` is recorded, the cursor does not pass them, and the next tick asks again. quarkd's `InputBrain` holds a wake (`coordinator_hands::hold`) while:
+
+- a prompt is on the coordinator's screen (below), which would take the typing;
+- a message the user sent is queued for the same turn end (`coordinator_outbox`): it goes in first, and the turn it starts holds the wake;
+- quarkd typed something into the coordinator after its last reported turn end (`CoordinatorInput::last_typed`), so that turn is still running. An interrupted or restarted harness reports no end for the turn it was in, so one whose transcript has been still for 30 seconds (the outbox's `QUIET`) is taken to be over, as it is for a queued message. Stopping the coordinator from the app ends it at once.
+
+quarkd only knows what it typed itself. A coordinator the person types into directly in its terminal, or one that was in a turn when quarkd started, can still take a wake mid-turn; on Claude Code that wake is confirmed from the queue lines above.
 
 The coordinator acts through `Coordinator::call` (served over MCP by `CoordinatorMcp`).
 Each call is recorded as `coordinator.tool` before it runs and `coordinator.tool_done` after; `Hands` carries it out.
@@ -136,7 +149,7 @@ quarkd runs the coordinator for every Project on a timer, in `crates/quarkd/src/
 
 | Piece | Where | Does |
 |---|---|---|
-| `InputBrain` | `coordinator_hands.rs` | Types each turn's briefing into the coordinator's session, the way the coordinator chat does. A typed but unconfirmed wake is not typed again; the turn timeout redelivers it. |
+| `InputBrain` | `coordinator_hands.rs` | Types each turn's briefing into the coordinator's session, the way the coordinator chat does, once the coordinator is between turns (`ready`, above). One coordinator is typed into by one sender at a time, from the paste to the confirmation (`chat::SessionsInput`), so a wake and a message sent at the same moment never share its input box. A wake is confirmed when the harness's session log records taking it (`quark_transcript::read_inputs`). A typed but unconfirmed wake logs `wake typed but not confirmed` and is not typed again, since that could deliver it twice: its turn stays open, the harness's turn end closes it if the coordinator did get it, and the turn timeout redelivers it if not. With wakes held until the coordinator is idle, that warning means the harness logged the wake in a form this build does not read (as Codex 0.169 did before quarkd read its `item_completed` user messages), or did not take it. |
 | `EngineHands` | `coordinator_hands.rs` | `fleet`, `task`, `screen`, `steer`, `answer`, `relaunch` and `cancel` go to the engine adapter. `ask_user` opens a decision in the store and `remember` proposes a memory entry. `start_task` and `choose_profile` go to the engine's dispatch, and `ack_message` to the triggers engine's channels (`with_channels`); without them it is refused. |
 | Routes | `coordinator_http.rs` | `POST /v1/coordinator/{project}/{token}/mcp` serves the tools over MCP; `POST /v1/coordinator/{project}/{token}/hooks/turn_end` (or `Stop`) closes the turn. On `Stop`, a reply that asks the user something (`questions::questions`) with no successful `ask_user` since the last turn end is sent back once with `{"decision": "block", "reason": questions::NUDGE}`, so the coordinator files each question as a decision; the stop that follows (`stop_hook_active`) closes the turn. |
 | Harness wiring | `coordinator_http::install`, `codex_overrides` | How each coordinator harness reaches its tools and turn end, below. |

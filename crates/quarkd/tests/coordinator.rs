@@ -45,8 +45,24 @@ fn post(uri: &str, body: Value) -> Request<Body> {
         .unwrap()
 }
 
-#[tokio::test]
-async fn ask_the_user_and_wake_on_the_answer() {
+/// A Project with a native coordinator typing into a [`RecordingInput`],
+/// and the daemon's API with the coordinator's own routes.
+struct Rig {
+    _dir: tempfile::TempDir,
+    store: Arc<Store>,
+    project: quark_systems::Project,
+    pid: ProjectId,
+    engine: Arc<StubEngine>,
+    log: quark_eventlog::SqliteEventLog,
+    typed: Arc<RecordingInput>,
+    coordinator: NativeCoordinator,
+    app: Router,
+    /// The coordinator's MCP endpoint and its `Stop` hook.
+    mcp_path: String,
+    hook_path: String,
+}
+
+async fn rig() -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let ws = dir.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
@@ -134,29 +150,93 @@ async fn ask_the_user_and_wake_on_the_answer() {
         .unwrap()
         .to_string();
     let hook_path = mcp_path.replace("/mcp", "/hooks/Stop");
+    Rig {
+        _dir: dir,
+        store,
+        project,
+        pid,
+        engine,
+        log,
+        typed,
+        coordinator,
+        app,
+        mcp_path,
+        hook_path,
+    }
+}
+
+impl Rig {
+    /// A worker asks `question`, which needs the coordinator's judgment.
+    async fn worker_asks(&self, task: &str, key: &str, question: &str) {
+        let ask = WorkerEnvelope {
+            task: TaskId::from(task),
+            generation: "g1".into(),
+            via: Transport::Mcp,
+            message: WorkerMessage::Ask {
+                key: key.into(),
+                question: question.into(),
+            },
+        };
+        self.log
+            .append(
+                NewEvent::typed(
+                    HostId::from("h"),
+                    self.pid.clone(),
+                    Some(TaskId::from(task)),
+                    kinds::WORKER,
+                    &ask,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// The coordinator's harness reports its turn's end.
+    async fn turn_ends(&self) {
+        let (s, b) = send(
+            &self.app,
+            post(
+                &self.hook_path,
+                json!({"usage": {"input": 900, "output": 80}}),
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        // Claude Code's `Stop` gets an empty decision, which lets the
+        // session stop.
+        assert_eq!(b, json!({}));
+    }
+
+    async fn woken(&self) -> usize {
+        self.log
+            .read(quark_core::Seq::ZERO, 10_000)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind.as_str() == "coordinator.woken")
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn ask_the_user_and_wake_on_the_answer() {
+    let rig = rig().await;
+    let Rig {
+        store,
+        project,
+        pid,
+        engine,
+        typed,
+        coordinator,
+        app,
+        mcp_path,
+        ..
+    } = &rig;
 
     // A worker's question wakes it: the briefing is typed into its session.
-    let ask = WorkerEnvelope {
-        task: TaskId::from("t1"),
-        generation: "g1".into(),
-        via: Transport::Mcp,
-        message: WorkerMessage::Ask {
-            key: "schema".into(),
-            question: "Drop the legacy table?".into(),
-        },
-    };
-    log.append(
-        NewEvent::typed(
-            HostId::from("h"),
-            pid.clone(),
-            Some(TaskId::from("t1")),
-            kinds::WORKER,
-            &ask,
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
+    rig.worker_asks("t1", "schema", "Drop the legacy table?")
+        .await;
     coordinator.pass().await.unwrap();
     let sent = typed.sent();
     assert_eq!(sent.len(), 1);
@@ -179,7 +259,7 @@ async fn ask_the_user_and_wake_on_the_answer() {
             "blocks": ["t1"]
         }
     }});
-    let (s, b) = send(&app, post(&mcp_path, call)).await;
+    let (s, b) = send(app, post(mcp_path, call)).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(b["result"]["isError"], false, "{b}");
     let open = store
@@ -189,20 +269,13 @@ async fn ask_the_user_and_wake_on_the_answer() {
     let decision = open[0].clone();
     assert_eq!(decision.brief.asked_by.as_deref(), Some("coordinator"));
 
-    // Its turn-end hook closes the turn. Claude Code's `Stop` gets an empty
-    // decision, which lets the session stop.
-    let (s, b) = send(
-        &app,
-        post(&hook_path, json!({"usage": {"input": 900, "output": 80}})),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(b, json!({}));
-    assert!(coordinator.coordinator().open_turn(&pid).await.is_none());
+    // Its turn-end hook closes the turn.
+    rig.turn_ends().await;
+    assert!(coordinator.coordinator().open_turn(pid).await.is_none());
 
     // The user answers in the app; the answer wakes the coordinator.
     let (s, b) = send(
-        &app,
+        app,
         post(
             &format!("/v1/decisions/{}:answer", decision.id),
             json!({"answer": "Keep", "answered_by": "Matt"}),
@@ -225,4 +298,67 @@ async fn ask_the_user_and_wake_on_the_answer() {
         "{}",
         sent[1].1
     );
+}
+
+#[tokio::test]
+async fn a_wake_waits_for_the_turn_the_user_started_and_is_typed_once() {
+    let rig = rig().await;
+    let Rig {
+        project,
+        pid,
+        typed,
+        coordinator,
+        app,
+        ..
+    } = &rig;
+
+    // The user writes to the coordinator, which starts working on it.
+    let (s, b) = send(
+        app,
+        post(
+            &format!("/v1/coordinators/{}/messages", project.id),
+            json!({"text": "How is the migration going?"}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{b}");
+    assert_eq!(typed.sent().len(), 1);
+
+    // A worker's question arrives while it works. Typed now, the wake would
+    // land inside the user's turn; it waits, with no turn opened for it.
+    rig.worker_asks("t1", "schema", "Drop the legacy table?")
+        .await;
+    for _ in 0..3 {
+        coordinator.pass().await.unwrap();
+    }
+    assert_eq!(typed.sent().len(), 1);
+    assert_eq!(rig.woken().await, 0);
+    assert!(coordinator.coordinator().open_turn(pid).await.is_none());
+    assert_eq!(coordinator.coordinator().pending(pid).await.len(), 1);
+
+    // The user's turn ends: the wake goes in, once.
+    rig.turn_ends().await;
+    for _ in 0..3 {
+        coordinator.pass().await.unwrap();
+    }
+    let sent = typed.sent();
+    assert_eq!(sent.len(), 2);
+    assert!(sent[1].1.starts_with("Wake "), "{}", sent[1].1);
+    assert!(
+        sent[1].1.contains("Drop the legacy table?"),
+        "{}",
+        sent[1].1
+    );
+    assert_eq!(rig.woken().await, 1);
+
+    // A second question waits for the wake's own turn, as before, and
+    // follows it at once when that turn ends.
+    rig.worker_asks("t2", "index", "Add the index now?").await;
+    coordinator.pass().await.unwrap();
+    assert_eq!(typed.sent().len(), 2);
+    rig.turn_ends().await;
+    coordinator.pass().await.unwrap();
+    let sent = typed.sent();
+    assert_eq!(sent.len(), 3);
+    assert!(sent[2].1.contains("Add the index now?"), "{}", sent[2].1);
 }

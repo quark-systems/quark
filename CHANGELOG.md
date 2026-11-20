@@ -10,6 +10,14 @@ page lists every merged pull request.
 
 ### Fixed
 
+- A wake no longer goes into a coordinator that is in the middle of a turn. When a worker
+  finished or asked something while you were talking to the coordinator, or just after Quark
+  typed it a note, the wake was typed into the running turn. The harness took it its own way
+  (Claude Code handed it to the running turn and never logged it as a message), quarkd logged
+  `wake typed but not confirmed`, and the turn's end was counted against the wake. The wake now
+  waits for that turn to end, as a queued message does, and your queued message goes in first.
+  A wake and a message sent at the same moment are also typed one after the other instead of
+  into the same input box, and a message Claude Code queues during a turn counts as delivered.
 - QuarkBar no longer sets off macOS prompts for Desktop, Documents, Downloads and other
   protected folders. quarkd, started by launchd in `/`, ran harness CLIs for quota, version
   and model checks there, and Antigravity's `agy /quota` indexes its working directory, so

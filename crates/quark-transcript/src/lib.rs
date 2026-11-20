@@ -42,7 +42,7 @@ pub use quark_systems::{
     ToolDiffLine, ToolDiffLineKind, ToolInfo, ToolKind, TranscriptEntry, TranscriptRole,
 };
 pub use rate_limit::{ApiError, RateLimit};
-pub use reader::{read_from, ReadBatch, MAX_BATCH_BYTES};
+pub use reader::{read_from, read_inputs, ReadBatch, MAX_BATCH_BYTES};
 pub use tool::MAX_DIFF_LINES;
 pub use usage::{read_turns, ModelUsage, TurnUsage, UsageCursor, BOBCOIN, KIRO_CREDIT};
 
@@ -121,6 +121,23 @@ impl SessionFormat {
             SessionFormat::Pi => pi::parse(v),
             SessionFormat::Kiro => kiro::parse(v),
             SessionFormat::Antigravity => antigravity::parse(v),
+        }
+    }
+
+    /// What the harness recorded taking from its input in one already-parsed
+    /// log line: the text of each user message and, for Claude Code, of
+    /// input it queued while a turn ran, which its log never holds as a user
+    /// message. For confirming that something typed in arrived; conversation
+    /// comes from [`Self::parse_value`].
+    pub fn input(self, v: &Value) -> Vec<String> {
+        match self {
+            SessionFormat::Claude => claude::input(v),
+            _ => self
+                .parse_value(v)
+                .into_iter()
+                .filter(|e| e.role == TranscriptRole::User)
+                .map(|e| e.text)
+                .collect(),
         }
     }
 

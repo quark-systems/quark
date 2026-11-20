@@ -1,18 +1,23 @@
 //! Chat input to coordinators.
 //!
 //! A message for a coordinator is typed into its live session, then
-//! confirmed from the coordinator's own session log. Delivery sits behind
+//! confirmed from the coordinator's own session log. One coordinator is
+//! typed into by one sender at a time, from the paste to the confirmation,
+//! so a wake and a message sent at the same moment never share its input
+//! box. Delivery sits behind
 //! [`CoordinatorInput`]: [`SessionsInput`] types into the coordinator's
 //! terminal, and [`NoSessions`] refuses every message (rather than dropping
 //! it) when the daemon has no terminal sessions. The reply is not returned
 //! here: it arrives as `coordinator.message` events read from the session log.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use quark_transcript::{locate, read_from, SessionFormat, SessionRoots, TranscriptRole};
+use quark_transcript::{locate, read_inputs, SessionFormat, SessionRoots, TranscriptRole};
+use time::OffsetDateTime;
 
 use crate::engine::WorkspaceRef;
 use crate::sessions::{SessionError, Sessions};
@@ -59,6 +64,14 @@ pub trait CoordinatorInput: Send + Sync {
 
     /// Interrupt the coordinator's current turn. Its session keeps running.
     async fn interrupt(&self, ws: &WorkspaceRef) -> Result<(), ChatError>;
+
+    /// When this daemon last began typing into `project_id`'s coordinator,
+    /// which starts a turn there: the coordinator is in that turn until its
+    /// harness reports a turn end later than this. `None` when the daemon
+    /// typed nothing since it started, or interrupted the coordinator after.
+    fn last_typed(&self, _project_id: &str) -> Option<OffsetDateTime> {
+        None
+    }
 }
 
 /// The input used while no terminal session client is attached.
@@ -104,7 +117,10 @@ pub fn engine_note(what: &str, quoted: &str) -> String {
 /// supported coordinator harness (Claude Code, Codex, Pi) understands
 /// bracketed paste; [`validate`] already refuses escape characters, so the
 /// text cannot end the paste itself. The submit is confirmed when the
-/// coordinator's session log records a user message starting with the text.
+/// coordinator's session log records taking input that starts with the
+/// text: a user message, or what Claude Code logs for input typed while a
+/// turn runs, which never becomes a user message there
+/// ([`SessionFormat::input`]).
 ///
 /// An interrupt is one Escape, the interrupt key of every supported
 /// coordinator harness. A second one soon after opens Claude Code's rewind
@@ -116,6 +132,10 @@ pub struct SessionsInput {
     /// The store and Bob's database, to confirm a message to a coordinator
     /// on IBM Bob, which keeps its conversation in that database.
     bob: Option<(Arc<Store>, PathBuf)>,
+    /// One lock per coordinator, held from the paste to the confirmation.
+    typing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// [`CoordinatorInput::last_typed`], by coordinator.
+    typed: Mutex<HashMap<String, OffsetDateTime>>,
 }
 
 impl SessionsInput {
@@ -125,6 +145,8 @@ impl SessionsInput {
             roots,
             confirm_timeout: CONFIRM_TIMEOUT,
             bob: None,
+            typing: Mutex::default(),
+            typed: Mutex::default(),
         }
     }
 
@@ -240,9 +262,10 @@ fn bob_logged(db: &Path, cwd: &Path, after: &BobCursor, want: &str) -> bool {
     }
 }
 
-#[async_trait]
-impl CoordinatorInput for SessionsInput {
-    async fn send(&self, ws: &WorkspaceRef, text: &str) -> Result<Delivery, ChatError> {
+impl SessionsInput {
+    /// [`CoordinatorInput::send`], for the one sender holding the
+    /// coordinator's typing lock.
+    async fn send_locked(&self, ws: &WorkspaceRef, text: &str) -> Result<Delivery, ChatError> {
         let terminal = ws.project_id.as_str();
         self.sessions.get(terminal).map_err(|e| match e {
             SessionError::NotFound => {
@@ -283,19 +306,7 @@ impl CoordinatorInput for SessionsInput {
             .await
             .map_err(|e| ChatError::Failed(e.to_string()))?;
 
-        let mut paste = Vec::with_capacity(text.len() + 12);
-        paste.extend_from_slice(b"\x1b[200~");
-        paste.extend_from_slice(text.as_bytes());
-        paste.extend_from_slice(b"\x1b[201~");
-        self.sessions
-            .input(terminal, &paste, None)
-            .await
-            .map_err(|e| ChatError::Failed(e.to_string()))?;
-        tokio::time::sleep(SUBMIT_DELAY).await;
-        self.sessions
-            .input(terminal, b"\r", None)
-            .await
-            .map_err(|e| ChatError::Failed(format!("typed but not submitted: {e}")))?;
+        self.type_in(terminal, text).await?;
 
         let deadline = tokio::time::Instant::now() + self.confirm_timeout;
         let want = first_line(text).to_string();
@@ -318,6 +329,42 @@ impl CoordinatorInput for SessionsInput {
             tokio::time::sleep(CONFIRM_POLL).await;
         }
     }
+}
+
+#[async_trait]
+impl CoordinatorInput for SessionsInput {
+    async fn send(&self, ws: &WorkspaceRef, text: &str) -> Result<Delivery, ChatError> {
+        let terminal = ws.project_id.as_str();
+        let lock = self
+            .typing
+            .lock()
+            .unwrap()
+            .entry(terminal.to_string())
+            .or_default()
+            .clone();
+        let _typing = lock.lock().await;
+        // Marked before anything is typed, so nobody takes the coordinator
+        // for idle while this is on its way in.
+        let before = self
+            .typed
+            .lock()
+            .unwrap()
+            .insert(terminal.to_string(), OffsetDateTime::now_utc());
+        let sent = self.send_locked(ws, text).await;
+        if matches!(sent, Err(ChatError::Unavailable(_))) {
+            // Nothing was typed.
+            let mut typed = self.typed.lock().unwrap();
+            match before {
+                Some(at) => typed.insert(terminal.to_string(), at),
+                None => typed.remove(terminal),
+            };
+        }
+        sent
+    }
+
+    fn last_typed(&self, project_id: &str) -> Option<OffsetDateTime> {
+        self.typed.lock().unwrap().get(project_id).copied()
+    }
 
     async fn interrupt(&self, ws: &WorkspaceRef) -> Result<(), ChatError> {
         let terminal = ws.project_id.as_str();
@@ -330,7 +377,11 @@ impl CoordinatorInput for SessionsInput {
         self.sessions
             .input(terminal, b"\x1b", None)
             .await
-            .map_err(|e| ChatError::Failed(e.to_string()))
+            .map_err(|e| ChatError::Failed(e.to_string()))?;
+        // The turn it was in is over, and an interrupted harness reports no
+        // turn end.
+        self.typed.lock().unwrap().remove(terminal);
+        Ok(())
     }
 }
 
@@ -354,7 +405,7 @@ fn log_position(roots: &SessionRoots, cwd: &Path) -> Option<LogPosition> {
     Some((path, format, len))
 }
 
-/// Whether the coordinator's log gained a user message starting with `want`
+/// Whether the coordinator's log recorded taking input starting with `want`
 /// since `before`. A log that appeared or changed since is read from its start.
 fn logged_since(
     roots: &SessionRoots,
@@ -369,13 +420,12 @@ fn logged_since(
         Some((p, _, len)) if *p == path => *len,
         _ => 0,
     };
-    let Ok(batch) = read_from(&path, offset, format) else {
+    let Ok(inputs) = read_inputs(&path, offset, format) else {
         return false;
     };
-    batch
-        .entries
+    inputs
         .iter()
-        .any(|(_, e)| e.role == TranscriptRole::User && e.text.trim_start().starts_with(want))
+        .any(|text| text.trim_start().starts_with(want))
 }
 
 fn first_line(text: &str) -> &str {
@@ -388,6 +438,7 @@ pub struct RecordingInput {
     outcome: Mutex<Result<Delivery, String>>,
     sent: Mutex<Vec<(WorkspaceRef, String)>>,
     interrupted: Mutex<Vec<WorkspaceRef>>,
+    typed: Mutex<HashMap<String, OffsetDateTime>>,
 }
 
 impl Default for RecordingInput {
@@ -396,6 +447,7 @@ impl Default for RecordingInput {
             outcome: Mutex::new(Ok(Delivery::Confirmed)),
             sent: Mutex::new(Vec::new()),
             interrupted: Mutex::new(Vec::new()),
+            typed: Mutex::default(),
         }
     }
 }
@@ -430,6 +482,10 @@ impl CoordinatorInput for RecordingInput {
                     .lock()
                     .unwrap()
                     .push((ws.clone(), text.to_string()));
+                self.typed
+                    .lock()
+                    .unwrap()
+                    .insert(ws.project_id.clone(), OffsetDateTime::now_utc());
                 Ok(d)
             }
             Err(e) => Err(ChatError::Failed(e)),
@@ -438,7 +494,12 @@ impl CoordinatorInput for RecordingInput {
 
     async fn interrupt(&self, ws: &WorkspaceRef) -> Result<(), ChatError> {
         self.interrupted.lock().unwrap().push(ws.clone());
+        self.typed.lock().unwrap().remove(&ws.project_id);
         Ok(())
+    }
+
+    fn last_typed(&self, project_id: &str) -> Option<OffsetDateTime> {
+        self.typed.lock().unwrap().get(project_id).copied()
     }
 }
 

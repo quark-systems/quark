@@ -12,6 +12,12 @@
 //! asked for it is left out. Text the person
 //! pasted reaches the log wrapped in `<pasted_content id="..">` tags, which
 //! are dropped so the entry reads as what they sent.
+//!
+//! Input typed while a turn runs is queued: Claude Code logs a
+//! `queue-operation` `enqueue` line at once and, when the running turn can
+//! take it, passes it on inside that turn as a `queued_command` attachment.
+//! The log then never holds it as a `user` line, so [`input`] reads both
+//! forms for whoever needs to know the harness took what was typed.
 
 use serde_json::Value;
 
@@ -92,6 +98,33 @@ pub(crate) fn parse(v: &Value) -> Vec<TranscriptEntry> {
         _ => {}
     }
     out
+}
+
+/// What Claude Code took from its input, when `v` records that: a `user`
+/// line's text, or text typed while a turn ran (queued, or handed to the
+/// running turn).
+pub(crate) fn input(v: &Value) -> Vec<String> {
+    let queued = match str_at(v, "type") {
+        Some("queue-operation") if str_at(v, "operation") == Some("enqueue") => v.get("content"),
+        Some("attachment") => v
+            .get("attachment")
+            .filter(|a| str_at(a, "type") == Some("queued_command"))
+            .and_then(|a| a.get("prompt")),
+        _ => None,
+    };
+    if let Some(text) = queued {
+        let text = unwrap_pasted(&text_of(text));
+        return if text.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![text]
+        };
+    }
+    parse(v)
+        .into_iter()
+        .filter(|e| e.role == TranscriptRole::User)
+        .map(|e| e.text)
+        .collect()
 }
 
 /// The entry a `compact_boundary` line stands for: who compacted the
@@ -206,6 +239,41 @@ mod tests {
             r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"text","text":"{command}"}}]}}}}"#
         )))
         .is_empty());
+    }
+
+    #[test]
+    fn input_typed_during_a_turn_is_read_from_the_queue_records() {
+        let v = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        // Shapes from a Claude Code 2.1 log: the wake was typed while a turn
+        // ran and passed on inside it, so no `user` line ever held it.
+        let enqueue = v(
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-29T18:22:41.860Z","sessionId":"s1","content":"Wake p#34: 1 item needs your judgment.\n- [merged] t1: merged"}"#,
+        );
+        let remove = v(
+            r#"{"type":"queue-operation","operation":"remove","timestamp":"2026-10-29T18:22:43.332Z","sessionId":"s1","content":"Wake p#34: 1 item needs your judgment.","reason":"absorbed_mid_turn"}"#,
+        );
+        let absorbed = v(
+            r#"{"type":"attachment","isSidechain":false,"attachment":{"type":"queued_command","prompt":"Wake p#34: 1 item needs your judgment.","commandMode":"prompt","origin":{"kind":"human"}},"timestamp":"2026-10-29T18:22:41.854Z"}"#,
+        );
+        let other = v(r#"{"type":"attachment","attachment":{"type":"date","content":"x"}}"#);
+        assert_eq!(
+            input(&enqueue),
+            ["Wake p#34: 1 item needs your judgment.\n- [merged] t1: merged"]
+        );
+        assert_eq!(input(&absorbed), ["Wake p#34: 1 item needs your judgment."]);
+        // Taking it off the queue is not taking new input.
+        assert!(input(&remove).is_empty());
+        assert!(input(&other).is_empty());
+        // None of them is conversation.
+        for line in [&enqueue, &remove, &absorbed, &other] {
+            assert!(parse(line).is_empty());
+        }
+        let user = v(r#"{"type":"user","message":{"role":"user","content":"hello"}}"#);
+        assert_eq!(input(&user), ["hello"]);
+        let reply = v(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
+        );
+        assert!(input(&reply).is_empty());
     }
 
     #[test]

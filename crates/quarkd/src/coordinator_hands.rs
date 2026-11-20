@@ -1,7 +1,8 @@
 //! The native coordinator's Brain and Hands in quarkd (slice 6).
 //!
 //! - [`InputBrain`] delivers a turn by typing its briefing into the
-//!   coordinator's session, the way the coordinator chat does.
+//!   coordinator's session, the way the coordinator chat does, once the
+//!   coordinator is between turns ([`hold`]).
 //! - [`EngineHands`] carries out the coordinator's tool calls through the
 //!   engine adapter and the store: steering, answering, relaunching and
 //!   cancelling go to the engine; clearing a finished task goes through
@@ -18,7 +19,8 @@ use async_trait::async_trait;
 use quark_coordinator::tools::Agent;
 use quark_coordinator::{Brain, Hands, ToolCall, Turn};
 use quark_core::{CoreError, ProjectId, Result};
-use quark_systems::{AgentConfig, MemoryEvidence, MemorySource};
+use quark_systems::{AgentConfig, MemoryEvidence, MemorySource, OutboxState};
+use time::OffsetDateTime;
 
 use crate::chat::{ChatError, CoordinatorInput, Delivery};
 use crate::clear::{ClearError, Cleared};
@@ -127,6 +129,52 @@ fn pending_lines(pending: &[(String, quark_systems::Decision)]) -> String {
     out
 }
 
+/// Why a wake must wait before it is typed into a coordinator, if it must.
+///
+/// A wake typed into a coordinator that is in a turn is not delivered the
+/// way the queue assumes: each harness does its own thing with input typed
+/// then. Claude Code queues it and passes it on inside the running turn,
+/// never logging it as a user message; Kiro CLI steers the running turn with
+/// it. Whatever the harness, that turn's end would close the wake's turn,
+/// and the wake's own turn end would then close the next one's. So a wake
+/// waits for what a queued message from the user waits for
+/// ([`crate::outbox`]): the turn's end.
+///
+/// - `prompt`: a prompt on the coordinator's screen would take the typing.
+/// - `message_waiting`: a message the user sent waits for the same turn end
+///   and goes in first; the turn it starts then holds the wake.
+/// - `typed`: when quarkd last began typing into the coordinator
+///   ([`CoordinatorInput::last_typed`]), which started a turn.
+/// - `turn_ended`: when the harness last reported a turn end. A turn typed
+///   in after it is still running.
+/// - `quiet`: the coordinator's transcript has been still for
+///   [`crate::outbox::QUIET`]. A harness that was interrupted or started
+///   again reports no end for the turn it was in, so a turn begun and still
+///   that long is taken to be over, as it is for a queued message.
+fn hold(
+    now: OffsetDateTime,
+    prompt: bool,
+    message_waiting: bool,
+    typed: Option<OffsetDateTime>,
+    turn_ended: Option<OffsetDateTime>,
+    quiet: bool,
+) -> Option<&'static str> {
+    if prompt {
+        return Some("a prompt is on its screen");
+    }
+    if message_waiting {
+        return Some("a message from the user goes in first");
+    }
+    let typed = typed?;
+    if turn_ended.is_some_and(|ended| ended >= typed) {
+        return None;
+    }
+    if quiet && now - typed >= crate::outbox::QUIET {
+        return None;
+    }
+    Some("it is in a turn")
+}
+
 /// Types each turn's briefing into the coordinator's session.
 pub struct InputBrain {
     store: Arc<Store>,
@@ -145,8 +193,12 @@ impl Brain for InputBrain {
         let ws = workspace(&self.store, project).await?;
         match self.input.send(&ws, &turn.briefing()).await {
             Ok(Delivery::Confirmed) => Ok(()),
-            // Typed and submitted; typing it again could deliver it twice.
-            // The turn timeout redelivers it if the coordinator never saw it.
+            // Typed and submitted into a coordinator that was between turns
+            // ([`Brain::ready`]), yet its log did not show it: its harness
+            // may log input in a form this build does not read. Typing it
+            // again could deliver it twice. The turn stays open: the
+            // harness's turn end closes it if the coordinator did get it,
+            // and the turn timeout redelivers it if not.
             Ok(Delivery::Unconfirmed) => {
                 tracing::warn!(%project, turn = %turn.id, "wake typed but not confirmed");
                 Ok(())
@@ -154,6 +206,42 @@ impl Brain for InputBrain {
             Err(ChatError::Unavailable(m)) => Err(CoreError::Refused(m)),
             Err(ChatError::Failed(m)) => Err(CoreError::Backend(m)),
         }
+    }
+
+    async fn ready(&self, project: &ProjectId, turn_ended: Option<OffsetDateTime>) -> bool {
+        let prompt = crate::coordinator_prompt::waiting(project.as_str());
+        let typed = self.input.last_typed(project.as_str());
+        let (store, pid) = (self.store.clone(), project.as_str().to_string());
+        let read = tokio::task::spawn_blocking(move || {
+            let outbox = store.coordinator_outbox(&pid)?;
+            let state = |s| outbox.iter().any(|m| m.state == s);
+            // A queued message goes in once the one being typed in is done
+            // (`claim_next_queued`), and that one is the coordinator's
+            // `typed` as soon as its typing starts.
+            let waiting = state(OutboxState::Queued) && !state(OutboxState::Sending);
+            Ok::<_, StoreError>((waiting, crate::outbox::quiet(&store, &pid)?))
+        })
+        .await;
+        let (message_waiting, quiet) = match read {
+            Ok(Ok(read)) => read,
+            // Unreadable is not busy: a wake held on it might never go.
+            _ => {
+                tracing::warn!(%project, "could not read the coordinator's outbox and transcript");
+                (false, true)
+            }
+        };
+        let why = hold(
+            OffsetDateTime::now_utc(),
+            prompt,
+            message_waiting,
+            typed,
+            turn_ended,
+            quiet,
+        );
+        if let Some(why) = why {
+            tracing::debug!(%project, why, "wake held");
+        }
+        why.is_none()
     }
 }
 
@@ -943,7 +1031,9 @@ mod tests {
         ));
     }
 
-    struct Typed(Mutex<Vec<String>>);
+    /// Records what is typed, and when the last of it was.
+    #[derive(Default)]
+    struct Typed(Mutex<Vec<String>>, Mutex<Option<OffsetDateTime>>);
 
     #[async_trait]
     impl CoordinatorInput for Typed {
@@ -953,18 +1043,23 @@ mod tests {
             text: &str,
         ) -> std::result::Result<Delivery, ChatError> {
             self.0.lock().unwrap().push(text.to_string());
+            *self.1.lock().unwrap() = Some(OffsetDateTime::now_utc());
             Ok(Delivery::Confirmed)
         }
 
         async fn interrupt(&self, _: &WorkspaceRef) -> std::result::Result<(), ChatError> {
             Ok(())
         }
+
+        fn last_typed(&self, _: &str) -> Option<OffsetDateTime> {
+            *self.1.lock().unwrap()
+        }
     }
 
     #[tokio::test]
     async fn the_brain_types_the_briefing() {
         let (store, _, p) = setup();
-        let typed = Arc::new(Typed(Mutex::new(Vec::new())));
+        let typed = Arc::new(Typed::default());
         let brain = InputBrain::new(store, typed.clone());
         let turn = Turn {
             id: format!("{p}#1"),
@@ -978,5 +1073,75 @@ mod tests {
             Arc::new(crate::chat::NoSessions),
         );
         assert!(none.wake(&p, &turn).await.is_err());
+    }
+
+    #[test]
+    fn a_wake_holds_for_a_prompt_a_waiting_message_or_a_running_turn() {
+        use time::Duration;
+        let now = OffsetDateTime::now_utc();
+        let ago = |s: i64| Some(now - Duration::seconds(s));
+        // Nothing typed since quarkd started, whatever the log says.
+        assert_eq!(hold(now, false, false, None, None, false), None);
+        assert_eq!(hold(now, false, false, None, ago(5), false), None);
+        // Typed after the last reported turn end: the turn is running, even
+        // through a pause in its transcript shorter than the outbox waits.
+        let turn = Some("it is in a turn");
+        assert_eq!(hold(now, false, false, ago(5), ago(60), false), turn);
+        assert_eq!(hold(now, false, false, ago(5), None, false), turn);
+        assert_eq!(hold(now, false, false, ago(5), ago(60), true), turn);
+        assert_eq!(hold(now, false, false, ago(600), ago(900), false), turn);
+        // Its end was reported: the next wake goes in at once.
+        assert_eq!(hold(now, false, false, ago(5), ago(1), false), None);
+        assert_eq!(hold(now, false, false, ago(5), ago(5), false), None);
+        // No end reported (an interrupted or restarted harness), and still
+        // for as long as a queued message waits.
+        assert_eq!(hold(now, false, false, ago(31), ago(60), true), None);
+        assert_eq!(hold(now, false, false, ago(31), None, true), None);
+        // A prompt on the screen and the user's own waiting message come
+        // first, even between turns.
+        assert_eq!(
+            hold(now, true, false, None, None, true),
+            Some("a prompt is on its screen")
+        );
+        assert_eq!(
+            hold(now, false, true, ago(5), ago(1), true),
+            Some("a message from the user goes in first")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_brain_is_ready_between_turns_only() {
+        let (store, _, p) = setup();
+        let typed = Arc::new(Typed::default());
+        let brain = InputBrain::new(store.clone(), typed.clone());
+        let ws = WorkspaceRef {
+            project_id: p.as_str().into(),
+            root: "/ws".into(),
+        };
+        // Nothing typed yet.
+        assert!(brain.ready(&p, None).await);
+
+        // The engine types a note (a changed agent, a memory entry): the
+        // coordinator is in a turn until its harness reports the end.
+        let before = OffsetDateTime::now_utc();
+        typed.send(&ws, "Engine note: Restarted.").await.unwrap();
+        assert!(!brain.ready(&p, None).await);
+        assert!(!brain.ready(&p, Some(before)).await);
+        assert!(brain.ready(&p, Some(OffsetDateTime::now_utc())).await);
+
+        // A message the user queued for the end of that turn goes in before
+        // the wake does.
+        let ended = Some(OffsetDateTime::now_utc());
+        let queued = store
+            .new_outbox_message(p.as_str(), "and the docs", OutboxState::Queued)
+            .unwrap();
+        assert!(!brain.ready(&p, ended).await);
+        // Typed in, it starts a turn of its own.
+        let sending = store.claim_next_queued(p.as_str()).unwrap().unwrap();
+        assert_eq!(sending.id, queued.id);
+        typed.send(&ws, &sending.text).await.unwrap();
+        store.finish_outbox_delivery(&sending.id, Ok(true)).unwrap();
+        assert!(!brain.ready(&p, ended).await);
+        assert!(brain.ready(&p, Some(OffsetDateTime::now_utc())).await);
     }
 }
