@@ -31,6 +31,12 @@
 //!   `SessionStart` hook priming Beads in `.bob/settings.json`, and the
 //!   [`BOB_MODE`] custom mode the coordinator runs in, whose rules carry its
 //!   prompt (Bob has no system-prompt flag).
+//! - Antigravity CLI ([`crate::coordinator_agy::install`]): the workspace's
+//!   `.agents/`: the MCP server in `mcp_config.json`, and a named hook in
+//!   `hooks.json` whose `PreInvocation` asks `hooks/agy_prompt` for the
+//!   prompt (agy has no system-prompt flag, so quarkd adds it to the
+//!   conversation) and whose `Stop` POSTs `hooks/agy_stop`, which can send
+//!   the turn back as Claude Code's `Stop` can.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -58,7 +64,7 @@ pub const PREFIX: &str = "/v1/coordinator";
 /// The MCP server's name in a coordinator's harness config.
 pub const SERVER_NAME: &str = "quark-coordinator";
 /// Hook events that end a turn.
-const TURN_END: &[&str] = &["turn_end", "Stop"];
+const TURN_END: &[&str] = &["turn_end", "Stop", crate::coordinator_agy::STOP_EVENT];
 
 /// Each Project coordinator's token, one file per Project.
 #[derive(Debug, Clone)]
@@ -163,6 +169,11 @@ struct Routes {
     /// Projects whose open turn was sent back with [`questions::NUDGE`]
     /// from a `turn_end`, which has no `stop_hook_active` of its own.
     nudged: Mutex<std::collections::HashSet<String>>,
+    /// The start of each Project's agy coordinator whose first turn was
+    /// already sent back with [`crate::coordinator_agy::TOOLS_NOTE`].
+    agy_launches: Mutex<HashMap<String, String>>,
+    /// What each agy coordinator transcript says about its prompt.
+    agy_prompts: Mutex<HashMap<PathBuf, crate::coordinator_agy::PromptState>>,
     wrap_up: Option<WrapUp>,
 }
 
@@ -209,6 +220,8 @@ fn routes(
         roots,
         cursors: Mutex::new(HashMap::new()),
         nudged: Mutex::new(Default::default()),
+        agy_prompts: Mutex::new(HashMap::new()),
+        agy_launches: Mutex::new(HashMap::new()),
         wrap_up,
     };
     Router::new()
@@ -259,6 +272,10 @@ async fn hook(
     if !r.tokens.check(&project, &token) {
         return not_found();
     }
+    if event == crate::coordinator_agy::PROMPT_EVENT {
+        let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        return Json(r.agy_prompt(&project, &body).await).into_response();
+    }
     if !TURN_END.contains(&event.as_str()) {
         return bad(format!("hook {event} is not a turn end"));
     }
@@ -288,7 +305,46 @@ async fn hook(
         tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
         return Json(json!({ "decision": "block", "reason": questions::NUDGE })).into_response();
     }
-    if !claude_stop && !r.nudged.lock().unwrap().remove(&project) {
+    // agy's `Stop` sends a turn back with `continue`. Its own
+    // `continuationActive` stays false on the stop that follows, so a turn
+    // already sent back is remembered here instead.
+    let agy_stop = event == crate::coordinator_agy::STOP_EVENT;
+    // A turn the person or quarkd interrupted, or that failed, is never
+    // sent back.
+    let agy_ended_itself = matches!(
+        body.get("terminationReason").and_then(Value::as_str),
+        None | Some("NO_TOOL_CALL" | "TERMINAL_STEP_TYPE" | "INJECTED_RESPONSE")
+    );
+    if agy_stop && agy_ended_itself {
+        let launch = headers
+            .get(crate::coordinator_agy::LAUNCH_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let fresh = launch.is_some_and(|l| {
+            let mut seen = r.agy_launches.lock().unwrap();
+            seen.insert(project.clone(), l.to_string()).as_deref() != Some(l)
+        });
+        if fresh {
+            r.nudged.lock().unwrap().insert(project.clone());
+            tracing::info!(%project, "sent the agy coordinator's first turn back once its tools connected");
+            return Json(json!({
+                "decision": "continue",
+                "reason": crate::coordinator_agy::TOOLS_NOTE,
+            }))
+            .into_response();
+        }
+    }
+    if agy_stop
+        && agy_ended_itself
+        && !r.nudged.lock().unwrap().remove(&project)
+        && r.unfiled_questions(&project, &body).await
+    {
+        r.nudged.lock().unwrap().insert(project.clone());
+        tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
+        return Json(json!({ "decision": "continue", "reason": questions::NUDGE })).into_response();
+    }
+    if !claude_stop && !agy_stop && !r.nudged.lock().unwrap().remove(&project) {
         if let Some(response) = r.nudge_turn_end(&project, &body).await {
             return response;
         }
@@ -331,9 +387,9 @@ async fn hook(
                     context,
                 );
             }
-            // Claude Code reads a `Stop` hook's output as its decision; an
-            // empty object lets the session stop.
-            if claude_stop {
+            // Claude Code and agy read a `Stop` hook's output as its
+            // decision; an empty object lets the session stop.
+            if claude_stop || agy_stop {
                 return Json(json!({})).into_response();
             }
             Json(json!({ "turn": turn })).into_response()
@@ -383,7 +439,7 @@ impl Routes {
                     }
                 });
             }
-            Wiring::Claude => return None,
+            Wiring::Claude | Wiring::Antigravity => return None,
         }
         self.nudged.lock().unwrap().insert(project.to_string());
         tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
@@ -403,8 +459,20 @@ impl Routes {
             .get("last_assistant_message")
             .or_else(|| body.get("last-assistant-message"))
             .and_then(Value::as_str);
+        // agy's payload names its transcript in camelCase.
+        let agy_log = body.get("transcriptPath").and_then(Value::as_str);
         let text = match said {
             Some(t) => t.to_string(),
+            None if agy_log.is_some() => {
+                let path = PathBuf::from(agy_log.unwrap_or_default());
+                tokio::task::spawn_blocking(move || {
+                    last_entry_reply(&path, SessionFormat::Antigravity)
+                })
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+            }
             None => match body.get("transcript_path").and_then(Value::as_str) {
                 Some(path) => {
                     let path = PathBuf::from(path);
@@ -429,6 +497,67 @@ impl Routes {
             .coordinator
             .asked_this_turn(&ProjectId::new(project.to_string()))
             .await
+    }
+
+    /// What an agy coordinator's `PreInvocation` hook prints: its prompt,
+    /// as [`crate::coordinator_agy::injection`], when the conversation does
+    /// not hold the current one (a new conversation, a compaction since it
+    /// was added, or a prompt file that changed); otherwise `{}`.
+    async fn agy_prompt(&self, project: &str, body: &Value) -> Value {
+        use crate::coordinator_agy::{digest, injection, PromptState};
+        use crate::engine::native_project::{PROMPT_FILE, STATE_DIR};
+        let store = self.store.clone();
+        let id = project.to_string();
+        let Ok(Ok(p)) = tokio::task::spawn_blocking(move || store.get_project(&id)).await else {
+            return json!({});
+        };
+        let Some(root) = p.workspace_path.map(PathBuf::from) else {
+            return json!({});
+        };
+        let Ok(text) = std::fs::read_to_string(root.join(STATE_DIR).join(PROMPT_FILE)) else {
+            tracing::warn!(%project, "the agy coordinator's prompt file is missing");
+            return json!({});
+        };
+        let want = digest(&text);
+        // The transcript agy names, else the newest for the workspace.
+        let log = body
+            .get("transcriptPath")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .or_else(|| locate(SessionFormat::Antigravity, &root, &self.roots));
+        if let Some(log) = log {
+            let mut state = self
+                .agy_prompts
+                .lock()
+                .unwrap()
+                .get(&log)
+                .cloned()
+                .unwrap_or_default();
+            let path = log.clone();
+            let read = tokio::task::spawn_blocking(move || {
+                // A conversation's first call comes before agy writes it.
+                if path.is_file() {
+                    state.scan(&path)?;
+                }
+                Ok::<_, std::io::Error>(state)
+            })
+            .await;
+            let mut state = match read {
+                Ok(Ok(s)) => s,
+                _ => PromptState::default(),
+            };
+            let holds = state.holds.as_deref() == Some(want.as_str());
+            if !holds {
+                // Added now; the transcript shows it from the next call on.
+                state.holds = Some(want.clone());
+            }
+            self.agy_prompts.lock().unwrap().insert(log, state);
+            if holds {
+                return json!({});
+            }
+        }
+        tracing::info!(%project, bytes = text.len(), "added the prompt to the agy coordinator's conversation");
+        injection(&text, &want)
     }
 
     /// The last thing the Project's coordinator said, from its newest Kiro
@@ -660,6 +789,7 @@ pub enum Wiring {
     Pi,
     Bob,
     Kiro,
+    Antigravity,
 }
 
 impl Wiring {
@@ -672,14 +802,22 @@ impl Wiring {
             "pi" | "pi-signed" => Some(Wiring::Pi),
             "bob" => Some(Wiring::Bob),
             "kiro" => Some(Wiring::Kiro),
+            "antigravity" | "agy" => Some(Wiring::Antigravity),
             _ => None,
         }
     }
 }
 
 /// The harnesses a native coordinator runs on, by manifest id.
-pub const COORDINATOR_HARNESSES: &[&str] =
-    &["claude-code", "codex", "pi", "pi-signed", "bob", "kiro"];
+pub const COORDINATOR_HARNESSES: &[&str] = &[
+    "claude-code",
+    "codex",
+    "pi",
+    "pi-signed",
+    "bob",
+    "kiro",
+    "antigravity",
+];
 
 /// Point the coordinator running `harness` in `root` at quarkd. Codex takes
 /// its wiring on the command line ([`codex_overrides`]), so nothing is
@@ -690,6 +828,7 @@ pub fn install(harness: &str, root: &Path, urls: &CoordinatorUrls) -> std::io::R
         Some(Wiring::Pi) => install_pi(root, urls),
         Some(Wiring::Bob) => install_bob(root, urls),
         Some(Wiring::Kiro) => install_kiro(root, urls),
+        Some(Wiring::Antigravity) => crate::coordinator_agy::install(root, urls),
         Some(Wiring::Codex) | None => Ok(false),
     }
 }
@@ -896,7 +1035,7 @@ pub fn codex_overrides(urls: &CoordinatorUrls) -> Vec<String> {
 
 /// Apply `edit` to the JSON object at `path` (an empty object when the file
 /// is missing), writing it back only when it changed.
-fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) -> std::io::Result<bool> {
+pub(crate) fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) -> std::io::Result<bool> {
     let old = match std::fs::read_to_string(path) {
         Ok(s) => Some(s),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -1282,6 +1421,134 @@ mod tests {
         assert_eq!(b, json!({}));
         let (_, b) = send(&app, stop(json!({"last_assistant_message": asking}))).await;
         assert_eq!(b["decision"], "block");
+    }
+
+    #[tokio::test]
+    async fn an_agy_coordinator_gets_its_prompt_and_its_text_questions_sent_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join(".quark")).unwrap();
+        let prompt = format!("# Coordinator\n{}", "Act through tools.\n".repeat(3000));
+        std::fs::write(ws.join(".quark/coordinator.md"), &prompt).unwrap();
+        store
+            .create_project(CreateProject {
+                name: "agy".into(),
+                goal: None,
+                workspace_path: Some(ws.display().to_string()),
+                repos: vec![],
+                agent_config: Some(quark_systems::AgentConfig {
+                    harness: "antigravity".into(),
+                    model: None,
+                    effort: None,
+                    pool: None,
+                }),
+                dispatch_preset: None,
+                delivery: None,
+            })
+            .unwrap();
+        let pid = store.list_projects().unwrap()[0].id.clone();
+        let log = quark_eventlog::SqliteEventLog::open(dir.path().join("events.db")).unwrap();
+        let coordinator = Arc::new(
+            Coordinator::open(
+                Arc::new(log.clone()),
+                quark_core::HostId::from("h"),
+                Config::default(),
+                Arc::new(NoBrain),
+                Arc::new(YesHands),
+            )
+            .await
+            .unwrap(),
+        );
+        let tokens = Tokens::new(dir.path());
+        let token = tokens.get_or_create(&pid).unwrap();
+        let app = router(coordinator, tokens, store, SessionRoots::default());
+        let transcript = dir.path().join("transcript_full.jsonl");
+        let payload = json!({"conversationId": "c1", "transcriptPath": transcript,
+            "hookEventName": "PreInvocation"});
+        let ask_prompt = || {
+            post(
+                &format!("/{pid}/{token}/hooks/agy_prompt"),
+                &payload.to_string(),
+            )
+        };
+
+        // The first call of a conversation: agy has written nothing yet.
+        let (s, b) = send(&app, ask_prompt()).await;
+        assert_eq!(s, StatusCode::OK);
+        let steps = b["injectSteps"].as_array().unwrap();
+        assert!(steps.len() > 1, "a long prompt goes in parts");
+        let parts: Vec<&str> = steps
+            .iter()
+            .map(|s| s["systemMessage"]["systemMessage"].as_str().unwrap())
+            .collect();
+        assert!(parts.iter().all(|p| p.len() < 32 * 1024));
+        // The next call, before agy wrote it, adds nothing again.
+        let (_, b) = send(&app, ask_prompt()).await;
+        assert_eq!(b, json!({}));
+
+        // agy wrote it; a compaction then drops it, so it goes in again.
+        let line = |v: Value| format!("{v}\n");
+        let mut text =
+            line(json!({"type": "USER_INPUT", "content": "<USER_REQUEST>\nhi\n</USER_REQUEST>"}));
+        for p in &parts {
+            text += &line(json!({"type": "SYSTEM_MESSAGE", "source": "SYSTEM_SDK", "content": p}));
+        }
+        std::fs::write(&transcript, &text).unwrap();
+        let (_, b) = send(&app, ask_prompt()).await;
+        assert_eq!(b, json!({}));
+        text += &line(json!({"type": "CHECKPOINT", "source": "SYSTEM",
+            "content": "# Resuming from a compaction\n\nsummary"}));
+        std::fs::write(&transcript, &text).unwrap();
+        let (_, b) = send(&app, ask_prompt()).await;
+        assert!(b["injectSteps"].is_array());
+
+        // A reply that asks in text is sent back once, with agy's decision.
+        let asking = "Plan is ready. Should I use Redis or keep it in memory?";
+        text += &line(json!({"type": "PLANNER_RESPONSE", "source": "MODEL", "content": asking}));
+        std::fs::write(&transcript, &text).unwrap();
+        let stop_payload = json!({"transcriptPath": transcript, "continuationActive": false,
+            "terminationReason": "NO_TOOL_CALL"});
+        let stop = |launch: &str| {
+            let mut req = post(
+                &format!("/{pid}/{token}/hooks/agy_stop"),
+                &stop_payload.to_string(),
+            );
+            req.headers_mut()
+                .insert("x-quark-launch", launch.parse().unwrap());
+            req
+        };
+        // The first stop of a start is sent back once: agy lists Quark's
+        // tools only from then on. It counts as the turn's one send-back.
+        let (_, b) = send(&app, stop("1")).await;
+        assert_eq!(b["decision"], "continue");
+        assert_eq!(b["reason"], crate::coordinator_agy::TOOLS_NOTE);
+        let (_, b) = send(&app, stop("1")).await;
+        assert_eq!(b, json!({}));
+        let (_, b) = send(&app, stop("1")).await;
+        assert_eq!(b["decision"], "continue");
+        assert_eq!(b["reason"], questions::NUDGE);
+        // agy's next stop still says `continuationActive: false`; it ends the turn.
+        let (_, b) = send(&app, stop("1")).await;
+        assert_eq!(b, json!({}));
+        // An interrupted turn is never sent back, even on a new start.
+        let cancelled = json!({"transcriptPath": transcript, "terminationReason": "USER_CANCELED"});
+        let mut req = post(
+            &format!("/{pid}/{token}/hooks/agy_stop"),
+            &cancelled.to_string(),
+        );
+        req.headers_mut()
+            .insert("x-quark-launch", "2".parse().unwrap());
+        let (_, b) = send(&app, req).await;
+        assert_eq!(b, json!({}));
+        let ended = log
+            .read(Seq::ZERO, 100)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind.as_str() == "coordinator.turn_ended")
+            .count();
+        assert_eq!(ended, 3);
     }
 
     #[tokio::test]

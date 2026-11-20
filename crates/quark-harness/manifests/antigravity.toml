@@ -2,8 +2,9 @@ schema = 1
 id = "antigravity"
 name = "Antigravity CLI"
 aliases = ["agy"]
-roles = ["worker"]
-efforts = ["low", "medium", "high"]
+roles = ["coordinator", "worker"]
+# `--effort` takes these; a model without one ignores it.
+efforts = ["low", "medium", "high", "xhigh", "max"]
 
 [detect]
 bins = ["agy"]
@@ -14,15 +15,42 @@ install_hint = "Install the Antigravity CLI and put `agy` on PATH"
 selection = "free_form"
 discovery = "agy models"
 
+# The prompt rides in the flag's own argument, so a launch without one (the
+# coordinator) leaves no flag behind to swallow the next option.
 [launch]
-argv = ["agy", "--dangerously-skip-permissions", "--prompt-interactive", "{prompt}"]
+argv = ["agy", "--dangerously-skip-permissions", "--prompt-interactive={prompt}"]
 optional = [["--model", "{model}"], ["--effort", "{effort}"]]
 prompt_via = "argv"
+# The newest conversation agy holds for the folder.
+resume = ["--continue"]
+
+# agy asks once per folder whether to trust it, then remembers the answer in
+# its own settings. A worktree Quark made for the task, or Quark's own
+# coordinator workspace, is trusted; the skip-permissions launch already
+# grants more.
+[[launch.dialogs]]
+detect = ["Do you trust the contents of this project?", "Yes, I trust this folder", "No, exit"]
+options = ["Yes, I trust this folder", "No, exit"]
+choose = "Yes, I trust this folder"
+cursor = ">"
+
+# agy signs in with Google and keeps the login in the login Keychain, under
+# the service `gemini`.
+[account]
+config_dir = ".gemini/antigravity-cli"
+auth_keychain = ["gemini"]
+
+# Installed in `~/.gemini/config/hooks.json` as one named hook that does
+# nothing outside a Quark worker.
+[hooks]
+install = "agy-hooks"
+events = { PreInvocation = "busy", Stop = "turn_end" }
 
 [turn_signals]
-busy = "pane"
-turn_end = "pane"
-summary = "terminal screen"
+busy = "hooks"
+turn_end = "hooks"
+summary = "Antigravity hooks (PreInvocation, Stop)"
+idle_patterns = ["? for shortcuts"]
 
 [keys]
 interrupt = ["Escape"]

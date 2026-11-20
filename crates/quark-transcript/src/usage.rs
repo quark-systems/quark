@@ -14,6 +14,10 @@
 //! - Kiro: no token counts; each turn's `usage_summary` carries the
 //!   credits it was billed (`promptTurnSummaries[].usage`, unit `credit`).
 //!   The model is the session's, from the `session.json` beside the log.
+//! - Antigravity: each `PLANNER_RESPONSE` step's `model`, `input_tokens`
+//!   (outside the cache), `cache_read_tokens` and `output_tokens`. Turns
+//!   are keyed by their prompt's `step_index`, which stays the same when agy
+//!   rewrites its transcript.
 //!
 //! [`read_turns`] reads completed turns from a byte offset and returns where
 //! to resume: the start of the turn still open at the end, read again once
@@ -223,6 +227,16 @@ fn prompt(format: SessionFormat, v: &Value) -> Option<(Option<String>, Option<St
                 && v.pointer("/message/role").and_then(Value::as_str) == Some("user")
         }
         SessionFormat::Kiro => v.pointer("/payload/type").and_then(Value::as_str) == Some("user"),
+        SessionFormat::Antigravity => {
+            if !crate::antigravity::is_prompt(v) {
+                return None;
+            }
+            let id = v
+                .get("step_index")
+                .and_then(Value::as_u64)
+                .map(|i| format!("step-{i}"));
+            return Some((id, str_at(v, "created_at").map(str::to_string)));
+        }
     };
     let id = str_at(v, "uuid").or_else(|| str_at(v, "id"));
     starts.then(|| (id.map(str::to_string), ts))
@@ -361,6 +375,28 @@ impl Builder {
                         cache_write: write,
                         calls: 1,
                         cost_usd: u.pointer("/cost/total").and_then(Value::as_f64),
+                        ..Default::default()
+                    },
+                );
+            }
+            SessionFormat::Antigravity => {
+                if str_at(v, "type") != Some("PLANNER_RESPONSE") {
+                    return;
+                }
+                let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+                let read = n("cache_read_tokens");
+                let id = v
+                    .get("step_index")
+                    .and_then(Value::as_u64)
+                    .map(|i| format!("step-{i}"));
+                self.call(
+                    id.as_deref(),
+                    ModelUsage {
+                        model: str_at(v, "model").unwrap_or_default().to_string(),
+                        input: n("input_tokens") + read,
+                        output: n("output_tokens"),
+                        cache_read: read,
+                        calls: 1,
                         ..Default::default()
                     },
                 );
@@ -588,6 +624,54 @@ mod tests {
             (16, 7, 10, 1)
         );
         assert_eq!(m.cost_usd, Some(0.25));
+    }
+
+    #[test]
+    fn antigravity_counts_cache_reads_as_input_and_keys_turns_by_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript_full.jsonl");
+        let user = |i: u64| {
+            json!({"step_index": i, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+            "created_at": "2026-11-20T05:44:55Z", "content": "<USER_REQUEST>\ngo\n</USER_REQUEST>"})
+        };
+        let call = |i: u64, input: u64, read: u64| {
+            json!({"step_index": i, "source": "MODEL",
+            "type": "PLANNER_RESPONSE", "model": "gemini-4-neon-high", "input_tokens": input,
+            "cache_read_tokens": read, "output_tokens": 10, "content": "x"})
+        };
+        write(
+            &path,
+            &[
+                user(0),
+                call(1, 10079, 0),
+                user(2),
+                call(3, 2233, 8001),
+                json!({"step_index": 4, "source": "MODEL", "type": "GENERIC", "content": "out"}),
+                call(5, 2230, 8185),
+                user(6),
+            ],
+        );
+        let (turns, next) = read_turns(
+            &path,
+            &UsageCursor::default(),
+            SessionFormat::Antigravity,
+            false,
+        )
+        .unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].id, "step-0");
+        assert_eq!(turns[1].id, "step-2");
+        let m = &turns[1].models[0];
+        assert_eq!(m.model, "gemini-4-neon-high");
+        assert_eq!(
+            (m.input, m.cache_read, m.output, m.calls),
+            (20649, 16186, 20, 2)
+        );
+        // The context is the last call's whole input.
+        assert_eq!(turns[1].context, Some(10415));
+        // The open turn is read again once it ends.
+        let (rest, _) = read_turns(&path, &next, SessionFormat::Antigravity, true).unwrap();
+        assert!(rest.is_empty(), "no model ran in the open turn yet");
     }
 
     #[test]

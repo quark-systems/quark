@@ -29,7 +29,7 @@ Account quota for every harness with a quota reader (Claude Code, Codex, IBM Bob
 
 ## Agent harnesses
 
-The coordinator and workers are CLI agents. Each has a manifest in `crates/quark-harness/manifests/`, which names the binary quarkd detects on `PATH` and the install hint the app shows. You need at least one coordinator harness: Claude Code (the default, and the default worker), Codex or Pi.
+The coordinator and workers are CLI agents. Each has a manifest in `crates/quark-harness/manifests/`, which names the binary quarkd detects on `PATH` and the install hint the app shows. You need at least one coordinator harness: Claude Code (the default, and the default worker), Codex, Pi, IBM Bob, Kiro CLI or the Antigravity CLI. For Google's models, use the Antigravity CLI (`agy`), Google's current CLI; Gemini CLI still works as a worker.
 
 | Harness | Binary | Install |
 | :--- | :--- | :--- |

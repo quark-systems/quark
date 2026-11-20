@@ -16,6 +16,7 @@ pub mod clone_sync;
 pub mod compaction;
 pub mod compat;
 pub mod config;
+pub mod coordinator_agy;
 pub mod coordinator_commands;
 pub mod coordinator_hands;
 pub mod coordinator_http;

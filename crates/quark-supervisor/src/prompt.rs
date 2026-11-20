@@ -434,6 +434,42 @@ mod tests {
         assert_eq!(detect(&moved).unwrap().key, k.key);
     }
 
+    // The Antigravity CLI 1.5.13 asking before an MCP tool call (agy run
+    // without --dangerously-skip-permissions), from a 140-column tmux pane
+    // on Matt's Mac (2026-11-20).
+    const AGY: &str = "\
+● Called 1 MCP tool (quark-coordinator/fleet) (ctrl+o to expand)
+MCP
+────────────────────────────────────────────────────────────
+quark-coordinator/fleet
+Allow calling this tool?
+> 1. Yes, allow tool call
+  2. Yes, and always allow tool 'quark-coordinator/fleet' in this conversation
+  3. Yes, and always allow tool 'quark-coordinator/fleet' (Persist to settings.json)
+  4. No, deny tool call
+  5. No, and always deny tool 'quark-coordinator/fleet' in this conversation
+  6. No, and always deny tool 'quark-coordinator/fleet' (Persist to settings.json)
+  ↑/↓ Navigate · tab Amend
+esc to cancel                                                                                                    auto · Gemini 4 Neon · high
+";
+
+    #[test]
+    fn reads_agys_numbered_menu() {
+        let a = detect(AGY).unwrap();
+        assert_eq!(a.options.len(), 6);
+        assert_eq!(a.options[0], "Yes, allow tool call");
+        assert_eq!(a.options[3], "No, deny tool call");
+        assert_eq!(a.selected, 0);
+        assert!(
+            a.context.iter().any(|l| l == "Allow calling this tool?"),
+            "{:?}",
+            a.context
+        );
+        assert_eq!(a.choice("4"), Ok(3));
+        // agy's idle prompt box, `> ` and a hint, is no menu.
+        assert!(detect("> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n? for shortcuts").is_none());
+    }
+
     // IBM Bob 2.1 asking to run a command outside its workspace, from the
     // coordinator pane on Matt's Mac (2026-11-17).
     const BOB_2_1: &str = "\

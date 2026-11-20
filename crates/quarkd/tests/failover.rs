@@ -95,6 +95,7 @@ fn setup() -> Setup {
         codex: vec![home.join(".codex")],
         pi: Vec::new(),
         kiro: Vec::new(),
+        antigravity: Vec::new(),
     };
     let worktree = dir.path().join("worktrees/fix-login");
     std::fs::create_dir_all(&worktree).unwrap();

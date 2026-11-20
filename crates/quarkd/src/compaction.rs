@@ -438,7 +438,11 @@ pub fn window_tokens(
         .collect();
     let window = models
         .iter()
-        .find_map(|m| claude_window(m).or_else(|| openai_window(m)))
+        .find_map(|m| {
+            claude_window(m)
+                .or_else(|| openai_window(m))
+                .or_else(|| gemini_window(m))
+        })
         .or_else(|| match harness {
             // The harness's own default model.
             "claude-code" | "claude"
@@ -518,6 +522,17 @@ fn claude_window(model: &str) -> Option<u64> {
     } else {
         CLAUDE_OLD_WINDOW
     })
+}
+
+/// Gemini models' window, as the Antigravity CLI reports it for Gemini 4
+/// (`/context`: 1.0M) and Google publishes for Gemini's Pro and Flash.
+const GEMINI_WINDOW: u64 = 1_000_000;
+
+/// A Gemini model's window, by the id the Antigravity CLI logs, such as
+/// `gemini-4-neon-high` or `gemini-3.8-flash-low`.
+fn gemini_window(model: &str) -> Option<u64> {
+    let m = model.rsplit('/').next().unwrap_or(model);
+    m.starts_with("gemini-").then_some(GEMINI_WINDOW)
 }
 
 /// An OpenAI GPT-5 model's input window.
@@ -799,6 +814,13 @@ mod tests {
             effort: None,
             pool: None,
         };
+        // An agy coordinator's Gemini model, as its transcript names it.
+        let g = agent("antigravity", None);
+        assert_eq!(
+            window_tokens(Some(&g), Some("gemini-4-neon-high"), Some(15_000)),
+            Some(1_000_000)
+        );
+        assert_eq!(window_tokens(Some(&g), None, None), None);
         // Claude Code's default and its aliases are current models: 1M.
         let a = agent("claude-code", None);
         assert_eq!(window_tokens(Some(&a), None, Some(50_000)), Some(1_000_000));

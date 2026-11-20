@@ -20,6 +20,11 @@
 //! stall on its first report. That opt-in is the person's trust boundary,
 //! so [`launch_warnings`] only checks it, read-only.
 //!
+//! The Antigravity CLI gets them in its global hooks file
+//! (`~/.gemini/config/hooks.json`), as one named hook that is likewise a
+//! no-op without `QUARK_HOOK_URL`: agy reads hooks from there or from the
+//! workspace's `.agents/`, which in a worktree would be the repository's.
+//!
 //! Other harnesses need nothing here yet.
 
 use std::collections::BTreeMap;
@@ -35,6 +40,10 @@ const CONFIG_ENV: &str = "CLAUDE_CONFIG_DIR";
 const BOB: &str = "bob-settings";
 /// The tool groups a Bob worker needs outside its workspace.
 const BOB_GROUPS: [&str; 3] = ["read", "write", "edit"];
+/// The `[hooks] install` value of the Antigravity CLI.
+const AGY: &str = "agy-hooks";
+/// The name of Quark's hook in agy's hooks file.
+const AGY_HOOK: &str = "quark-worker";
 
 /// Record that `folder` is trusted and the bypass-permissions warning was
 /// accepted, for the account `env` selects (its `CLAUDE_CONFIG_DIR`, else
@@ -48,6 +57,12 @@ pub fn prepare_folder(
     if let Some(h) = m.hooks.as_ref().filter(|h| h.install == BOB) {
         return match home {
             Some(home) => install_bob_hooks(h, home),
+            None => Ok(()),
+        };
+    }
+    if let Some(h) = m.hooks.as_ref().filter(|h| h.install == AGY) {
+        return match home {
+            Some(home) => install_agy_hooks(h, home),
             None => Ok(()),
         };
     }
@@ -141,6 +156,37 @@ fn install_bob_hooks(h: &quark_core::harness::Hooks, home: &Path) -> std::io::Re
     })
 }
 
+/// agy's global hooks file under `home`.
+fn agy_hooks_file(home: &Path) -> PathBuf {
+    home.join(".gemini").join("config").join("hooks.json")
+}
+
+/// The command an agy hook runs for `event`: POST to the worker's hook URL
+/// when agy runs as a Quark worker, nothing otherwise. agy reads a hook's
+/// output as JSON, so it prints an empty object either way; agy's payload
+/// is not used, and a failure never fails the hook.
+fn agy_hook_command(event: &str) -> String {
+    format!(
+        "[ -n \"$QUARK_HOOK_URL\" ] && curl -fsS -m 5 -X POST -d '' \"$QUARK_HOOK_URL/{event}\" >/dev/null 2>&1 </dev/null; echo '{{}}' {QUARK_HOOK_MARK}"
+    )
+}
+
+/// Set Quark's named hook ([`AGY_HOOK`]) in agy's global hooks file, one
+/// handler per event the manifest maps. agy's hooks file is an object of
+/// named hooks, so the person's own hooks sit beside it untouched.
+fn install_agy_hooks(h: &quark_core::harness::Hooks, home: &Path) -> std::io::Result<()> {
+    edit_json(&agy_hooks_file(home), |v| {
+        let mut hook = serde_json::Map::new();
+        for event in h.events.keys() {
+            hook.insert(
+                event.clone(),
+                json!([{ "type": "command", "command": agy_hook_command(event), "timeout": 10 }]),
+            );
+        }
+        v[AGY_HOOK] = Value::Object(hook);
+    })
+}
+
 /// What a person should fix before `m` can work unattended under `home`,
 /// one sentence each; empty when nothing is known to be missing.
 pub fn launch_warnings(m: &HarnessManifest, home: Option<&Path>) -> Vec<String> {
@@ -207,6 +253,7 @@ pub fn hooks_reach_quark(
             None => home?.join(".claude").join("settings.json"),
         },
         BOB => home?.join(".bob").join("settings").join("settings.json"),
+        AGY => agy_hooks_file(home?),
         _ => return None,
     };
     let text = std::fs::read_to_string(path).unwrap_or_default();
@@ -365,6 +412,63 @@ mod tests {
         // A failing POST still succeeds, silently.
         let out = run(Some("http://127.0.0.1:9/worker/hooks/t/g"));
         assert!(out.status.success() && out.stdout.is_empty());
+        let args = std::fs::read_to_string(dir.path().join("curl.args")).unwrap();
+        assert!(args.contains("http://127.0.0.1:9/worker/hooks/t/g/Stop"));
+    }
+
+    #[test]
+    fn installs_agy_hooks_beside_the_persons_own() {
+        let reg = ManifestRegistry::builtin();
+        let agy = reg.get("antigravity").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let none = BTreeMap::new();
+        assert_eq!(hooks_reach_quark(agy, &none, Some(home)), Some(false));
+        let file = home.join(".gemini/config/hooks.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"lint":{"PostToolUse":[{"matcher":"*","hooks":[{"command":"x"}]}]}}"#,
+        )
+        .unwrap();
+        let folder = home.join("ws");
+        prepare_folder(agy, &folder, &none, Some(home)).unwrap();
+        prepare_folder(agy, &folder, &none, Some(home)).unwrap();
+        let v = read(&file);
+        assert_eq!(v["lint"]["PostToolUse"][0]["hooks"][0]["command"], "x");
+        for event in ["PreInvocation", "Stop"] {
+            let list = v[AGY_HOOK][event].as_array().unwrap();
+            assert_eq!(list.len(), 1, "{event}");
+            let cmd = list[0]["command"].as_str().unwrap();
+            assert!(cmd.contains(&format!("$QUARK_HOOK_URL/{event}")), "{cmd}");
+        }
+        assert_eq!(hooks_reach_quark(agy, &none, Some(home)), Some(true));
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn the_agy_hook_always_prints_an_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let curl = dir.path().join("curl");
+        std::fs::write(&curl, "#!/bin/sh\necho \"$@\" >> \"$0.args\"\nexit 7\n").unwrap();
+        std::fs::set_permissions(&curl, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = format!("{}:/usr/bin:/bin", dir.path().display());
+        let run = |url: Option<&str>| {
+            let mut c = std::process::Command::new("sh");
+            c.arg("-c").arg(agy_hook_command("Stop")).env("PATH", &path);
+            c.env_remove("QUARK_HOOK_URL");
+            if let Some(u) = url {
+                c.env("QUARK_HOOK_URL", u);
+            }
+            c.output().unwrap()
+        };
+        let out = run(None);
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "{}");
+        assert!(!dir.path().join("curl.args").exists());
+        let out = run(Some("http://127.0.0.1:9/worker/hooks/t/g"));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "{}");
         let args = std::fs::read_to_string(dir.path().join("curl.args")).unwrap();
         assert!(args.contains("http://127.0.0.1:9/worker/hooks/t/g/Stop"));
     }

@@ -236,6 +236,39 @@ mod tests {
         assert_eq!(j(&kiro_dialog("No, exit")), Screen::Answer(DOWN));
     }
 
+    /// agy 1.5.13's folder-trust question on a fresh folder, as drawn in a
+    /// 140-column tmux pane on Matt's Mac (2026-11-20).
+    fn agy_folder_trust(selected: &str) -> String {
+        let opt = |o: &str| {
+            if o == selected {
+                format!("> {o}\n")
+            } else {
+                format!("  {o}\n")
+            }
+        };
+        format!(
+            "Accessing workspace:\n/Users/me/.quark/work/fix-42\nDo you trust the contents of this project?\nAntigravity CLI requires permission to read, edit, and execute files here.\n{}{}  ↑/↓ Navigate · enter Confirm\n                                        auto · Gemini 4 Neon · high\n",
+            opt("Yes, I trust this folder"),
+            opt("No, exit")
+        )
+    }
+
+    #[test]
+    fn answers_agys_folder_trust_question() {
+        let reg = ManifestRegistry::builtin();
+        let agy = reg.get("antigravity").unwrap();
+        let j = |s: &str| judge(agy, &snap(s), s);
+        assert_eq!(
+            j(&agy_folder_trust("Yes, I trust this folder")),
+            Screen::Answer(b"\r")
+        );
+        assert_eq!(j(&agy_folder_trust("No, exit")), Screen::Answer(UP));
+        // agy's prompt box also starts with `>`: it is no dialog.
+        let ready = "> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n? for shortcuts      auto · Gemini 4 Neon · high\n";
+        assert_eq!(j(ready), Screen::Idle);
+        assert_eq!(dialog_key(agy, ready), None);
+    }
+
     #[test]
     fn dialogs_are_read_from_the_visible_screen() {
         let reg = ManifestRegistry::builtin();

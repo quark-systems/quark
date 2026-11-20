@@ -17,10 +17,14 @@
 //! - [`SessionFormat::Kiro`]: Kiro CLI's V3 engine,
 //!   `<kiro home>/sessions/<workspace hash>/sess_<id>/messages.jsonl`, beside a
 //!   `session.json` naming its working directories.
+//! - [`SessionFormat::Antigravity`]: Antigravity CLI (`agy`),
+//!   `<app data>/brain/<conversation id>/.system_generated/logs/transcript_full.jsonl`,
+//!   the folder's newest conversation named in `cache/last_conversations.json`.
 //!
 //! IBM Bob keeps no log file: its conversation is rows of its database,
 //! read by the daemon and parsed one row at a time ([`parse_bob_message`]).
 
+pub mod antigravity;
 mod bob;
 mod claude;
 mod codex;
@@ -55,23 +59,26 @@ pub enum SessionFormat {
     Codex,
     Pi,
     Kiro,
+    Antigravity,
 }
 
 impl SessionFormat {
-    pub const ALL: [SessionFormat; 4] = [
+    pub const ALL: [SessionFormat; 5] = [
         SessionFormat::Claude,
         SessionFormat::Codex,
         SessionFormat::Pi,
         SessionFormat::Kiro,
+        SessionFormat::Antigravity,
     ];
 
     /// The formats of harnesses that can run a coordinator, searched for a
     /// Project's coordinator log. IBM Bob keeps no log.
-    pub const COORDINATOR: [SessionFormat; 4] = [
+    pub const COORDINATOR: [SessionFormat; 5] = [
         SessionFormat::Claude,
         SessionFormat::Codex,
         SessionFormat::Pi,
         SessionFormat::Kiro,
+        SessionFormat::Antigravity,
     ];
 
     /// The format a harness writes, by the harness name the engine reports:
@@ -82,6 +89,7 @@ impl SessionFormat {
             "codex" => Some(SessionFormat::Codex),
             "pi" | "pi-signed" => Some(SessionFormat::Pi),
             "kiro" => Some(SessionFormat::Kiro),
+            "antigravity" | "agy" => Some(SessionFormat::Antigravity),
             _ => None,
         }
     }
@@ -92,6 +100,7 @@ impl SessionFormat {
             SessionFormat::Codex => "codex",
             SessionFormat::Pi => "pi",
             SessionFormat::Kiro => "kiro",
+            SessionFormat::Antigravity => "antigravity",
         }
     }
 
@@ -111,6 +120,7 @@ impl SessionFormat {
             SessionFormat::Codex => codex::parse(v),
             SessionFormat::Pi => pi::parse(v),
             SessionFormat::Kiro => kiro::parse(v),
+            SessionFormat::Antigravity => antigravity::parse(v),
         }
     }
 
@@ -121,7 +131,7 @@ impl SessionFormat {
         match self {
             SessionFormat::Claude => rate_limit::claude(v),
             SessionFormat::Codex => rate_limit::codex(v),
-            SessionFormat::Pi | SessionFormat::Kiro => None,
+            SessionFormat::Pi | SessionFormat::Kiro | SessionFormat::Antigravity => None,
         }
     }
 
@@ -131,7 +141,7 @@ impl SessionFormat {
         match self {
             SessionFormat::Claude => rate_limit::claude_auth_error(v),
             SessionFormat::Codex => rate_limit::codex_auth_error(v),
-            SessionFormat::Pi | SessionFormat::Kiro => None,
+            SessionFormat::Pi | SessionFormat::Kiro | SessionFormat::Antigravity => None,
         }
     }
 
@@ -325,6 +335,10 @@ mod tests {
         assert_eq!(
             SessionFormat::for_harness("kiro"),
             Some(SessionFormat::Kiro)
+        );
+        assert_eq!(
+            SessionFormat::for_harness("antigravity"),
+            Some(SessionFormat::Antigravity)
         );
         assert_eq!(SessionFormat::for_harness("bob"), None);
     }
