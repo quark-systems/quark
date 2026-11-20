@@ -6,7 +6,7 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
-## Unreleased
+## 0.3.1
 
 ### Added
 
@@ -17,6 +17,16 @@ page lists every merged pull request.
   their own, resume their conversation, and show their transcript and token use. Their hooks
   are one named entry, `quark-worker`, in `~/.gemini/config/hooks.json`, which does nothing
   outside a Quark worker. Gemini CLI keeps working as a worker.
+
+### Changed
+
+- Codex, Kiro CLI, IBM Bob, Grok Build, Rovo Dev, Antigravity CLI and Oh My Pi show their
+  vendors' published icons instead of monograms, and Muse Code shows Meta's symbol.
+
+### Fixed
+
+- A message or wake sent while a Kiro CLI coordinator is working shows as what was sent, not
+  wrapped in Kiro's live-steering note, and Kiro's steering reports stay out of its replies.
 
 ## 0.3.0
 
