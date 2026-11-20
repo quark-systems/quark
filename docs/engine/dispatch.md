@@ -33,7 +33,7 @@ A task can be taken back with `Dispatcher::withdraw` until it is placed.
 
 **Cursor** reads the editor's token from its `state.vscdb` (with `sqlite3`, read-only), else the Cursor CLI's (Keychain item `cursor-access-token` on macOS, `~/.config/cursor/auth.json` elsewhere), and asks Cursor's dashboard service: included, auto, API and spend-limit usage for the billing cycle jointly bound `all_models`; the Grok Bot weekly allowance is its own `grok_bot` scope. Only the default login is read.
 
-**Antigravity** runs `agy -p /quota --output-format json`: the Gemini five-hour and weekly windows bound the `gemini` scope, the Claude/GPT ones `claude_gpt`.
+**Antigravity** runs `agy -p /quota --output-format json`: the Gemini five-hour and weekly windows bound the `gemini` scope, the Claude/GPT ones `claude_gpt`. Dispatch bounds an agy candidate by its model's family: a Gemini model (or none, agy's default) by `gemini`, a Claude or GPT model by `claude_gpt`.
 
 **Muse** reads the Muse CLI's `auth.json` (`~/.config/muse`, or the account's directory), its Keychain item (`ai.meta.dev.credentials`), or `META_API_KEY`, and asks Meta's `POST /muse-code/key`, at most every five minutes: the five-hour and weekly subscription windows bound `all_models`. API-key accounts are read with their key.
 

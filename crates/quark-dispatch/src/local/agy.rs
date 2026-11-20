@@ -150,6 +150,24 @@ impl Drop for OpenerGuard {
     }
 }
 
+/// The quota scope that bounds an Antigravity worker running `model`:
+/// `gemini` for Gemini models and for agy's own default (Gemini), and
+/// `claude_gpt` for the Claude and GPT models agy also serves.
+pub fn scope_for_model(model: &str) -> Option<&'static str> {
+    let m = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    if m.is_empty() || m.starts_with("gemini") {
+        Some("gemini")
+    } else if m.starts_with("claude") || m.starts_with("gpt") {
+        Some("claude_gpt")
+    } else {
+        None
+    }
+}
+
 /// `(id, label, rank)` of a bucket's model group.
 fn group(name: &str, bucket: &str) -> (String, String, u8) {
     let n = format!("{name} {bucket}").to_ascii_lowercase();
