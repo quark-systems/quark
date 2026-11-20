@@ -111,6 +111,35 @@ pub fn read_from(path: &Path, offset: u64, format: SessionFormat) -> io::Result<
     Ok(batch)
 }
 
+/// What the harness recorded taking from its input ([`SessionFormat::input`])
+/// in the complete lines of `path` after byte `offset`, in log order. A file
+/// shorter than `offset` was replaced, and is read from its start.
+pub fn read_inputs(path: &Path, offset: u64, format: SessionFormat) -> io::Result<Vec<String>> {
+    let mut file = File::open(path)?;
+    let start = if file.metadata()?.len() < offset {
+        0
+    } else {
+        offset
+    };
+    file.seek(SeekFrom::Start(start))?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut inputs = Vec::new();
+    let mut read = 0;
+    while read < MAX_BATCH_BYTES {
+        line.clear();
+        let n = reader.read_until(b'\n', &mut line)?;
+        if n == 0 || line.last() != Some(&b'\n') {
+            break;
+        }
+        read += n as u64;
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) {
+            inputs.extend(format.input(&v));
+        }
+    }
+    Ok(inputs)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -144,6 +173,47 @@ mod tests {
         let none = read_from(&path, second.next_offset, SessionFormat::Claude).unwrap();
         assert!(none.entries.is_empty());
         assert_eq!(none.next_offset, second.next_offset);
+    }
+
+    #[test]
+    fn reads_what_each_harness_took_from_its_input() {
+        let dir = tempfile::tempdir().unwrap();
+        // Claude Code: a user line, then input queued during the turn.
+        let claude = dir.path().join("claude.jsonl");
+        let queued = r#"{"type":"queue-operation","operation":"enqueue","content":"Wake p#2: 1 item needs your judgment."}"#;
+        std::fs::write(
+            &claude,
+            format!("{USER}\n{REPLY}\n{queued}\n{{\"type\":\"us"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_inputs(&claude, 0, SessionFormat::Claude).unwrap(),
+            ["hello", "Wake p#2: 1 item needs your judgment."]
+        );
+        // Only what was appended after the offset counts.
+        let after = USER.len() as u64 + 1;
+        assert_eq!(
+            read_inputs(&claude, after, SessionFormat::Claude).unwrap(),
+            ["Wake p#2: 1 item needs your judgment."]
+        );
+        // A log replaced by a shorter one is read from its start.
+        assert_eq!(
+            read_inputs(&claude, 10_000, SessionFormat::Claude)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Codex: both the form before 0.169 and the one since.
+        let codex = dir.path().join("rollout.jsonl");
+        let old = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"user_message","message":"Wake p#3: old form"}}"#;
+        let new = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"Wake p#4: new form"}]}}}"#;
+        let injected = r#"{"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>"}]}}"#;
+        std::fs::write(&codex, format!("{old}\n{injected}\n{new}\n")).unwrap();
+        assert_eq!(
+            read_inputs(&codex, 0, SessionFormat::Codex).unwrap(),
+            ["Wake p#3: old form", "Wake p#4: new form"]
+        );
     }
 
     #[test]

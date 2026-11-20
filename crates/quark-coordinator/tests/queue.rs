@@ -20,6 +20,10 @@ use time::{Duration, OffsetDateTime};
 struct Recorder {
     turns: Mutex<Vec<(ProjectId, Turn)>>,
     calls: Mutex<Vec<ToolCall>>,
+    /// The coordinator is in a turn the queue did not open.
+    busy: Mutex<bool>,
+    /// The last turn end each `ready` was asked with.
+    asked: Mutex<Vec<Option<OffsetDateTime>>>,
 }
 
 #[async_trait]
@@ -30,6 +34,11 @@ impl Brain for Recorder {
             .unwrap()
             .push((project.clone(), turn.clone()));
         Ok(())
+    }
+
+    async fn ready(&self, _: &ProjectId, turn_ended: Option<OffsetDateTime>) -> bool {
+        self.asked.lock().unwrap().push(turn_ended);
+        !*self.busy.lock().unwrap()
     }
 }
 
@@ -301,6 +310,85 @@ async fn a_crash_redelivers_the_open_turn_and_closes_a_tool_that_was_running() {
     let last = rig.rec.turns.lock().unwrap().last().unwrap().1.clone();
     assert_eq!(last.id, "p#2");
     assert!(last.items[0].summary.contains("another?"));
+}
+
+#[tokio::test]
+async fn a_wake_waits_while_the_coordinator_is_in_a_turn_it_did_not_open() {
+    let mut rig = Rig::new();
+    // A log with history, as a Project's is: its head is where evaluation
+    // starts.
+    rig.working("t0").await;
+    let c = rig.open().await;
+    // The user is talking to the coordinator when a worker asks something.
+    *rig.rec.busy.lock().unwrap() = true;
+    let asked = rig.ask("t1", "k", "q?").await;
+    let r = c.tick(now()).await.unwrap();
+    assert_eq!((r.items, r.turns, r.held), (1, 0, 1));
+    let r = c.tick(now()).await.unwrap();
+    assert_eq!((r.items, r.turns, r.held), (0, 0, 1));
+    // Nothing was typed and no turn is open, so nothing can time out and
+    // be delivered a second time.
+    assert!(rig.rec.turns.lock().unwrap().is_empty());
+    assert!(rig.events("coordinator.woken").await.is_empty());
+    assert!(c.open_turn(&p()).await.is_none());
+    assert_eq!(c.pending(&p()).await.len(), 1);
+    c.tick(now() + Duration::minutes(31)).await.unwrap();
+    assert!(rig.events("coordinator.turn_ended").await.is_empty());
+    assert_eq!(*rig.rec.asked.lock().unwrap().last().unwrap(), None);
+
+    // A restart keeps the waiting item: the cursor never passed it.
+    for e in rig.decoded("coordinator.cursor").await {
+        let CoordinatorEvent::Cursor { through } = e else {
+            unreachable!()
+        };
+        assert!(through < asked);
+    }
+    drop(c);
+    rig.reopen_log();
+    let c = rig.open().await;
+    let r = c.tick(now()).await.unwrap();
+    assert_eq!((r.items, r.turns, r.held), (1, 0, 1));
+
+    // The user's turn ends: the wake is delivered once, with what arrived
+    // while it waited.
+    c.turn_ended(&p(), Usage::default(), None).await.unwrap();
+    rig.ask("t2", "k", "later?").await;
+    *rig.rec.busy.lock().unwrap() = false;
+    let r = c.tick(now()).await.unwrap();
+    assert_eq!((r.turns, r.held), (1, 0));
+    let ended = rig.events("coordinator.turn_ended").await[0].ts;
+    assert_eq!(*rig.rec.asked.lock().unwrap().last().unwrap(), Some(ended));
+    c.tick(now()).await.unwrap();
+    let turns = rig.rec.turns.lock().unwrap().clone();
+    assert_eq!(turns.len(), 1);
+    assert_eq!((turns[0].1.id.as_str(), turns[0].1.attempt), ("p#1", 1));
+    let summaries: Vec<&str> = turns[0]
+        .1
+        .items
+        .iter()
+        .map(|i| i.summary.as_str())
+        .collect();
+    assert_eq!(summaries, ["t1: asks: q?", "t2: asks: later?"]);
+}
+
+#[tokio::test]
+async fn a_turn_left_open_by_a_crash_is_redelivered_once_the_coordinator_can_take_it() {
+    let mut rig = Rig::new();
+    let c = rig.open().await;
+    rig.ask("t1", "k", "q?").await;
+    c.tick(now()).await.unwrap();
+    drop(c);
+    rig.reopen_log();
+    let c = rig.open().await;
+    *rig.rec.busy.lock().unwrap() = true;
+    let r = c.tick(now()).await.unwrap();
+    assert_eq!((r.redelivered, r.held), (0, 1));
+    assert_eq!(rig.rec.turns.lock().unwrap().len(), 1);
+    *rig.rec.busy.lock().unwrap() = false;
+    let r = c.tick(now()).await.unwrap();
+    assert_eq!((r.redelivered, r.held), (1, 0));
+    let turns = rig.rec.turns.lock().unwrap().clone();
+    assert_eq!((turns[1].1.id.as_str(), turns[1].1.attempt), ("p#1", 2));
 }
 
 #[tokio::test]

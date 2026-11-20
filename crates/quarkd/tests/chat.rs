@@ -28,13 +28,19 @@ fn claude_slug(p: &Path) -> String {
 
 /// A stand-in coordinator: reads submitted lines, strips the bracketed-paste
 /// markers and records each as a Claude Code user message in `log`, the way
-/// the real harness records what it is sent.
+/// the real harness records what it is sent. While the file `$LOG.busy`
+/// exists it is "in a turn": it records the line as Claude Code records
+/// input typed then, queued and never a user message.
 const FAKE_COORDINATOR: &str = r#"
 stty -echo
 printf '\033[?2004h'
 while IFS= read -r line; do
   text=$(printf '%s' "$line" | sed 's/\x1b\[20[01]~//g')
-  printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$text" >> "$LOG"
+  if [ -e "$LOG.busy" ]; then
+    printf '{"type":"queue-operation","operation":"enqueue","content":"%s"}\n' "$text" >> "$LOG"
+  else
+    printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$text" >> "$LOG"
+  fi
 done
 "#;
 
@@ -82,6 +88,8 @@ async fn messages_are_pasted_submitted_and_confirmed_from_the_log() {
     // No coordinator window yet: nothing is typed anywhere.
     let err = input.send(&ws, "hello").await.unwrap_err();
     assert!(matches!(err, ChatError::Unavailable(_)), "{err:?}");
+    assert_eq!(input.last_typed(&project.id), None);
+    let started = time::OffsetDateTime::now_utc();
 
     let target = sessions
         .start_window(&WindowSpec {
@@ -110,6 +118,50 @@ async fn messages_are_pasted_submitted_and_confirmed_from_the_log() {
         "{logged}"
     );
 
+    // A typed message started a turn, in this coordinator only.
+    assert_eq!(input.last_typed("another-project"), None);
+    let typed = input.last_typed(&project.id).expect("typed");
+    assert!(typed >= started && typed <= time::OffsetDateTime::now_utc());
+
+    // A wake and a message sent at the same moment each get the input box
+    // to themselves: neither is pasted into the other's line.
+    let (wake, message) = tokio::join!(
+        input.send(&ws, "Wake p#1: 1 item needs your judgment."),
+        input.send(&ws, "and update the docs"),
+    );
+    assert_eq!(wake.unwrap(), Delivery::Confirmed);
+    assert_eq!(message.unwrap(), Delivery::Confirmed);
+    let logged = std::fs::read_to_string(&log).unwrap();
+    let lines: Vec<&str> = logged.lines().collect();
+    assert!(
+        lines.contains(
+            &r#"{"type":"user","message":{"role":"user","content":"Wake p#1: 1 item needs your judgment."}}"#
+        ) && lines.contains(
+            &r#"{"type":"user","message":{"role":"user","content":"and update the docs"}}"#
+        ),
+        "{logged}"
+    );
+
+    // Typed while the coordinator is in a turn, Claude Code queues the text
+    // and its log never holds it as a user message: its queue record
+    // confirms it.
+    std::fs::write(log.with_extension("jsonl.busy"), "").unwrap();
+    assert_eq!(
+        input
+            .send(&ws, "Wake p#2: 1 item needs your judgment.")
+            .await
+            .unwrap(),
+        Delivery::Confirmed
+    );
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        logged.contains(
+            r#"{"type":"queue-operation","operation":"enqueue","content":"Wake p#2: 1 item needs your judgment."}"#
+        ),
+        "{logged}"
+    );
+    std::fs::remove_file(log.with_extension("jsonl.busy")).unwrap();
+
     // With no session log to confirm from, a typed message is reported
     // unconfirmed rather than delivered.
     let blind = SessionsInput::new(sessions.clone(), SessionRoots::default())
@@ -118,6 +170,11 @@ async fn messages_are_pasted_submitted_and_confirmed_from_the_log() {
         blind.send(&ws, "anyone there?").await.unwrap(),
         Delivery::Unconfirmed
     );
+
+    // Interrupted, the coordinator is in no turn: its harness reports no
+    // end for the one it was in.
+    input.interrupt(&ws).await.unwrap();
+    assert_eq!(input.last_typed(&project.id), None);
 
     let server = sessions.server().unwrap().clone();
     sessions.detach_all();

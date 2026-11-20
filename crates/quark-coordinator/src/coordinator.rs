@@ -91,6 +91,19 @@ fn inset(summary: &str) -> String {
 #[async_trait]
 pub trait Brain: Send + Sync {
     async fn wake(&self, project: &ProjectId, turn: &Turn) -> Result<()>;
+
+    /// Whether `project`'s coordinator can take a wake now. `turn_ended` is
+    /// when its harness last reported a turn end, if it ever has.
+    ///
+    /// The queue knows the turns it opened, not the ones someone else began:
+    /// the user talking to the coordinator, or the engine sending it a note.
+    /// A wake delivered into one of those is taken into that turn or held in
+    /// the harness's own queue, where nothing shows whether it arrived. While
+    /// this is `false` the items wait, undelivered and with no turn opened,
+    /// and it is asked again on the next tick.
+    async fn ready(&self, _project: &ProjectId, _turn_ended: Option<OffsetDateTime>) -> bool {
+        true
+    }
 }
 
 /// A brain that refuses, for tests.
@@ -115,6 +128,9 @@ pub struct TickReport {
     pub turns: usize,
     /// Turns delivered again after a restart or a timeout.
     pub redelivered: usize,
+    /// Projects whose wake waited because their coordinator could not take
+    /// it yet ([`Brain::ready`]).
+    pub held: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +151,8 @@ struct ProjectState {
     prompt_digest: Option<String>,
     /// An `ask_user` call succeeded since the last turn ended.
     asked: bool,
+    /// When the harness last reported a turn end, whoever began the turn.
+    ended_at: Option<OffsetDateTime>,
 }
 
 #[derive(Default)]
@@ -208,6 +226,7 @@ impl State {
             }
             CoordinatorEvent::TurnEnded { turn, end, .. } => {
                 p.asked = false;
+                p.ended_at = Some(e.ts);
                 if let (Some(open), Some(turn)) = (&p.open, turn) {
                     if open.id == turn {
                         let open = p.open.take().unwrap();
@@ -540,6 +559,10 @@ impl Coordinator {
                 self.refresh_locked(st).await?;
                 wrote = true;
             } else if open.stale {
+                if !self.brain.ready(project, p.ended_at).await {
+                    report.held += 1;
+                    return Ok(false);
+                }
                 let turn = Turn {
                     id: open.id.clone(),
                     items: open.items.clone(),
@@ -555,6 +578,12 @@ impl Coordinator {
 
         let p = st.projects.get(project).expect("listed project");
         if p.open.is_some() || p.pending.is_empty() {
+            return Ok(wrote);
+        }
+        // Not recorded as woken until it can be delivered: the items stay
+        // waiting, so the cursor does not pass them either.
+        if !self.brain.ready(project, p.ended_at).await {
+            report.held += 1;
             return Ok(wrote);
         }
         let turn = Turn {
