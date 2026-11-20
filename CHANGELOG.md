@@ -30,6 +30,14 @@ page lists every merged pull request.
   git writes with the `com.apple.provenance` extended attribute, and the sharing pass kept any
   file carrying an extended attribute, so a new worktree shared nothing with the primary
   checkout. That one attribute no longer keeps a file; any other still does.
+- Standing approval no longer leaves a green pull request unmerged after a forge read fails.
+  A merge refused with "could not read whether … contains main's tip" was never tried again
+  until quarkd restarted. The merge now reads the forge again before it refuses, says which
+  read failed and why, and standing approval tries the same head again later. Merge steps that
+  end on their own (a rebased head waiting for its checks, checks still running, main moving
+  under the gates) are logged as information instead of warnings, so `quarkd diagnose` and
+  triage no longer report them as trouble; one that keeps failing still is. The merge guard's
+  own warnings now reach quarkd's log.
 
 ## 0.3.1
 

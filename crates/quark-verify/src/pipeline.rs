@@ -186,13 +186,24 @@ impl NativePipeline {
             uuid::Uuid::now_v7().simple()
         );
         let dir = self.scratch.join(name);
-        // Best effort: the objects may already be local.
-        let _ = git(
+        // Best effort: the objects may already be local. When they are not,
+        // the failed fetch is why, and is reported as that.
+        let unfetched = git(
             &t.checkout,
             &["fetch", "--quiet", &t.remote, &t.base, &change.branch],
         )
-        .await;
-        git(
+        .await
+        .err()
+        .map(|e| {
+            CoreError::Backend(format!(
+                "could not fetch {} and {} from {} into {}: {e}",
+                t.base,
+                change.branch,
+                t.remote,
+                t.checkout.display()
+            ))
+        });
+        let added = git(
             &t.checkout,
             &[
                 "worktree",
@@ -203,11 +214,16 @@ impl NativePipeline {
                 rev,
             ],
         )
-        .await?;
-        Ok(Scratch {
-            checkout: t.checkout.clone(),
-            dir,
-        })
+        .await;
+        match (added, unfetched) {
+            (Ok(_), unfetched) => Ok(Scratch {
+                checkout: t.checkout.clone(),
+                dir,
+                unfetched,
+            }),
+            (Err(_), Some(unfetched)) => Err(unfetched),
+            (Err(e), None) => Err(e),
+        }
     }
 }
 
@@ -215,6 +231,9 @@ impl NativePipeline {
 struct Scratch {
     checkout: PathBuf,
     dir: PathBuf,
+    /// Why the fetch before it failed, when it did: the worktree is made
+    /// from what the clone already had.
+    unfetched: Option<CoreError>,
 }
 
 impl Scratch {
@@ -247,8 +266,9 @@ impl VerifyPipeline for NativePipeline {
 
     async fn rebase_and_reverify(&self, change: &Change) -> Result<Verdict> {
         let t = self.target(&change.project)?;
-        let wt = self.worktree(&t, change, &change.head).await?;
-        let result = rebase_and_run(&t, change, &wt.dir, &self.scratch).await;
+        let mut wt = self.worktree(&t, change, &change.head).await?;
+        let unfetched = wt.unfetched.take();
+        let result = rebase_and_run(&t, change, &wt.dir, &self.scratch, unfetched).await;
         wt.remove().await;
         result
     }
@@ -259,6 +279,7 @@ async fn rebase_and_run(
     change: &Change,
     dir: &Path,
     scratch: &Path,
+    unfetched: Option<CoreError>,
 ) -> Result<Verdict> {
     let onto = format!("{}/{}", t.remote, t.base);
     if let Some(tip) = &t.tip {
@@ -266,6 +287,11 @@ async fn rebase_and_run(
             .await
             .is_err()
         {
+            // The clone lacks the tip because it could not be fetched: a
+            // failed read, not a remote that is the wrong place to merge.
+            if let Some(unfetched) = unfetched {
+                return Err(unfetched);
+            }
             return Ok(Verdict {
                 head: change.head.clone(),
                 stages: Vec::new(),

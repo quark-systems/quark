@@ -278,6 +278,13 @@ pub enum EngineError {
     TaskNotFound(String),
     #[error("engine command failed: {0}")]
     Command(String),
+    /// The guarded merge refused a pull request, with the reason a person
+    /// reads. `retry` says the same merge can go through later with no one
+    /// acting on the pull request: its rebased head waits for checks, its
+    /// checks are still running, main moved under the gates, or a forge read
+    /// failed.
+    #[error("engine command failed: merge refused: {reason}")]
+    MergeRefused { reason: String, retry: bool },
     #[error("could not parse engine output: {0}")]
     Parse(String),
     #[error(transparent)]
@@ -392,7 +399,9 @@ pub trait EngineAdapter: Send + Sync {
 
     /// Merge the pull request at `url`, which `task_id` opened, through the
     /// engine's guarded merge. `Ok` means the engine confirmed the merge; a
-    /// refusal (not green, conflicting, held) is a [`EngineError::Command`].
+    /// refusal (not green, conflicting, held) is an
+    /// [`EngineError::MergeRefused`], and a read or write that failed on the
+    /// way an [`EngineError::Command`].
     async fn merge_pull_request(
         &self,
         ws: &WorkspaceRef,
@@ -836,6 +845,11 @@ pub struct StubEngine {
     holds: Mutex<Vec<Hold>>,
     writes: Mutex<Vec<StubWrite>>,
     write_error: Mutex<Option<String>>,
+    /// The refusal every merge gets: its reason, and whether it ends on its
+    /// own.
+    merge_refusal: Mutex<Option<(String, bool)>>,
+    /// Merges asked for, refused or not.
+    merge_attempts: Mutex<usize>,
     coordinators: Mutex<HashMap<String, String>>,
     /// Status entries per engine task id; the offset is an index.
     status: Mutex<HashMap<String, Vec<StatusEntry>>>,
@@ -963,6 +977,17 @@ impl StubEngine {
     /// Make every later write fail as an engine command error.
     pub fn fail_writes(&self, message: Option<&str>) {
         *self.write_error.lock().unwrap() = message.map(str::to_string);
+    }
+
+    /// Refuse every later merge as the guarded merge does, with `reason` and
+    /// whether the refusal ends with no one acting; `None` merges again.
+    pub fn refuse_merges(&self, refusal: Option<(&str, bool)>) {
+        *self.merge_refusal.lock().unwrap() = refusal.map(|(r, retry)| (r.to_string(), retry));
+    }
+
+    /// How many merges were asked for, refused or not.
+    pub fn merge_attempts(&self) -> usize {
+        *self.merge_attempts.lock().unwrap()
     }
 
     fn accept(&self, write: StubWrite) -> Result<(), EngineError> {
@@ -1171,6 +1196,10 @@ impl EngineAdapter for StubEngine {
         url: &str,
         method: Option<MergeMethod>,
     ) -> Result<(), EngineError> {
+        *self.merge_attempts.lock().unwrap() += 1;
+        if let Some((reason, retry)) = self.merge_refusal.lock().unwrap().clone() {
+            return Err(EngineError::MergeRefused { reason, retry });
+        }
         self.accept(StubWrite::MergePullRequest {
             task_id: task_id.into(),
             url: url.into(),

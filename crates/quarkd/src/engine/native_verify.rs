@@ -45,7 +45,8 @@ impl NativeVerify {
 
     /// Merge `url`, the pull request `task` opened, through the guarded
     /// merge, and mark the task landed. A rule's refusal is an
-    /// [`EngineError::Command`] naming it.
+    /// [`EngineError::MergeRefused`] naming it; a read or write that failed
+    /// is an [`EngineError::Command`].
     pub async fn merge(
         &self,
         supervisor: &Supervisor,
@@ -131,9 +132,7 @@ impl NativeVerify {
                 crate::clone_sync::after_merge(worker.assignment.repo.clone());
                 Ok(())
             }
-            Outcome::Refused { reason } => {
-                Err(EngineError::Command(format!("merge refused: {reason}")))
-            }
+            Outcome::Refused { reason, retry } => Err(EngineError::MergeRefused { reason, retry }),
         }
     }
 

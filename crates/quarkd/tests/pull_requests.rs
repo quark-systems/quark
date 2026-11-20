@@ -1,6 +1,7 @@
 //! The PR center end to end over the stub engine and stub forge.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -108,7 +109,9 @@ async fn harness() -> Harness {
             },
         )
         .unwrap();
-    let center = PrCenter::new(store.clone(), engine.clone(), forge.clone());
+    // No wait between standing approval's tries of one head.
+    let center =
+        PrCenter::new(store.clone(), engine.clone(), forge.clone()).retry_after(Duration::ZERO);
     Harness {
         _dir: dir,
         app,
@@ -536,6 +539,26 @@ async fn merge_goes_through_the_engine_and_reads_back() {
         .contains("not green"));
     h.engine.fail_writes(None);
 
+    // So is the guarded merge's own refusal, whether or not it ends on its own.
+    for retry in [false, true] {
+        h.engine
+            .refuse_merges(Some(("its checks are still running", retry)));
+        let (status, body) = call(
+            &h.app,
+            "POST",
+            &format!("/v1/pull-requests/{id}:merge"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "merge_refused");
+        assert_eq!(
+            body["error"]["message"],
+            "merge refused: its checks are still running"
+        );
+    }
+    h.engine.refuse_merges(None);
+
     let mut merged = forge_pr(PullRequestState::Merged, CheckStatus::Success);
     merged.merged_at = Some("2026-10-02T17:00:00Z".into());
     h.forge.set(URL, merged);
@@ -654,11 +677,13 @@ async fn standing_approval_merges_green_pull_requests_once_per_head() {
     );
 
     // The merge is refused (say, a hold); it is not retried on the same head.
-    h.engine.fail_writes(Some("held for the captain"));
+    h.engine
+        .refuse_merges(Some(("held for the captain", false)));
     h.center.refresh().await;
     h.center.refresh().await;
-    h.engine.fail_writes(None);
+    h.engine.refuse_merges(None);
     h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 1);
     assert_eq!(h.engine.writes().len(), 1);
 
     // A new head is tried again.
@@ -677,9 +702,12 @@ async fn standing_approval_merges_green_pull_requests_once_per_head() {
     let mut stale = forge_pr(PullRequestState::Open, CheckStatus::Success);
     stale.head_sha = Some("5a1e".into());
     h.forge.set(URL, stale);
-    h.engine.fail_writes(Some("merge refused: stale head 5a1e"));
+    h.engine.refuse_merges(Some((
+        "stale head 5a1e: rebase onto main, verify the rebased head, then merge",
+        true,
+    )));
     h.center.refresh().await;
-    h.engine.fail_writes(None);
+    h.engine.refuse_merges(None);
     h.center.refresh().await;
     assert_eq!(h.engine.writes().len(), 3);
 
@@ -708,6 +736,179 @@ async fn standing_approval_merges_green_pull_requests_once_per_head() {
             on: false,
         }
     );
+}
+
+/// What the PR center logged on this thread, as level and message.
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+impl Logs {
+    /// Start capturing; the guard stops it.
+    fn capture() -> (Self, tracing::subscriber::DefaultGuard) {
+        use tracing_subscriber::layer::SubscriberExt;
+        let logs = Self::default();
+        let subscriber = tracing_subscriber::registry().with(logs.clone());
+        (logs.clone(), tracing::subscriber::set_default(subscriber))
+    }
+
+    /// Messages logged at `level` so far.
+    fn at(&self, level: tracing::Level) -> Vec<String> {
+        let all = self.0.lock().unwrap();
+        all.iter()
+            .filter(|(l, _)| *l == level)
+            .map(|(_, m)| m.clone())
+            .collect()
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Logs {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        if event.metadata().target() != "quarkd::pr_center" {
+            return;
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        self.0
+            .lock()
+            .unwrap()
+            .push((*event.metadata().level(), message.0));
+    }
+}
+
+const NOT_DONE: &str = "standing approval merge not done yet; it will be tried again";
+const KEEPS_ENDING: &str = "standing approval merge keeps ending without a merge";
+const REFUSED: &str = "standing approval merge refused";
+
+/// A harness whose Project has standing approval on and whose pull request
+/// is open and green.
+async fn approved() -> Harness {
+    let h = harness().await;
+    h.store
+        .update_project(
+            &h.project_id,
+            quark_systems::UpdateProject {
+                standing_approval: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    h.forge
+        .set(URL, forge_pr(PullRequestState::Open, CheckStatus::Success));
+    h
+}
+
+/// The same pull request moved to `head`, its checks at `check`.
+fn moved(head: &str, check: CheckStatus) -> ForgePr {
+    let mut pr = forge_pr(PullRequestState::Open, check);
+    pr.head_sha = Some(head.into());
+    pr
+}
+
+#[tokio::test]
+async fn a_rebased_head_merges_once_its_checks_pass_and_none_of_it_is_a_warning() {
+    let h = approved().await;
+    let (logs, _guard) = Logs::capture();
+
+    // Main had moved: the merge pushed a rebased head and refused for now.
+    h.engine.refuse_merges(Some((
+        "abc123 did not contain main's tip, so it was rebased and pushed as def456; the gates \
+         passed on it, so merge again once its checks pass",
+        true,
+    )));
+    h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 1);
+    assert_eq!(logs.at(tracing::Level::INFO).last().unwrap(), NOT_DONE);
+    h.engine.refuse_merges(None);
+
+    // The forge shows the rebased head, its checks running: nothing to try.
+    h.forge.set(URL, moved("def456", CheckStatus::Pending));
+    h.center.refresh().await;
+    h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 1);
+
+    // Its checks pass: the next pass merges it, with no one asking.
+    h.forge.set(URL, moved("def456", CheckStatus::Success));
+    h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 2);
+    assert!(matches!(
+        h.engine.writes().as_slice(),
+        [StubWrite::MergePullRequest { .. }]
+    ));
+    assert_eq!(logs.at(tracing::Level::WARN), Vec::<String>::new());
+    assert_eq!(logs.at(tracing::Level::ERROR), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_failed_read_is_tried_again_and_reported_only_when_it_keeps_failing() {
+    let h = approved().await;
+    let (logs, _guard) = Logs::capture();
+
+    // The forge did not answer the guard: nothing was decided about the head.
+    h.engine.refuse_merges(Some((
+        "could not read whether abc123 contains main's tip: gh api \
+         repos/quark-systems/quark/compare/a...b: HTTP 502 (read 3 times)",
+        true,
+    )));
+    h.center.refresh().await;
+    h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 2, "the same head is tried again");
+    assert_eq!(logs.at(tracing::Level::INFO).last().unwrap(), NOT_DONE);
+    assert_eq!(logs.at(tracing::Level::WARN), Vec::<String>::new());
+
+    // It keeps failing: from the third try on, that is trouble worth filing.
+    h.center.refresh().await;
+    assert_eq!(logs.at(tracing::Level::WARN), vec![KEEPS_ENDING]);
+
+    // A read that failed before the guard ran is tried again too.
+    h.engine.refuse_merges(None);
+    h.engine
+        .fail_writes(Some("gh api repos/quark-systems/quark/pulls/16: timed out"));
+    h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 4);
+    h.engine.fail_writes(None);
+
+    // The forge answers again: the head merges without the pull request moving.
+    h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 5);
+    assert!(matches!(
+        h.engine.writes().as_slice(),
+        [StubWrite::MergePullRequest { .. }]
+    ));
+}
+
+#[tokio::test]
+async fn a_lasting_refusal_is_a_warning_and_waits_for_the_pull_request_to_move() {
+    let h = approved().await;
+    let (logs, _guard) = Logs::capture();
+    h.engine.refuse_merges(Some((
+        "the gates did not pass on abc123: test: failed",
+        false,
+    )));
+    h.center.refresh().await;
+    h.center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 1);
+    assert_eq!(logs.at(tracing::Level::WARN), vec![REFUSED]);
+}
+
+#[tokio::test]
+async fn a_head_is_not_tried_again_before_its_wait_is_over() {
+    let h = approved().await;
+    let center = PrCenter::new(h.store.clone(), h.engine.clone(), h.forge.clone());
+    h.engine
+        .refuse_merges(Some(("its checks are still running", true)));
+    center.refresh().await;
+    // A minute by default: the passes in between leave the head alone.
+    center.refresh().await;
+    center.refresh().await;
+    assert_eq!(h.engine.merge_attempts(), 1);
 }
 
 #[tokio::test]

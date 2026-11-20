@@ -47,7 +47,7 @@ Useful flags (`cargo run -p quarkd -- --help` lists them all):
 | `--user-memory` | `QUARK_USER_MEMORY` | `<home>/memory` |
 | `--refresh-secs` | | `5` |
 | `--pr-refresh-secs` | | `30` |
-| | `QUARKD_LOG` | `quarkd=info,tower_http=info` |
+| | `QUARKD_LOG` | `quarkd=info,quark_supervisor=info,quark_worker=info,quark_verify=info,tower_http=info` |
 
 The daemon logs to stderr and, as JSON lines, to `<home>/logs/quarkd.<date>.jsonl`, one file a day, keeping a week. Every hour it also prunes the store: successful engine reads after a day, failed ones after 30 days, and a finished task's terminal output down to its last 256 KB.
 
