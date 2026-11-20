@@ -30,6 +30,7 @@ pub async fn check(m: &HarnessManifest, model: &str, timeout: Duration) -> Listi
         timeout,
         tokio::process::Command::new(exe)
             .args(args)
+            .current_dir(quark_core::probe_dir())
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .output(),

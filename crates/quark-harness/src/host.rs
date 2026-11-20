@@ -199,6 +199,7 @@ pub async fn probe_version(exe: &Path, args: &[String]) -> Option<String> {
     }
     let run = tokio::process::Command::new(exe)
         .args(args)
+        .current_dir(quark_core::probe_dir())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();

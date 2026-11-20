@@ -295,10 +295,26 @@ fn main() -> anyhow::Result<()> {
     // under a Node version other than nvm's default are found by detection
     // and by every worker quarkd launches.
     let widened = widen_path();
+    leave_root_dir();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(run(widened))
+}
+
+/// launchd (and an app bundle) start quarkd in `/`, and every program it
+/// runs without its own directory inherits that. A harness CLI that indexes
+/// its working directory then walks the whole disk, and macOS asks for
+/// Desktop, Documents, Downloads and other volumes in the name of QuarkBar.
+/// Move to an empty directory instead; any other directory is kept, so
+/// relative paths given on the command line still resolve.
+fn leave_root_dir() {
+    match std::env::current_dir() {
+        Ok(d) if d != std::path::Path::new("/") => {}
+        _ => {
+            let _ = std::env::set_current_dir(quark_core::probe_dir());
+        }
+    }
 }
 
 /// Appends [`quark_harness::tool_dirs`] missing from `PATH`; returns them.

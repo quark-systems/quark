@@ -10,6 +10,11 @@ page lists every merged pull request.
 
 ### Fixed
 
+- QuarkBar no longer sets off macOS prompts for Desktop, Documents, Downloads and other
+  protected folders. quarkd, started by launchd in `/`, ran harness CLIs for quota, version
+  and model checks there, and Antigravity's `agy /quota` indexes its working directory, so
+  each check walked the disk. Those checks now run in an empty temporary directory, and
+  quarkd itself leaves `/` when it starts.
 - Dispatch ranks Antigravity CLI workers by their quota. A worker on a Gemini model is bounded
   by Antigravity's Gemini windows and one on a Claude or GPT model by its Claude/GPT windows,
   instead of being left unranked with "no applicable quota row for provider agy".
