@@ -1,7 +1,6 @@
-// J3: the project's Conversation tab (its coordinator) and Work tab (its board, live from the event stream).
+// J3: the project's Agents tab (its coordinator) and Work tab (its board, live from the event stream).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, CoordinatorCommand, Project, Task, TranscriptItem } from "../api";
-import { SinceYouLooked } from "../shell/SinceYouLooked";
 import { clearWorkers, loadChat, noteOutbox, useStore } from "../store";
 import { useOutboxPrompts } from "../components/CoordinatorOutbox";
 import { errText, STATES } from "../util";
@@ -20,6 +19,9 @@ import { commandLabel, fromSlash, HINTS, slashMatches } from "../commands";
 import { Welcome } from "../components/Welcome";
 import { ScreenPromptCard } from "../components/ScreenPromptCard";
 import { coordinatorScreenPrompt, ScreenPrompt } from "../screenPrompt";
+import { dockMessage } from "../shell/Dock";
+import { BeadText } from "../ui/BeadText";
+import { Agents } from "./Agents";
 import type { Decision } from "../api";
 
 const ALWAYS_SHOWN = new Set(["queued", "running", "needs_decision", "in_review", "done"]);
@@ -87,18 +89,15 @@ export function ProjectBoard({ id }: { id: string }) {
   );
 }
 
-/** The Conversation tab, the project's home: its coordinator, and what changed since you looked. */
-export function Conversation({ id }: { id: string }) {
+/** The Agents tab, the project's home: its coordinator in the middle and the project panel beside it. */
+export function Conversation({ id, worker }: { id: string; worker?: string }) {
   const project = useStore((s) => s.projects[id]);
   const connected = useStore((s) => s.connected);
   if (!project) return <Missing connected={connected} />;
   return (
     <>
       {project.status && project.status !== "ready" && <ProvisionBar project={project} />}
-      <div className="conversation">
-        <CoordinatorChat cid={id} welcome />
-        <SinceYouLooked project={id} />
-      </div>
+      <Agents pid={id} worker={worker} />
     </>
   );
 }
@@ -185,6 +184,16 @@ function ProvisionBar({ project }: { project: Project }) {
 
 const EMPTY: TranscriptItem[] = [];
 
+/** The open worker as context on the coordinator's box: on, it names the worker in what you send; off, the message goes as typed. */
+function AboutChip({ about, on, onToggle }: { about: ChatAbout; on: boolean; onToggle: () => void }) {
+  return (
+    <button type="button" className={"composer-tool about-chip" + (on ? " on" : "")} aria-pressed={on} onClick={onToggle} data-testid="coordinator-about"
+      title={on ? "Messages say they are about this worker. Click to send without it." : "Click to say your message is about this worker"}>
+      <span className="composer-tool-label ellipsis">{on ? "About " : "Not about "}<BeadText text={about.title} project={null} /></span>{on && <span aria-hidden="true"> ×</span>}
+    </button>
+  );
+}
+
 /** The coordinator's state as a pill in its header: working (with how long and on what), listening, idle, stopped, or your turn. */
 function ChatStatus({ live, stopped }: { live: LiveStatus; stopped: boolean }) {
   const now = useNow(live.activity === "working", 1_000);
@@ -202,8 +211,12 @@ function ChatStatus({ live, stopped }: { live: LiveStatus; stopped: boolean }) {
   );
 }
 
-/** `welcome`: show the welcome while the conversation is empty (the Conversation tab; not the Issues side chat). */
-export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome?: boolean }) {
+/** What the coordinator's box is about: the worker open beside it, with the link the coordinator follows. */
+export type ChatAbout = { key: string; title: string; link: string };
+
+/** `welcome`: show the welcome while the conversation is empty (the Agents tab; not the Issues side chat).
+ * `about`: a worker open beside the chat; messages say they are about it until you remove the chip. */
+export function CoordinatorChat({ cid, welcome = false, about = null }: { cid: string; welcome?: boolean; about?: ChatAbout | null }) {
   const project = useStore((s) => s.projects[cid]);
   const box = useRef<HTMLElement>(null);
   const loaded = useStore((s) => s.chat[cid]);
@@ -242,6 +255,8 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
     ...commandsPending.map((p): PendingPrompt => ({ after: p.after, text: commandLabel(l, p.command), note: null,
       card: <CommandCard key={p.key} note={{ command: p.command, asked: "you" }} state={p.sending ? "sending" : p.confirmed ? "sent" : "unconfirmed"} /> })),
   ].sort((a, b) => a.after - b.after), [pending, busy, outbox.prompts, commandsPending, l]);
+  const [dropped, setDropped] = useState<string | null>(null);
+  const aboutOn = about && dropped !== about.key ? about : null;
   const matches = slashMatches(text);
   const label = useCallback((c: CoordinatorCommand) => commandLabel(l, c), [l]);
 
@@ -272,7 +287,7 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
     // A slash command is a request, not a message: it shows as its command card.
     const command = files.length ? null : fromSlash(typedText);
     if (command) return ask(command);
-    const t = withAttachments(typedText, files);
+    const t = dockMessage(withAttachments(typedText, files), { projectId: cid, pinned: true, about: aboutOn?.title ?? null, link: aboutOn?.link ?? null });
     setErr(null);
     // Only entries recorded after this point can be this message.
     const key = Date.now() + Math.random();
@@ -333,10 +348,10 @@ export function CoordinatorChat({ cid, welcome = false }: { cid: string; welcome
           )}
           <Composer value={text} onChange={setText} onSend={() => void send()} sending={false} attachments={attach}
             above={screenPrompts.length ? screenPrompts.map(({ d, p }) => <ScreenPromptCard key={d.id} d={d} p={p} who={coordinator} />) : null}
-            label={`Message the ${coordinator}`} placeholder={`Ask the ${coordinator} to plan, start or check work`}
-            tools={<button type="button" className="composer-tool" aria-label="Commands" title="Catch up, status report, wrap up" data-testid="composer-commands"
+            label={`Message the ${coordinator}`} placeholder={aboutOn ? `Ask the ${coordinator} about this ${l.role("worker")}` : `Ask the ${coordinator} to plan, start or check work`}
+            tools={<>{about && <AboutChip about={about} on={!!aboutOn} onToggle={() => setDropped(aboutOn ? about.key : null)} />}<button type="button" className="composer-tool" aria-label="Commands" title="Catch up, status report, wrap up" data-testid="composer-commands"
               onClick={() => { setText(text.startsWith("/") ? "" : "/"); box.current?.querySelector("textarea")?.focus(); }}>
-              <span className="mono">/</span><span className="composer-tool-label">Commands</span></button>}
+              <span className="mono">/</span><span className="composer-tool-label">Commands</span></button></>}
             hint={<><kbd>↵</kbd> {queueing ? "queues it until this step ends" : "sends"} · <kbd>⇧↵</kbd> new line</>}
             onStop={busy || live.activity === "quiet" ? () => void stopper.stop() : undefined} stopping={stopper.resting} />
         </>

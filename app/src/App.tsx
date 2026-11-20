@@ -3,7 +3,7 @@ import { daemonUrl, setDaemonUrl } from "./api";
 import { RouteView } from "./routes";
 import { start, useStore } from "./store";
 import { LeftList } from "./shell/LeftList";
-import { ASK_COORDINATOR_EVENT, Dock, MOD } from "./shell/Dock";
+import { Dock, MOD } from "./shell/Dock";
 import { goNextAttention, useAttention } from "./shell/NextAttention";
 import { parseRoute, useRoute } from "./nav";
 import { Palette } from "./Palette";
@@ -18,8 +18,7 @@ export function App() {
   const route = useRoute();
   const queue = useAttention();
   const dock = useRef<HTMLInputElement>(null);
-  // The coordinator's own conversation (the project route) has its message box; every other screen has the dock.
-  // The worker view places its own, under the worker's conversation.
+  // The Agents tab (the project route, or a worker open in it) has the coordinator's own box; every other screen has the dock.
   const hasDock = route.name !== "project" && route.name !== "task";
   const health = useStore((s) => s.health);
   useEffect(() => { if (health) void checkFirstRun(); }, [health]);
@@ -35,8 +34,6 @@ export function App() {
       if (k === "p") { e.preventDefault(); e.stopPropagation(); setPalette((p) => !p); }
       else if (k === "k") {
         e.preventDefault(); e.stopPropagation(); setPalette(false);
-        // A worker's message box switches to its coordinator in place.
-        if (document.querySelector('[data-testid="worker-composer"]')) { window.dispatchEvent(new Event(ASK_COORDINATOR_EVENT)); return; }
         const box = dock.current ?? document.querySelector<HTMLElement>('[data-testid="dock"] input, [data-testid="coordinator-chat"] textarea');
         box?.focus();
       } else if (k === "j") {

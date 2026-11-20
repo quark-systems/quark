@@ -1,9 +1,9 @@
-// J4: one worker in one view. Its live terminal (view only until you take it over) and one message
-// box in the middle, which writes to the worker or, switched, to the coordinator about it; prompts on
-// the worker's screen show as buttons above the box. The work pane on the right has its transcript,
-// changed files with their diff, its PR, the brief it was dispatched with and why this agent;
-// cancel, relaunch and clear are in the header. A cleared worker has no terminal: its center is its
-// whole transcript, read only.
+// J4: one worker, opened as a tab in the Agents tab's project panel beside the coordinator. In the
+// panel its views are tabs: its live terminal (view only until you take it over), transcript,
+// changed files with their diff, PR, brief and why this agent; its message box sits under them and
+// prompts on the worker's screen show as buttons above it. Expanded to the full width, the terminal
+// and box take the middle and the other views a work pane on the right. Cancel, relaunch and clear
+// are in the header. A cleared worker has no terminal: its main view is its whole transcript, read only.
 import { KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, Decision, NotAvailable, Task, TaskChanges, TranscriptItem } from "../api";
 import { href } from "../nav";
@@ -15,8 +15,6 @@ import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
 import { FileDiff } from "../components/diff/DiffView";
 import { Unavailable } from "../components/Unavailable";
 import { Composer } from "../components/Composer";
-import { runCommand, useStop } from "../components/CoordinatorCommand";
-import { fromSlash } from "../commands";
 import { screenPrompt, ScreenPrompt } from "../screenPrompt";
 import { ScreenPromptCard } from "../components/ScreenPromptCard";
 import { Transcript } from "../components/transcript";
@@ -24,13 +22,16 @@ import { WhyThisAgent } from "../components/WhyThisAgent";
 import { WorkerBrief } from "../components/WorkerBrief";
 import { HarnessLogo, harnessMark } from "../components/WorkerCard";
 import { useLabels } from "../persona";
-import { ASK_COORDINATOR_EVENT, dockMessage, MOD } from "../shell/Dock";
-import { CoordinatorMark, cx, StatusDot, taskTone, TONE_LABEL } from "../ui";
+import { MOD } from "../shell/Dock";
+import { cx, StatusDot, taskTone, TONE_LABEL } from "../ui";
 import { useDraft } from "../drafts";
 import { useAttachments, withAttachments } from "../attachments";
 import { BeadText } from "../ui/BeadText";
 
-export function WorkerView({ id }: { id: string }) {
+/** How the worker sits in the project panel: `expanded` gives it the full width; `onExpand` toggles that. */
+type Fit = { expanded: boolean; onExpand: (expanded: boolean) => void };
+
+export function WorkerView({ id, fit }: { id: string; fit: Fit }) {
   const task = useStore((s) => s.tasks[id]);
   const connected = useStore((s) => s.connected);
   const [gone, setGone] = useState<null | "missing" | Task>(null);
@@ -40,25 +41,58 @@ export function WorkerView({ id }: { id: string }) {
     else setGone(null);
   }, [id, task]);
 
-  if (task) return <LiveWorker task={task} />;
-  if (gone && gone !== "missing" && gone.id === id) return <ClearedWorker task={gone} />;
+  if (task) return <LiveWorker key={String(fit.expanded)} task={task} fit={fit} />;
+  if (gone && gone !== "missing" && gone.id === id) return <ClearedWorker key={String(fit.expanded)} task={gone} fit={fit} />;
   const why = gone === "missing" ? "This task does not exist on the daemon." : connected ? "Loading…" : "Waiting for the daemon…";
   return <div className="empty">{why}</div>;
 }
 
-type PaneTab = "transcript" | "changes" | "pr" | "brief" | "why";
+type PaneTab = "terminal" | "transcript" | "changes" | "pr" | "brief" | "why";
 
-function LiveWorker({ task }: { task: Task }) {
+/** Expand to the full width, or back into the panel beside the coordinator. */
+function ExpandButton({ fit }: { fit: Fit }) {
+  return (
+    <button className="btn icon-btn" onClick={() => fit.onExpand(!fit.expanded)} data-testid="worker-expand"
+      aria-label={fit.expanded ? "Show the coordinator" : "Expand"} title={fit.expanded ? "Back beside the coordinator" : "Give this worker the full width"}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+        {fit.expanded ? <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /> : <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />}
+      </svg>
+    </button>
+  );
+}
+
+function LiveWorker({ task, fit }: { task: Task; fit: Fit }) {
   const id = task.id;
   const activity = useStore((s) => s.taskActivity[id] ?? 0);
-  const [tab, setTab] = useState<PaneTab>("transcript");
+  const [tab, setTab] = useState<PaneTab>(fit.expanded ? "transcript" : "terminal");
   const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
   const [paneWidth, setPaneWidth] = useWorkPaneWidth();
+  const views: PaneTab[] = ["transcript", "changes", ...(pr || task.pull_request_url ? ["pr" as const] : []), "brief", "why"];
+  const body = (t: PaneTab) => <>
+    {t === "transcript" && <div className="tab-body"><TranscriptPanel taskId={id} /></div>}
+    {t === "changes" && <div className="tab-body"><ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} /></div>}
+    {t === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
+    {t === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
+    {t === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
+  </>;
 
+  if (!fit.expanded) {
+    return (
+      <div className="worker-panel" data-testid="worker-view">
+        <WorkerHead task={task}><Controls taskId={id} active={isActive(task.state)} /><ExpandButton fit={fit} /></WorkerHead>
+        {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
+        <PaneTabs tab={tab} setTab={setTab} tabs={["terminal", ...views]} />
+        {tab === "terminal" ? <TerminalPanel taskId={id} taskState={task.state} /> : body(tab)}
+        <WorkerComposer taskId={id} />
+      </div>
+    );
+  }
+
+  const paneTab = tab === "terminal" ? "transcript" : tab;
   return (
-    <div className="screen worker" style={paneWidth ? { ["--work-pane-width" as string]: `${paneWidth}px` } : undefined}>
+    <div className="screen worker" data-testid="worker-view" style={paneWidth ? { ["--work-pane-width" as string]: `${paneWidth}px` } : undefined}>
       <section className="worker-center">
-        <WorkerHead task={task}><Controls taskId={id} active={isActive(task.state)} /></WorkerHead>
+        <WorkerHead task={task}><Controls taskId={id} active={isActive(task.state)} /><ExpandButton fit={fit} /></WorkerHead>
         {task.state_note && <div className="state-note">{task.state_note} <span className="faint">· {ago(task.updated_at)}</span></div>}
         <TerminalPanel taskId={id} taskState={task.state} />
         {/* One box under the worker's terminal: to the worker, or to the coordinator about it. */}
@@ -66,12 +100,8 @@ function LiveWorker({ task }: { task: Task }) {
       </section>
       <aside className="worker-pane" aria-label="Work">
         <PaneResizer width={paneWidth} onWidth={setPaneWidth} />
-        <PaneTabs tab={tab} setTab={setTab} tabs={["transcript", "changes", ...(pr || task.pull_request_url ? ["pr" as const] : []), "brief", "why"]} />
-        {tab === "transcript" && <div className="tab-body"><TranscriptPanel taskId={id} /></div>}
-        {tab === "changes" && <div className="tab-body"><ChangesPanel taskId={id} stateKey={task.state + task.updated_at + ":" + activity} /></div>}
-        {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
-        {tab === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
-        {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
+        <PaneTabs tab={paneTab} setTab={setTab} tabs={views} />
+        {body(paneTab)}
       </aside>
     </div>
   );
@@ -81,36 +111,59 @@ function LiveWorker({ task }: { task: Task }) {
  * A cleared worker: its terminal is closed and its working copy given back, so the center is its
  * whole transcript, read only. The work pane keeps what outlives the working copy.
  */
-function ClearedWorker({ task }: { task: Task }) {
+function ClearedWorker({ task, fit }: { task: Task; fit: Fit }) {
   const id = task.id;
-  const [tab, setTab] = useState<PaneTab>("brief");
+  const [tab, setTab] = useState<PaneTab>(fit.expanded ? "brief" : "transcript");
   const pr = useStore((s) => Object.values(s.pullRequests).find((p) => p.task_id === id));
   const [paneWidth, setPaneWidth] = useWorkPaneWidth();
+  const cleared = (
+    <div className="state-note" data-testid="worker-cleared">
+      Cleared{task.cleared_at ? ` ${ago(task.cleared_at)}` : ""}. Its terminal was closed and its working copy given back; its transcript is kept.
+    </div>
+  );
+  const transcript = (
+    <div className="pane" data-testid="cleared-transcript">
+      <div className="pane-head"><span>transcript</span><span className="spacer" /><span className="faint">read only</span></div>
+      <TranscriptPanel taskId={id} full projectId={task.project_id} />
+    </div>
+  );
+  const views: PaneTab[] = [...(pr || task.pull_request_url ? ["pr" as const] : []), "brief", "why"];
 
+  if (!fit.expanded) {
+    return (
+      <div className="worker-panel" data-testid="worker-view">
+        <WorkerHead task={task}><ExpandButton fit={fit} /></WorkerHead>
+        {cleared}
+        <PaneTabs tab={tab} setTab={setTab} tabs={["transcript", ...views]} />
+        {tab === "transcript" ? transcript : <>
+          {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
+          {tab === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
+          {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
+        </>}
+      </div>
+    );
+  }
+
+  const paneTab = tab === "transcript" ? "brief" : tab;
   return (
-    <div className="screen worker" style={paneWidth ? { ["--work-pane-width" as string]: `${paneWidth}px` } : undefined}>
+    <div className="screen worker" data-testid="worker-view" style={paneWidth ? { ["--work-pane-width" as string]: `${paneWidth}px` } : undefined}>
       <section className="worker-center">
-        <WorkerHead task={task} />
-        <div className="state-note" data-testid="worker-cleared">
-          Cleared{task.cleared_at ? ` ${ago(task.cleared_at)}` : ""}. Its terminal was closed and its working copy given back; its transcript is kept.
-        </div>
-        <div className="pane" data-testid="cleared-transcript">
-          <div className="pane-head"><span>transcript</span><span className="spacer" /><span className="faint">read only</span></div>
-          <TranscriptPanel taskId={id} full projectId={task.project_id} />
-        </div>
+        <WorkerHead task={task}><ExpandButton fit={fit} /></WorkerHead>
+        {cleared}
+        {transcript}
       </section>
       <aside className="worker-pane" aria-label="Work">
         <PaneResizer width={paneWidth} onWidth={setPaneWidth} />
-        <PaneTabs tab={tab} setTab={setTab} tabs={[...(pr || task.pull_request_url ? ["pr" as const] : []), "brief", "why"]} />
-        {tab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
-        {tab === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
-        {tab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
+        <PaneTabs tab={paneTab} setTab={setTab} tabs={views} />
+        {paneTab === "pr" && <div className="tab-body"><PrPanel prId={pr?.id ?? null} url={task.pull_request_url ?? pr?.url ?? null} /></div>}
+        {paneTab === "brief" && <div className="tab-body"><WorkerBrief taskId={id} /></div>}
+        {paneTab === "why" && <div className="tab-body"><WhyThisAgent taskId={id} /></div>}
       </aside>
     </div>
   );
 }
 
-const TAB_LABEL: Record<PaneTab, string> = { transcript: "Transcript", changes: "Changes", pr: "PR", brief: "Brief", why: "Why this agent" };
+const TAB_LABEL: Record<PaneTab, string> = { terminal: "Terminal", transcript: "Transcript", changes: "Changes", pr: "PR", brief: "Brief", why: "Why this agent" };
 
 function PaneTabs({ tab, setTab, tabs }: { tab: PaneTab; setTab: (t: PaneTab) => void; tabs: PaneTab[] }) {
   return (
@@ -123,7 +176,6 @@ function PaneTabs({ tab, setTab, tabs }: { tab: PaneTab; setTab: (t: PaneTab) =>
 }
 
 function WorkerHead({ task, children }: { task: Task; children?: ReactNode }) {
-  const project = useStore((s) => s.projects[task.project_id]);
   const st = stateMeta(task.state);
   return (
     <div className="header worker-head">
@@ -131,9 +183,8 @@ function WorkerHead({ task, children }: { task: Task; children?: ReactNode }) {
       <div className="wh-text">
         <h1 className="ellipsis" title={task.title}><BeadText text={task.title} project={task.project_id} link /></h1>
         <span className="wh-sub ellipsis">
-          <a href={href({ name: "project", id: task.project_id })}>{project?.name ?? task.project_id}</a>
-          {task.branch && <> · branch <span className="mono">{task.branch}</span></>}
-          {" · "}started {ago(task.created_at)}
+          {task.branch ? <>branch <span className="mono">{task.branch}</span> · </> : null}
+          started {ago(task.created_at)}
         </span>
       </div>
       <span className="pill" style={{ color: st.color }} data-testid="task-state">{st.label}</span>
@@ -353,9 +404,8 @@ function TerminalPanel({ taskId, taskState }: { taskId: string; taskState: strin
   );
 }
 
-// ---- one message box: to the worker, or to the coordinator about it ----
+// ---- the worker's message box ----
 
-type Target = "worker" | "coordinator";
 const STOP_REST_MS = 3_000;
 
 /** The worker's open screen prompts: permission requests or menus quarkd read off its terminal. */
@@ -368,49 +418,31 @@ function useScreenPrompts(taskId: string) {
     .sort((a, b) => a.d.opened_at.localeCompare(b.d.opened_at)), [decisions, taskId]);
 }
 
+/** Writes to the worker; the coordinator's own box sits beside it and already knows which worker is open. */
 function WorkerComposer({ taskId }: { taskId: string }) {
   const task = useStore((s) => s.tasks[taskId]);
   const pid = task?.project_id;
   const labels = useLabels(pid);
   const worker = labels.role("worker");
   const coordinator = labels.role("coordinator");
-  const [target, setTarget] = useState<Target>("worker");
   const [text, setText] = useDraft(`worker:${taskId}`);
   const attach = useAttachments(pid, `worker:${taskId}`);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: ReactNode } | null>(null);
   const [resting, setResting] = useState(false);
-  const coordStop = useStop(pid ?? "");
   const prompts = useScreenPrompts(taskId);
-  const wrap = useRef<HTMLDivElement>(null);
   const active = !!task && isActive(task.state);
-  const toCoord = target === "coordinator";
-
-  // Cmd/Ctrl+K asks the coordinator about this worker from the same box.
-  useEffect(() => {
-    const ask = () => { setTarget("coordinator"); wrap.current?.querySelector("textarea")?.focus(); };
-    window.addEventListener(ASK_COORDINATOR_EVENT, ask);
-    return () => window.removeEventListener(ASK_COORDINATOR_EVENT, ask);
-  }, []);
-  useEffect(() => setNote(null), [target]);
 
   const send = async () => {
     const t = text.trim();
     if ((!t && !attach.items.length) || busy || attach.uploading || !pid) return;
     setBusy(true); setNote(null);
     try {
-      if (toCoord) {
-        const command = attach.items.length ? null : fromSlash(t);
-        const ctx = { projectId: pid, pinned: true, about: task?.title ?? null, link: href({ name: "task", id: taskId }) };
-        await (command ? runCommand(pid, command) : api.sendChat(pid, dockMessage(withAttachments(t, attach.items), ctx)));
-        setNote({ ok: true, text: <>Sent to the {coordinator}. <a href={href({ name: "project", id: pid })}>See the conversation</a></> });
-      } else {
-        await api.steer(taskId, withAttachments(t, attach.items));
-        setNote({ ok: true, text: prompts.length ? `Sent. The ${worker} gets it once the prompt above is answered` : `Delivered to the ${worker}'s inbox` });
-      }
+      await api.steer(taskId, withAttachments(t, attach.items));
+      setNote({ ok: true, text: prompts.length ? `Sent. The ${worker} gets it once the prompt above is answered` : `Delivered to the ${worker}'s inbox` });
       setText(""); attach.clear();
     } catch (e) {
-      setNote({ ok: false, text: !toCoord && e instanceof NotAvailable ? `Messaging a ${worker} is not available from this daemon yet` : errText(e) });
+      setNote({ ok: false, text: e instanceof NotAvailable ? `Messaging a ${worker} is not available from this daemon yet` : errText(e) });
     } finally { setBusy(false); }
   };
 
@@ -421,30 +453,16 @@ function WorkerComposer({ taskId }: { taskId: string }) {
     finally { setTimeout(() => setResting(false), STOP_REST_MS); }
   };
 
-  const tools = (
-    <div className="target-switch" role="radiogroup" aria-label="Send to">
-      {(["worker", "coordinator"] as const).map((t) => (
-        <button key={t} type="button" role="radio" aria-checked={target === t} className={cx("ts-opt", target === t && "on", t)}
-          onClick={() => { setTarget(t); wrap.current?.querySelector("textarea")?.focus(); }} data-testid={`target-${t}`}>
-          {t === "coordinator" && <CoordinatorMark size={14} />}{labels.role(t).replace(/^./, (c) => c.toUpperCase())}
-        </button>
-      ))}
-    </div>
-  );
-  const placeholder = toCoord ? `Ask the ${coordinator} about this ${worker}…`
-    : prompts.length ? `Message the ${worker}… it waits until the prompt above is answered`
-    : `Message the ${worker}…`;
+  const placeholder = prompts.length ? `Message the ${worker}… it waits until the prompt above is answered` : `Message the ${worker}…`;
 
   return (
-    <div ref={wrap} className="worker-composer" data-testid="worker-composer">
+    <div className="worker-composer" data-testid="worker-composer">
       <Composer value={text} onChange={(v) => { setText(v); setNote(null); }} onSend={() => void send()} sending={busy}
-        className={cx("steer", toCoord && "to-coordinator")}
-        label={`Message the ${toCoord ? coordinator : worker}`} placeholder={placeholder} attachments={attach} tools={tools}
-        above={!toCoord && prompts.length ? prompts.map(({ d, p }) => <ScreenPromptCard key={d.id} d={d} p={p} who={worker} />) : null}
+        className="steer" label={`Message the ${worker}`} placeholder={placeholder} attachments={attach}
+        above={prompts.length ? prompts.map(({ d, p }) => <ScreenPromptCard key={d.id} d={d} p={p} who={worker} />) : null}
         hint={note ? <span className={note.ok ? "ok" : "bad"} role="status">{note.text}</span>
-          : toCoord ? <>Enter sends · about this {worker}</> : <>Enter sends · <kbd>{MOD}K</kbd> asks the {coordinator}</>}
-        onStop={toCoord ? (pid ? () => void coordStop.stop() : undefined) : active ? () => void stopWorker() : undefined}
-        stopping={toCoord ? coordStop.resting : resting} />
+          : <>Enter sends · <kbd>{MOD}K</kbd> asks the {coordinator} about it</>}
+        onStop={active ? () => void stopWorker() : undefined} stopping={resting} />
     </div>
   );
 }
