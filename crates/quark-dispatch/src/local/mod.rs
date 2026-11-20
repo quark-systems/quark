@@ -242,9 +242,12 @@ async fn run_with(
         .envs(env.iter().copied())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
+    // Never the daemon's own directory (`/` under launchd): some CLIs index
+    // their working directory before answering. See quark_core::probe_dir.
+    match cwd {
+        Some(cwd) => cmd.current_dir(cwd),
+        None => cmd.current_dir(quark_core::probe_dir()),
+    };
     let run = async {
         // A script just written can be busy for a moment (ETXTBSY) while
         // another thread's child still holds it open for writing.
@@ -344,6 +347,21 @@ fn parse_time(v: &Value) -> Option<OffsetDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_check_without_a_directory_runs_in_the_probe_dir() {
+        let argv = ["pwd".to_string()];
+        let (ok, out) = run_with(&argv, None, &[], Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(ok);
+        let ran_in = std::fs::canonicalize(out.trim()).unwrap();
+        assert_eq!(
+            ran_in,
+            std::fs::canonicalize(quark_core::probe_dir()).unwrap()
+        );
+    }
 
     #[test]
     fn spend_priority_matches_quota_axi() {
