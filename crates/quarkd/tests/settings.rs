@@ -348,7 +348,7 @@ async fn the_coordinators_agent_is_changed_through_a_switch() {
         )
         .unwrap();
     // A worker-only harness cannot run the coordinator.
-    let (status, e) = call(&app, "PUT", &agent, Some(json!({"harness": "kiro"}))).await;
+    let (status, e) = call(&app, "PUT", &agent, Some(json!({"harness": "gemini"}))).await;
     assert_eq!(status, 400, "{e}");
     // The agent it already runs.
     let (status, e) = call(
