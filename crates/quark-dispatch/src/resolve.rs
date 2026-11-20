@@ -268,11 +268,16 @@ impl Judge<'_> {
 
     fn applicable(&self, provider: &str, model: &str) -> Vec<&QuotaRow> {
         let bare = model.rsplit('/').next().unwrap_or(model);
+        // Antigravity bounds its models by family, not one by one.
+        let family = (provider == crate::local::agy::PROVIDER)
+            .then(|| crate::local::agy::scope_for_model(bare))
+            .flatten();
         self.rows(provider)
             .iter()
             .filter(|r| {
                 r.scope == "all_models"
                     || r.scope == "all_products"
+                    || family == Some(r.scope.as_str())
                     || (!model.is_empty()
                         && (r.scope == format!("model:{bare}")
                             || r.scope == format!("product:{bare}")))
@@ -867,6 +872,36 @@ mod tests {
             Ok(q),
             &ProviderFamilies::builtin(),
         )
+    }
+
+    #[test]
+    fn an_agy_model_is_bounded_by_its_familys_quota() {
+        let q = quota(serde_json::json!([
+            {"provider":"agy","quotaSemantics":{"status":"known","effectiveAvailability":[
+                row("gemini", 80.0, 0.6), row("claude_gpt", 10.0, 0.1)]}}
+        ]));
+        let rules = r#"{"rules":[{"when":"trivial","use":[
+            {"harness":"agy","model":"gemini-4-neon-high"},
+            {"harness":"agy","model":"claude-opus-5-5-high"},
+            {"harness":"agy"}]}]}"#;
+        let r = resolve(
+            &config(rules),
+            &settings(),
+            Some(&answered("rule_1", 0.9)),
+            Ok(&q),
+            &ProviderFamilies::builtin(),
+        );
+        let scopes: Vec<Option<&str>> = r.candidates.iter().map(|c| c.scope.as_deref()).collect();
+        assert_eq!(scopes, [Some("gemini"), Some("claude_gpt"), Some("gemini")]);
+        assert!(r
+            .candidates
+            .iter()
+            .all(|c| !format!("{:?}", c.verdict).contains("no applicable")));
+        assert_eq!(
+            crate::local::agy::scope_for_model("gpt-5.5"),
+            Some("claude_gpt")
+        );
+        assert_eq!(crate::local::agy::scope_for_model("mystery-1"), None);
     }
 
     #[test]
