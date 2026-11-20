@@ -818,8 +818,9 @@ const KIRO_AGENT_FILE: &str = ".kiro/agents/quark-coordinator.json";
 /// - `mcpServers`: [`SERVER_NAME`] by URL (Kiro speaks streamable HTTP to
 ///   a remote server), its tools allowed without asking
 ///   (`permissions.rules`; Kiro's V3 engine skips a JSON agent that has
-///   `allowedTools` and no `permissions`). `includeMcpJson` is off, so the
-///   user's own MCP servers stay out of the coordinator's tools and context.
+///   `allowedTools` and no `permissions`). `includeMcpJson` is off, which
+///   keeps the workspace's `mcp.json` out; Kiro 3.5's interactive chat
+///   still loads the user's global servers (`~/.kiro/settings/mcp.json`).
 /// - `hooks.stop`: POSTs Kiro's `Stop` payload to `turn_end`. Its output is
 ///   dropped, since Kiro would take a printed block decision as "keep
 ///   going" and allows only one per prompt.
