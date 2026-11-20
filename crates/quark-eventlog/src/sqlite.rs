@@ -95,6 +95,27 @@ pub struct SqliteEventLog {
     shared: Arc<Shared>,
 }
 
+/// The schema version of the event log behind `conn`, or `Unsupported` when
+/// a newer build wrote it and its changes since [`SCHEMA_VERSION`] aren't all
+/// additive ([`MIN_READER`]). It changes nothing, so a reader that opens the
+/// file itself, read-only, can ask before it trusts what it reads.
+pub fn usable_version(conn: &Connection) -> Result<i64> {
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(backend)?;
+    if version > SCHEMA_VERSION {
+        let min_reader: Option<i64> = conn
+            .query_row("SELECT min_reader FROM schema_compat", [], |r| r.get(0))
+            .ok();
+        if !min_reader.is_some_and(|m| m <= SCHEMA_VERSION) {
+            return Err(CoreError::Unsupported(format!(
+                "event log schema {version} is newer than this build knows ({SCHEMA_VERSION})"
+            )));
+        }
+    }
+    Ok(version)
+}
+
 fn backend(e: impl std::fmt::Display) -> CoreError {
     CoreError::Backend(format!("event log: {e}"))
 }
@@ -113,20 +134,12 @@ impl SqliteEventLog {
             .map_err(backend)?;
         conn.pragma_update(None, "busy_timeout", 5000)
             .map_err(backend)?;
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .map_err(backend)?;
-        if version > SCHEMA_VERSION {
-            let min_reader: Option<i64> = conn
-                .query_row("SELECT min_reader FROM schema_compat", [], |r| r.get(0))
-                .ok();
-            if !min_reader.is_some_and(|m| m <= SCHEMA_VERSION) {
-                return Err(CoreError::Unsupported(format!(
-                    "{} has event log schema {version}; this build knows {SCHEMA_VERSION}",
-                    path.display()
-                )));
-            }
-        } else {
+        let version = usable_version(&conn).map_err(|e| match e {
+            CoreError::Unsupported(m) => CoreError::Unsupported(format!("{}: {m}", path.display())),
+            e => e,
+        })?;
+        // A newer build's log with only additive changes is used as it is.
+        if version <= SCHEMA_VERSION {
             conn.execute_batch(SCHEMA).map_err(backend)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(backend)?;

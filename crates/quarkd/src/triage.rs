@@ -9,7 +9,11 @@
 //! `diag:<fingerprint>` and `host:<host>` make them easy to list.
 //!
 //! A Quark trigger runs it on a schedule; someone (or an agent) then picks
-//! the beads up like any other work.
+//! the beads up like any other work. The rule's command is `quarkd triage
+//! ...`, which the daemon runs with its own executable
+//! (`native_triggers::OwnQuarkd`), so the quarkd that files is the one that
+//! runs the home. Run by hand from a quarkd too old for the home,
+//! [`crate::diagnose`] refuses and nothing is filed.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -117,9 +121,16 @@ fn title(f: &Finding) -> String {
 
 fn body(report: &Diagnostics, f: &Finding) -> String {
     let mut out = format!(
-        "Filed by `quarkd triage` on {} ({}).\n\n\
+        "Filed by `quarkd triage` (quarkd {}) on {} ({}).\n\n\
          - Severity: {:?}\n- Source: {}\n- Seen: {} time(s), {} .. {}\n",
-        report.host, report.home, f.severity, f.source, f.count, f.first_seen, f.last_seen
+        report.version,
+        report.host,
+        report.home,
+        f.severity,
+        f.source,
+        f.count,
+        f.first_seen,
+        f.last_seen
     );
     if !f.projects.is_empty() {
         out.push_str(&format!("- Projects: {}\n", f.projects.join(", ")));
@@ -322,6 +333,7 @@ mod tests {
             home: "/h".into(),
             host: "mac".into(),
             version: "0".into(),
+            quark_db_schema: None,
             generated_at: "2026-10-26T12:00:00Z".into(),
             since: "2026-10-25T12:00:00Z".into(),
             last_log_at: None,
@@ -375,6 +387,8 @@ mod tests {
                 assert_eq!(*priority, 1);
                 assert_eq!(labels, &["diagnostics", "diag:new", "host:mac"]);
                 assert!(body.contains("Projects: prj_1"));
+                // Which quarkd filed it: not always the one that runs the home.
+                assert!(body.starts_with("Filed by `quarkd triage` (quarkd 0) on mac"));
             }
             s => panic!("{s:?}"),
         }

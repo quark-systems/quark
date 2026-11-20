@@ -38,6 +38,14 @@ page lists every merged pull request.
   under the gates) are logged as information instead of warnings, so `quarkd diagnose` and
   triage no longer report them as trouble; one that keeps failing still is. The merge guard's
   own warnings now reach quarkd's log.
+- A trigger rule or channel whose command runs `quarkd` now runs the daemon's own executable,
+  whatever path the rule names. A daily `quarkd triage` rule that pointed at an old build read
+  the home with a quarkd older than the one running it, and filed "quark.db was last opened by
+  a newer quarkd than this one" every day.
+- `quarkd diagnose` and `quarkd triage` refuse a home that a newer quarkd has moved past what
+  they can read, and exit 1, instead of reporting on it. A `quark.db` at another schema that
+  they can read is named at the top of the report and is no longer a finding, so triage files
+  no bead for it.
 
 ## 0.3.1
 

@@ -89,6 +89,34 @@ pub fn read(home: &Path) -> anyhow::Result<Option<Format>> {
     }
 }
 
+/// Why this quarkd won't use a home whose newer format it can't read.
+fn too_new(home: &Path, f: &Format) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} is format {} (written by quarkd {}), newer than this quarkd {} knows ({CURRENT}); \
+         run the newer Quark, or give this one another home with --home",
+        home.display(),
+        f.format,
+        if f.written_by.is_empty() {
+            "?"
+        } else {
+            &f.written_by
+        },
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+/// Refuses a home in a newer format this quarkd can't use, as [`migrate`]
+/// does, and changes nothing: for a command that only reads the home
+/// (`quarkd diagnose`) and so never migrates it.
+pub fn check_readable(home: &Path) -> anyhow::Result<()> {
+    match read(home)? {
+        Some(f) if f.format > CURRENT && f.min_reader.unwrap_or(f.format) > CURRENT => {
+            Err(too_new(home, &f))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Bring the home at `home` to [`CURRENT`], or refuse a newer one.
 pub fn migrate(home: &Path) -> anyhow::Result<Migrated> {
     std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
@@ -112,16 +140,7 @@ pub fn migrate(home: &Path) -> anyhow::Result<Migrated> {
             out.to = f.format;
             return Ok(out);
         }
-        Some(f) if f.format > CURRENT => {
-            anyhow::bail!(
-            "{} is format {} (written by quarkd {}), newer than this quarkd {} knows ({CURRENT}); \
-             run the newer Quark, or give this one another home with --home",
-            home.display(),
-            f.format,
-            if f.written_by.is_empty() { "?" } else { &f.written_by },
-            env!("CARGO_PKG_VERSION"),
-        )
-        }
+        Some(f) if f.format > CURRENT => return Err(too_new(home, &f)),
         Some(f) => f.format,
         None if has_state(home) => 0,
         None => {
@@ -243,6 +262,7 @@ mod tests {
         assert_eq!(m.from, None);
         assert!(!m.adopt_legacy_projects);
         assert_eq!(read(dir.path()).unwrap().unwrap().format, CURRENT);
+        check_readable(dir.path()).unwrap();
         // Again: nothing to do.
         let m = migrate(dir.path()).unwrap();
         assert_eq!(m.from, Some(CURRENT));
@@ -256,6 +276,9 @@ mod tests {
         std::fs::write(dir.path().join(FILE), body).unwrap();
         let err = migrate(dir.path()).unwrap_err().to_string();
         assert!(err.contains("format 99") && err.contains("9.0.0"), "{err}");
+        // A command that only reads the home refuses it the same way.
+        let err = check_readable(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("format 99") && err.contains("9.0.0"), "{err}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join(FILE)).unwrap(),
             body
@@ -267,6 +290,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let body = format!(r#"{{"format": 99, "written_by": "9.0.0", "min_reader": {CURRENT}}}"#);
         std::fs::write(dir.path().join(FILE), &body).unwrap();
+        check_readable(dir.path()).unwrap();
         let m = migrate(dir.path()).unwrap();
         assert_eq!((m.from, m.to), (Some(99), 99));
         assert_eq!(

@@ -9320,6 +9320,14 @@
             ],
             "description": "When the daemon last logged, if it logs to the home."
           },
+          "quark_db_schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`quark.db`'s schema version when it is not the one this quarkd\nwrites: another quarkd migrated the home last (an update this one\npredates, or one rolled back)."
+          },
           "since": {
             "type": "string"
           },
@@ -9327,7 +9335,8 @@
             "$ref": "#/components/schemas/StoreSizes"
           },
           "version": {
-            "type": "string"
+            "type": "string",
+            "description": "The quarkd that made the report, which is the daemon for\n`GET /v1/diagnostics` and whichever binary ran `quarkd diagnose`."
           }
         }
       },

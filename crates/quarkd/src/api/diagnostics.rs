@@ -39,6 +39,8 @@ pub async fn diagnostics(
         diagnose::diagnose(&home, now - hours, now)
     })
     .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    // The daemon opened this home, so it can read it.
     .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(report))
 }

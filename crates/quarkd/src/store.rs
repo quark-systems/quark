@@ -86,6 +86,14 @@ pub const SCHEMA_VERSION: i64 = migrations::SCHEMA_VERSION;
 /// The oldest schema a quarkd must know to use this build's database.
 pub const SCHEMA_MIN_READER: i64 = migrations::MIN_READER;
 
+/// The schema version of the `quark.db` behind `conn`, or an error when a
+/// newer quarkd migrated it past what this build can use. [`Store::open`]
+/// refuses such a database itself; this is for a reader that opens the file
+/// read-only (`quarkd diagnose`) and so never goes through it.
+pub fn usable_schema(conn: &Connection) -> Result<i64> {
+    migrations::usable_version(conn)
+}
+
 /// A transcript the daemon projects into events.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TranscriptSource {

@@ -114,23 +114,30 @@ fn recorded_min_reader(conn: &Connection) -> Result<Option<i64>> {
         .ok())
 }
 
+/// The schema version of the database behind `conn`, or an error when a
+/// newer quarkd migrated it past what this one can use (see the module docs).
+/// It changes nothing, so a reader that never migrates can ask it too.
+pub(super) fn usable_version(conn: &Connection) -> Result<i64> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version > SCHEMA_VERSION && !recorded_min_reader(conn)?.is_some_and(|m| m <= SCHEMA_VERSION)
+    {
+        return Err(StoreError::Invalid(format!(
+            "database schema {version} is newer than this quarkd ({SCHEMA_VERSION})"
+        )));
+    }
+    Ok(version)
+}
+
 /// Bring `conn` up to [`SCHEMA_VERSION`], one transaction per migration.
 pub(super) fn migrate(conn: &mut Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let version = usable_version(conn)?;
     if version > SCHEMA_VERSION {
-        return match recorded_min_reader(conn)? {
-            Some(min) if min <= SCHEMA_VERSION => {
-                tracing::info!(
-                    schema = version,
-                    ours = SCHEMA_VERSION,
-                    "database is from a newer quarkd, with only additive changes since ours; using it as it is"
-                );
-                Ok(())
-            }
-            _ => Err(StoreError::Invalid(format!(
-                "database schema {version} is newer than this quarkd ({SCHEMA_VERSION})"
-            ))),
-        };
+        tracing::info!(
+            schema = version,
+            ours = SCHEMA_VERSION,
+            "database is from a newer quarkd, with only additive changes since ours; using it as it is"
+        );
+        return Ok(());
     }
     for (i, m) in MIGRATIONS.iter().enumerate().skip(version as usize) {
         let tx = conn.transaction()?;
@@ -187,6 +194,30 @@ mod tests {
         // One from before schema_compat.
         conn.execute("DROP TABLE schema_compat", []).unwrap();
         assert!(migrate(&mut conn).is_err());
+    }
+
+    #[test]
+    fn a_reader_is_told_whether_it_can_use_the_database() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // One an older quarkd made: usable, and this quarkd would migrate it.
+        assert_eq!(usable_version(&conn).unwrap(), 0);
+        migrate(&mut conn).unwrap();
+        assert_eq!(usable_version(&conn).unwrap(), SCHEMA_VERSION);
+        // A newer quarkd's additive migration: usable as it is.
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        assert_eq!(usable_version(&conn).unwrap(), SCHEMA_VERSION + 1);
+        // One that isn't additive: refused, and nothing is written.
+        conn.execute(
+            "UPDATE schema_compat SET min_reader = ?1",
+            [SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+        assert!(usable_version(&conn).is_err());
+        assert_eq!(
+            recorded_min_reader(&conn).unwrap(),
+            Some(SCHEMA_VERSION + 1)
+        );
     }
 
     #[test]
