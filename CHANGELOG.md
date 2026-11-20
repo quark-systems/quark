@@ -6,6 +6,47 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
+## 0.3.0
+
+### Install
+
+Quark 0.2.0 offers 0.3.0 on its own. Otherwise download `Quark_0.3.0_aarch64.dmg` and drag
+Quark to Applications.
+
+### Added
+
+- App-wide dispatch rules. **Dispatch** in the app menu sets the rules every project follows
+  until it saves its own, and new projects start that way. Until they are saved, Quark ships
+  Trivial, Standard, Complex and Scout tiers plus a default, with candidates taken from the
+  harnesses and accounts available. A project's Dispatch section can copy rules from another
+  project or the defaults, and **Reset to defaults** drops its own. The defaults live in
+  `~/.quark/dispatch.yaml`.
+- A cleared worker's page shows its whole transcript, read only, from its first entry, instead
+  of saying only that it was cleared.
+- The Agents tab replaces Conversation. The coordinator sits in the middle; a project panel on
+  the right has tabs for Work, Needs you, PRs and Activity, plus one per worker you open (its
+  terminal, transcript, changes, PR, brief and why this agent, with its message box). Expand
+  gives a worker the full width. The coordinator's box takes the open worker as context, and
+  Ctrl/Cmd+K focuses it.
+- The left list is for getting around: a project is one row that opens its coordinator, with
+  what the coordinator has waiting on the line under it. Workers moved into the project.
+- QuarkBar and its widgets leave out hidden projects, and the menu groups projects under the
+  app's collections when the app does, with Ungrouped last and folded collections as submenus.
+
+### Changed
+
+- A worker's question goes to the coordinator first. The coordinator answers it itself or
+  frames it as a decision with its own question, options and recommendation, and your answer
+  goes back to the worker. Worker questions already open move to the coordinator on upgrade.
+
+### Fixed
+
+- A pull request the coordinator opened from its own shell is tracked: it shows in the PR
+  center, and its merge wakes the coordinator instead of leaving it waiting on you.
+- A merge counts as landed only once it reaches the default branch. A pull request stacked on
+  a branch that had already merged no longer finishes its task; the coordinator is woken to land
+  the change, and Quark refuses to merge a pull request on an already-merged branch.
+
 ## 0.2.0
 
 Quark now updates itself, and the Mac build is signed and notarized. This release collects
