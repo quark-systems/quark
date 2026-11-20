@@ -917,7 +917,7 @@ mod tests {
         let (s, _) = send(&app, post(&format!("/{}/nope/mcp", project.id), list)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         // Shadow mode refuses to act, as a tool result.
-        let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tell_user","arguments":{"text":"hi"}}}"#;
+        let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"remember","arguments":{"fact":"hi"}}}"#;
         let (_, b) = send(&app, post(&format!("{base}/mcp"), call)).await;
         assert_eq!(b["result"]["isError"], true);
 

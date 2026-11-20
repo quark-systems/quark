@@ -132,7 +132,9 @@ pub enum ToolCall {
     /// Withdraw an open decision the coordinator asked, which no longer
     /// needs the user.
     WithdrawDecision { number: i64, reason: String },
-    /// Tell the user an outcome.
+    /// Retired: the coordinator's reply already shows in the user's chat,
+    /// so a second copy doubled every message. Calls logged before still
+    /// read; a new call is refused with [`TELL_USER_RETIRED`].
     TellUser { text: String },
     /// Keep a fact in Project memory (as a proposal the user reviews).
     Remember { fact: String },
@@ -206,6 +208,9 @@ impl ToolCall {
     /// Parse an MCP `tools/call` by name and arguments. Text fields must
     /// not be blank.
     pub fn parse(name: &str, args: &Value) -> std::result::Result<ToolCall, String> {
+        if name == "tell_user" {
+            return Err(TELL_USER_RETIRED.into());
+        }
         if !catalog().iter().any(|t| t.name == name) {
             return Err(format!("unknown tool {name}"));
         }
@@ -308,14 +313,7 @@ impl ToolCall {
                 }
                 blank("reason", reason)
             }
-            ToolCall::TellUser { text } => {
-                blank("text", text)?;
-                if crate::questions::questions(text).is_empty() {
-                    Ok(())
-                } else {
-                    Err(TELL_USER_QUESTION.into())
-                }
-            }
+            ToolCall::TellUser { .. } => Err(TELL_USER_RETIRED.into()),
             ToolCall::Remember { fact } => blank("fact", fact),
             ToolCall::AckMessage { channel, id } => {
                 blank("channel", channel)?;
@@ -341,11 +339,12 @@ pub const ASK_USER_SHAPE: &str =
      yet, find out more first (read the task, its screen, the code), or answer the worker \
      yourself.";
 
-/// Why `tell_user` refuses a question, and what to do instead.
-pub const TELL_USER_QUESTION: &str =
-    "tell_user is for outcomes and does not carry questions: nothing waits on \
-     a question there and its answer never wakes you. Ask each question with ask_user (one call per \
-     question), then tell_user anything else without the questions.";
+/// What a coordinator started before `tell_user` was retired hears when it
+/// calls it: its reply text is already the message.
+pub const TELL_USER_RETIRED: &str =
+    "tell_user is retired: your reply text already shows in the user's chat, so a tell_user \
+     message showed twice. Nothing was posted. Say it in your reply, once. Ask any question with \
+     ask_user.";
 
 /// A tool as listed to the coordinator.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -456,7 +455,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "ask_user",
-            description: "Ask the user something. Every question for the user goes through this tool, one call per question: a design choice, a clarification, a go-ahead, anything destructive, irreversible or security-sensitive, a credential. It files a decision the user answers in the app with one tap. Never ask in your reply text or in tell_user instead. Required: the question standing alone in plain words (never a worker's shorthand or code names), `context`, at least two `options` each with its consequence, `recommended` (one option's label) and `recommended_why`; the app adds \"Something else\" for a written answer. To put a worker's question to the user, set `answers` to its task and key: the decision replaces the worker's question and the user's answer goes straight to the worker. Asking again with the same key, or the same `answers`, rewrites the open decision in place. Without `answers` the answer wakes you.",
+            description: "Ask the user something. Every question for the user goes through this tool, one call per question: a design choice, a clarification, a go-ahead, anything destructive, irreversible or security-sensitive, a credential. It files a decision the user answers in the app with one tap. Never ask in your reply text instead. Required: the question standing alone in plain words (never a worker's shorthand or code names), `context`, at least two `options` each with its consequence, `recommended` (one option's label) and `recommended_why`; the app adds \"Something else\" for a written answer. To put a worker's question to the user, set `answers` to its task and key: the decision replaces the worker's question and the user's answer goes straight to the worker. Asking again with the same key, or the same `answers`, rewrites the open decision in place. Without `answers` the answer wakes you.",
             input_schema: object(
                 json!({
                     "key": text("Stable key; asking again with it updates the same decision."),
@@ -502,11 +501,6 @@ pub fn catalog() -> Vec<ToolSpec> {
                 json!({"number": {"type": "integer", "description": "The decision's number, such as 16 for D-16."}, "reason": text("Why it no longer needs the user.")}),
                 &["number", "reason"],
             ),
-        },
-        ToolSpec {
-            name: "tell_user",
-            description: "Tell the user an outcome they need: finished work with its link, findings, a real blocker. Lead with the outcome. It carries no questions: ask those with ask_user.",
-            input_schema: object(json!({"text": text("The message.")}), &["text"]),
         },
         ToolSpec {
             name: "remember",
@@ -583,7 +577,6 @@ mod tests {
                 "answers": {"task": "t1", "key": "schema"}
             }),
             "withdraw_decision" => json!({"number": 3, "reason": "covered by D-4"}),
-            "tell_user" => json!({"text": "x"}),
             "remember" => json!({"fact": "f"}),
             "ack_message" => json!({"channel": "inbox", "id": "1"}),
             "load_skill" => json!({"name": "s"}),
@@ -624,19 +617,15 @@ mod tests {
         let logged = json!({"tool": "start_task", "title": "t", "brief": "b", "agent": {"harness": "claude"}});
         assert!(serde_json::from_value::<ToolCall>(logged).is_ok());
         assert!(ToolCall::parse("fleet", &Value::Null).is_ok());
-        // A question goes through ask_user, where its answer wakes the coordinator.
+        // The reply is the message: tell_user only doubled it.
         assert_eq!(
-            ToolCall::parse(
-                "tell_user",
-                &json!({"text": "PR is up. Want me to merge it?"})
-            ),
-            Err(TELL_USER_QUESTION.to_string())
+            ToolCall::parse("tell_user", &json!({"text": "Merged."})),
+            Err(TELL_USER_RETIRED.to_string())
         );
-        assert!(ToolCall::parse(
-            "tell_user",
-            &json!({"text": "Merged https://x.test/pr/1?tab=files."})
-        )
-        .is_ok());
+        assert!(!catalog().iter().any(|t| t.name == "tell_user"));
+        // A call logged before it was retired still reads.
+        let logged = json!({"tool": "tell_user", "text": "PR #46 merged."});
+        assert!(serde_json::from_value::<ToolCall>(logged).is_ok());
     }
 
     #[test]

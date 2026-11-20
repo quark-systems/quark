@@ -4,8 +4,8 @@
 //! The coordinator's replies are read in the app, but a question left in a
 //! reply is not a decision: nothing waits on it, it is not in the decision
 //! log, and the answer never comes back as an `[answered]` wake. The
-//! turn-end check in quarkd and the `tell_user` tool use [`questions`] to
-//! catch them, so the coordinator files each one with `ask_user`.
+//! turn-end check in quarkd uses [`questions`] to catch them, so the
+//! coordinator files each one with `ask_user`.
 //!
 //! The test is plain: a sentence of prose that ends in `?`. Code, quoted
 //! text, links and headings are skipped, since a question there is something

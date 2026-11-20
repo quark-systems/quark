@@ -486,11 +486,11 @@ impl Hands for EngineHands {
                     "Withdrew decision {number}; it is closed in the log."
                 ))
             }
-            ToolCall::TellUser { text } => {
-                let (store, pid, text) = (self.store.clone(), ws.project_id.clone(), text.clone());
-                blocking(move || store.coordinator_says(&pid, &text)).await?;
-                Ok("Told the user.".into())
-            }
+            // Retired: the reply already shows in the chat, and a copy here
+            // doubled it. `parse` refuses new calls before they get here.
+            ToolCall::TellUser { .. } => Err(CoreError::Invalid(
+                quark_coordinator::tools::TELL_USER_RETIRED.into(),
+            )),
             ToolCall::Remember { fact } => {
                 crate::memory::validate_text(fact).map_err(CoreError::Invalid)?;
                 let proposal = NewProposal {
@@ -764,7 +764,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ask_user_tell_user_and_remember_land_in_the_store() {
+    async fn ask_user_and_remember_land_in_the_store_and_tell_user_is_refused() {
         let (store, engine, p) = setup();
         let hands = EngineHands::new(store.clone(), engine.clone());
         let ask = ToolCall::parse(
@@ -790,7 +790,8 @@ mod tests {
         assert_eq!(open[0].brief.recommended.as_deref(), Some("SQLite"));
         assert_eq!(open[0].brief.options.len(), 2);
 
-        hands
+        // The reply already shows in the chat; tell_user only doubled it.
+        assert!(hands
             .run(
                 &p,
                 &ToolCall::TellUser {
@@ -798,7 +799,7 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
+            .is_err());
         hands
             .run(
                 &p,
