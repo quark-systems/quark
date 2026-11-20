@@ -290,9 +290,11 @@ test("worker cards show the harness, its mark and how much the worker changed", 
   // The model it runs and the branch it works on.
   await expect(card.getByTestId("card-model")).toHaveText("sonnet-5-5");
   await expect(card.getByTestId("card-branch")).toHaveText("claude/event-stream-resync");
-  // An alias resolves to the harness's mark; a harness without a published mark gets a monogram.
+  // An alias resolves to the harness's mark, and Codex draws its vendor mark rather than a monogram.
   await expect(page.getByTestId("task-card").filter({ hasText: "Decision records" }).getByRole("img", { name: "Cursor Agent" })).toBeVisible();
-  await expect(page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).getByRole("img", { name: "Codex" })).toHaveText("Cx");
+  const codex = page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).getByRole("img", { name: "Codex" });
+  await expect(codex).toBeVisible();
+  await expect(codex).not.toHaveClass(/harness-mono/);
   // Queued work has no working copy, so no counts.
   await expect(page.getByTestId("task-card").filter({ hasText: "Harness registry trait" }).getByTestId("card-diff")).toHaveCount(0);
 });
