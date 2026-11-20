@@ -172,6 +172,8 @@ async fn ask_the_user_and_wake_on_the_answer() {
         "arguments": {
             "key": "legacy-table",
             "question": "Drop the legacy table? It cannot be undone.",
+            "context": "The migration can drop it now or keep it for a release.",
+            "recommended_why": "keeps a rollback",
             "options": ["Drop", {"label": "Keep", "consequence": "the migration stays two-step"}],
             "recommended": "Keep",
             "blocks": ["t1"]

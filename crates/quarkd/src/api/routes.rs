@@ -955,6 +955,13 @@ pub(crate) async fn answer(
         .resume(&ws, &decision, &engine_answer)
         .await?;
     } else {
+        // A worker reads the picked option with what it leads to, since
+        // the coordinator may have reworded the worker's question.
+        let decision = {
+            let id = id.clone();
+            db(state, move |s| s.get_decision(&id)).await?
+        };
+        let engine_answer = worker_answer(&decision, input.answer.trim(), why.as_deref());
         state
             .engine
             .answer(&ws, &target.engine_id, &engine_answer, &answered_by)
@@ -980,6 +987,35 @@ pub(crate) async fn answer(
         _ => e,
     })?;
     Ok(decision)
+}
+
+/// What the engine is sent for `answer` to `d`, then the user's reason. A
+/// worker's question the coordinator framed also carries the question as
+/// the user saw it and the picked option's consequence, since the worker
+/// asked it in other words.
+fn worker_answer(d: &quark_systems::Decision, answer: &str, why: Option<&str>) -> String {
+    let framed = d.task_id.is_some() && d.brief.asked_by.as_deref() == Some("coordinator");
+    let mut out = String::new();
+    if framed {
+        out.push_str(&format!(
+            "The user was asked: {}\nThey answered: ",
+            d.question.trim()
+        ));
+    }
+    out.push_str(answer);
+    if let Some(c) = framed
+        .then_some(d)
+        .into_iter()
+        .flat_map(|d| d.brief.options.iter())
+        .find(|o| o.label.trim() == answer)
+        .and_then(|o| o.consequence.as_deref())
+    {
+        out.push_str(&format!(" ({})", c.trim()));
+    }
+    if let Some(w) = why {
+        out.push_str(&format!("\n\nWhy: {w}"));
+    }
+    out
 }
 
 /// Where an answer can come from.

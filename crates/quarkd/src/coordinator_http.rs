@@ -1153,7 +1153,11 @@ mod tests {
         // A question filed with ask_user this turn needs no nudge.
         let ask = quark_coordinator::ToolCall::parse(
             "ask_user",
-            &json!({"key": "cache", "question": "Redis or memory?"}),
+            &json!({
+                "key": "cache", "question": "Redis or memory?",
+                "context": "Sessions need a store.", "options": ["Redis", "Memory"],
+                "recommended": "Memory", "recommended_why": "one process"
+            }),
         )
         .unwrap();
         coordinator.call(&ProjectId::new("p1"), ask).await.unwrap();

@@ -13,9 +13,21 @@ use quark_systems::{
 use rusqlite::{params, OptionalExtension};
 
 use super::{
-    api_task_ids, append_event, decision_from_row, insert_decision, new_id, Result, Store,
-    DECISION_SELECT,
+    api_task_ids, append_event, decision_from_row, decision_from_row_at, insert_decision,
+    mark_answered, new_id, number_if_unset, Result, Store, StoreError, COORDINATOR,
+    DECISION_COLUMNS, DECISION_SELECT,
 };
+
+/// `a` then each of `b` not in it.
+fn merged(a: &[String], b: &[String]) -> Vec<String> {
+    let mut out = a.to_vec();
+    for x in b {
+        if !out.contains(x) {
+            out.push(x.clone());
+        }
+    }
+    out
+}
 use crate::now_rfc3339;
 
 /// Engine ids of the coordinator's decisions, under the daemon's prefix.
@@ -37,35 +49,74 @@ impl Store {
     /// `decision.opened`. Asking again while it is still open updates its
     /// question and brief in place (and emits `decision.opened` again when
     /// either changed); asking after it was answered opens a new one.
-    /// Returns the task's own open decision instead, unchanged, when the
-    /// question blocks a task that already asks one.
+    ///
+    /// `answers` names a worker's question (`<task>:<key>`, the engine's id
+    /// for it) the decision frames. That question's own decision takes the
+    /// coordinator's question and brief in place, and opens if it was still
+    /// with the coordinator, so the person's answer goes to the worker. A
+    /// question that blocks a task with a pending question of its own frames
+    /// that one the same way, so no copy is left to answer twice.
     pub fn ask_from_coordinator(
         &self,
         project_id: &str,
         key: &str,
         question: &str,
         brief: DecisionBrief,
+        answers: Option<&str>,
     ) -> Result<Decision> {
         let engine_id = coordinator_decision_id(key);
         self.write(|tx, events| {
             let brief = api_task_ids(tx, project_id, brief.normalized())?;
-            // A task the question blocks may already ask it as its own
-            // decision; a second copy would be answered in one place and
-            // left open in the other.
-            for task in &brief.blocks {
-                let asked = tx
+            let pending = |sql_where: &str, a: &str| -> Result<Option<Decision>> {
+                Ok(tx
                     .query_row(
                         &format!(
-                            "{DECISION_SELECT} WHERE project_id = ?1 AND task_id = ?2
-                             AND state = 'open' ORDER BY rowid DESC LIMIT 1"
+                            "{DECISION_SELECT} WHERE project_id = ?1 AND {sql_where}
+                             AND state IN ('open', 'with_coordinator')
+                             ORDER BY rowid DESC LIMIT 1"
                         ),
-                        params![project_id, task],
+                        params![project_id, a],
                         decision_from_row,
                     )
-                    .optional()?;
-                if let Some(d) = asked {
-                    return Ok(d);
+                    .optional()?)
+            };
+            let mut worker = match answers {
+                Some(hold) => {
+                    Some(pending("engine_id = ?2", hold)?.ok_or_else(|| StoreError::NotFound)?)
                 }
+                None => None,
+            };
+            if worker.is_none() {
+                for task in &brief.blocks {
+                    if let Some(d) = pending("task_id = ?2", task)? {
+                        worker = Some(d);
+                        break;
+                    }
+                }
+            }
+            if let Some(old) = worker {
+                let mut d = Decision {
+                    question: question.to_string(),
+                    brief: DecisionBrief {
+                        blocks: merged(&old.brief.blocks, &brief.blocks),
+                        ..brief
+                    },
+                    state: DecisionState::Open,
+                    ..old
+                };
+                number_if_unset(tx, &mut d)?;
+                tx.execute(
+                    "UPDATE decisions SET question = ?2, brief = ?3, state = 'open' WHERE id = ?1",
+                    params![d.id, d.question, serde_json::to_string(&d.brief)?],
+                )?;
+                append_event(
+                    tx,
+                    events,
+                    Some(project_id),
+                    EventType::DecisionOpened,
+                    serde_json::to_value(&d)?,
+                )?;
+                return Ok(d);
             }
             let open = tx
                 .query_row(
@@ -113,6 +164,109 @@ impl Store {
                 serde_json::to_value(&decision)?,
             )?;
             Ok(decision)
+        })
+    }
+
+    /// Records the coordinator's own answer to a worker's question (`hold`,
+    /// the engine's id for it) on that question's decision, so the log
+    /// shows the call it made. `None` when no decision is pending for it.
+    pub fn coordinator_answered(
+        &self,
+        project_id: &str,
+        hold: &str,
+        answer: &str,
+        answered_by: &str,
+    ) -> Result<Option<Decision>> {
+        self.write(|tx, events| {
+            let Some(old) = tx
+                .query_row(
+                    &format!(
+                        "{DECISION_SELECT} WHERE project_id = ?1 AND engine_id = ?2
+                         AND state IN ('open', 'with_coordinator')
+                         ORDER BY rowid DESC LIMIT 1"
+                    ),
+                    params![project_id, hold],
+                    decision_from_row,
+                )
+                .optional()?
+            else {
+                return Ok(None);
+            };
+            let mut d = Decision {
+                state: DecisionState::Answered,
+                answer: Some(answer.to_string()),
+                answered_by: Some(answered_by.to_string()),
+                answered_at: Some(now_rfc3339()),
+                answered_via: Some(COORDINATOR.into()),
+                ..old
+            };
+            number_if_unset(tx, &mut d)?;
+            mark_answered(tx, events, &d)?;
+            Ok(Some(d))
+        })
+    }
+
+    /// Withdraws the coordinator's own open decision `number`: the question
+    /// no longer needs the person (another decision covers it, or the work
+    /// moved on). Closed in the log with `reason`, and nothing is sent
+    /// anywhere. A worker's question is closed by answering the worker
+    /// instead, so this refuses one.
+    pub fn withdraw_decision(
+        &self,
+        project_id: &str,
+        number: i64,
+        reason: &str,
+    ) -> Result<Decision> {
+        self.write(|tx, events| {
+            let (engine_id, old): (String, Decision) = tx
+                .query_row(
+                    &format!(
+                        "SELECT engine_id, {DECISION_COLUMNS} FROM decisions
+                         WHERE project_id = ?1 AND number = ?2
+                         ORDER BY rowid DESC LIMIT 1"
+                    ),
+                    params![project_id, number],
+                    |r| Ok((r.get(0)?, decision_from_row_at(r, 1)?)),
+                )
+                .optional()?
+                .ok_or(StoreError::NotFound)?;
+            if old.state != DecisionState::Open {
+                return Err(StoreError::Conflict(format!(
+                    "decision {number} is not open"
+                )));
+            }
+            if coordinator_decision_key(&engine_id).is_none() {
+                return Err(StoreError::Conflict(format!(
+                    "decision {number} is a worker's question: answer the worker with `answer` \
+                     (its task and key), which closes it, or reframe it with ask_user `answers`"
+                )));
+            }
+            let d = Decision {
+                state: DecisionState::Answered,
+                answered_by: Some(COORDINATOR.into()),
+                answered_at: Some(now_rfc3339()),
+                answered_via: Some(COORDINATOR.into()),
+                answer_why: Some(format!("Withdrawn: {}", reason.trim())),
+                ..old
+            };
+            mark_answered(tx, events, &d)?;
+            Ok(d)
+        })
+    }
+
+    /// Worker questions still with the coordinator, and every open decision
+    /// a person sees, each with the engine's id for it, oldest first.
+    pub fn pending_for_coordinator(&self, project_id: &str) -> Result<Vec<(String, Decision)>> {
+        self.read(|c| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT engine_id, {DECISION_COLUMNS} FROM decisions
+                 WHERE project_id = ?1 AND state IN ('open', 'with_coordinator')
+                 ORDER BY opened_at, rowid"
+            ))?;
+            let rows = stmt.query_map([project_id], |r| {
+                Ok((r.get(0)?, decision_from_row_at(r, 1)?))
+            })?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
         })
     }
 
@@ -248,15 +402,15 @@ mod tests {
             ..Default::default()
         };
         let d = store
-            .ask_from_coordinator(&p, "storage", "Which database?", brief.clone())
+            .ask_from_coordinator(&p, "storage", "Which database?", brief.clone(), None)
             .unwrap();
         assert_eq!(d.state, DecisionState::Open);
         let same = store
-            .ask_from_coordinator(&p, "storage", "Which database?", brief.clone())
+            .ask_from_coordinator(&p, "storage", "Which database?", brief.clone(), None)
             .unwrap();
         assert_eq!(same, d);
         let again = store
-            .ask_from_coordinator(&p, "storage", "Which database for v1?", brief)
+            .ask_from_coordinator(&p, "storage", "Which database for v1?", brief, None)
             .unwrap();
         assert_eq!(again.id, d.id);
         assert_eq!(again.question, "Which database for v1?");
@@ -274,7 +428,13 @@ mod tests {
 
         store.answer_decision(&d.id, "SQLite", "Matt").unwrap();
         let next = store
-            .ask_from_coordinator(&p, "storage", "Which database?", DecisionBrief::default())
+            .ask_from_coordinator(
+                &p,
+                "storage",
+                "Which database?",
+                DecisionBrief::default(),
+                None,
+            )
             .unwrap();
         assert_ne!(next.id, d.id);
     }

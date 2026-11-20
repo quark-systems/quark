@@ -9249,7 +9249,8 @@
         "enum": [
           "open",
           "answered",
-          "acted"
+          "acted",
+          "with_coordinator"
         ]
       },
       "DeleteCollection": {

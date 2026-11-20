@@ -16,6 +16,10 @@ pub enum DecisionState {
     Answered,
     /// Answered and acted on: `outcome` says what happened.
     Acted,
+    /// A worker's question waiting on the coordinator, never shown to a
+    /// person: the coordinator answers it itself, or frames it with
+    /// options and a recommendation, which opens it.
+    WithCoordinator,
 }
 
 impl DecisionState {
@@ -24,6 +28,7 @@ impl DecisionState {
             DecisionState::Open => "open",
             DecisionState::Answered => "answered",
             DecisionState::Acted => "acted",
+            DecisionState::WithCoordinator => "with_coordinator",
         }
     }
 
@@ -32,6 +37,7 @@ impl DecisionState {
         match s {
             "answered" => DecisionState::Answered,
             "acted" => DecisionState::Acted,
+            "with_coordinator" => DecisionState::WithCoordinator,
             _ => DecisionState::Open,
         }
     }
@@ -331,6 +337,7 @@ mod tests {
             DecisionState::Open,
             DecisionState::Answered,
             DecisionState::Acted,
+            DecisionState::WithCoordinator,
         ] {
             assert_eq!(DecisionState::parse(s.as_str()), s);
         }
