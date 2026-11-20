@@ -426,8 +426,11 @@ mod tests {
         assert_eq!(hooks_reach_quark(agy, &none, Some(home)), Some(false));
         let file = home.join(".gemini/config/hooks.json");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, r#"{"lint":{"PostToolUse":[{"matcher":"*","hooks":[{"command":"x"}]}]}}"#)
-            .unwrap();
+        std::fs::write(
+            &file,
+            r#"{"lint":{"PostToolUse":[{"matcher":"*","hooks":[{"command":"x"}]}]}}"#,
+        )
+        .unwrap();
         let folder = home.join("ws");
         prepare_folder(agy, &folder, &none, Some(home)).unwrap();
         prepare_folder(agy, &folder, &none, Some(home)).unwrap();

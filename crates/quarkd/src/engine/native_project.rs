@@ -1181,8 +1181,17 @@ mod tests {
         a.model = Some("gemini-4-neon-high".into());
         a.effort = Some("high".into());
         let p = Path::new("/w/.quark/coordinator.md");
-        let argv = launch_argv(m, Wiring::Antigravity, &a, Path::new("/w"), p, &urls(), false, &[])
-            .unwrap();
+        let argv = launch_argv(
+            m,
+            Wiring::Antigravity,
+            &a,
+            Path::new("/w"),
+            p,
+            &urls(),
+            false,
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             argv,
             [
@@ -1194,8 +1203,17 @@ mod tests {
                 "high"
             ]
         );
-        let resumed = launch_argv(m, Wiring::Antigravity, &a, Path::new("/w"), p, &urls(), true, &[])
-            .unwrap();
+        let resumed = launch_argv(
+            m,
+            Wiring::Antigravity,
+            &a,
+            Path::new("/w"),
+            p,
+            &urls(),
+            true,
+            &[],
+        )
+        .unwrap();
         assert_eq!(resumed.last().unwrap(), "--continue");
         // A worker gets its brief in the flag's own argument.
         let vars = LaunchVars {
@@ -1204,7 +1222,11 @@ mod tests {
         };
         assert_eq!(
             quark_harness::argv(m, &vars),
-            ["agy", "--dangerously-skip-permissions", "--prompt-interactive=-do it"]
+            [
+                "agy",
+                "--dangerously-skip-permissions",
+                "--prompt-interactive=-do it"
+            ]
         );
     }
 

@@ -309,7 +309,13 @@ async fn hook(
     // `continuationActive` stays false on the stop that follows, so a turn
     // already sent back is remembered here instead.
     let agy_stop = event == crate::coordinator_agy::STOP_EVENT;
-    if agy_stop {
+    // A turn the person or quarkd interrupted, or that failed, is never
+    // sent back.
+    let agy_ended_itself = matches!(
+        body.get("terminationReason").and_then(Value::as_str),
+        None | Some("NO_TOOL_CALL" | "TERMINAL_STEP_TYPE" | "INJECTED_RESPONSE")
+    );
+    if agy_stop && agy_ended_itself {
         let launch = headers
             .get(crate::coordinator_agy::LAUNCH_HEADER)
             .and_then(|v| v.to_str().ok())
@@ -330,13 +336,13 @@ async fn hook(
         }
     }
     if agy_stop
+        && agy_ended_itself
         && !r.nudged.lock().unwrap().remove(&project)
         && r.unfiled_questions(&project, &body).await
     {
         r.nudged.lock().unwrap().insert(project.clone());
         tracing::info!(%project, "coordinator asked in text; nudged it to ask_user");
-        return Json(json!({ "decision": "continue", "reason": questions::NUDGE }))
-            .into_response();
+        return Json(json!({ "decision": "continue", "reason": questions::NUDGE })).into_response();
     }
     if !claude_stop && !agy_stop && !r.nudged.lock().unwrap().remove(&project) {
         if let Some(response) = r.nudge_turn_end(&project, &body).await {
@@ -803,8 +809,15 @@ impl Wiring {
 }
 
 /// The harnesses a native coordinator runs on, by manifest id.
-pub const COORDINATOR_HARNESSES: &[&str] =
-    &["claude-code", "codex", "pi", "pi-signed", "bob", "kiro", "antigravity"];
+pub const COORDINATOR_HARNESSES: &[&str] = &[
+    "claude-code",
+    "codex",
+    "pi",
+    "pi-signed",
+    "bob",
+    "kiro",
+    "antigravity",
+];
 
 /// Point the coordinator running `harness` in `root` at quarkd. Codex takes
 /// its wiring on the command line ([`codex_overrides`]), so nothing is
@@ -1453,7 +1466,12 @@ mod tests {
         let transcript = dir.path().join("transcript_full.jsonl");
         let payload = json!({"conversationId": "c1", "transcriptPath": transcript,
             "hookEventName": "PreInvocation"});
-        let ask_prompt = || post(&format!("/{pid}/{token}/hooks/agy_prompt"), &payload.to_string());
+        let ask_prompt = || {
+            post(
+                &format!("/{pid}/{token}/hooks/agy_prompt"),
+                &payload.to_string(),
+            )
+        };
 
         // The first call of a conversation: agy has written nothing yet.
         let (s, b) = send(&app, ask_prompt()).await;
@@ -1471,7 +1489,8 @@ mod tests {
 
         // agy wrote it; a compaction then drops it, so it goes in again.
         let line = |v: Value| format!("{v}\n");
-        let mut text = line(json!({"type": "USER_INPUT", "content": "<USER_REQUEST>\nhi\n</USER_REQUEST>"}));
+        let mut text =
+            line(json!({"type": "USER_INPUT", "content": "<USER_REQUEST>\nhi\n</USER_REQUEST>"}));
         for p in &parts {
             text += &line(json!({"type": "SYSTEM_MESSAGE", "source": "SYSTEM_SDK", "content": p}));
         }
@@ -1491,7 +1510,10 @@ mod tests {
         let stop_payload = json!({"transcriptPath": transcript, "continuationActive": false,
             "terminationReason": "NO_TOOL_CALL"});
         let stop = |launch: &str| {
-            let mut req = post(&format!("/{pid}/{token}/hooks/agy_stop"), &stop_payload.to_string());
+            let mut req = post(
+                &format!("/{pid}/{token}/hooks/agy_stop"),
+                &stop_payload.to_string(),
+            );
             req.headers_mut()
                 .insert("x-quark-launch", launch.parse().unwrap());
             req
@@ -1509,6 +1531,16 @@ mod tests {
         // agy's next stop still says `continuationActive: false`; it ends the turn.
         let (_, b) = send(&app, stop("1")).await;
         assert_eq!(b, json!({}));
+        // An interrupted turn is never sent back, even on a new start.
+        let cancelled = json!({"transcriptPath": transcript, "terminationReason": "USER_CANCELED"});
+        let mut req = post(
+            &format!("/{pid}/{token}/hooks/agy_stop"),
+            &cancelled.to_string(),
+        );
+        req.headers_mut()
+            .insert("x-quark-launch", "2".parse().unwrap());
+        let (_, b) = send(&app, req).await;
+        assert_eq!(b, json!({}));
         let ended = log
             .read(Seq::ZERO, 100)
             .await
@@ -1516,7 +1548,7 @@ mod tests {
             .iter()
             .filter(|e| e.kind.as_str() == "coordinator.turn_ended")
             .count();
-        assert_eq!(ended, 2);
+        assert_eq!(ended, 3);
     }
 
     #[tokio::test]

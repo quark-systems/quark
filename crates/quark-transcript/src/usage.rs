@@ -630,11 +630,15 @@ mod tests {
     fn antigravity_counts_cache_reads_as_input_and_keys_turns_by_step() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("transcript_full.jsonl");
-        let user = |i: u64| json!({"step_index": i, "source": "USER_EXPLICIT", "type": "USER_INPUT",
-            "created_at": "2026-11-20T05:44:55Z", "content": "<USER_REQUEST>\ngo\n</USER_REQUEST>"});
-        let call = |i: u64, input: u64, read: u64| json!({"step_index": i, "source": "MODEL",
+        let user = |i: u64| {
+            json!({"step_index": i, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+            "created_at": "2026-11-20T05:44:55Z", "content": "<USER_REQUEST>\ngo\n</USER_REQUEST>"})
+        };
+        let call = |i: u64, input: u64, read: u64| {
+            json!({"step_index": i, "source": "MODEL",
             "type": "PLANNER_RESPONSE", "model": "gemini-4-neon-high", "input_tokens": input,
-            "cache_read_tokens": read, "output_tokens": 10, "content": "x"});
+            "cache_read_tokens": read, "output_tokens": 10, "content": "x"})
+        };
         write(
             &path,
             &[
@@ -647,15 +651,22 @@ mod tests {
                 user(6),
             ],
         );
-        let (turns, next) =
-            read_turns(&path, &UsageCursor::default(), SessionFormat::Antigravity, false)
-                .unwrap();
+        let (turns, next) = read_turns(
+            &path,
+            &UsageCursor::default(),
+            SessionFormat::Antigravity,
+            false,
+        )
+        .unwrap();
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].id, "step-0");
         assert_eq!(turns[1].id, "step-2");
         let m = &turns[1].models[0];
         assert_eq!(m.model, "gemini-4-neon-high");
-        assert_eq!((m.input, m.cache_read, m.output, m.calls), (20649, 16186, 20, 2));
+        assert_eq!(
+            (m.input, m.cache_read, m.output, m.calls),
+            (20649, 16186, 20, 2)
+        );
         // The context is the last call's whole input.
         assert_eq!(turns[1].context, Some(10415));
         // The open turn is read again once it ends.

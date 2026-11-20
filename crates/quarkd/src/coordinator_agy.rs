@@ -156,9 +156,7 @@ impl PromptState {
                         self.holds = Some(d.to_string());
                     }
                 }
-                Some("CHECKPOINT")
-                    if quark_transcript::antigravity::is_compaction(content) =>
-                {
+                Some("CHECKPOINT") if quark_transcript::antigravity::is_compaction(content) => {
                     self.holds = None;
                 }
                 _ => {}
@@ -185,12 +183,10 @@ pub fn install(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bool> {
         .iter()
         .map(|t| (t.name.to_string(), json!({ "eager": true })))
         .collect();
-    let mut changed = crate::coordinator_http::edit_json(
-        &root.join(".agents/mcp_config.json"),
-        |v| {
+    let mut changed =
+        crate::coordinator_http::edit_json(&root.join(".agents/mcp_config.json"), |v| {
             v["mcpServers"][SERVER_NAME] = json!({ "url": urls.mcp, "tools": tools });
-        },
-    )?;
+        })?;
     changed |= crate::coordinator_http::edit_json(&root.join(".agents/hooks.json"), |v| {
         v[HOOK_NAME] = json!({
             "PreInvocation": [{
@@ -246,8 +242,10 @@ mod tests {
         let line = |v: Value| format!("{v}\n");
         let user = json!({"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
             "content": "<USER_REQUEST>\nhi\n</USER_REQUEST>"});
-        let added = |d: &str| json!({"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE",
-            "content": format!("The following is a <SYSTEM_MESSAGE>...\n<!-- {MARK} {d} -->\nYour instructions")});
+        let added = |d: &str| {
+            json!({"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE",
+            "content": format!("The following is a <SYSTEM_MESSAGE>...\n<!-- {MARK} {d} -->\nYour instructions")})
+        };
         let compacted = json!({"source": "SYSTEM", "type": "CHECKPOINT",
             "content": "# Resuming from a compaction\n\nYou are continuing"});
         std::fs::write(&path, line(user.clone())).unwrap();
@@ -298,10 +296,18 @@ mod tests {
         assert_eq!(server["tools"]["ask_user"]["eager"], true);
         let hooks = read(".agents/hooks.json");
         assert_eq!(hooks["theirs"]["Stop"][0]["command"], "x");
-        let pre = hooks[HOOK_NAME]["PreInvocation"][0]["command"].as_str().unwrap();
-        assert!(pre.contains(&format!("{}/{PROMPT_EVENT}", urls.hooks)), "{pre}");
+        let pre = hooks[HOOK_NAME]["PreInvocation"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            pre.contains(&format!("{}/{PROMPT_EVENT}", urls.hooks)),
+            "{pre}"
+        );
         let stop = hooks[HOOK_NAME]["Stop"][0]["command"].as_str().unwrap();
-        assert!(stop.contains(&format!("{}/{STOP_EVENT}", urls.hooks)), "{stop}");
+        assert!(
+            stop.contains(&format!("{}/{STOP_EVENT}", urls.hooks)),
+            "{stop}"
+        );
     }
 
     #[test]

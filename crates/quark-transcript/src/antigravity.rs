@@ -172,7 +172,10 @@ mod tests {
 
         let reply = json!({"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "ok"});
         let e = parse(&reply);
-        assert_eq!((e[0].role, e[0].text.as_str()), (TranscriptRole::Assistant, "ok"));
+        assert_eq!(
+            (e[0].role, e[0].text.as_str()),
+            (TranscriptRole::Assistant, "ok")
+        );
 
         // Hook and system notes are not conversation.
         let note = json!({"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE",
