@@ -7,19 +7,91 @@
 //! (`api/automation.rs`). See `docs/engine/triggers.md`.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_core::{CoreError, EventLog, NewEvent, ProjectId, TaskId};
 use quark_systems::{EventType, Notice, NoticeItem, NoticeKind};
-use quark_triggers::{Channel, CommandChannel, Effects, Engine, Item, Occasion, Processes};
+use quark_triggers::{
+    Channel, CommandChannel, Commands, Effects, Engine, Item, Occasion, Processes,
+};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex;
 
 use crate::engine::{EngineAdapter, WorkspaceRef};
 use crate::store::Store;
+
+/// The name a command calls the daemon by.
+const QUARKD: &str = "quarkd";
+
+/// Runs rule and channel commands so that one whose program is named
+/// `quarkd` runs this daemon's own executable, whatever directory it asked
+/// for (and with no `PATH` lookup for a bare `quarkd`).
+///
+/// A rule outlives the quarkd it was written under. A path to the build that
+/// was current then names an older quarkd after the next update, which would
+/// read a home this daemon has since migrated (`quarkd triage` on a daily
+/// rule did, and filed what it misread). The daemon that runs the home is
+/// the one to read it.
+struct OwnQuarkd {
+    exe: PathBuf,
+    run: Processes,
+}
+
+impl OwnQuarkd {
+    fn new(exe: PathBuf) -> Self {
+        Self {
+            exe,
+            run: Processes,
+        }
+    }
+
+    /// The program to start for `asked`, a command's first word: `None` to
+    /// run it as asked.
+    fn program(&self, asked: &str) -> Option<&Path> {
+        let name = Path::new(asked).file_name()?;
+        let exe_name = format!("{QUARKD}{}", std::env::consts::EXE_SUFFIX);
+        if name != QUARKD && name != exe_name.as_str() {
+            return None;
+        }
+        if asked != QUARKD && !same_file(Path::new(asked), &self.exe) {
+            tracing::info!(
+                asked,
+                running = %self.exe.display(),
+                "a command asked for another quarkd; running this one"
+            );
+        }
+        Some(&self.exe)
+    }
+}
+
+/// Whether two paths name one file, through links and `..`.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+#[async_trait]
+impl Commands for OwnQuarkd {
+    async fn run(&self, argv: &[String], timeout: Duration) -> quark_triggers::commands::Ran {
+        let own = argv
+            .first()
+            .and_then(|asked| self.program(asked))
+            .and_then(Path::to_str);
+        match own {
+            Some(exe) => {
+                let mut argv = argv.to_vec();
+                argv[0] = exe.to_string();
+                self.run.run(&argv, timeout).await
+            }
+            None => self.run.run(argv, timeout).await,
+        }
+    }
+}
 
 /// The slice 7 engine and its channel plug-ins.
 pub struct Triggers {
@@ -41,8 +113,15 @@ impl Triggers {
             log: log.clone(),
             adapter,
         });
-        let engine = Engine::open(log, crate::host(), effects, Arc::new(Processes)).await?;
-        let (channels, errors) = CommandChannel::load_dir(channels_dir, Arc::new(Processes));
+        let commands: Arc<dyn Commands> = match std::env::current_exe() {
+            Ok(exe) => Arc::new(OwnQuarkd::new(exe)),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not find quarkd's own executable; a command that runs quarkd runs the one it names");
+                Arc::new(Processes)
+            }
+        };
+        let engine = Engine::open(log, crate::host(), effects, commands.clone()).await?;
+        let (channels, errors) = CommandChannel::load_dir(channels_dir, commands);
         for e in errors {
             tracing::warn!(error = %e, "channel plug-in skipped");
         }
@@ -303,6 +382,55 @@ mod tests {
 
     use super::*;
     use crate::engine::{EngineTask, FleetSnapshot, StubEngine, StubWrite};
+
+    #[test]
+    fn a_command_that_names_quarkd_gets_the_daemons_own() {
+        let own = Path::new("/Applications/Quark.app/Contents/MacOS/quarkd");
+        let c = OwnQuarkd::new(own.into());
+        // A bare name, the daemon's own path, and a build that has gone stale.
+        assert_eq!(c.program("quarkd"), Some(own));
+        assert_eq!(c.program(own.to_str().unwrap()), Some(own));
+        assert_eq!(
+            c.program("/Users/me/src/quark/target/debug/quarkd"),
+            Some(own)
+        );
+        // Anything else runs as asked.
+        assert_eq!(c.program("bd"), None);
+        assert_eq!(c.program("/usr/local/bin/quarkd-wrapper"), None);
+        assert_eq!(c.program("/opt/quarkd/bin/gh"), None);
+    }
+
+    /// quark-5li: a daily rule named a source build's `quarkd`, which
+    /// became an older quarkd than the daemon as releases went on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_rule_that_names_a_stale_quarkd_runs_the_daemons() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = |sub: &str, says: &str| {
+            let at = dir.path().join(sub);
+            std::fs::create_dir_all(&at).unwrap();
+            let path = at.join("quarkd");
+            std::fs::write(&path, format!("#!/bin/sh\necho {says} \"$@\"\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let stale = script("old", "stale");
+        let own = script("app", "current");
+        let c = OwnQuarkd::new(own.clone());
+        let gone = dir.path().join("gone/quarkd");
+        for asked in [&stale, Path::new("quarkd"), &own, &gone] {
+            let argv: Vec<String> = [asked.to_str().unwrap(), "triage", "--hours", "24"]
+                .map(String::from)
+                .to_vec();
+            let r = c.run(&argv, Duration::from_secs(5)).await;
+            assert_eq!(r.code, Some(0), "{}: {}", asked.display(), r.stderr);
+            assert_eq!(r.stdout, "current triage --hours 24\n");
+        }
+        // Another program runs as asked.
+        let argv = ["printf", "%s", "quarkd"].map(String::from).to_vec();
+        assert_eq!(c.run(&argv, Duration::from_secs(5)).await.stdout, "quarkd");
+    }
 
     fn messages(stub: &StubEngine) -> Vec<(String, String)> {
         stub.writes()

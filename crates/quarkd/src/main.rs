@@ -368,7 +368,7 @@ async fn run(widened: Vec<PathBuf>) -> anyhow::Result<()> {
             let home = home.unwrap_or_else(config::default_home);
             let now = time::OffsetDateTime::now_utc();
             let report =
-                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now);
+                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -408,7 +408,7 @@ async fn run(widened: Vec<PathBuf>) -> anyhow::Result<()> {
             };
             let now = time::OffsetDateTime::now_utc();
             let report =
-                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now);
+                quarkd::diagnose::diagnose(&home, now - time::Duration::hours(hours.into()), now)?;
             let bd = quarkd::triage::Bd { bin: bd, beads_dir };
             quarkd::triage::triage(&report, &bd, min, dry_run, sync)?;
             Ok(())

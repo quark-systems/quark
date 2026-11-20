@@ -45,6 +45,9 @@ A `Rule` is a condition, an action and a few switches (`once`, `enabled`).
 Actions are deterministic: `wake` the coordinator with a note, leave an `inbox` note, `steer` a task, or run a bounded `command`.
 A `command` condition with a `command` action and an `until` is the native form of firstmate's when-then watch (`fm-procevent-when.sh`).
 Commands run without a shell.
+A command whose program is named `quarkd` runs the daemon's own executable, whatever directory it names, so write it as a bare `quarkd` (`["quarkd", "triage", "--project", "<id>"]`).
+A rule outlives the quarkd it was written under: a path to the build that was current then names an older quarkd after the next update, which would read a home the daemon has since migrated.
+The daemon logs `a command asked for another quarkd; running this one` when a rule's path names a different file.
 Anything that needs judgment stays with the coordinator, which a rule can wake.
 Rules can't watch `trigger.*` events, so a rule never triggers itself.
 

@@ -12,6 +12,18 @@
 //! It opens both databases read-only, so it also works with quarkd down.
 //! It reports counts, kinds, ids and log messages, never terminal output or
 //! transcripts.
+//!
+//! # Run by another quarkd than the home's
+//!
+//! `quarkd diagnose` and `quarkd triage` are whichever binary was started,
+//! which need not be the quarkd that runs the home: a build left in a
+//! source checkout, or one a script still names after an update. One too
+//! old for the home (the home's format, `quark.db` or the event log moved on
+//! in a way it can't read, see [`crate::home_format`] and
+//! `store/migrations.rs`) refuses with [`Unreadable`] instead of reporting
+//! what it misreads, so triage files nothing from it. A schema that differs
+//! but is usable is a fact about the reader, not trouble in the home: it is
+//! reported as [`Diagnostics::quark_db_schema`], never as a finding.
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
@@ -105,7 +117,14 @@ const LARGEST_KINDS: usize = 6;
 pub struct Diagnostics {
     pub home: String,
     pub host: String,
+    /// The quarkd that made the report, which is the daemon for
+    /// `GET /v1/diagnostics` and whichever binary ran `quarkd diagnose`.
     pub version: String,
+    /// `quark.db`'s schema version when it is not the one this quarkd
+    /// writes: another quarkd migrated the home last (an update this one
+    /// predates, or one rolled back).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quark_db_schema: Option<i64>,
     pub generated_at: String,
     pub since: String,
     /// When the daemon last logged, if it logs to the home.
@@ -115,23 +134,68 @@ pub struct Diagnostics {
     pub findings: Vec<Finding>,
 }
 
-/// Builds the report for `home` covering everything since `since`.
-pub fn diagnose(home: &Path, since: OffsetDateTime, now: OffsetDateTime) -> Diagnostics {
+/// Why a quarkd won't report on a home: it can't read what it finds there.
+/// The message says what to run instead.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct Unreadable(String);
+
+/// A database a newer quarkd moved past this one.
+fn too_new(db: &Path, why: &str) -> Unreadable {
+    Unreadable(format!(
+        "{}: {why}; quarkd {} is too old to report on this home. \
+         Run the newer Quark, or give this one another home with --home",
+        db.display(),
+        env!("CARGO_PKG_VERSION")
+    ))
+}
+
+/// Builds the report for `home` covering everything since `since`, or
+/// refuses a home this quarkd can't read (see the module docs).
+pub fn diagnose(
+    home: &Path,
+    since: OffsetDateTime,
+    now: OffsetDateTime,
+) -> Result<Diagnostics, Unreadable> {
+    crate::home_format::check_readable(home).map_err(|e| Unreadable(format!("{e:#}")))?;
     let since_s = fmt(since);
     let mut f = Findings::default();
     let logs = home.join("logs");
     let last_log_at = read_logs(&logs, &since_s, &mut f);
     let quark_db = home.join("quark.db");
     let mut largest = Vec::new();
+    let mut quark_db_schema = None;
     if let Some(c) = open(&quark_db) {
-        let r = read_store(&c, &since_s, now, &mut f);
-        if let Err(e) = r {
+        let ours = crate::store::SCHEMA_VERSION;
+        // A database that can't be read at all is trouble in the home; one
+        // a newer quarkd moved past this one is this quarkd's to refuse.
+        let schema = match crate::store::usable_schema(&c) {
+            Ok(v) => Some(v),
+            Err(crate::store::StoreError::Invalid(m)) => return Err(too_new(&quark_db, &m)),
+            Err(_) => None,
+        };
+        quark_db_schema = schema.filter(|v| *v != ours);
+        if let Err(e) = read_store(&c, &since_s, now, &mut f) {
+            // An older database lacks what this quarkd reads, and a reader
+            // can't migrate it.
+            if let Some(v) = schema.filter(|v| *v < ours) {
+                return Err(Unreadable(format!(
+                    "{} is at schema {v}, older than quarkd {} reads ({ours}), and reading it \
+                     failed: {e}. Run the quarkd that runs this home, or start this one on it \
+                     once to migrate it",
+                    quark_db.display(),
+                    env!("CARGO_PKG_VERSION")
+                )));
+            }
             f.add_error("store", &format!("could not read quark.db: {e}"));
         }
         largest.extend(kind_sizes(&c, "quark.db", "type").unwrap_or_default());
     }
     let events_db = home.join(quark_eventlog::FILE_NAME);
     if let Some(c) = open(&events_db) {
+        if let Err(quark_core::CoreError::Unsupported(m)) = quark_eventlog::usable_version(&c) {
+            return Err(too_new(&events_db, &m));
+        }
         if let Err(e) = read_events(&c, &since_s, &mut f) {
             f.add_error("event", &format!("could not read the event log: {e}"));
         }
@@ -158,16 +222,17 @@ pub fn diagnose(home: &Path, since: OffsetDateTime, now: OffsetDateTime) -> Diag
             );
         }
     }
-    Diagnostics {
+    Ok(Diagnostics {
         home: home.display().to_string(),
         host: hostname(),
         version: env!("CARGO_PKG_VERSION").into(),
+        quark_db_schema,
         generated_at: fmt(now),
         since: since_s,
         last_log_at,
         sizes,
         findings: f.into_sorted(),
-    }
+    })
 }
 
 /// Plain-text report for a terminal.
@@ -176,6 +241,13 @@ pub fn render(d: &Diagnostics) -> String {
     let mut out = String::new();
     let mb = |b: u64| b as f64 / 1024.0 / 1024.0;
     let _ = writeln!(out, "quarkd {} on {} ({})", d.version, d.host, d.home);
+    if let Some(schema) = d.quark_db_schema {
+        let _ = writeln!(
+            out,
+            "quark.db is at schema {schema}; this quarkd writes {}: another quarkd migrated it last",
+            crate::store::SCHEMA_VERSION
+        );
+    }
     let _ = writeln!(out, "since {}", d.since);
     let _ = writeln!(
         out,
@@ -332,19 +404,6 @@ fn read_store(
     now: OffsetDateTime,
     f: &mut Findings,
 ) -> rusqlite::Result<()> {
-    let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    let ours = crate::store::SCHEMA_VERSION;
-    if version != ours {
-        let who = if version < ours { "older" } else { "newer" };
-        f.add(
-            Severity::Warn,
-            "store",
-            &format!("quark.db was last opened by an {who} quarkd than this one"),
-            &fmt(now),
-            None,
-            format!("schema version {version}, this quarkd's is {ours}"),
-        );
-    }
     let mut stmt = c.prepare(
         "SELECT ts, project_id, operation, COALESCE(detail, '') FROM adapter_calls
          WHERE ok = 0 AND ts >= ?1 ORDER BY id",
@@ -711,7 +770,8 @@ mod tests {
         .unwrap();
 
         let now = OffsetDateTime::now_utc();
-        let d = diagnose(home, now - DEFAULT_WINDOW, now);
+        let d = diagnose(home, now - DEFAULT_WINDOW, now).unwrap();
+        assert_eq!(d.quark_db_schema, None, "this quarkd migrated it");
         assert_eq!(d.last_log_at.as_deref(), Some("2099-01-01T00:00:01Z"));
         let summaries: Vec<(&str, u64)> = d
             .findings
@@ -726,5 +786,102 @@ mod tests {
             ]
         );
         assert_eq!(d.findings[1].projects, ["prj_1"]);
+    }
+
+    /// A home with a migrated `quark.db`, then changed by `sql` the way
+    /// another quarkd would leave it.
+    fn home_after(sql: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("quark.db");
+        drop(crate::store::Store::open(&db).unwrap());
+        Connection::open(&db).unwrap().execute_batch(sql).unwrap();
+        dir
+    }
+
+    fn report(home: &Path) -> Result<Diagnostics, Unreadable> {
+        let now = OffsetDateTime::now_utc();
+        diagnose(home, now - DEFAULT_WINDOW, now)
+    }
+
+    /// quark-5li: a daily trigger ran `quarkd triage` from a build older
+    /// than the daemon, which filed "quark.db was last opened by a newer
+    /// quarkd than this one" against a healthy home every day.
+    #[test]
+    fn a_quarkd_too_old_for_the_home_refuses_to_report() {
+        let ours = crate::store::SCHEMA_VERSION;
+        let dir = home_after(&format!(
+            "PRAGMA user_version = {}; UPDATE schema_compat SET min_reader = {};",
+            ours + 11,
+            ours + 1
+        ));
+        let before = std::fs::read(dir.path().join("quark.db")).unwrap();
+        let err = report(dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("quark.db")
+                && err.contains(&format!("schema {}", ours + 11))
+                && err.contains("too old"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("quark.db")).unwrap(),
+            before,
+            "a reader leaves the database as it found it"
+        );
+
+        // The same for a newer event log, and a newer home format.
+        let dir = tempfile::tempdir().unwrap();
+        let events = dir.path().join(quark_eventlog::FILE_NAME);
+        drop(quark_eventlog::SqliteEventLog::open(&events).unwrap());
+        Connection::open(&events)
+            .unwrap()
+            .execute_batch("PRAGMA user_version = 99; UPDATE schema_compat SET min_reader = 99;")
+            .unwrap();
+        let err = report(dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("events.db") && err.contains("too old"),
+            "{err}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(crate::home_format::FILE),
+            r#"{"format": 99, "written_by": "9.0.0"}"#,
+        )
+        .unwrap();
+        let err = report(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("format 99"), "{err}");
+    }
+
+    #[test]
+    fn another_quarkds_usable_schema_is_a_fact_not_a_finding() {
+        let ours = crate::store::SCHEMA_VERSION;
+        // A newer quarkd added only what this one ignores (a rollback, or an
+        // older build asked to diagnose).
+        let dir = home_after(&format!("PRAGMA user_version = {}", ours + 2));
+        let d = report(dir.path()).unwrap();
+        assert_eq!(d.quark_db_schema, Some(ours + 2));
+        assert!(d.findings.is_empty(), "{:?}", d.findings);
+        assert!(render(&d).contains(&format!("quark.db is at schema {}", ours + 2)));
+        // An older quarkd runs the home, and what this one reads is there.
+        let dir = home_after(&format!("PRAGMA user_version = {}", ours - 1));
+        let d = report(dir.path()).unwrap();
+        assert_eq!(d.quark_db_schema, Some(ours - 1));
+        assert!(d.findings.is_empty(), "{:?}", d.findings);
+    }
+
+    #[test]
+    fn an_older_database_this_quarkd_cannot_read_is_refused_not_filed() {
+        let ours = crate::store::SCHEMA_VERSION;
+        let dir = home_after(&format!(
+            "PRAGMA user_version = {}; ALTER TABLE decisions RENAME TO decisions_then;",
+            ours - 1
+        ));
+        let err = report(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("older than quarkd"), "{err}");
+        // At this quarkd's own schema, the same failure is trouble in the home.
+        let dir = home_after("ALTER TABLE decisions RENAME TO decisions_then;");
+        let d = report(dir.path()).unwrap();
+        assert_eq!(d.findings.len(), 1, "{:?}", d.findings);
+        assert!(d.findings[0].summary.starts_with("could not read quark.db"));
     }
 }
