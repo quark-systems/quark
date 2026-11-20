@@ -18,6 +18,10 @@ page lists every merged pull request.
 - Dispatch ranks Antigravity CLI workers by their quota. A worker on a Gemini model is bounded
   by Antigravity's Gemini windows and one on a Claude or GPT model by its Claude/GPT windows,
   instead of being left unranked with "no applicable quota row for provider agy".
+- `apfs_sharing = "fresh"` shares files again on macOS 27. macOS stamps every file a checkout's
+  git writes with the `com.apple.provenance` extended attribute, and the sharing pass kept any
+  file carrying an extended attribute, so a new worktree shared nothing with the primary
+  checkout. That one attribute no longer keeps a file; any other still does.
 
 ## 0.3.1
 
