@@ -20,6 +20,15 @@ describe("harnessMark", () => {
     expect(harnessMark("kiro").src).toMatch(/kiro\.svg|^data:image\/svg/);
   });
 
+  it("never ships an icon that picks its colors from the OS theme instead of the app's", () => {
+    const files = import.meta.glob<string>("./marks/*.svg", { query: "?raw", import: "default", eager: true });
+    const used = import.meta.glob<string>("./harnessMarks.ts", { query: "?raw", import: "default", eager: true })["./harnessMarks.ts"];
+    for (const [file, svg] of Object.entries(files)) {
+      if (used.includes(file)) expect(svg, file).not.toMatch(/prefers-color-scheme/);
+    }
+    expect(harnessMark("bob").srcLight).toBeTruthy();
+  });
+
   it("draws unknown harnesses as a monogram", () => {
     expect(harnessMark("my-agent")).toEqual({ name: "my-agent", monogram: "MA" });
     expect(harnessMark("zed")).toEqual({ name: "zed", monogram: "Ze" });

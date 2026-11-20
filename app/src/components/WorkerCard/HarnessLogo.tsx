@@ -6,11 +6,13 @@ export function HarnessLogo({ harness, size = 16, title }: { harness: string; si
   const m = harnessMark(harness);
   const label = title ?? m.name;
   if (m.src) {
-    return (
-      <img className={m.tile ? "harness-logo harness-tile" : "harness-logo"} src={m.src} width={size} height={size}
-        alt={label} title={label} data-harness={harness} draggable={false}
+    const img = (src: string, variant?: "dark" | "light") => (
+      <img className={["harness-logo", m.tile && "harness-tile", variant && `harness-variant-${variant}`].filter(Boolean).join(" ")}
+        src={src} width={size} height={size} alt={label} title={label} data-harness={harness} draggable={false}
         style={m.tile ? { background: m.tile } : undefined} />
     );
+    // An icon with light and dark versions renders both; CSS shows the one for the app's theme.
+    return m.srcLight ? <>{img(m.src, "dark")}{img(m.srcLight, "light")}</> : img(m.src);
   }
   if (m.path) {
     return (
