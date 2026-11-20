@@ -275,11 +275,18 @@ impl EngineAdapter for Watched {
     }
 }
 
+/// How long a watcher-driven event may take. macOS hands over a file event
+/// only once it has worked through the writes before it, and on a busy disk
+/// that takes a while: right after the Beads tests of a full
+/// `cargo test --workspace`, anything from 0.3 s to 47 s was measured on
+/// macOS 27. The refresh timer these tests rule out is an hour.
+const WATCHER_DEADLINE: Duration = Duration::from_secs(300);
+
 async fn wait_for(
     rx: &mut tokio::sync::broadcast::Receiver<quark_systems::Event>,
     want: EventType,
 ) -> quark_systems::Event {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(WATCHER_DEADLINE, async {
         loop {
             let e = rx.recv().await.unwrap();
             if e.event_type == want {
@@ -288,7 +295,7 @@ async fn wait_for(
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("no {want:?} within 10s"))
+    .unwrap_or_else(|_| panic!("no {want:?} within {WATCHER_DEADLINE:?}"))
 }
 
 #[tokio::test]

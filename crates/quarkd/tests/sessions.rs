@@ -35,6 +35,13 @@ fn output(e: &Event) -> Option<(TerminalOutput, Vec<u8>)> {
     Some((out, bytes))
 }
 
+/// How long a flood may take to pass through. It is a second or two on an
+/// idle machine, but every line crosses several processes, so it slows far
+/// more than the machine does when the cores are shared: 37 s with three
+/// busy processes per core, and over 60 s in a gate run beside other gates.
+/// These tests are about what is kept afterwards, not about speed.
+const FLOOD_DEADLINE: Duration = Duration::from_secs(300);
+
 /// Waits for an output event of `terminal` matching `pred`, collecting the
 /// terminal's bytes since the last snapshot.
 async fn wait_for(
@@ -337,7 +344,7 @@ async fn floods_are_recorded_and_pruned_to_a_snapshot() {
         .input(&id, b"seq 1 1000000; echo flood-$((1+1))-done\r", None)
         .await
         .unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let deadline = tokio::time::Instant::now() + FLOOD_DEADLINE;
     let mut last_line = Vec::new();
     loop {
         let event = tokio::time::timeout_at(deadline, rx.recv())
@@ -725,7 +732,7 @@ async fn pty_floods_are_pruned_to_a_snapshot() {
         .input(task, b"seq 1 500000; echo flood-$((1+1))-done\r", None)
         .await
         .unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let deadline = tokio::time::Instant::now() + FLOOD_DEADLINE;
     let mut last_line = Vec::new();
     let mut snapshots = 0;
     loop {

@@ -16,7 +16,8 @@
 //!   hardlink, owned by someone else, carries flags or setuid/setgid/sticky
 //!   bits, is sparse or compressed, has an ACL or extended attributes
 //!   (stricter than treehouse, which copies xattrs over), or differs in
-//!   content (SHA-256 of both).
+//!   content (SHA-256 of both). The one attribute that keeps nothing is
+//!   macOS's own `com.apple.provenance` (`TOLERATED_XATTRS`).
 //!
 //! Each clone is made in a private staging directory beside the file,
 //! verified (content, mode, times, owner), and renamed over the original
@@ -34,6 +35,33 @@ use super::git::{self, exec};
 /// Files below this size are never worth a clone.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const MINIMUM_SIZE: i64 = 64 * 1024;
+
+/// Extended attributes a file may carry and still be cloned.
+///
+/// `com.apple.provenance` is the kernel's note of which app a file's writer
+/// was launched from. macOS stamps it on every file such a process creates
+/// (on macOS 27 that is every file of a checkout git wrote for quarkd), and
+/// it cannot be set or removed from user space, so a pass that kept every
+/// file carrying it would clone nothing. It says nothing about the file's
+/// content; the clone carries the kernel's own value like any new file.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const TOLERATED_XATTRS: &[&[u8]] = &[b"com.apple.provenance"];
+
+/// Whether `names` (a `listxattr` buffer: each name NUL-terminated) holds
+/// any attribute other than [`TOLERATED_XATTRS`]. A buffer that is not a
+/// list of terminated names counts as yes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn names_blocking_xattr(names: &[u8]) -> bool {
+    if names.is_empty() {
+        return false;
+    }
+    let Some(names) = names.strip_suffix(&[0]) else {
+        return true;
+    };
+    names
+        .split(|b| *b == 0)
+        .any(|name| !TOLERATED_XATTRS.contains(&name))
+}
 
 /// What a sharing pass did.
 #[derive(Debug, Default)]
@@ -375,11 +403,23 @@ mod platform {
         true
     }
 
-    /// Whether `fd` carries any extended attribute (errors count as yes).
+    /// Whether `fd` carries an extended attribute that keeps it from being
+    /// cloned: any but [`TOLERATED_XATTRS`]. Errors, and a list that grew
+    /// between the two calls, count as yes.
     fn has_xattrs(fd: libc::c_int) -> bool {
         // SAFETY: a null buffer with size 0 asks only for the length.
         let n = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, 0) };
-        n != 0
+        if n <= 0 {
+            return n != 0;
+        }
+        let mut names = vec![0u8; n as usize];
+        // SAFETY: fd is open; names is a writable buffer of the given size.
+        let n = unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast(), names.len(), 0) };
+        if n < 0 {
+            return true;
+        }
+        names.truncate(n as usize);
+        names_blocking_xattr(&names)
     }
 
     fn hash(f: &mut File) -> std::result::Result<[u8; 32], String> {
@@ -749,8 +789,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_the_provenance_xattr_is_tolerated() {
+        assert!(!names_blocking_xattr(b""));
+        assert!(!names_blocking_xattr(b"com.apple.provenance\0"));
+        for names in [
+            &b"com.apple.quarantine\0"[..],
+            b"com.apple.provenance\0com.apple.quarantine\0",
+            b"user.note\0com.apple.provenance\0",
+            // A name that only starts or ends like the tolerated one.
+            b"com.apple.provenance.extra\0",
+            b"x.com.apple.provenance\0",
+            b"com.apple.provenanc\0",
+            // Not a list of terminated names.
+            b"com.apple.provenance",
+            b"\0",
+            b"com.apple.provenance\0\0",
+        ] {
+            assert!(
+                names_blocking_xattr(names),
+                "{}",
+                String::from_utf8_lossy(names)
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_xattr(path: &Path, name: &std::ffi::CStr) {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: both strings are NUL-terminated; the value is one byte.
+        let rc =
+            unsafe { libc::setxattr(path.as_ptr(), name.as_ptr(), c"1".as_ptr().cast(), 1, 0, 0) };
+        assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+    }
+
+    #[cfg(target_os = "macos")]
+    fn inode(path: &Path) -> u64 {
+        std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap())
+    }
+
+    /// An extended attribute other than macOS's provenance stamp, on the
+    /// slot's file or on the primary checkout's, still keeps the file.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn other_extended_attributes_keep_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let repo = base.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        let big = vec![7u8; 200 * 1024];
+        for name in ["plain.bin", "slot.bin", "primary.bin"] {
+            std::fs::write(repo.join(name), &big).unwrap();
+        }
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "files"]);
+        let wt = base.join("wt");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+        );
+        set_xattr(&wt.join("slot.bin"), c"com.example.note");
+        set_xattr(&repo.join("primary.bin"), c"com.apple.quarantine");
+        let before = ["plain.bin", "slot.bin", "primary.bin"].map(|n| inode(&wt.join(n)));
+
+        let report = share(&repo, &wt).unwrap();
+        assert_eq!(report.reason, "", "{report}");
+        assert_eq!(report.cloned, 1, "{report}");
+        assert_eq!(report.skipped.get("xattr"), Some(&2), "{report}");
+        let after = ["plain.bin", "slot.bin", "primary.bin"].map(|n| inode(&wt.join(n)));
+        assert_ne!(after[0], before[0], "plain.bin was replaced by a clone");
+        assert_eq!(after[1..], before[1..], "the others were left alone");
+    }
+
     /// On a Mac (whose temp directory is APFS) identical large tracked
-    /// files are cloned and everything else is kept.
+    /// files are cloned and everything else is kept. Where macOS stamps new
+    /// files with `com.apple.provenance` (every file, on macOS 27), that
+    /// attribute does not keep them.
     #[cfg(target_os = "macos")]
     #[test]
     fn clones_identical_large_files_on_apfs() {
@@ -777,23 +893,37 @@ mod tests {
         let mut other = big.clone();
         other[0] = 8;
         std::fs::write(repo.join("changed.bin"), &other).unwrap();
+        // The slot's file has its own mode (git does not track these bits),
+        // which the clone must keep instead of taking the donor's 0640.
+        std::fs::set_permissions(wt.join("big.bin"), std::fs::Permissions::from_mode(0o600))
+            .unwrap();
         let mtime = std::fs::metadata(wt.join("big.bin"))
             .unwrap()
             .modified()
             .unwrap();
+        let before = ["big.bin", "changed.bin", "small.txt"].map(|n| inode(&wt.join(n)));
 
         let report = share(&repo, &wt).unwrap();
         assert_eq!(report.reason, "", "{report}");
         assert_eq!(report.cloned, 1, "{report}");
+        assert_eq!(report.logical_bytes, big.len() as u64, "{report}");
         assert_eq!(report.skipped.get("below_threshold"), Some(&1), "{report}");
         assert_eq!(
             report.skipped.get("different_content"),
             Some(&1),
             "{report}"
         );
+        assert_eq!(report.skipped.len(), 2, "{report}");
+        // The clone is a new file in the old one's place; the kept files
+        // are the ones git wrote.
+        let after = ["big.bin", "changed.bin", "small.txt"].map(|n| inode(&wt.join(n)));
+        assert_ne!(after[0], before[0]);
+        assert_eq!(after[1..], before[1..]);
         assert_eq!(std::fs::read(wt.join("big.bin")).unwrap(), big);
         let meta = std::fs::metadata(wt.join("big.bin")).unwrap();
-        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        let donor = std::fs::metadata(repo.join("big.bin")).unwrap();
+        assert_eq!(donor.permissions().mode() & 0o777, 0o640);
         assert_eq!(meta.modified().unwrap(), mtime);
         // Independent: editing the clone leaves the source alone.
         std::fs::write(wt.join("big.bin"), b"edited").unwrap();
