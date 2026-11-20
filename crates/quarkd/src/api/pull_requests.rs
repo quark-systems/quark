@@ -303,7 +303,13 @@ pub async fn merge(
     .map_err(|e| PrError::Store(crate::store::StoreError::Invalid(e.to_string())))
     .and_then(|r| r)
     .map_err(|e| match e {
-        // The engine's guarded merge refuses with its reasons on stderr.
+        // The engine's guarded merge refuses with its reason.
+        PrError::Engine(crate::engine::EngineError::MergeRefused { reason, .. }) => ApiError::new(
+            StatusCode::CONFLICT,
+            "merge_refused",
+            format!("merge refused: {reason}"),
+        ),
+        // A read or write failed on the way; the error says which.
         PrError::Engine(crate::engine::EngineError::Command(m)) => {
             ApiError::new(StatusCode::CONFLICT, "merge_refused", m)
         }

@@ -14,29 +14,61 @@
 //!
 //! Standing approval: for each Project that has it on, every open pull
 //! request that is mergeable, green and not held by a review is merged
-//! through the engine's guarded merge. Each head commit is tried once, so a
-//! refusal is not repeated until the pull request moves. A stale head is the
-//! exception: main moved during the merge, so the next pass rebases again.
+//! through the engine's guarded merge. A head the merge refuses for good
+//! (failed gates or checks, a conflict, a red main) is tried once, so the
+//! refusal is not repeated until the pull request moves, and is logged as a
+//! warning.
+//!
+//! A try that ends on its own is tried again without anyone asking, and is
+//! logged as information, not trouble: the merge pushed a rebased head that
+//! waits for its checks (the new head is tried once they pass), checks were
+//! still running, main moved under the gates, or a read or write failed
+//! before anything was decided. The same head is tried again after
+//! [`RETRY_AFTER`], doubling up to [`RETRY_MAX`], and from the
+//! [`QUIET_TRIES`]th try that ends this way it is logged as a warning.
 //!
 //! An open pull request that conflicts with its base or has a failed check
 //! cannot merge until someone acts, so its worker is told, once per head.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 use quark_systems::{ChecksState, Mergeability, PullRequest};
 
-use crate::engine::{EngineAdapter, WorkspaceRef};
+use crate::engine::{EngineAdapter, EngineError, WorkspaceRef};
 use crate::forge::Forge;
 use crate::store::{PrOwner, Store, StoreError};
+
+/// How long standing approval waits before it tries a head again after a
+/// try that ended on its own; doubled for each such try.
+pub const RETRY_AFTER: Duration = Duration::from_secs(60);
+/// The longest it waits between tries of one head.
+pub const RETRY_MAX: Duration = Duration::from_secs(15 * 60);
+/// From this many tries of one head that all ended on their own, each
+/// further one is reported as trouble.
+pub const QUIET_TRIES: u32 = 3;
+
+/// Standing approval's tries of one head.
+#[derive(Debug, Clone, Copy)]
+struct Attempt {
+    /// Tries that ended on their own, with no merge and no lasting refusal.
+    unfinished: u32,
+    /// When to try again; `None` while a try runs, and once the head merged
+    /// or was refused for good.
+    again: Option<Instant>,
+}
 
 pub struct PrCenter {
     store: Arc<Store>,
     engine: Arc<dyn EngineAdapter>,
     forge: Arc<dyn Forge>,
-    /// `(pull request id, head sha)` pairs standing approval already tried.
-    attempted: Mutex<HashSet<(String, String)>>,
+    /// Standing approval's tries, by `(pull request id, head sha)`.
+    attempted: Mutex<HashMap<(String, String), Attempt>>,
+    /// [`RETRY_AFTER`], unless set otherwise.
+    retry_after: Duration,
     /// `(pull request id, head sha, problem)` its worker was told of.
     flagged: Mutex<HashSet<(String, String, &'static str)>>,
     /// Merged pull requests the engine has been told of.
@@ -50,9 +82,17 @@ impl PrCenter {
             engine,
             forge,
             attempted: Mutex::default(),
+            retry_after: RETRY_AFTER,
             flagged: Mutex::default(),
             told: Mutex::default(),
         }
+    }
+
+    /// Wait `after` (doubled per try, up to [`RETRY_MAX`]) before standing
+    /// approval tries a head again.
+    pub fn retry_after(mut self, after: Duration) -> Self {
+        self.retry_after = after;
+        self
     }
 
     /// One pass: discover, read from the forge, then merge what standing
@@ -336,11 +376,26 @@ impl PrCenter {
         for owner in ready {
             let pr = &owner.pull_request;
             let key = (pr.id.clone(), pr.head_sha.clone().unwrap_or_default());
-            if !self.attempted.lock().unwrap().insert(key.clone()) {
-                continue;
-            }
+            let tries = {
+                let mut attempted = self.attempted.lock().unwrap();
+                let tries = match attempted.get(&key) {
+                    None => 0,
+                    Some(a) => match a.again {
+                        Some(at) if at <= Instant::now() => a.unfinished,
+                        _ => continue,
+                    },
+                };
+                attempted.insert(
+                    key.clone(),
+                    Attempt {
+                        unfinished: tries,
+                        again: None,
+                    },
+                );
+                tries
+            };
             tracing::info!(pr = %pr.url, "merging under standing approval");
-            match merge(
+            let e = match merge(
                 &self.store,
                 self.engine.as_ref(),
                 self.forge.as_ref(),
@@ -349,13 +404,37 @@ impl PrCenter {
             )
             .await
             {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(pr = %pr.url, error = %e, "standing approval merge refused");
-                    if e.to_string().contains("stale head") {
-                        self.attempted.lock().unwrap().remove(&key);
-                    }
-                }
+                Ok(_) => continue,
+                Err(e) => e,
+            };
+            if !ends_on_its_own(&e) {
+                tracing::warn!(pr = %pr.url, error = %e, "standing approval merge refused");
+                continue;
+            }
+            let tries = tries + 1;
+            let wait = retry_wait(self.retry_after, tries);
+            self.attempted.lock().unwrap().insert(
+                key,
+                Attempt {
+                    unfinished: tries,
+                    again: Some(Instant::now() + wait),
+                },
+            );
+            if tries < QUIET_TRIES {
+                tracing::info!(
+                    pr = %pr.url,
+                    reason = %e,
+                    retry_in_s = wait.as_secs(),
+                    "standing approval merge not done yet; it will be tried again"
+                );
+            } else {
+                tracing::warn!(
+                    pr = %pr.url,
+                    error = %e,
+                    tries,
+                    retry_in_s = wait.as_secs(),
+                    "standing approval merge keeps ending without a merge"
+                );
             }
         }
     }
@@ -386,6 +465,34 @@ pub enum PrError {
     /// it would not land its change.
     #[error("{0}")]
     OffDefault(String),
+}
+
+/// How long standing approval waits after a head's `tries`th try that ended
+/// on its own: `after`, doubled per try, up to [`RETRY_MAX`].
+fn retry_wait(after: Duration, tries: u32) -> Duration {
+    after
+        .saturating_mul(1 << tries.saturating_sub(1).min(16))
+        .min(RETRY_MAX)
+}
+
+/// Whether a merge that failed with `e` can go through later with no one
+/// acting on the pull request, so standing approval tries it again.
+fn ends_on_its_own(e: &PrError) -> bool {
+    match e {
+        PrError::Engine(EngineError::MergeRefused { retry, .. }) => *retry,
+        // The request is wrong, and stays wrong until someone changes it.
+        PrError::Engine(
+            EngineError::Invalid(_)
+            | EngineError::TaskNotFound(_)
+            | EngineError::WorkspaceNotFound(_),
+        )
+        | PrError::NoOwner(_)
+        | PrError::OffDefault(_) => false,
+        // A read or write failed before anything was decided.
+        PrError::Engine(EngineError::Command(_) | EngineError::Parse(_) | EngineError::Io(_))
+        | PrError::Store(_)
+        | PrError::Forge(_) => true,
+    }
 }
 
 /// What stands in `pr`'s way, and the steering message that says so. A
@@ -512,5 +619,42 @@ pub async fn merge(
                     .map_err(|e| PrError::Store(StoreError::Invalid(e.to_string())))??,
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wait_doubles_per_try_up_to_the_longest() {
+        let secs = |tries| retry_wait(RETRY_AFTER, tries).as_secs();
+        assert_eq!(
+            (1..=6).map(secs).collect::<Vec<_>>(),
+            vec![60, 120, 240, 480, 900, 900]
+        );
+        assert_eq!(retry_wait(RETRY_AFTER, u32::MAX), RETRY_MAX);
+        assert_eq!(retry_wait(Duration::ZERO, 9), Duration::ZERO);
+    }
+
+    #[test]
+    fn only_a_refusal_that_ends_on_its_own_or_a_failed_read_is_tried_again() {
+        let refused = |retry| {
+            PrError::Engine(EngineError::MergeRefused {
+                reason: "r".into(),
+                retry,
+            })
+        };
+        assert!(ends_on_its_own(&refused(true)));
+        assert!(!ends_on_its_own(&refused(false)));
+        // A forge or git command that failed on the way.
+        assert!(ends_on_its_own(&PrError::Engine(EngineError::Command(
+            "gh api repos/o/r/pulls/1: HTTP 502".into()
+        ))));
+        assert!(!ends_on_its_own(&PrError::Engine(EngineError::Invalid(
+            "task t is failed".into()
+        ))));
+        assert!(!ends_on_its_own(&PrError::NoOwner("no task")));
+        assert!(!ends_on_its_own(&PrError::OffDefault("off".into())));
     }
 }

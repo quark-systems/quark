@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use quark_core::verify::{Change, MainHealth, MergeGuard, Permit, Verdict};
@@ -16,7 +17,7 @@ use crate::health::{classify, green_checks};
 use crate::kinds;
 use crate::rules::{
     dispatch_decision, merge_decision, observe, Decision, DispatchFacts, Episode, Freshness,
-    MainStatus, MergeFacts, Observation,
+    MainStatus, MergeFacts, Observation, Reason,
 };
 
 /// Which repository and branch a Project merges into.
@@ -81,7 +82,16 @@ pub struct NativeGuard {
     /// Serializes read-advance-record so two callers never open one episode
     /// twice.
     turn: tokio::sync::Mutex<()>,
+    /// The pause before a merge reads the forge again after a failed read.
+    read_pause: Duration,
 }
+
+/// How many times a merge reads main and its head's freshness from the forge
+/// before it refuses for want of an answer. The gates have already run by
+/// then, so one dropped request must not cost the merge.
+const READ_ATTEMPTS: u32 = 3;
+/// A forge that dropped a request usually answers a moment later.
+const READ_PAUSE: Duration = Duration::from_secs(2);
 
 fn now() -> String {
     OffsetDateTime::now_utc()
@@ -101,7 +111,15 @@ impl NativeGuard {
             fix_main: Mutex::default(),
             live: Mutex::default(),
             turn: tokio::sync::Mutex::new(()),
+            read_pause: READ_PAUSE,
         }
+    }
+
+    /// Pause `pause` before a merge reads the forge again after a failed
+    /// read.
+    pub fn read_pause(mut self, pause: Duration) -> Self {
+        self.read_pause = pause;
+        self
     }
 
     /// Rebuild episodes and answered decisions from the log.
@@ -250,25 +268,19 @@ impl NativeGuard {
         Ok(())
     }
 
-    /// Read main and advance its episode. Call with `turn` held.
+    /// Read main and advance its episode: the observation, and main's tip
+    /// or why the forge read failed. Call with `turn` held.
     async fn observe_locked(
         &self,
         project: &ProjectId,
         t: &Target,
-    ) -> Result<(Observation, Option<String>)> {
+    ) -> Result<(Observation, std::result::Result<String, CoreError>)> {
         let read = async {
             let tip = self.forge.branch_tip(&t.repo, &t.branch).await?;
             let (runs, statuses) = self.forge.checks(&t.repo, &tip).await?;
             Ok::<_, CoreError>(classify(&tip, &runs, &statuses))
         }
         .await;
-        let read = match read {
-            Ok(r) => Some(r),
-            Err(e) => {
-                tracing::warn!(repo = %t.repo, error = %e, "main health unreadable");
-                None
-            }
-        };
         let prev = self
             .episodes
             .lock()
@@ -276,7 +288,7 @@ impl NativeGuard {
             .get(&(t.repo.clone(), t.branch.clone()))
             .cloned();
         let answered = self.answered.lock().unwrap().clone();
-        let o = observe(prev.clone(), read.as_ref(), &now(), |d| {
+        let o = observe(prev.clone(), read.as_ref().ok(), &now(), |d| {
             answered.contains(d)
         });
         if o.episode != prev {
@@ -290,6 +302,106 @@ impl NativeGuard {
             self.save(project, t, o.episode.clone(), change).await?;
         }
         Ok((o, read.map(|r| r.tip)))
+    }
+
+    /// Whether `change` may merge, with the rule that decided. The trait's
+    /// [`MergeGuard::may_merge`] is this as a [`Permit`].
+    ///
+    /// The forge is read up to `READ_ATTEMPTS` times: main's tip and
+    /// checks, then whether the head contains that tip. A read that still
+    /// fails refuses the merge as [`Reason::HeadUnreadable`], and the message
+    /// says which read failed and how.
+    pub async fn decide(&self, change: &Change, verdict: &Verdict) -> Result<Decision> {
+        if verdict.head != change.head {
+            return Ok(Decision {
+                allow: false,
+                reason: Reason::GatesNotPassed,
+                message: format!(
+                    "the verdict is for {}, not {}; rebase and re-verify",
+                    verdict.head, change.head
+                ),
+            });
+        }
+        if !verdict.passed() {
+            return Ok(Decision {
+                allow: false,
+                reason: Reason::GatesNotPassed,
+                message: verdict
+                    .conflict
+                    .as_ref()
+                    .map(|c| format!("rebase conflict: {c}"))
+                    .unwrap_or_else(|| "the gates did not pass".into()),
+            });
+        }
+        let t = self.target(&change.project)?;
+        let head = &change.head[..change.head.len().min(12)];
+        let mut attempt = 1;
+        let (o, behind) = loop {
+            // Held for one read, not across the pause.
+            let turn = self.turn.lock().await;
+            let (o, tip) = self.observe_locked(&change.project, &t).await?;
+            let behind = match tip {
+                Ok(tip) => self
+                    .forge
+                    .behind_by(&t.repo, &tip, &change.head)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "could not read whether {head} contains {}'s tip: {e}",
+                            t.branch
+                        )
+                    }),
+                Err(e) => Err(format!(
+                    "could not read {}'s tip and checks on {}, so not whether {head} contains \
+                     that tip: {e}",
+                    t.branch, t.repo
+                )),
+            };
+            drop(turn);
+            match &behind {
+                Err(why) if attempt < READ_ATTEMPTS => {
+                    tracing::info!(repo = %t.repo, attempt, "{why}; reading again");
+                    attempt += 1;
+                    tokio::time::sleep(self.read_pause).await;
+                }
+                _ => break (o, behind),
+            }
+        };
+        let _turn = self.turn.lock().await;
+        let mut green = BTreeSet::new();
+        if o.status == MainStatus::Red {
+            if let Ok((runs, statuses)) = self.forge.checks(&t.repo, &change.head).await {
+                green = green_checks(&runs, &statuses);
+            }
+        }
+        let facts = MergeFacts {
+            head: change.head.clone(),
+            freshness: Freshness::from_behind(behind.as_ref().ok().copied()),
+            // The verdict passed on this head, which is the gate evidence.
+            gates: None,
+            main: o.status,
+            failing: o.episode.map(|e| e.checks).unwrap_or_default(),
+            green,
+        };
+        let mut d = merge_decision(&facts);
+        if let (Reason::HeadUnreadable, Err(why)) = (d.reason, behind) {
+            d.message = format!("{why} (read {attempt} times)");
+        }
+        self.record(
+            &change.project,
+            Some(&change.task),
+            &GuardDecision {
+                op: "merge".into(),
+                repo: t.repo,
+                branch: t.branch,
+                head: Some(change.head.clone()),
+                pull_request: change.pull_request.clone(),
+                main: o.status,
+                decision: d.clone(),
+            },
+        )
+        .await;
+        Ok(d)
     }
 
     async fn record(&self, project: &ProjectId, task: Option<&TaskId>, d: &GuardDecision) {
@@ -315,11 +427,12 @@ impl MergeGuard for NativeGuard {
     async fn main_health(&self, project: &ProjectId) -> Result<MainHealth> {
         let t = self.target(project)?;
         let _turn = self.turn.lock().await;
-        let (o, _) = self.observe_locked(project, &t).await?;
+        let (o, tip) = self.observe_locked(project, &t).await?;
+        let unread = tip.err().map(|e| format!(": {e}")).unwrap_or_default();
         Ok(match (o.status, o.episode) {
             (MainStatus::Clear, _) => MainHealth::Green,
             (MainStatus::Unknown, _) => MainHealth::Unknown {
-                reason: format!("could not read {} on {}", t.branch, t.repo),
+                reason: format!("could not read {} on {}{unread}", t.branch, t.repo),
             },
             (_, Some(e)) => MainHealth::Red {
                 check: e.checks.join(", "),
@@ -332,69 +445,16 @@ impl MergeGuard for NativeGuard {
     }
 
     async fn may_merge(&self, change: &Change, verdict: &Verdict) -> Result<Permit> {
-        if verdict.head != change.head {
-            return Ok(Permit::Deny {
-                reason: format!(
-                    "the verdict is for {}, not {}; rebase and re-verify",
-                    verdict.head, change.head
-                ),
-            });
-        }
-        if !verdict.passed() {
-            return Ok(Permit::Deny {
-                reason: verdict
-                    .conflict
-                    .as_ref()
-                    .map(|c| format!("rebase conflict: {c}"))
-                    .unwrap_or_else(|| "the gates did not pass".into()),
-            });
-        }
-        let t = self.target(&change.project)?;
-        let _turn = self.turn.lock().await;
-        let (o, tip) = self.observe_locked(&change.project, &t).await?;
-        let freshness = match &tip {
-            Some(tip) => {
-                Freshness::from_behind(self.forge.behind_by(&t.repo, tip, &change.head).await.ok())
-            }
-            None => Freshness::Unreadable,
-        };
-        let mut green = BTreeSet::new();
-        if o.status == MainStatus::Red {
-            if let Ok((runs, statuses)) = self.forge.checks(&t.repo, &change.head).await {
-                green = green_checks(&runs, &statuses);
-            }
-        }
-        let facts = MergeFacts {
-            head: change.head.clone(),
-            freshness,
-            // The verdict passed on this head, which is the gate evidence.
-            gates: None,
-            main: o.status,
-            failing: o.episode.map(|e| e.checks).unwrap_or_default(),
-            green,
-        };
-        let d = merge_decision(&facts);
-        self.record(
-            &change.project,
-            Some(&change.task),
-            &GuardDecision {
-                op: "merge".into(),
-                repo: t.repo,
-                branch: t.branch,
-                head: Some(change.head.clone()),
-                pull_request: change.pull_request.clone(),
-                main: o.status,
-                decision: d.clone(),
-            },
-        )
-        .await;
-        Ok(d.permit())
+        Ok(self.decide(change, verdict).await?.permit())
     }
 
     async fn may_dispatch(&self, project: &ProjectId, task: &TaskId) -> Result<Permit> {
         let t = self.target(project)?;
         let _turn = self.turn.lock().await;
-        let (o, _) = self.observe_locked(project, &t).await?;
+        let (o, tip) = self.observe_locked(project, &t).await?;
+        if let Err(e) = tip {
+            tracing::warn!(repo = %t.repo, error = %e, "main health unreadable");
+        }
         let prior = o.episode.as_ref().and_then(|e| e.fix_task.clone());
         let prior_live = prior
             .as_ref()
@@ -407,7 +467,7 @@ impl MergeGuard for NativeGuard {
             prior_fix_live: prior_live,
         };
         let d = dispatch_decision(&facts);
-        if d.reason == crate::rules::Reason::FixMainClaimed {
+        if d.reason == Reason::FixMainClaimed {
             if let Some(mut ep) = o.episode.clone() {
                 ep.fix_task = Some(task.to_string());
                 self.save(project, &t, Some(ep), "fix_main").await?;
@@ -449,7 +509,8 @@ mod tests {
     fn setup() -> (Arc<FakeForge>, Arc<MemoryEventLog>, NativeGuard, ProjectId) {
         let forge = Arc::new(FakeForge::new());
         let log = Arc::new(MemoryEventLog::new());
-        let guard = NativeGuard::new(forge.clone(), log.clone(), "h".into());
+        let guard = NativeGuard::new(forge.clone(), log.clone(), "h".into())
+            .read_pause(Duration::from_millis(1));
         let p = ProjectId::from("p");
         guard.set_target(
             p.clone(),
@@ -590,6 +651,73 @@ mod tests {
             .collect();
         assert!(kinds.iter().any(|k| k == kinds::DECISION));
         assert!(kinds.iter().any(|k| k == kinds::RED_MAIN));
+    }
+
+    fn green_main(forge: &FakeForge) {
+        forge.set_tip("acme/app", "main", RED);
+        forge.set_checks(
+            RED,
+            vec![CheckRun::new(1, "ci", "completed", Some("success"))],
+            vec![],
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_reads_the_forge_again_after_a_dropped_read() {
+        let (forge, _log, guard, p) = setup();
+        green_main(&forge);
+        forge.set_behind(RED, HEAD, 0);
+        let c = change(&p, "t1");
+
+        // Two reads of main fail; the third attempt answers.
+        forge.fail_reads(2);
+        let d = guard.decide(&c, &passed(HEAD)).await.unwrap();
+        assert!(d.allow, "{d:?}");
+
+        // The forge stays down: refused, naming the read and its error.
+        forge.fail_reads(usize::MAX);
+        let d = guard.decide(&c, &passed(HEAD)).await.unwrap();
+        assert_eq!((d.allow, d.reason), (false, Reason::HeadUnreadable));
+        assert!(
+            d.message
+                .starts_with("could not read main's tip and checks on acme/app"),
+            "{}",
+            d.message
+        );
+        assert!(d.message.contains("HTTP 502"), "{}", d.message);
+        assert!(d.message.ends_with("(read 3 times)"), "{}", d.message);
+        forge.fail_reads(0);
+        assert!(guard.decide(&c, &passed(HEAD)).await.unwrap().allow);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_comparison_says_so_with_the_forges_error() {
+        let (forge, log, guard, p) = setup();
+        green_main(&forge);
+        // Main is readable; how far the head is behind it is not.
+        let c = change(&p, "t1");
+        let before = forge.reads();
+        let d = guard.decide(&c, &passed(HEAD)).await.unwrap();
+        assert_eq!((d.allow, d.reason), (false, Reason::HeadUnreadable));
+        assert!(
+            d.message
+                .starts_with("could not read whether 222222222222 contains main's tip: "),
+            "{}",
+            d.message
+        );
+        assert!(d.message.contains("no answer for"), "{}", d.message);
+        // Main's tip, its checks and the comparison, three times over.
+        assert_eq!(forge.reads() - before, 9);
+        // The recorded decision carries the same words.
+        let events = log.read(Seq::ZERO, 100).await.unwrap();
+        let recorded: GuardDecision = events
+            .iter()
+            .rfind(|e| e.kind.as_str() == kinds::DECISION)
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert_eq!(recorded.decision, d);
+        assert_eq!(recorded.main, MainStatus::Clear);
     }
 
     #[tokio::test]

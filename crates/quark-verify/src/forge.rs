@@ -298,6 +298,7 @@ pub struct FakeForge {
     pulls: Mutex<HashMap<(String, u64), PullHead>>,
     merges: Mutex<Vec<(String, u64, String, MergeMethod)>>,
     reads: Mutex<usize>,
+    failing: Mutex<usize>,
 }
 
 impl FakeForge {
@@ -343,8 +344,22 @@ impl FakeForge {
         *self.reads.lock().unwrap()
     }
 
-    fn read(&self) {
+    /// Make the next `n` reads fail, the way a forge that drops a request
+    /// does, whatever answers are set.
+    pub fn fail_reads(&self, n: usize) {
+        *self.failing.lock().unwrap() = n;
+    }
+
+    fn read(&self) -> Result<()> {
         *self.reads.lock().unwrap() += 1;
+        let mut failing = self.failing.lock().unwrap();
+        if *failing > 0 {
+            *failing -= 1;
+            return Err(CoreError::Backend(
+                "fake forge: HTTP 502: Bad Gateway".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -355,7 +370,7 @@ fn missing(what: String) -> CoreError {
 #[async_trait]
 impl Forge for FakeForge {
     async fn branch_tip(&self, repo: &str, branch: &str) -> Result<String> {
-        self.read();
+        self.read()?;
         self.tips
             .lock()
             .unwrap()
@@ -365,7 +380,7 @@ impl Forge for FakeForge {
     }
 
     async fn checks(&self, _repo: &str, sha: &str) -> Result<(Vec<CheckRun>, Vec<CommitStatus>)> {
-        self.read();
+        self.read()?;
         self.checks
             .lock()
             .unwrap()
@@ -375,7 +390,7 @@ impl Forge for FakeForge {
     }
 
     async fn behind_by(&self, _repo: &str, base: &str, head: &str) -> Result<u64> {
-        self.read();
+        self.read()?;
         if base == head {
             return Ok(0);
         }
@@ -388,7 +403,7 @@ impl Forge for FakeForge {
     }
 
     async fn pull_request(&self, repo: &str, number: u64) -> Result<PullHead> {
-        self.read();
+        self.read()?;
         self.pulls
             .lock()
             .unwrap()

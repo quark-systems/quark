@@ -467,7 +467,11 @@ fn init_tracing(
 
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_env("QUARKD_LOG").unwrap_or_else(|_| {
-            "quarkd=info,quark_supervisor=info,quark_worker=info,tower_http=info".into()
+            // quark_verify: the merge guard's and the guarded merge's own
+            // warnings, which name the read or write that failed.
+            "quarkd=info,quark_supervisor=info,quark_worker=info,quark_verify=info,\
+             tower_http=info"
+                .into()
         })
     };
     let stderr = tracing_subscriber::fmt::layer().with_filter(filter());

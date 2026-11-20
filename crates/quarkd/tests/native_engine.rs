@@ -539,6 +539,192 @@ async fn merges_through_the_gates_and_the_guard_then_lands_the_task() {
     assert!(approvals[0].on);
 }
 
+/// Bead quark-m7v: main moved past a green pull request under standing
+/// approval. The guarded merge rebases it, pushes the new head and refuses
+/// for now; the PR center's own passes then merge that head once its checks
+/// pass, with no person or coordinator asking again.
+#[tokio::test]
+async fn standing_approval_merges_a_rebased_head_once_its_checks_pass() {
+    use quark_systems::{
+        Check, CheckStatus, Mergeability, PullRequestState, ReviewDecision, UpdateProject,
+    };
+    use quark_verify::health::CheckRun;
+    use quark_verify::{FakeForge, PullHead, PullState};
+    use quarkd::forge::{ForgePr, StubForge};
+    use quarkd::pr_center::PrCenter;
+
+    let env = Env::new();
+    let origin = env.dir.path().join("origin.git");
+    common::git(
+        env.dir.path(),
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    common::git(
+        &env.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    common::git(&env.repo, &["push", "-q", "origin", "main"]);
+    let sup = Arc::new(env.supervisor(Arc::new(PtySupervisor::new())).await);
+    // The guarded merge's forge, and the PR center's.
+    let forge = Arc::new(FakeForge::new());
+    let seen = Arc::new(StubForge::new());
+    let engine = Arc::new(NativeEngine::with_forge(
+        env.log(),
+        sup.clone(),
+        forge.clone(),
+    ));
+
+    // A Project with standing approval, its workspace the engine's.
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let project = store
+        .create_project(CreateProject {
+            name: "App".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .set_project_status(
+            &project.id,
+            ProjectStatus::Ready,
+            None,
+            Some(env.dir.path().to_str().unwrap()),
+            None,
+        )
+        .unwrap();
+    store
+        .update_project(
+            &project.id,
+            UpdateProject {
+                standing_approval: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ws = WorkspaceRef {
+        project_id: project.id.clone(),
+        root: env.dir.path().to_path_buf(),
+    };
+
+    // The worker commits, pushes its branch and opens pull request 7.
+    sup.spawn(quark_supervisor::SpawnRequest {
+        project: ProjectId::new(project.id.clone()),
+        ..env.request("t1")
+    })
+    .await
+    .unwrap();
+    engine.send_message(&ws, "t1", "commit").await.unwrap();
+    eventually("a commit", async || {
+        sha(&env.repo, "quark/t1") != sha(&env.repo, "main")
+    })
+    .await;
+    common::git(&env.repo, &["push", "-q", "origin", "quark/t1"]);
+    engine.send_message(&ws, "t1", "ship it").await.unwrap();
+    eventually("review", async || {
+        state(&engine, &ws, "t1").await == TaskState::InReview
+    })
+    .await;
+    store
+        .apply_snapshot(&project.id, &engine.snapshot(&ws).await.unwrap())
+        .unwrap();
+    let url = "https://github.com/o/r/pull/7";
+    let old = sha(&env.repo, "quark/t1");
+
+    // Main moves on, as it does when another pull request merges first.
+    std::fs::write(env.repo.join("other.txt"), "x\n").unwrap();
+    common::git(&env.repo, &["add", "other.txt"]);
+    common::git(&env.repo, &["commit", "-qm", "other"]);
+    common::git(&env.repo, &["push", "-q", "origin", "main"]);
+    let main = sha(&env.repo, "main");
+    let green = || vec![CheckRun::new(1, "ci", "completed", Some("success"))];
+    let pull = |head: &str| PullHead {
+        sha: head.into(),
+        branch: "quark/t1".into(),
+        base: "main".into(),
+        state: PullState::Open,
+    };
+    forge.set_tip("o/r", "main", &main);
+    forge.set_checks(&main, green(), vec![]);
+    forge.set_checks(&old, green(), vec![]);
+    forge.set_behind(&main, &old, 1);
+    forge.set_pull("o/r", 7, pull(&old));
+    let shown = |head: &str, check: CheckStatus| ForgePr {
+        title: "task t1".into(),
+        body: String::new(),
+        comments: None,
+        default_branch: None,
+        author: None,
+        state: PullRequestState::Open,
+        head_ref: Some("quark/t1".into()),
+        base_ref: Some("main".into()),
+        head_sha: Some(head.into()),
+        mergeable: Mergeability::Mergeable,
+        review_decision: ReviewDecision::None,
+        additions: None,
+        deletions: None,
+        changed_files: None,
+        opened_at: None,
+        updated_at: None,
+        merged_at: None,
+        closed_at: None,
+        checks: vec![Check {
+            name: "ci".into(),
+            status: check,
+            conclusion: None,
+            details_url: None,
+            started_at: None,
+            completed_at: None,
+        }],
+        reviews: vec![],
+    };
+    seen.set(url, shown(&old, CheckStatus::Success));
+
+    // The PR center as the daemon runs it; each `refresh` is one timer pass.
+    let center = PrCenter::new(store.clone(), engine.clone(), seen.clone());
+
+    // Pass 1: green and mergeable, so it is tried. The head lacks main's
+    // tip: it is rebased, pushed, and refused until its checks have run.
+    center.refresh().await;
+    let rebased = sha(&origin, "quark/t1");
+    assert_ne!(rebased, old, "the rebased head was pushed");
+    assert_eq!(
+        common::git(&origin, &["merge-base", &main, &rebased]).trim(),
+        main
+    );
+    assert!(forge.merges().is_empty());
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::InReview);
+
+    // Pass 2: the forge shows the rebased head with its checks running.
+    // Nothing is tried, and nothing has to remember to come back.
+    forge.set_pull("o/r", 7, pull(&rebased));
+    forge.set_checks(
+        &rebased,
+        vec![CheckRun::new(2, "ci", "in_progress", None)],
+        vec![],
+    );
+    forge.set_behind(&main, &rebased, 0);
+    seen.set(url, shown(&rebased, CheckStatus::Pending));
+    let reads = forge.reads();
+    center.refresh().await;
+    assert_eq!(forge.reads(), reads, "no merge was tried");
+    assert!(forge.merges().is_empty());
+
+    // Pass 3: its checks passed. The same timer merges exactly that head
+    // and the task lands.
+    forge.set_checks(&rebased, green(), vec![]);
+    seen.set(url, shown(&rebased, CheckStatus::Success));
+    center.refresh().await;
+    assert_eq!(
+        forge.merges(),
+        vec![(
+            "o/r".to_string(),
+            7,
+            rebased,
+            quark_verify::MergeMethod::Squash
+        )]
+    );
+    assert_eq!(state(&engine, &ws, "t1").await, TaskState::Done);
+}
+
 #[tokio::test]
 async fn a_merge_made_on_the_forge_lands_the_task_and_is_recorded() {
     use quark_core::Seq;

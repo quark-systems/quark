@@ -7,6 +7,10 @@
 //!    the gates run on the rebased head ([`NativePipeline`]). A head that
 //!    did not contain the tip is pushed rebased and the merge is refused
 //!    until the forge's checks have run on it: a stale head never merges.
+//!    That refusal is a step of the merge, not a verdict on the change, so
+//!    it is marked `retry` (see [`Outcome::Refused`]), as is any other
+//!    refusal that ends with no one acting: checks still running, main
+//!    moving under the gates, or a forge read that failed.
 //!    A pull request with no checks at all (a repo without CI) has none to
 //!    wait for, so once the forge reports the rebased head it merges that.
 //! 2. The gates must pass on exactly the head that merges.
@@ -25,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use quark_core::verify::{Change, MergeGuard, Permit, Verdict, VerifyPipeline};
+use quark_core::verify::{Change, Verdict, VerifyPipeline};
 use quark_core::{EventLog, HostId, NewEvent, ProjectId, Result, Seq, TaskId};
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +38,7 @@ use crate::guard::{NativeGuard, Target};
 use crate::health::{classify, HealthState};
 use crate::kinds;
 use crate::pipeline::{forge_remote, NativePipeline, PipelineTarget, RepoGates};
+use crate::rules::Reason;
 
 /// One merge to attempt.
 #[derive(Debug, Clone)]
@@ -63,6 +68,12 @@ pub enum Outcome {
     /// A rule refused it, with the reason a person reads.
     Refused {
         reason: String,
+        /// The same merge can go through later with no one acting on the
+        /// pull request: its rebased head was pushed and waits for checks,
+        /// its checks are still running, main moved while the gates ran, or
+        /// a forge read failed. Whoever merges unasked tries again; anything
+        /// else stays refused until its worker or a person acts.
+        retry: bool,
     },
 }
 
@@ -79,6 +90,18 @@ impl Landing {
             verdict,
             outcome: Outcome::Refused {
                 reason: reason.into(),
+                retry: false,
+            },
+        }
+    }
+
+    /// Refused for now: `retry` of [`Outcome::Refused`].
+    fn waiting(verdict: Option<Verdict>, reason: impl Into<String>) -> Self {
+        Self {
+            verdict,
+            outcome: Outcome::Refused {
+                reason: reason.into(),
+                retry: true,
             },
         }
     }
@@ -150,6 +173,13 @@ impl GuardedMerge {
     /// Wait at most `settle` for a pushed rebase to reach the forge.
     pub fn settle_within(mut self, settle: Duration) -> Self {
         self.settle = settle;
+        self
+    }
+
+    /// Pause `pause` before the guard reads the forge again after a failed
+    /// read (see [`NativeGuard::read_pause`]).
+    pub fn read_pause(mut self, pause: Duration) -> Self {
+        self.guard = self.guard.read_pause(pause);
         self
     }
 
@@ -247,18 +277,23 @@ impl GuardedMerge {
             }
         }
         if verdict.head != change.head {
+            let passed = verdict.passed();
             let reason = format!(
                 "{} did not contain {}'s tip, so it was rebased and pushed as {}; {}",
                 short(&change.head),
                 pull.base,
                 short(&verdict.head),
-                if verdict.passed() {
+                if passed {
                     "the gates passed on it, so merge again once its checks pass"
                 } else {
                     "the gates did not pass on it"
                 }
             );
-            return Ok(Landing::refused(Some(verdict), reason));
+            return Ok(if passed {
+                Landing::waiting(Some(verdict), reason)
+            } else {
+                Landing::refused(Some(verdict), reason)
+            });
         }
         if !verdict.passed() {
             let failed: Vec<&str> = verdict
@@ -278,13 +313,18 @@ impl GuardedMerge {
         // Rule 3: the pull request's own checks.
         let (runs, statuses) = self.forge.checks(&repo, &change.head).await?;
         let own = classify(&change.head, &runs, &statuses);
-        let not_green = match own.state {
-            HealthState::Red => Some(format!("its checks failed: {}", own.red.join(", "))),
-            HealthState::Pending => Some("its checks are still running".to_string()),
-            HealthState::Green | HealthState::None => None,
-        };
-        if let Some(reason) = not_green {
-            return Ok(Landing::refused(Some(verdict), reason));
+        match own.state {
+            HealthState::Red => {
+                let reason = format!("its checks failed: {}", own.red.join(", "));
+                return Ok(Landing::refused(Some(verdict), reason));
+            }
+            HealthState::Pending => {
+                return Ok(Landing::waiting(
+                    Some(verdict),
+                    "its checks are still running",
+                ))
+            }
+            HealthState::Green | HealthState::None => {}
         }
 
         // Rules 4 and 5: the guard re-reads main, then the forge merges
@@ -298,7 +338,8 @@ impl GuardedMerge {
                 branch: pull.base.clone(),
             },
         );
-        if let Permit::Deny { reason } = self.guard.may_merge(&change, &verdict).await? {
+        let decision = self.guard.decide(&change, &verdict).await?;
+        if !decision.allow {
             // A red main asks a person once per episode whether to override.
             if let Some(ep) = self.guard.episode(&req.project) {
                 if ep.decision.is_none() {
@@ -308,7 +349,14 @@ impl GuardedMerge {
                         .await?;
                 }
             }
-            return Ok(Landing::refused(Some(verdict), reason));
+            return Ok(match decision.reason {
+                // Main moved under the gates, or the forge did not answer:
+                // neither says anything about the change.
+                Reason::StaleHead | Reason::HeadUnreadable | Reason::MainUnknown => {
+                    Landing::waiting(Some(verdict), decision.message)
+                }
+                _ => Landing::refused(Some(verdict), decision.message),
+            });
         }
         self.forge
             .merge(&repo, number, &change.head, req.method)
@@ -508,7 +556,8 @@ mod tests {
             git(&checkout, &["checkout", "-q", "main"]);
             let forge = Arc::new(FakeForge::new());
             let log = Arc::new(MemoryEventLog::new());
-            let merge = GuardedMerge::new(forge.clone(), log.clone(), "h".into());
+            let merge = GuardedMerge::new(forge.clone(), log.clone(), "h".into())
+                .read_pause(Duration::from_millis(1));
             let r = Self {
                 dir,
                 origin,
@@ -575,7 +624,15 @@ mod tests {
 
     fn refusal(l: &Landing) -> &str {
         match &l.outcome {
-            Outcome::Refused { reason } => reason,
+            Outcome::Refused { reason, .. } => reason,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// Whether the refusal ends with no one acting.
+    fn retried(l: &Landing) -> bool {
+        match &l.outcome {
+            Outcome::Refused { retry, .. } => *retry,
             other => panic!("expected a refusal, got {other:?}"),
         }
     }
@@ -618,6 +675,7 @@ mod tests {
         let r = Repo::new();
         let l = r.land("exit 4").await;
         assert!(refusal(&l).contains("test: failed (exit 4)"), "{l:?}");
+        assert!(!retried(&l), "failed gates stay failed");
         assert!(!l.verdict.unwrap().passed());
 
         let head = r.origin_sha("b");
@@ -626,9 +684,13 @@ mod tests {
             vec![CheckRun::new(1, "ci", "in_progress", None)],
             vec![],
         );
-        assert!(refusal(&r.land("true").await).contains("still running"));
+        let l = r.land("true").await;
+        assert!(refusal(&l).contains("still running"));
+        assert!(retried(&l), "running checks finish on their own");
         r.forge.set_checks(&head, vec![ci("failure")], vec![]);
-        assert!(refusal(&r.land("true").await).contains("its checks failed: ci"));
+        let l = r.land("true").await;
+        assert!(refusal(&l).contains("its checks failed: ci"));
+        assert!(!retried(&l), "failed checks need the worker");
         assert!(r.forge.merges().is_empty());
     }
 
@@ -651,6 +713,7 @@ mod tests {
         let reason = refusal(&l);
         assert!(reason.contains("rebased and pushed"), "{reason}");
         assert!(reason.contains("gates passed"), "{reason}");
+        assert!(retried(&l), "the rebased head merges once it is checked");
         assert_eq!(l.verdict.unwrap().head, rebased);
         assert!(r.forge.merges().is_empty());
 
@@ -763,8 +826,81 @@ mod tests {
             refusal(&l).contains("does not have the forge's tip"),
             "{l:?}"
         );
+        assert!(!retried(&l));
         assert_eq!(r.origin_sha("b"), old);
         assert!(r.forge.merges().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_clone_that_cannot_fetch_the_forges_tip_fails_as_a_read() {
+        let r = Repo::new();
+        main_moves_on_only_on_the_forge(&r);
+        let gone = r.dir.path().join("gone.git");
+        git(
+            &r.checkout,
+            &["remote", "set-url", "origin", gone.to_str().unwrap()],
+        );
+        // Not a refusal: nothing was decided about the change.
+        let e = r.merge.land(&r.request("true")).await.unwrap_err();
+        let e = e.to_string();
+        assert!(
+            e.contains("could not fetch main and b from origin into"),
+            "{e}"
+        );
+        assert!(r.forge.merges().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_rebased_head_whose_gates_fail_is_refused_for_good() {
+        let r = Repo::new();
+        let old = r.origin_sha("b");
+        commit(&r.checkout, "other");
+        git(&r.checkout, &["push", "-q", "origin", "main"]);
+        let main = r.origin_sha("main");
+        r.forge.set_tip("acme/app", "main", &main);
+        r.forge.set_checks(&main, vec![ci("success")], vec![]);
+        r.forge.set_behind(&main, &old, 1);
+        let l = r.land("exit 3").await;
+        assert!(
+            refusal(&l).contains("the gates did not pass on it"),
+            "{l:?}"
+        );
+        assert!(!retried(&l));
+    }
+
+    #[tokio::test]
+    async fn a_forge_that_cannot_compare_the_head_refuses_for_now_and_says_why() {
+        let r = Repo::new();
+        let (main, head) = (r.origin_sha("main"), r.origin_sha("b"));
+        // A forge that reads main, but not how far the head is behind it.
+        let stale = Arc::new(FakeForge::new());
+        stale.set_tip("acme/app", "main", &main);
+        stale.set_checks(&main, vec![ci("success")], vec![]);
+        stale.set_checks(&head, vec![ci("success")], vec![]);
+        stale.set_pull(
+            "acme/app",
+            1,
+            r.forge.pull_request("acme/app", 1).await.unwrap(),
+        );
+        let merge = GuardedMerge::new(stale.clone(), r.log.clone(), "h".into())
+            .read_pause(Duration::from_millis(1));
+        let l = merge.land(&r.request("true")).await.unwrap();
+        let reason = refusal(&l);
+        assert!(
+            reason.starts_with(&format!(
+                "could not read whether {} contains main's tip: ",
+                &head[..12]
+            )),
+            "{reason}"
+        );
+        assert!(retried(&l), "a failed read decides nothing");
+        assert!(l.verdict.unwrap().passed());
+        assert!(stale.merges().is_empty());
+
+        // The forge answers again: the same head merges.
+        stale.set_behind(&main, &head, 0);
+        let l = merge.land(&r.request("true")).await.unwrap();
+        assert_eq!(l.outcome, Outcome::Merged { head });
     }
 
     #[tokio::test]
@@ -776,6 +912,7 @@ mod tests {
         r.forge.set_checks(&head, vec![], vec![]);
         let l = r.land("true").await;
         assert!(refusal(&l).starts_with("main is red"), "{l:?}");
+        assert!(!retried(&l), "a red main waits for a person or a fix");
         assert!(r.merge.guard().episode(&"p".into()).is_some());
 
         r.forge.set_checks(&head, vec![ci("success")], vec![]);
@@ -820,7 +957,9 @@ mod tests {
         let mut pull = r.forge.pull_request("acme/app", 1).await.unwrap();
         pull.state = PullState::Closed;
         r.forge.set_pull("acme/app", 1, pull);
-        assert!(refusal(&r.land("true").await).contains("closed"));
+        let l = r.land("true").await;
+        assert!(refusal(&l).contains("closed"));
+        assert!(!retried(&l));
 
         let p = ProjectId::from("p");
         let repos = vec!["app".to_string(), "lib".to_string()];
