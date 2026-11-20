@@ -1,7 +1,7 @@
 schema = 1
 id = "kiro"
 name = "Kiro CLI"
-roles = ["worker"]
+roles = ["coordinator", "worker"]
 efforts = ["low", "medium", "high", "xhigh", "max"]
 
 [detect]
@@ -34,8 +34,10 @@ cursor = "❯"
 # Kiro 2.33 asks once per folder whether to trust it, then remembers the
 # answer in ~/.kiro/workspace-roots/<hash>/permissions.yaml. A worktree
 # Quark made for the task is trusted; --trust-all-tools already grants more.
+# Only the choices are matched: the explanation wraps with the pane's width
+# (Kiro 3.5 titles it "Trust this workspace?").
 [[launch.dialogs]]
-detect = ["Only trust folders you know", "Trust, continue", "Don't trust, exit"]
+detect = ["Trust, continue", "Don't trust, exit"]
 options = ["Trust, continue", "Don't trust, exit"]
 choose = "Trust, continue"
 cursor = "❯"

@@ -6,6 +6,15 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
+## Unreleased
+
+### Added
+
+- Kiro CLI can run a project's coordinator. Pick **Kiro CLI** as the project's agent in
+  Settings. Quark writes a `quark-coordinator` agent into the coordinator's workspace with
+  Quark's tools and turn end, and leaves `~/.kiro` alone. Kiro's own compaction manages the
+  coordinator's context, since Kiro records no token counts.
+
 ## 0.3.0
 
 ### Install

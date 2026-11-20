@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use super::{EngineError, SourceRepo, WorkspacePlan, WorkspaceRef};
 use crate::coordinator_http::{
     codex_overrides, install, CoordinatorUrls, Tokens, Wiring, BOB_MODE, BOB_PROMPT,
-    COORDINATOR_HARNESSES, PI_EXTENSION,
+    COORDINATOR_HARNESSES, KIRO_AGENT, PI_EXTENSION,
 };
 use crate::provision::Layout;
 use crate::sessions::{SessionError, Sessions, WindowSpec};
@@ -339,11 +339,11 @@ impl ProjectSetup {
     ) -> Result<PathBuf, EngineError> {
         let (layout, pid, root) = (self.layout.clone(), ws.project_id.clone(), ws.root.clone());
         // Claude Code and Bob prime themselves from their session-start
-        // hook; Codex and Pi have none, so their prompt carries the memories
-        // as of launch.
+        // hook; Codex and Pi have none, and Kiro does not run its again on
+        // resume, so their prompt carries the memories as of launch.
         let memories = match wiring {
             Wiring::Claude | Wiring::Bob => None,
-            Wiring::Codex | Wiring::Pi => {
+            Wiring::Codex | Wiring::Pi | Wiring::Kiro => {
                 crate::beads::prime_memories(&self.bd, &layout.home, &pid).await
             }
         };
@@ -393,7 +393,8 @@ impl ProjectSetup {
 /// (`--append-system-prompt`); Codex reads a `-c developer_instructions`
 /// override from it. Codex and Pi also get their wiring to `urls` here.
 /// Bob has no system-prompt flag: it runs in its coordinator mode, whose
-/// rules are the prompt file, so it is started directly. `env` is the
+/// rules are the prompt file, so it is started directly; so is Kiro CLI,
+/// whose coordinator agent reads the prompt file. `env` is the
 /// window's environment, for the manifest's `{env:NAME}` options.
 #[allow(clippy::too_many_arguments)]
 fn launch_argv(
@@ -439,10 +440,23 @@ fn launch_argv(
         }
         return Ok(argv);
     }
+    if wiring == Wiring::Kiro {
+        // `--trust-all-tools` stays: the coordinator runs commands without
+        // asking, as a worker does. Its confirmation and Kiro's folder-trust
+        // question are answered from the manifest's dialogs
+        // (`coordinator_prompt`).
+        let mut argv = quark_harness::argv(m, &vars);
+        argv.push("--agent".into());
+        argv.push(KIRO_AGENT.into());
+        if resume {
+            argv.extend(m.launch.resume.iter().cloned());
+        }
+        return Ok(argv);
+    }
     let flag = match wiring {
         Wiring::Claude | Wiring::Pi => "--append-system-prompt",
         Wiring::Codex => "-c",
-        Wiring::Bob => unreachable!("Bob is started above"),
+        Wiring::Bob | Wiring::Kiro => unreachable!("started above"),
     };
     let mut argv = vec![
         "/bin/sh".to_string(),
@@ -494,7 +508,7 @@ fn launch_argv(
                 harness.push("--continue".into());
             }
         }
-        Wiring::Bob => unreachable!("Bob is started above"),
+        Wiring::Bob | Wiring::Kiro => unreachable!("started above"),
     }
     argv.extend(harness);
     Ok(argv)
@@ -942,7 +956,7 @@ mod tests {
             root: dir.path().join("ws"),
         };
         std::fs::create_dir_all(&ws.root).unwrap();
-        for harness in ["kiro", "nope"] {
+        for harness in ["gemini", "nope"] {
             let err = setup
                 .start_coordinator(&command, &ws, &agent(harness), &[], false)
                 .await
@@ -1110,6 +1124,35 @@ mod tests {
     }
 
     #[test]
+    fn launches_kiro_as_its_coordinator_agent() {
+        let reg = ManifestRegistry::builtin();
+        let m = reg.get("kiro").unwrap();
+        let mut a = agent("kiro");
+        a.model = Some("claude-sonnet-5.5".into());
+        let p = Path::new("/w/.quark/coordinator.md");
+        let argv =
+            launch_argv(m, Wiring::Kiro, &a, Path::new("/w"), p, &urls(), false, &[]).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "kiro-cli",
+                "chat",
+                "--v3",
+                "--trust-all-tools",
+                "--model",
+                "claude-sonnet-5.5",
+                "--effort",
+                "high",
+                "--agent",
+                KIRO_AGENT
+            ]
+        );
+        let resumed =
+            launch_argv(m, Wiring::Kiro, &a, Path::new("/w"), p, &urls(), true, &[]).unwrap();
+        assert_eq!(&resumed[8..], ["--agent", KIRO_AGENT, "--resume"]);
+    }
+
+    #[test]
     fn launches_pi_with_its_extension() {
         let reg = ManifestRegistry::builtin();
         let m = reg.get("pi").unwrap();
@@ -1188,7 +1231,7 @@ mod tests {
             "# Memories from {}",
             crate::beads::beads_dir(&dir.path().join("home"), "p1").display()
         );
-        for wiring in [Wiring::Codex, Wiring::Pi] {
+        for wiring in [Wiring::Codex, Wiring::Pi, Wiring::Kiro] {
             rt.block_on(setup.write_prompt(&wref, wiring)).unwrap();
             assert!(md().contains(&want), "{wiring:?}: {}", md());
         }

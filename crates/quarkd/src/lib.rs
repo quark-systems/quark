@@ -419,6 +419,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
     let prompts_task = tokio::spawn(coordinator_prompt::run(
         store.clone(),
         sessions.clone(),
+        Arc::new(quark_harness::ManifestRegistry::load(&config.home.join("harnesses")).0),
         coordinator_prompt::INTERVAL,
     ));
     // Messages queued while a coordinator works go in once it is quiet.

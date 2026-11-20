@@ -13,11 +13,17 @@
 //! are the prompt's; [`answer`] picks the chosen one on the screen with the
 //! arrow keys and Enter. A prompt gone for [`GONE_AFTER`] closes its
 //! decision as answered elsewhere.
+//!
+//! A start-up question the harness's manifest says how to answer
+//! (`launch.dialogs`, such as Kiro CLI's trust-all-tools confirmation) is
+//! answered right away instead, as the worker supervisor does for workers:
+//! the coordinator is not started by the supervisor.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use quark_harness::ManifestRegistry;
 use quark_supervisor::prompt::{self, Prompt};
 use quark_systems::ProjectStatus;
 
@@ -145,9 +151,50 @@ pub async fn read(sessions: &Sessions, project_id: &str) -> Result<Option<Prompt
     Ok(prompt::detect(&screen))
 }
 
-/// Reads every ready Project's coordinator screen every `interval`, raising
-/// and closing prompt decisions, until the task is dropped.
-pub async fn run(store: Arc<Store>, sessions: Sessions, interval: Duration) {
+/// Answers a start-up dialog the harness `m` names while one is on
+/// `project_id`'s coordinator screen, a key at a time. Returns whether one
+/// was answered.
+pub async fn answer_dialogs(
+    sessions: &Sessions,
+    project_id: &str,
+    m: &quark_core::harness::HarnessManifest,
+) -> bool {
+    if m.launch.dialogs.is_empty() {
+        return false;
+    }
+    let mut answered = false;
+    for _ in 0..ANSWER_KEYS {
+        let Ok(screen) = sessions.screen_text(project_id).await else {
+            break;
+        };
+        let Some(key) = quark_supervisor::dialog_key(m, &screen) else {
+            break;
+        };
+        if let Err(e) = sessions.input(project_id, key, None).await {
+            tracing::warn!(project = %project_id, error = %e, "could not answer the coordinator's start-up question");
+            break;
+        }
+        if key == b"\r" {
+            tracing::info!(project = %project_id, harness = %m.id, "answered the coordinator's start-up question");
+            answered = true;
+            // The next dialog, if any, takes a moment to draw.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    }
+    answered
+}
+
+/// Reads every ready Project's coordinator screen every `interval`,
+/// answering start-up dialogs its harness's manifest names and raising and
+/// closing prompt decisions, until the task is dropped.
+pub async fn run(
+    store: Arc<Store>,
+    sessions: Sessions,
+    manifests: Arc<ManifestRegistry>,
+    interval: Duration,
+) {
     let mut tick = tokio::time::interval(interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -164,6 +211,16 @@ pub async fn run(store: Arc<Store>, sessions: Sessions, interval: Duration) {
         for p in projects {
             if p.status != ProjectStatus::Ready || p.workspace_path.is_none() {
                 continue;
+            }
+            let harness = p
+                .agent_config
+                .as_ref()
+                .map(|a| a.harness.as_str())
+                .unwrap_or(crate::engine::native_project::COORDINATOR_HARNESS);
+            if let Some(m) = manifests.resolve(harness) {
+                if answer_dialogs(&sessions, &p.id, m).await {
+                    continue;
+                }
             }
             // No coordinator terminal: nothing on its screen.
             let found = read(&sessions, &p.id).await.unwrap_or_default();
