@@ -12,7 +12,11 @@ Adapted from the `CONTEXT.md` discipline of AgentsInTheCloud (MIT, Copyright (c)
   _Avoid_: dashboard, home screen, projects list.
 - **Left list**: the column on the left: projects, each with its coordinator pinned on top and its workers under it, then Accounts and Hosts in its footer. The app menu (a gear) sits in its head.
   _Avoid_: sidebar, nav, tree.
-- **Work pane**: the panel that slides in on the right with views of the selected thing: Terminal, Changes, PR, Brief, Why this agent.
+- **Agents**: a project's home tab: its coordinator in the middle, always, and the project panel on the right. A worker opens here too, as a tab in the project panel.
+  _Avoid_: conversation (as the tab's name), chat tab.
+- **Project panel**: the right-hand side of the Agents tab. Its tabs are Work (the project's workers by state), Needs you, PRs and Activity (what changed since you looked, updates, recent decisions), then one tab per worker you opened. An open worker can expand to the full width.
+  _Avoid_: sidebar, side panel, inspector.
+- **Work pane**: a worker's views beside its terminal when it is expanded to the full width: Transcript, Changes, PR, Brief, Why this agent. In the project panel the same views, and Terminal, are tabs over the worker.
   _Avoid_: inspector, drawer, details panel.
 - **Dock**: the coordinator box at the bottom of every screen that is not the coordinator's own conversation. It carries what you are looking at as its context.
   _Avoid_: chat bar, omnibox, prompt bar.

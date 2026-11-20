@@ -1,14 +1,13 @@
-// The Conversation tab's right column: what changed since you last looked, what needs you,
-// open PRs and recent decisions in this project. It only reads: the Overview tab marks things read.
-import React, { useEffect, useMemo, useState } from "react";
+// The Agents tab's project panel views: Needs you, PRs, and Activity (what changed since you last
+// looked, updates and recent decisions). They only read: the Overview tab marks things read.
+import { useEffect, useMemo, useState } from "react";
 import { api, Notice, OverviewDigest } from "../api";
 import { href } from "../nav";
 import { useStore } from "../store";
-import { ago, stateMeta, workerNamed } from "../util";
-import { SectionLabel, StatusDot, taskTone } from "../ui";
+import { ago, workerNamed } from "../util";
+import { SectionLabel, StatusDot } from "../ui";
 import { lastSeen, summarize } from "../screens/dashboard/summary";
 import { useAttention } from "./NextAttention";
-import { listed } from "./groups";
 import { describeUpdate } from "./updates";
 import { CommandButton } from "../components/CoordinatorCommand";
 import { BeadMarkdown, BeadText } from "../ui/BeadText";
@@ -58,10 +57,56 @@ function Update({ notice: n }: { notice: Posted }) {
 
 const KIND = { decision: "decision", pr: "check failed", worker: "worker stuck" } as const;
 
-export function SinceYouLooked({ project: pid }: { project: string }) {
+/** What needs you in this project: open decisions, failed checks, stuck workers. */
+export function useNeedsYou(pid: string) {
   const queue = useAttention();
+  return useMemo(() => queue.filter((i) => i.projectId === pid), [queue, pid]);
+}
+
+/** This project's open and draft PRs, newest first. */
+export function useOpenPrs(pid: string) {
   const prs = useStore((s) => s.pullRequests);
-  const tasks = useStore((s) => s.tasks);
+  return useMemo(() => Object.values(prs).filter((p) => p.project_id === pid && (p.state === "open" || p.state === "draft"))
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs, pid]);
+}
+
+/** The project panel's Needs you tab. */
+export function NeedsYouPanel({ project: pid }: { project: string }) {
+  const mine = useNeedsYou(pid);
+  return (
+    <div className="since" data-testid="panel-needs">
+      <section>
+        {mine.length ? mine.map((i) => (
+          <a key={i.key} className="since-item needs" href={href(i.route)} data-testid="since-needs">
+            <StatusDot tone={i.kind === "decision" ? "needs-you" : "failed"} />
+            <span className="since-title"><BeadText text={i.title} project={i.projectId} /></span><span className="since-kind">{KIND[i.kind]}</span>
+          </a>
+        )) : <p className="since-none">Nothing needs you here.</p>}
+      </section>
+    </div>
+  );
+}
+
+/** The project panel's PRs tab. */
+export function OpenPrsPanel({ project: pid }: { project: string }) {
+  const open = useOpenPrs(pid);
+  return (
+    <div className="since" data-testid="panel-prs">
+      <section>
+        <SectionLabel right={<a href={href({ name: "pulls", project: pid })}>All</a>}>Open PRs</SectionLabel>
+        {open.length ? open.map((p) => (
+          <a key={p.id} className="since-item" href={href({ name: "pulls", project: pid, id: p.id })}>
+            <StatusDot tone={p.checks_state === "failing" ? "failed" : p.checks_state === "passing" ? "ready" : "busy"} />
+            <span className="since-title">{p.title ?? `${p.repo}#${p.number}`}</span><span className="since-kind">#{p.number}</span>
+          </a>
+        )) : <p className="since-none">No open PRs.</p>}
+      </section>
+    </div>
+  );
+}
+
+/** The project panel's Activity tab: what changed since you looked, updates and recent decisions. */
+export function ActivityPanel({ project: pid }: { project: string }) {
   const decisions = useStore((s) => s.decisions);
   const connected = useStore((s) => s.connected);
   const [digest, setDigest] = useState<OverviewDigest | null>(null);
@@ -73,60 +118,23 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
     return () => { live = false; };
   }, [pid, seen, connected]);
 
-  const mine = queue.filter((i) => i.projectId === pid);
-  const open = useMemo(() => Object.values(prs).filter((p) => p.project_id === pid && (p.state === "open" || p.state === "draft"))
-    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")), [prs, pid]);
   const allNotices = useStore((s) => s.notices);
   const notices = useMemo(() => allNotices.filter((n) => n.project_id === pid).slice(-5).reverse(), [allNotices, pid]);
-  // The project's workers live here rather than in the left list, which is for getting around.
-  const workers = useMemo(() => Object.values(tasks).filter((t) => t.project_id === pid && listed(t, Date.now()))
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at)), [tasks, pid]);
   const recent = useMemo(() => Object.values(decisions).filter((d) => d.project_id === pid && d.state === "answered")
     .sort((a, b) => (b.answered_at ?? "").localeCompare(a.answered_at ?? "")).slice(0, 3), [decisions, pid]);
 
   return (
-    <aside className="since" aria-label="Since you looked" data-testid="since-you-looked">
+    <div className="since" aria-label="Since you looked" data-testid="since-you-looked">
       <section>
         <SectionLabel right={<CommandButton cid={pid} command="catch_up" />}>
           {!digest ? "Since you looked" : seen === null ? "Since the log began" : `Since you looked · ${ago(digest.from)}`}
         </SectionLabel>
         {digest && <p className="since-summary" data-testid="since-summary">{summarize(digest)} <a href={href({ name: "overview", project: pid })}>Overview</a></p>}
       </section>
-      <section>
-        <SectionLabel>Needs you</SectionLabel>
-        {mine.length ? mine.map((i) => (
-          <a key={i.key} className="since-item needs" href={href(i.route)} data-testid="since-needs">
-            <StatusDot tone={i.kind === "decision" ? "needs-you" : "failed"} />
-            <span className="since-title"><BeadText text={i.title} project={i.projectId} /></span><span className="since-kind">{KIND[i.kind]}</span>
-          </a>
-        )) : <p className="since-none">Nothing needs you here.</p>}
-      </section>
-      <section>
-        <SectionLabel>Open PRs</SectionLabel>
-        {open.length ? open.map((p) => (
-          <a key={p.id} className="since-item" href={href({ name: "pulls", project: pid, id: p.id })}>
-            <StatusDot tone={p.checks_state === "failing" ? "failed" : p.checks_state === "passing" ? "ready" : "busy"} />
-            <span className="since-title">{p.title ?? `${p.repo}#${p.number}`}</span><span className="since-kind">#{p.number}</span>
-          </a>
-        )) : <p className="since-none">No open PRs.</p>}
-      </section>
       {notices.length > 0 && (
         <section data-testid="since-updates">
           <SectionLabel right={<a href={href({ name: "automation", project: pid })} title="Choose what you hear about and how">Choose updates</a>}>Updates</SectionLabel>
           {notices.map((n) => <Update key={n.seq} notice={n} />)}
-        </section>
-      )}
-      {workers.length > 0 && (
-        <section data-testid="since-workers">
-          {/* No "All" here: the Work tab is a board of issues, not a list of these workers. */}
-          <SectionLabel>Workers</SectionLabel>
-          {workers.map((t) => (
-            <a key={t.id} className="since-item" href={href({ name: "task", id: t.id })}>
-              <StatusDot tone={taskTone(t.state)} />
-              <span className="since-title"><BeadText text={t.title} project={pid} /></span>
-              <span className="since-kind">{t.state_note || stateMeta(t.state).label}</span>
-            </a>
-          ))}
         </section>
       )}
       {recent.length > 0 && (
@@ -139,6 +147,6 @@ export function SinceYouLooked({ project: pid }: { project: string }) {
           ))}
         </section>
       )}
-    </aside>
+    </div>
   );
 }

@@ -8,7 +8,7 @@ export const ROUTES = {
   projects: "", // All projects: what needs you, open PRs, one card per project
   new: "new", // create a Project
   import: "import/:source?", // import Projects from another tool, optionally with its source chosen
-  project: "p/:id", // the project's Conversation tab: its coordinator, and what changed since you looked
+  project: "p/:id", // the project's Agents tab: its coordinator, and the project panel beside it
   work: "p/:project/work", // the project's Work tab: one column per worker state
   issues: "p/:project/issues/:id?", // the project's Issues tab: its Beads issues, optionally with one selected
   pulls: "p/:project/prs/:id?", // the project's Pull requests tab: its PRs, or one of them
@@ -19,7 +19,7 @@ export const ROUTES = {
   settings: "p/:project/settings", // Settings › General: every per-Project switch
   metrics: "p/:project/metrics", // the Project dashboard's Metrics tab: how the work has gone
   automation: "p/:project/automation", // Settings › Automation: the inbox, trigger rules and away policy
-  task: "t/:id", // worker view
+  task: "t/:id", // one worker, open in its project's Agents tab
   inbox: "inbox/:id?", // decisions inbox, optionally with one decision selected
   prs: "prs", // PR center
   pr: "pr/:id", // one pull request: checks, reviews, diff

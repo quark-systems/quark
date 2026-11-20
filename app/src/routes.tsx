@@ -11,7 +11,7 @@ import { Memory } from "./screens/Memory";
 import { Issues } from "./screens/Issues";
 import { Decisions } from "./screens/Decisions";
 import { Dispatch } from "./screens/Dispatch";
-import { WorkerView } from "./screens/WorkerView";
+import { WorkerRoute } from "./screens/Agents";
 import { Inbox } from "./screens/Inbox";
 import { PullRequests } from "./screens/PullRequests";
 import { PullRequestView } from "./screens/PullRequestView";
@@ -45,7 +45,7 @@ export const SCREENS: Screens = {
   settings: (r) => framed(r, r.project, <Settings key={r.project} project={r.project} />),
   metrics: (r) => framed(r, r.project, <Metrics key={r.project} project={r.project} />),
   automation: (r) => framed(r, r.project, <Automation key={r.project} project={r.project} />),
-  task: (r) => <WorkerView key={r.id} id={r.id} />,
+  task: (r) => <WorkerRoute key={r.id} id={r.id}>{(pid) => framed(r, pid, <Conversation key={pid} id={pid} worker={r.id} />)}</WorkerRoute>,
   inbox: (r) => <Inbox id={r.id} />,
   prs: () => <PullRequests />,
   pr: (r) => <PullRequestView key={r.id} id={r.id} />,

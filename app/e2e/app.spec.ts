@@ -324,6 +324,7 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await expect(term.getByTestId("term-takeover")).toBeVisible();
 
   // Transcript shows history; steering lands in it.
+  await page.getByTestId("worker-view").getByRole("tab", { name: "Transcript" }).click();
   const transcript = page.getByTestId("transcript");
   await expect(transcript).toContainText("The tests pass on the base");
   await page.getByLabel("Message the worker").fill("Please also cover the lagged receiver");
@@ -349,15 +350,15 @@ test("worker view: terminal, steering, transcript, changes, cancel and relaunch"
   await expect.poll(termText).toContain("relaunched on");
 });
 
-test("worker view: one message box answers screen prompts, stops the worker and asks the coordinator", async ({ page }) => {
+test("worker view: its message box answers screen prompts and stops the worker; Ctrl+K asks the coordinator beside it", async ({ page }) => {
   await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Terminal sessions" }).click();
   await expect(page).toHaveURL(/#\/t\//);
   const box = page.getByTestId("worker-composer");
   const termText = terminalText(page);
-  // One box under the terminal, no separate coordinator dock.
+  // The worker's box under its terminal; the coordinator's own box beside it, no dock.
   await expect(page.getByTestId("dock")).toHaveCount(0);
-  await expect(box.getByTestId("target-worker")).toHaveAttribute("aria-checked", "true");
+  await expect(box.getByRole("textbox", { name: "Message the worker" })).toBeVisible();
 
   // A permission prompt on the worker's screen shows as buttons; a message waits for it.
   const tid = decodeURIComponent(page.url().split("#/t/")[1]);
@@ -376,15 +377,12 @@ test("worker view: one message box answers screen prompts, stops the worker and 
   await asked;
   await expect.poll(termText).toContain("[interrupted by user]");
 
-  // Ctrl+K switches the same box to the coordinator, about this worker.
+  // Ctrl+K goes to the coordinator's box beside it, about this worker.
   await page.keyboard.press("Control+k");
-  await expect(box.getByTestId("target-coordinator")).toHaveAttribute("aria-checked", "true");
-  const ask = box.getByRole("textbox", { name: "Message the coordinator" });
+  const ask = page.getByTestId("coordinator-chat").getByRole("textbox", { name: "Message the coordinator" });
   await expect(ask).toBeFocused();
-  await expect(ask).toHaveAttribute("placeholder", "Ask the coordinator about this worker…");
+  await expect(ask).toHaveAttribute("placeholder", "Ask the coordinator about this worker");
   // (Sending to the coordinator from here is covered by the dock test in shell.spec.ts.)
-  await box.getByTestId("target-worker").click();
-  await expect(box.getByRole("textbox", { name: "Message the worker" })).toBeFocused();
 });
 
 test("worker view: why this agent, live on relaunch and kept after the task ends", async ({ page }) => {
@@ -1621,25 +1619,26 @@ test("issue sync: a new project has its own Beads with no sync, until a rule tur
   await expect(sync).toContainText("It is not synced with any issue tracker");
 });
 
-test("worker view: the work pane's edge drags wider, is remembered, and resets on double-click", async ({ page }) => {
+test("worker view: the project panel's edge drags wider, is remembered, and resets on double-click", async ({ page }) => {
   await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "Event stream" }).click();
-  const pane = page.getByRole("complementary", { name: "Work" });
-  const before = (await pane.boundingBox())!.width;
-  const handle = (await page.getByTestId("pane-resizer").boundingBox())!;
+  const panel = page.getByTestId("project-panel");
+  await expect(panel.getByTestId("worker-view")).toBeVisible();
+  const before = (await panel.boundingBox())!.width;
+  const handle = (await page.getByTestId("panel-resizer").boundingBox())!;
   await page.mouse.move(handle.x + handle.width / 2, handle.y + 200);
   await page.mouse.down();
-  await page.mouse.move(handle.x - 300, handle.y + 200, { steps: 5 });
+  await page.mouse.move(handle.x - 200, handle.y + 200, { steps: 5 });
   await page.mouse.up();
-  const wider = (await pane.boundingBox())!.width;
-  expect(wider).toBeGreaterThan(before + 250);
+  const wider = (await panel.boundingBox())!.width;
+  expect(wider).toBeGreaterThan(before + 150);
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
 
   await page.reload();
-  await expect.poll(async () => (await pane.boundingBox())!.width).toBeCloseTo(wider, -1);
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeCloseTo(wider, -1);
 
-  await page.getByTestId("pane-resizer").dblclick();
-  await expect.poll(async () => (await pane.boundingBox())!.width).toBeCloseTo(before, -1);
+  await page.getByTestId("panel-resizer").dblclick();
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeCloseTo(before, -1);
 });
 
 test("project lifecycle: archive hides a project, Archived brings it back, delete needs its name", async ({ page, request }) => {
@@ -1793,6 +1792,7 @@ test("prompt boxes take pasted images and picked or dropped files, and send thei
   await expect(steer.getByTestId("attachments")).toContainText("numbers.csv");
   await steer.getByRole("button", { name: "Send" }).click();
   await expect(steer.getByRole("status")).toHaveText("Delivered to the worker's inbox");
+  await page.getByTestId("worker-view").getByRole("tab", { name: "Transcript" }).click();
   await expect(page.getByTestId("transcript")).toContainText(/Attached file:\s*- \S+\/numbers\.csv/);
 });
 

@@ -1,4 +1,4 @@
-// The project's header: its name, the tabs (Conversation, Overview, Work, Issues, Pull requests, Decisions,
+// The project's header: its name, the tabs (Agents, Overview, Work, Issues, Pull requests, Decisions,
 // Memory, Metrics) and Settings. Every project screen sits under it.
 import React, { useMemo } from "react";
 import { href, Route } from "../nav";
@@ -13,7 +13,7 @@ export type ProjectTab = "conversation" | "overview" | "work" | "issues" | "pull
 /** The tab a project route belongs to; Dispatch and Automation are sections of Settings. */
 export function tabOf(route: Route): ProjectTab | null {
   switch (route.name) {
-    case "project": return "conversation";
+    case "project": case "task": return "conversation";
     case "overview": case "work": case "issues": case "pulls": case "decisions": case "memory": case "metrics": return route.name;
     case "settings": case "dispatch": case "automation": return "settings";
     default: return null;
@@ -31,7 +31,7 @@ export function ProjectHeader({ project: pid, current }: { project: string; curr
   const open = useMemo(() => Object.values(decisions).filter((d) => d.project_id === pid && d.state === "open").length, [decisions, pid]);
   const toReview = useMemo(() => Object.values(proposals).filter((m) => m.project_id === pid && m.state === "proposed").length, [proposals, pid]);
   const tabs: { tab: Exclude<ProjectTab, "settings">; label: string; count?: React.ReactNode; testid?: string }[] = [
-    { tab: "conversation", label: "Conversation" },
+    { tab: "conversation", label: "Agents" },
     { tab: "overview", label: "Overview" },
     { tab: "work", label: "Work" },
     { tab: "issues", label: "Issues" },
@@ -79,7 +79,7 @@ const SECTIONS = [
 export function SettingsSections({ project, current }: { project: string; current: (typeof SECTIONS)[number]["name"] }) {
   return (
     <nav className="settings-sections" aria-label="Settings">
-      <a className="settings-back" href={href({ name: "project", id: project })}><span aria-hidden="true">‹ </span>Back to Conversation</a>
+      <a className="settings-back" href={href({ name: "project", id: project })}><span aria-hidden="true">‹ </span>Back to Agents</a>
       <span className="settings-title">Settings</span>
       {SECTIONS.map((s) => (
         <a key={s.name} href={href({ name: s.name, project })} className={"settings-section" + (s.name === current ? " on" : "")}

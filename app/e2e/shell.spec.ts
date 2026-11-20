@@ -20,7 +20,7 @@ test("catalogue: every shared part with when to use it, searchable, reached from
   await expect(entries).toContainText("Kbd");
 });
 
-test("left list: each project is one row that opens its coordinator, with what waits on you; its workers are beside the conversation", async ({ page }) => {
+test("left list: each project is one row that opens its coordinator, with what waits on you; its workers are in the project panel", async ({ page }) => {
   await open(page, "#/");
   const list = page.getByRole("navigation", { name: "Projects" });
   const quark = list.getByRole("region", { name: "Quark MVP" });
@@ -50,29 +50,29 @@ test("left list: each project is one row that opens its coordinator, with what w
   await expect(page).toHaveURL(/#\/p\/quark$/);
   await expect(coord).toHaveAttribute("aria-current", "page");
 
-  // The workers are in the right-hand pane, under Workers: unfinished ones only, each with its state.
-  const workers = page.getByRole("complementary", { name: "Since you looked" }).getByTestId("since-workers");
-  await expect(workers).toContainText("Workers");
-  await expect(workers.getByRole("link")).toHaveCount(unfinished);
-  await expect(workers).not.toContainText("Daemon skeleton");
-  for (const title of asking) {
-    await expect(workers.getByRole("link").filter({ hasText: title }).getByRole("img", { name: "Needs you" })).toBeVisible();
-  }
-  const busy = workers.getByRole("link").filter({ hasText: "Event stream: resync slow clients" });
-  await expect(busy.getByRole("img", { name: "Busy" })).toBeVisible();
+  // The workers are in the project panel's Work tab, grouped by state: what needs you first, finished ones last.
+  const work = page.getByTestId("project-panel").getByTestId("panel-work");
+  await expect(page.getByTestId("panel-tab-work")).toHaveAttribute("aria-selected", "true");
+  const unfinishedRows = work.locator('[data-testid^="work-group-"]:not([data-testid="work-group-done"]):not([data-testid="work-group-failed"])').getByTestId("work-row");
+  await expect(unfinishedRows).toHaveCount(unfinished);
+  for (const title of asking) await expect(work.getByTestId("work-group-needs_decision")).toContainText(title);
+  const busy = work.getByTestId("work-group-running").getByTestId("work-row").filter({ hasText: "Event stream: resync slow clients" });
+  await expect(busy).toBeVisible();
 
-  // Done work leaves the pane; a recent failure stays, with what went wrong.
+  // A failure shows with what went wrong.
   await list.getByRole("region", { name: "Website refresh" }).getByTestId("ll-coordinator").click();
   await expect(page).toHaveURL(/#\/p\/website$/);
-  const failed = workers.getByRole("link").filter({ hasText: "Changelog feed" });
-  await expect(failed.getByRole("img", { name: "Failed" })).toBeVisible();
+  const failed = work.getByTestId("work-group-failed").getByTestId("work-row").filter({ hasText: "Changelog feed" });
   await expect(failed).toContainText("Build failed: missing RSS dependency");
 
-  // A worker's row opens the worker.
+  // A worker's row opens it as a tab in the panel, beside the coordinator, still under the project's tabs.
   await coord.click();
   await busy.click();
   await expect(page).toHaveURL(/#\/t\//);
-  await expect(page.locator(".worker-center").getByTestId("terminal")).toBeVisible();
+  await expect(page.getByTestId("coordinator-chat")).toBeVisible();
+  await expect(page.getByTestId("project-panel").getByTestId("terminal")).toBeVisible();
+  await expect(page.getByTestId("project-panel").getByTestId("panel-worker-tab")).toContainText("Event stream: resync slow clients");
+  await expect(page.getByTestId("nav-conversation")).toHaveAttribute("aria-current", "page");
 });
 
 test("next attention: one button and Ctrl+J walk what waits on you, oldest first", async ({ page }) => {
@@ -107,7 +107,7 @@ test("next attention: one button and Ctrl+J walk what waits on you, oldest first
   expect(seen.some((h) => h.startsWith("#/t/"))).toBe(true);
 });
 
-test("dock: Ctrl+K asks the coordinator, and on a worker the worker's own box switches to it", async ({ page }) => {
+test("dock: Ctrl+K asks the coordinator, and beside a worker its box is about that worker", async ({ page }) => {
   await open(page, "#/p/quark");
   await expect(page.getByTestId("coordinator-chat")).toBeVisible();
   // The coordinator's own conversation has no dock; Ctrl+K goes to its message box.
@@ -118,39 +118,47 @@ test("dock: Ctrl+K asks the coordinator, and on a worker the worker's own box sw
   // A pull request's page has the dock, about that pull request.
   await open(page, "#/p/quark/prs");
   await expect(page.getByTestId("dock")).toBeVisible();
-  // Workers are reached from the project's Conversation, under Workers in the right-hand pane.
+  // Workers open from the project panel's Work tab, beside the coordinator.
   await open(page, "#/p/quark");
-  await page.getByRole("complementary", { name: "Since you looked" }).getByTestId("since-workers").getByRole("link").filter({ hasText: "Terminal sessions over tmux" }).click();
+  await page.getByTestId("panel-work").getByTestId("work-row").filter({ hasText: "Terminal sessions over tmux" }).click();
   await expect(page.getByTestId("worker-composer").getByRole("textbox", { name: "Message the worker" })).toBeVisible();
-  // On a worker, its one message box takes Ctrl+K: no second box.
+  // No dock: the coordinator's own box is beside the worker, and Ctrl+K goes to it.
   await expect(page.getByTestId("dock")).toHaveCount(0);
   await page.keyboard.press("Control+k");
-  const box = page.getByTestId("worker-composer").getByRole("textbox", { name: "Message the coordinator" });
+  const chat = page.getByTestId("coordinator-chat");
+  const box = chat.getByRole("textbox", { name: "Message the coordinator" });
   await expect(box).toBeFocused();
+  await expect(box).toHaveAttribute("placeholder", "Ask the coordinator about this worker");
+  await expect(chat.getByTestId("coordinator-about")).toContainText("About Terminal sessions over tmux control mode");
   await box.fill("Is control mode lossy under load?");
   await box.press("Enter");
-  await expect(page.getByTestId("worker-composer").getByRole("status")).toContainText("Sent to the coordinator");
 
-  // The coordinator records the message shortly after it is accepted.
+  // The coordinator records the message, about the open worker.
   await expect.poll(async () => JSON.stringify(await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/coordinators/quark/messages")).json())))
     .toContain('About \\"Terminal sessions over tmux control mode\\" (#/t/');
   await expect.poll(async () => JSON.stringify(await page.evaluate(async () => (await fetch("http://127.0.0.1:7392/v1/coordinators/quark/messages")).json())))
     .toContain("Is control mode lossy under load?");
 
-  await page.getByTestId("worker-composer").getByRole("link", { name: "See the conversation" }).click();
-  await expect(page).toHaveURL(/#\/p\/quark$/);
+  // The chip turns off for a message that is not about the worker.
+  await chat.getByTestId("coordinator-about").click();
+  await expect(box).toHaveAttribute("placeholder", "Ask the coordinator to plan, start or check work");
 });
 
 test("routes: project tabs, one Settings page, All projects home, and old links still open", async ({ page }) => {
-  // The project opens on its Conversation: the coordinator in the middle, what changed and what needs you beside it.
+  // The project opens on its Agents tab: the coordinator in the middle, the project panel beside it.
   await open(page, "#/p/quark");
   const tabs = page.getByRole("navigation", { name: "Project", exact: true });
-  await expect(tabs.getByRole("link")).toHaveText(["Conversation", "Overview", "Work", "Issues", "Pull requests", /^Decisions/, /^Memory/, "Metrics"]);
-  await expect(tabs.getByRole("link", { name: "Conversation" })).toHaveAttribute("aria-current", "page");
+  await expect(tabs.getByRole("link")).toHaveText(["Agents", "Overview", "Work", "Issues", "Pull requests", /^Decisions/, /^Memory/, "Metrics"]);
+  await expect(tabs.getByRole("link", { name: "Agents" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("coordinator-chat")).toBeVisible();
-  const since = page.getByRole("complementary", { name: "Since you looked" });
-  await expect(since).toContainText("Needs you");
-  await expect(since).toContainText("Open PRs");
+  const panel = page.getByTestId("project-panel");
+  await expect(panel.getByRole("tab")).toHaveText(["Work", /^Needs you/, /^PRs/, "Activity"]);
+  await page.getByTestId("panel-tab-needs").click();
+  await expect(panel.getByTestId("panel-needs")).toBeVisible();
+  await page.getByTestId("panel-tab-prs").click();
+  await expect(panel.getByTestId("panel-prs")).toContainText("Open PRs");
+  await page.getByTestId("panel-tab-activity").click();
+  await expect(panel.getByTestId("since-you-looked")).toBeVisible();
 
   // Work is the board; Decisions lists the project's decisions; Issues lists its Beads issues.
   await tabs.getByRole("link", { name: "Work" }).click();
@@ -174,7 +182,7 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   // Settings is one page; Dispatch and Automation are its sections, and their old links open there.
   await page.getByTestId("nav-settings").click();
   const sections = page.getByRole("navigation", { name: "Settings" });
-  await expect(sections.getByRole("link")).toHaveText([/Back to Conversation$/, "General", "Dispatch", "Automation"]);
+  await expect(sections.getByRole("link")).toHaveText([/Back to Agents$/, "General", "Dispatch", "Automation"]);
   await open(page, "#/p/quark/dispatch");
   await expect(page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: "Dispatch" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("nav-settings")).toHaveAttribute("aria-current", "page");
@@ -189,38 +197,52 @@ test("routes: project tabs, one Settings page, All projects home, and old links 
   await expect(page).toHaveURL(/#\/prs$/);
 });
 
-test("worker view: terminal in the middle, Transcript, Changes, PR, Brief and Why this agent in the work pane", async ({ page }) => {
+test("worker view: a tab in the project panel beside the coordinator, expanding to the full width", async ({ page }) => {
   await open(page, "#/p/quark/work");
   await page.getByTestId("task-card").filter({ hasText: "OpenAPI check in CI" }).click();
   await expect(page).toHaveURL(/#\/t\//);
 
-  // The center is the worker's live terminal and a box to message it; the work pane opens on its transcript.
-  await expect(page.locator(".worker-center").getByTestId("terminal")).toBeVisible();
-  await expect(page.locator(".worker-center").getByLabel("Message the worker")).toBeVisible();
-  // One message box under the worker's terminal, not under the work pane, and no separate dock.
-  await expect(page.locator(".worker-center").getByTestId("worker-composer")).toBeVisible();
+  // The worker opens in the Agents tab: the coordinator stays in the middle, the worker is a tab in the panel.
+  await expect(page.getByTestId("nav-conversation")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("coordinator-chat")).toBeVisible();
+  const panel = page.getByTestId("project-panel");
+  await expect(panel.getByTestId("panel-worker-tab")).toContainText("OpenAPI check in CI");
+  const view = panel.getByTestId("worker-view");
+  await expect(view.getByRole("tab")).toHaveText(["Terminal", "Transcript", "Changes", "PR", "Brief", "Why this agent"]);
+  await expect(view.getByTestId("terminal")).toBeVisible();
+  await expect(view.getByTestId("worker-composer")).toBeVisible();
   await expect(page.getByTestId("dock")).toHaveCount(0);
+  await view.getByRole("tab", { name: "Transcript" }).click();
+  await expect(view.getByTestId("transcript")).toBeVisible();
+  await expect(view.getByTestId("terminal")).toHaveCount(0);
+
+  // Expanded, it takes the full width: terminal and box in the middle, the other views in the work pane.
+  await view.getByTestId("worker-expand").click();
+  await expect(page.getByTestId("coordinator-chat")).toHaveCount(0);
+  await expect(page.locator(".worker-center").getByTestId("terminal")).toBeVisible();
+  await expect(page.locator(".worker-center").getByTestId("worker-composer")).toBeVisible();
   const pane = page.getByRole("complementary", { name: "Work" });
   await expect(pane.getByRole("tab")).toHaveText(["Transcript", "Changes", "PR", "Brief", "Why this agent"]);
-  await expect(pane.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");
-  await expect(pane.getByTestId("transcript")).toBeVisible();
-
-  // PR: the worker's PR in brief, opening its full view.
-  await pane.getByRole("tab", { name: "PR" }).click();
+  await pane.getByRole("tab", { name: "PR", exact: true }).click();
   await expect(pane.getByTestId("worker-pr")).toContainText("#2");
-  await expect(pane.getByTestId("transcript")).toBeHidden();
 
   // Why this agent links to the dispatch rules it was picked by.
   await pane.getByRole("tab", { name: "Why this agent" }).click();
-  const edit = pane.getByTestId("why-edit-rule").first();
-  await expect(edit).toBeVisible();
-  await edit.click();
-  await expect(page).toHaveURL(/#\/p\/quark\/dispatch$/);
+  await expect(pane.getByTestId("why-edit-rule").first()).toBeVisible();
+
+  // Back beside the coordinator; closing the tab returns to the panel's lists.
+  await page.getByTestId("show-coordinator").click();
+  await expect(page.getByTestId("coordinator-chat")).toBeVisible();
+  await panel.getByTestId("panel-worker-close").click();
+  await expect(page).toHaveURL(/#\/p\/quark$/);
+  await expect(panel.getByTestId("panel-worker-tab")).toHaveCount(0);
+  await expect(panel.getByTestId("panel-work")).toBeVisible();
 });
 
 test("updates: each says what happened, which worker, and the detail in plain words", async ({ page, request }) => {
   await open(page, "#/p/quark");
   await expect(page.getByTestId("connection")).toContainText("connected");
+  await page.getByTestId("panel-tab-activity").click();
   const tasks = await (await request.get("http://127.0.0.1:7392/v1/projects/quark/tasks")).json();
   const ci = tasks.find((t: { title: string }) => t.title === "OpenAPI check in CI");
   await request.post("http://127.0.0.1:7392/mock/notice", {
@@ -241,6 +263,7 @@ test("coordinator commands: shown as a card the moment you ask, from a button or
   await open(page, "#/p/quark");
   const chat = page.getByTestId("coordinator-chat");
   const cards = chat.getByTestId("command-card");
+  await page.getByTestId("panel-tab-activity").click();
   await page.getByTestId("since-you-looked").getByTestId("command-catch_up").click();
   // The card shows at once, then stays as the recorded request with the coordinator's answer under it.
   await expect(cards.filter({ hasText: "Catch up" }).first()).toBeVisible();
