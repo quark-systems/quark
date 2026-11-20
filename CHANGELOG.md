@@ -6,15 +6,6 @@ quarkd upgrades an older home on its first start (see
 [Upgrading](docs/getting-started/build-from-source.md#upgrading)). Each release's GitHub
 page lists every merged pull request.
 
-## Unreleased
-
-### Added
-
-- Kiro CLI can run a project's coordinator. Pick **Kiro CLI** as the project's agent in
-  Settings. Quark writes a `quark-coordinator` agent into the coordinator's workspace with
-  Quark's tools and turn end, and leaves `~/.kiro` alone. Kiro's own compaction manages the
-  coordinator's context, since Kiro records no token counts.
-
 ## 0.3.0
 
 ### Install
@@ -24,6 +15,10 @@ Quark to Applications.
 
 ### Added
 
+- Kiro CLI can run a project's coordinator. Pick **Kiro CLI** as the project's agent in
+  Settings. Quark writes a `quark-coordinator` agent into the coordinator's workspace with
+  Quark's tools and turn end, and leaves `~/.kiro` alone. Kiro's own compaction manages the
+  coordinator's context, since Kiro records no token counts.
 - App-wide dispatch rules. **Dispatch** in the app menu sets the rules every project follows
   until it saves its own, and new projects start that way. Until they are saved, Quark ships
   Trivial, Standard, Complex and Scout tiers plus a default, with candidates taken from the
@@ -50,6 +45,9 @@ Quark to Applications.
 
 ### Fixed
 
+- A coordinator's message shows once in the chat. Its reply already showed there, and
+  `tell_user` added a second copy; `tell_user` is retired, and a session that still calls it is
+  told to say it in its reply instead.
 - A pull request the coordinator opened from its own shell is tracked: it shows in the PR
   center, and its merge wakes the coordinator instead of leaving it waiting on you.
 - A merge counts as landed only once it reaches the default branch. A pull request stacked on
