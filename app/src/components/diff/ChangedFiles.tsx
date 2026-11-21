@@ -101,22 +101,22 @@ export function ChangedFiles({ files, viewedKey, conflicts, comments, onComment,
   );
 
   const toggle = (
-    <button type="button" className="dv-icon" onClick={toggleTree} aria-pressed={treeOpen} data-testid="file-tree-toggle"
+    <button type="button" className="ft-filter-btn" onClick={toggleTree} aria-expanded={treeOpen} data-testid="file-tree-toggle"
       title={treeOpen ? "Hide the file tree" : "Show the file tree"} aria-label={treeOpen ? "Hide the file tree" : "Show the file tree"}>
-      <TreeIcon />
+      <TreeIcon open={treeOpen} />
     </button>
   );
 
   return (
     <div className={"cf" + (treeOpen ? " with-tree" : "")}>
-      {treeOpen && <FileTree files={shown} active={active} onOpen={jump} conflicts={conflicts} filterMenu={filterMenu} />}
+      {treeOpen && <FileTree files={shown} active={active} onOpen={jump} conflicts={conflicts} filterMenu={filterMenu} lead={toggle} />}
       <div className="diff-body" ref={scroller} data-testid="pr-diff-scroll">
         {children}
         {shown.length > 0
           ? <DiffView files={shown} comments={comments} onComment={onComment} focus={focus} source={source}
-            lead={<>{toggle}{!treeOpen && filterMenu}</>} viewed={viewed} conflicts={conflicts} />
+            lead={treeOpen ? undefined : <>{toggle}{filterMenu}</>} viewed={viewed} conflicts={conflicts} />
           : <>
-            <div className="dv-bar">{toggle}{!treeOpen && filterMenu}</div>
+            {!treeOpen && <div className="dv-bar">{toggle}{filterMenu}</div>}
             <div className="empty">No files match the filter.</div>
           </>}
       </div>
@@ -125,9 +125,11 @@ export function ChangedFiles({ files, viewedKey, conflicts, comments, onComment,
 }
 
 /** The tree: a filter box, then folders and files. Arrow keys move, Left and Right fold, Enter opens. */
-export function FileTree({ files, active, onOpen, conflicts, filterMenu }: {
+export function FileTree({ files, active, onOpen, conflicts, filterMenu, lead }: {
   files: DiffFile[]; active: string | null; onOpen: (path: string) => void;
   conflicts?: ReadonlySet<string>; filterMenu?: React.ReactNode;
+  /** Leads the head (the button that hides the tree). */
+  lead?: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
@@ -189,6 +191,7 @@ export function FileTree({ files, active, onOpen, conflicts, filterMenu }: {
   return (
     <aside className="ft" aria-label="Changed files" data-testid="file-tree">
       <div className="ft-head">
+        {lead}
         <div className="ft-search">
           <SearchIcon />
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter files…"
@@ -265,6 +268,8 @@ function SearchIcon() {
 function FilterIcon() {
   return <svg {...svg} width={14} height={14}><path d="M2 4h12M4.5 8h7M7 12h2" /></svg>;
 }
-function TreeIcon() {
-  return <svg {...svg} width={14} height={14}><rect x="1.75" y="2.25" width="12.5" height="11.5" rx="2" /><path d="M6 2.25v11.5" /></svg>;
+/** A sidebar with an arrow: pointing in to hide the tree, out to show it. */
+function TreeIcon({ open }: { open: boolean }) {
+  return <svg {...svg}><rect x="1.75" y="2.25" width="12.5" height="11.5" rx="2" /><path d="M6 2.25v11.5" />
+    <path d={open ? "M10.75 6 8.75 8l2 2" : "M8.75 6l2 2-2 2"} /></svg>;
 }
