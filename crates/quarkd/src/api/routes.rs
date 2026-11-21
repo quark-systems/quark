@@ -369,7 +369,14 @@ pub async fn send_task_message(
         return Err(ApiError::invalid("text is empty"));
     }
     let (ws, task) = engine_target(&state, id).await?;
-    state.engine.send_message(&ws, &task, &input.text).await?;
+    if input.interrupt {
+        state
+            .engine
+            .send_message_now(&ws, &task, &input.text)
+            .await?;
+    } else {
+        state.engine.send_message(&ws, &task, &input.text).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

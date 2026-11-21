@@ -34,6 +34,10 @@ const BATCH: usize = 512;
 /// that never clears cannot be driven forever.
 const MAX_DIALOG_KEYS: usize = 12;
 
+/// Longest [`Supervisor::steer_now`] waits for an interrupted worker's
+/// composer before typing the message anyway.
+pub const STEER_NOW_WAIT: Duration = Duration::from_secs(10);
+
 /// The worker signal an agent's start-up hook sends once its input is live.
 const READY: &str = "ready";
 
@@ -710,7 +714,8 @@ impl Supervisor {
         } else {
             Seq::ZERO
         };
-        self.wait_ready(session, manifest).await;
+        self.wait_ready(session, manifest, self.config.ready_timeout)
+            .await;
         self.sessions.input(session, &launch::paste(brief)).await?;
         if let Some(ms) = manifest.launch.enter_again_ms {
             tokio::time::sleep(Duration::from_millis(ms)).await;
@@ -729,7 +734,8 @@ impl Supervisor {
             return Ok(());
         }
         tracing::warn!(%task, %generation, harness = %manifest.id, "brief looks lost; typing it again");
-        self.wait_ready(session, manifest).await;
+        self.wait_ready(session, manifest, self.config.ready_timeout)
+            .await;
         self.sessions.input(session, &launch::paste(brief)).await?;
         if !self.heard_from(task, generation, &mut after, wait).await? {
             tracing::warn!(%task, %generation, harness = %manifest.id, "still no busy signal after typing the brief again");
@@ -791,8 +797,8 @@ impl Supervisor {
     /// is not a live composer, and a brief pasted into it is lost.
     /// Start-up questions the manifest lists (`launch.dialogs`) are answered
     /// first, and the screen never counts as ready while one shows.
-    async fn wait_ready(&self, session: &SessionId, manifest: &HarnessManifest) {
-        let deadline = Instant::now() + self.config.ready_timeout;
+    async fn wait_ready(&self, session: &SessionId, manifest: &HarnessManifest, wait: Duration) {
+        let deadline = Instant::now() + wait;
         let mut last: Option<(u64, Instant)> = None;
         let mut idle_since: Option<Instant> = None;
         let mut keys = 0;
@@ -870,6 +876,56 @@ impl Supervisor {
         .await?;
         self.deliver(project, task).await?;
         Ok(id)
+    }
+
+    /// Stop the worker's current turn and send `text` as its next prompt.
+    ///
+    /// A harness hands a message typed while it works to the agent only at
+    /// a safe point (Claude Code and Codex at the next model call, Kiro CLI
+    /// after the running tool finishes), so a steer can wait for minutes
+    /// behind a long command. This presses the harness's interrupt keys
+    /// first, which cancels that command, waits up to [`STEER_NOW_WAIT`]
+    /// for the composer, then steers as usual. A worker with a prompt on
+    /// its screen is not interrupted: the message waits for the prompt, as
+    /// any steer does. Returns the message id.
+    pub async fn steer_now(
+        &self,
+        project: &ProjectId,
+        task: &TaskId,
+        text: &str,
+    ) -> Result<String> {
+        if text.trim().is_empty() {
+            return Err(CoreError::Invalid("message is empty".into()));
+        }
+        let key = (project.clone(), task.clone());
+        let ready = {
+            let _guard = self.lock(&key).await;
+            self.refresh().await?;
+            self.worker(project, task)?;
+            match self.live(project, task) {
+                Ok(g) if !self.prompt_on_screen(&key, &g.id) => {
+                    match self.manifests.resolve(&g.harness) {
+                        Some(m) => {
+                            for k in &m.keys.interrupt {
+                                self.sessions
+                                    .input(&g.session, &launch::key_bytes(k)?)
+                                    .await?;
+                            }
+                            Some((g.session.clone(), m))
+                        }
+                        None => None,
+                    }
+                }
+                _ => None,
+            }
+        };
+        if let Some((session, manifest)) = ready {
+            // Let the harness unwind the turn before the message is typed,
+            // so it arrives as a prompt rather than as another steer.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            self.wait_ready(&session, manifest, STEER_NOW_WAIT).await;
+        }
+        self.steer(project, task, text).await
     }
 
     /// Answer the task's open decision `key` and tell the worker.

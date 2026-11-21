@@ -81,6 +81,37 @@ async fn spawn_steer_decide_and_ship() {
 }
 
 #[tokio::test]
+async fn steer_now_interrupts_the_turn_then_sends_the_message() {
+    let env = Env::new();
+    let pty = Arc::new(PtySupervisor::new());
+    let sup = env.supervisor(pty.clone()).await;
+    let (p, t) = ids("t1");
+    let mut req = env.request("t1");
+    req.assignment.harness = "esc".into();
+    let g = sup.spawn(req).await.unwrap().current.unwrap();
+    eventually("the brief", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "Fix the parser.")
+    })
+    .await;
+
+    sup.steer_now(&p, &t, "stop and rebase").await.unwrap();
+    eventually("the message", async || {
+        received(&env, "t1", &g.id)
+            .iter()
+            .any(|l| l == "stop and rebase")
+    })
+    .await;
+    let lines = received(&env, "t1", &g.id);
+    let at = lines.iter().position(|l| l == "stop and rebase").unwrap();
+    assert_eq!(lines[at - 1], "<interrupt>", "{lines:?}");
+    let (_, worker) = sup.task(&p, &t).unwrap();
+    assert!(worker.undelivered().next().is_none());
+    assert_eq!(worker.current.unwrap().id, g.id, "the worker keeps running");
+}
+
+#[tokio::test]
 async fn daemon_crash_adopts_the_running_worker() {
     let env = Env::new();
     // The PTY supervisor stands in for quark-ptyd: it outlives the daemon.

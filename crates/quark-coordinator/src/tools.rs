@@ -70,7 +70,13 @@ pub enum ToolCall {
         rule: Option<String>,
     },
     /// Send a running worker a message.
-    Steer { task: TaskId, text: String },
+    Steer {
+        task: TaskId,
+        text: String,
+        /// Interrupt the worker's turn first, so the message is read now.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        interrupt: bool,
+    },
     /// Answer a worker's question.
     Answer {
         task: TaskId,
@@ -260,7 +266,7 @@ impl ToolCall {
                     None => Ok(()),
                 }
             }
-            ToolCall::Steer { task, text } => {
+            ToolCall::Steer { task, text, .. } => {
                 blank("task", task.as_str())?;
                 blank("text", text)
             }
@@ -403,9 +409,13 @@ pub fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "steer",
-            description: "Send a running worker a message. It is delivered even if the worker is replaced, and waits while a prompt is on the worker's screen (typed text would answer it). `task` shows whether the worker reacted; one that leaves a steer unanswered may be stuck: read its screen with `screen`, or relaunch it.",
+            description: "Send a running worker a message. It is delivered even if the worker is replaced, and waits while a prompt is on the worker's screen (typed text would answer it). A worker reads a message sent while it works only at its next safe point, after the command it is running finishes, which can take minutes; set `interrupt` when the message must change what it is doing now. `task` shows whether the worker reacted; one that leaves a steer unanswered may be stuck: read its screen with `screen`, or relaunch it.",
             input_schema: object(
-                json!({"task": text("Task id."), "text": text("The message.")}),
+                json!({
+                    "task": text("Task id."),
+                    "text": text("The message."),
+                    "interrupt": {"type": "boolean", "description": "Stop the worker's current turn first (its running command is cancelled), so it reads the message now as its next prompt. Only when waiting for the command to finish would waste it or do harm."}
+                }),
                 &["task", "text"],
             ),
         },

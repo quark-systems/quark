@@ -22,12 +22,16 @@ use quark_harness::ManifestRegistry;
 use quark_supervisor::{Assignment, Config, SpawnRequest, Supervisor};
 
 /// A fake agent: prints a prompt, logs its arguments and every line it
-/// reads next to its status file, and acts on a few words.
+/// reads next to its status file, and acts on a few words. A line that
+/// starts with a bare Escape before a paste (an interrupt, then a message)
+/// is logged as `<interrupt>` first.
 const AGENT: &str = r#"#!/bin/sh
 dir=$(dirname "$QUARK_STATUS_FILE")
 echo "args: $*" >> "$dir/received"
 echo "fake agent ready"
+esc=$(printf '\033')
 while IFS= read -r line; do
+  case "$line" in "$esc$esc"*) echo "<interrupt>" >> "$dir/received" ;; esac
   clean=$(printf '%s' "$line" | tr -d '\033\r' | sed 's/\[20[01]~//g')
   printf '%s\n' "$clean" >> "$dir/received"
   case "$clean" in
@@ -63,7 +67,7 @@ impl Env {
         git(&repo, &["commit", "-qm", "init"]);
         let agent = dir.path().join("agent.sh");
         std::fs::write(&agent, AGENT).unwrap();
-        let manifest = |id: &str, efforts: &str| {
+        let manifest = |id: &str, efforts: &str, interrupt: &str| {
             quark_harness::parse(&format!(
                 r#"
 schema = 1
@@ -81,7 +85,7 @@ busy = "none"
 turn_end = "none"
 idle_patterns = ["fake agent ready"]
 [keys]
-interrupt = ["C-c"]
+interrupt = ["{interrupt}"]
 exit = "/exit"
 "#,
                 agent = agent.display()
@@ -91,9 +95,11 @@ exit = "/exit"
         let worktrees = Arc::new(GitWorktrees::new(dir.path().join("pool")));
         Self {
             manifests: Arc::new(ManifestRegistry::with([
-                manifest("fake", r#"["low", "high"]"#),
+                manifest("fake", r#"["low", "high"]"#, "C-c"),
                 // Like Bob: no model or effort to choose.
-                manifest("plain", "[]"),
+                manifest("plain", "[]", "C-c"),
+                // Like Kiro: Escape interrupts a turn and leaves it running.
+                manifest("esc", r#"["low", "high"]"#, "Escape"),
             ])),
             dir,
             repo,
