@@ -569,6 +569,7 @@ body.resizing iframe, body.resizing .xterm { pointer-events: none; }
 .pr-detail { display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
 .pr-diff { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .pr-diff .diff-body { flex: 1; }
+.pr-files { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .diff-hint { margin-bottom: 8px; }
 .check-list, .review-list { padding: 4px 0 8px; }
 .check-row { display: flex; align-items: center; gap: 8px; padding: 3px 12px; font-size: 12px; }

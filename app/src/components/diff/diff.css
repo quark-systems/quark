@@ -74,3 +74,43 @@ tr.comment-row td { white-space: normal; padding: 6px 10px; background: var(--bg
 .dv-image-open { display: block; max-width: 100%; padding: 0; border: 0; border-radius: 2px; background: none; cursor: zoom-in; }
 .dv-image-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 760px) { .dv-images.both { grid-template-columns: minmax(0, 1fr); } }
+
+/* A file's flags and its Viewed box, as on GitHub. */
+.dv-flag { flex: none; padding: 1px 7px; border-radius: 999px; font: 500 11px var(--sans); color: var(--fg-dim); background: var(--selection-subtle); border: 1px solid var(--line); white-space: nowrap; }
+.dv-flag.conflict { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+.dv-viewed { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 6px; color: var(--fg-dim); font: 12px var(--sans); cursor: pointer; user-select: none; }
+.dv-viewed:hover { color: var(--fg); background: var(--selection-subtle); }
+.dv-viewed.on { color: var(--fg); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); }
+.dv-viewed input { margin: 0; accent-color: var(--accent); }
+
+/* The changed-files tree beside the diff (GitHub's "Files changed" tree). */
+.cf { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.cf.with-tree { grid-template-columns: 264px minmax(0, 1fr); }
+.cf > .diff-body { min-height: 0; min-width: 0; }
+.ft { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--bg-1); }
+.ft-head { flex: none; display: flex; gap: 6px; padding: 10px 8px 8px 10px; }
+.ft-search { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; }
+.ft-search-icon { position: absolute; left: 8px; color: var(--fg-faint); pointer-events: none; }
+.ft-search input { width: 100%; min-width: 0; height: 28px; padding: 0 8px 0 27px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); color: var(--fg); font: 12.5px var(--sans); outline: none; }
+.ft-search input::placeholder { color: var(--fg-faint); }
+.ft-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ft-filter-btn { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); color: var(--fg-dim); cursor: pointer; }
+.ft-filter-btn:hover, .ft-filter-btn[data-state="open"] { color: var(--fg); background: var(--selection); }
+.ft-filter-btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line-2)); }
+.ft-filter-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ft-list { flex: 1; min-height: 0; overflow: auto; padding: 0 6px 16px; }
+.ft-row { position: relative; display: flex; align-items: center; gap: 5px; min-height: 26px; padding-right: 6px; border-radius: 6px; color: var(--fg); font: 12.5px var(--sans); cursor: pointer; user-select: none; white-space: nowrap; }
+.ft-row:hover { background: var(--selection-subtle); }
+.ft-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ft-row.current { background: var(--selection); font-weight: 600; }
+.ft-row.current::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 2px; border-radius: 2px; background: var(--accent); }
+.ft-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ft-chev, .ft-chev-space { flex: none; width: 12px; color: var(--fg-faint); transition: transform var(--motion-feedback-duration) var(--motion-ease-out); }
+.ft-chev.open { transform: rotate(90deg); }
+.ft-folder { flex: none; color: var(--fg-dim); }
+.ft-status { flex: none; }
+.ft-status.st-added { color: var(--green); } .ft-status.st-deleted { color: var(--red); }
+.ft-status.st-modified { color: var(--yellow); } .ft-status.st-renamed { color: var(--blue); }
+.ft-status.st-conflicted { color: var(--red); }
+.ft-empty { padding: 8px 10px; color: var(--fg-faint); font: 12px var(--sans); }
+@media (prefers-reduced-motion: reduce) { .ft-chev { transition: none; } }
