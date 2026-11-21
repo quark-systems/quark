@@ -653,8 +653,7 @@ mod tests {
 
     fn stub(dir: &Path, name: &str, body: &str) -> String {
         let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        crate::local::support::write_script(&p, format!("#!/bin/sh\n{body}\n"));
         p.to_string_lossy().into_owned()
     }
 

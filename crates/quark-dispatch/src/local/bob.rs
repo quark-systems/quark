@@ -1585,7 +1585,7 @@ mod tests {
     #[cfg(unix)]
     fn api_curl(dir: &Path) -> PathBuf {
         let curl = dir.join("curl");
-        std::fs::write(
+        crate::local::support::write_script(
             &curl,
             r#"#!/bin/sh
 cat > "$0.stdin"
@@ -1597,10 +1597,7 @@ case "$url" in
   *) printf 'nope\n404' ;;
 esac
 "#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&curl, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        );
         curl
     }
 

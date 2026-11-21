@@ -370,16 +370,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let agy = tmp.path().join("agy");
         // Fails when the stand-in `open` is not first on PATH.
-        std::fs::write(
+        crate::local::support::write_script(
             &agy,
             format!(
                 "#!/bin/sh\nopen && exit 3\nprintf 'Loading...\\n%s\\n' '{}'\n",
                 sample()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&agy, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        );
         let r = AgyUsage {
             agy: agy.to_string_lossy().into_owned(),
             cache: Cache::none(),
