@@ -14519,6 +14519,10 @@
           "text"
         ],
         "properties": {
+          "interrupt": {
+            "type": "boolean",
+            "description": "Interrupt the worker's current turn first, so the message is read\nnow instead of when its running command finishes. The interrupted\ncommand is cancelled."
+          },
           "text": {
             "type": "string",
             "description": "Plain text for the worker to read; may span several lines."

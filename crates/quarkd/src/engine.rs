@@ -334,6 +334,18 @@ pub trait EngineAdapter: Send + Sync {
         text: &str,
     ) -> Result<(), EngineError>;
 
+    /// Interrupt the worker's current turn, then deliver `text` as its next
+    /// prompt, for a message that must not wait for the running command
+    /// to finish. Engines that cannot interrupt deliver it as a steer.
+    async fn send_message_now(
+        &self,
+        ws: &WorkspaceRef,
+        task_id: &str,
+        text: &str,
+    ) -> Result<(), EngineError> {
+        self.send_message(ws, task_id, text).await
+    }
+
     /// The steering messages sent to a task's worker, oldest first, with
     /// whether the worker acknowledged each. Empty when the engine does not
     /// track them.

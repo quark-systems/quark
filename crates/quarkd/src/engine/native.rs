@@ -325,6 +325,19 @@ impl EngineAdapter for NativeEngine {
             .map_err(engine_error)
     }
 
+    async fn send_message_now(
+        &self,
+        ws: &WorkspaceRef,
+        task: &str,
+        text: &str,
+    ) -> Result<(), EngineError> {
+        self.supervisor
+            .steer_now(&project(ws), &task_id(task)?, text)
+            .await
+            .map(drop)
+            .map_err(engine_error)
+    }
+
     async fn messages(
         &self,
         ws: &WorkspaceRef,

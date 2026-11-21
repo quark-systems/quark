@@ -119,6 +119,11 @@ pub struct Task {
 pub struct SendTaskMessage {
     /// Plain text for the worker to read; may span several lines.
     pub text: String,
+    /// Interrupt the worker's current turn first, so the message is read
+    /// now instead of when its running command finishes. The interrupted
+    /// command is cancelled.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interrupt: bool,
 }
 
 /// Where a steering message is.

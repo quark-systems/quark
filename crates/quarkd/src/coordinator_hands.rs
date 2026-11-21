@@ -464,7 +464,18 @@ impl Hands for EngineHands {
                 }
                 Ok(format!("{task}'s screen:\n```\n{screen}\n```"))
             }
-            ToolCall::Steer { task, text } => {
+            ToolCall::Steer {
+                task,
+                text,
+                interrupt,
+            } => {
+                if *interrupt {
+                    self.engine
+                        .send_message_now(&ws, task.as_str(), text)
+                        .await
+                        .map_err(core)?;
+                    return Ok(format!("Interrupted {task} and sent it the message."));
+                }
                 self.engine
                     .send_message(&ws, task.as_str(), text)
                     .await
@@ -743,6 +754,7 @@ mod tests {
                 &ToolCall::Steer {
                     task: t1.clone(),
                     text: "rebase first".into(),
+                    interrupt: false,
                 },
             )
             .await
