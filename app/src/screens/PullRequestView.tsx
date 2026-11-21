@@ -8,7 +8,8 @@ import { externalLink } from "../links";
 import { mergePullRequest, refreshPullRequest, useStore } from "../store";
 import { ago, errText } from "../util";
 import { DiffFile, parseUnifiedDiff } from "../components/diff/model";
-import { DiffFocus, DiffView, LineComment, OnComment } from "../components/diff/DiffView";
+import { DiffFocus, LineComment, OnComment } from "../components/diff/DiffView";
+import { ChangedFiles } from "../components/diff/ChangedFiles";
 import { DiffTarget, PrConversation } from "../components/PrConversation";
 import { FileSource } from "../components/diff/ImageDiff";
 import { StandingApproval } from "../components/StandingApproval";
@@ -172,6 +173,7 @@ function DiffPanel({ pr, comments, onComment, focus }: {
   const [truncated, setTruncated] = useState(false);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
+  const conflicts = undefined as ReadonlySet<string> | undefined;
 
   const source = useMemo<FileSource>(() => ({
     url: (path, side) => api.pullRequestFileUrl(pr.id, path, side),
@@ -195,13 +197,19 @@ function DiffPanel({ pr, comments, onComment, focus }: {
   }, [pr.id, pr.head_sha, pr.state]);
 
   if (status === "unavailable") return <Unavailable what="The PR diff" endpoint={`GET /v1/pull-requests/${pr.id}/diff`} />;
+  if (files && files.length > 0) return (
+    <div className="pr-files" data-testid="pr-diff">
+      <ChangedFiles files={files} viewedKey={pr.id} conflicts={conflicts} comments={comments} onComment={onComment} focus={focus} source={source}>
+        {truncated && <div className="state-note">This diff was cut at the daemon's size limit.</div>}
+        {onComment && <div className="faint small-text diff-hint">Click a line number to comment for the worker.</div>}
+      </ChangedFiles>
+    </div>
+  );
   return (
     <div className="diff-body" data-testid="pr-diff">
       {status === "error" && <div className="form-error">{err}</div>}
       {status === "loading" && <div className="empty">Loading the diff…</div>}
       {truncated && <div className="state-note">This diff was cut at the daemon's size limit.</div>}
-      {onComment && files && files.length > 0 && <div className="faint small-text diff-hint">Click a line number to comment for the worker.</div>}
-      {files && files.length > 0 && <DiffView files={files} comments={comments} onComment={onComment} focus={focus} source={source} />}
       {files && !files.length && <div className="empty">No textual changes.</div>}
     </div>
   );

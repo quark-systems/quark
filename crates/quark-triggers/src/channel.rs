@@ -419,13 +419,16 @@ mod tests {
             "#!/bin/sh\nprintf '%s\\n' '{\"id\":\"m1\",\"body\":\"disk alert\",\"from\":\"ops@example\"}' '' '{\"id\":\"m2\",\"body\":\"  \"}'\n",
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Run through sh rather than exec'd: a test forking on another thread can hold the
+        // script's write descriptor open for a moment, and exec then fails with ETXTBSY.
         let chans = dir.path().join("channels");
         std::fs::create_dir_all(&chans).unwrap();
         std::fs::write(
             chans.join("mail.json"),
-            format!(r#"{{"project":"p","argv":["{}"]}}"#, script.display()),
+            format!(
+                r#"{{"project":"p","argv":["/bin/sh","{}"]}}"#,
+                script.display()
+            ),
         )
         .unwrap();
         std::fs::write(chans.join("inbox.json"), r#"{"project":"p","argv":["x"]}"#).unwrap();

@@ -8,6 +8,7 @@ import { highlight, langForPath } from "../../markdown";
 import { anchorOf, CommentSide, DiffFile, DiffLine, fileKind, LARGE_FILE_LINES, markRange, splitPath, totals } from "./model";
 import { FileSource, ImageDiff } from "./ImageDiff";
 import { errText } from "../../util";
+import type { ViewedFiles } from "./viewed";
 import "./diff.css";
 
 export { anchorOf };
@@ -19,21 +20,29 @@ export type OnComment = (c: { path: string; line: number; side: CommentSide; bod
 export interface DiffFocus { path: string; line: number; side: CommentSide; n: number }
 
 /** Several files with a summary bar and expand/collapse all. */
-export function DiffView({ files, comments, onComment, focus, source }: {
+export function DiffView({ files, comments, onComment, focus, source, lead, viewed, conflicts }: {
   files: DiffFile[]; comments?: LineComment[]; onComment?: OnComment; focus?: DiffFocus | null;
   /** Where file bytes are served; with it, images show as pictures. */
   source?: FileSource;
+  /** Leads the summary bar (the file tree's toggle); the bar shows whenever it is given. */
+  lead?: React.ReactNode;
+  /** With it, each file has a Viewed box, as on GitHub, and the bar counts viewed files. */
+  viewed?: ViewedFiles;
+  /** Paths that conflict with the base branch. */
+  conflicts?: ReadonlySet<string>;
 }) {
   // Bumping `all` re-applies "everything open" or "everything closed" to each file.
   const [all, setAll] = useState<{ open: boolean; n: number } | null>(null);
   const t = useMemo(() => totals(files), [files]);
   return (
     <div className="dv" data-testid="diff-view">
-      {files.length > 1 && (
+      {(files.length > 1 || lead) && (
         <div className="dv-bar">
-          <span>{files.length} files</span>
+          {lead}
+          <span>{files.length} {files.length === 1 ? "file" : "files"}</span>
           <DiffCounts adds={t.adds} dels={t.dels} />
           <span className="spacer" />
+          {viewed && <span data-testid="viewed-count">{viewed.count} / {files.length} viewed</span>}
           <button className="dv-icon" title="Expand all files" aria-label="Expand all files"
             onClick={() => setAll({ open: true, n: (all?.n ?? 0) + 1 })}><Unfold /></button>
           <button className="dv-icon" title="Collapse all files" aria-label="Collapse all files"
@@ -42,19 +51,24 @@ export function DiffView({ files, comments, onComment, focus, source }: {
       )}
       {files.map((f, i) => (
         <FileDiff key={f.path + i} f={f} comments={comments} onComment={onComment} force={all}
-          focus={focus?.path === f.path ? focus : null} source={source} />
+          focus={focus?.path === f.path ? focus : null} source={source}
+          viewed={viewed?.isViewed(f.path)} changedSince={viewed?.changedSince(f.path)} onViewed={viewed?.set}
+          conflicted={conflicts?.has(f.path)} />
       ))}
     </div>
   );
 }
 
-export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, focus, source }: {
+export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, focus, source, viewed, changedSince, onViewed, conflicted }: {
   f: DiffFile; comments?: LineComment[]; onComment?: OnComment; force?: { open: boolean; n: number } | null;
   focus?: DiffFocus | null; source?: FileSource;
+  /** Marked viewed (starts collapsed); changed by a commit since it was; the Viewed box's handler. */
+  viewed?: boolean; changedSince?: boolean; onViewed?: (f: DiffFile, viewed: boolean) => void;
+  conflicted?: boolean;
 }) {
   const kind = source ? fileKind(f.path) : null;
   const large = f.lines.length > LARGE_FILE_LINES;
-  const [open, setOpen] = useState(!!kind || (!large && !f.binary));
+  const [open, setOpen] = useState(!viewed && (!!kind || (!large && !f.binary)));
   // An SVG shows as a picture; its markup is one click away.
   const [svgSource, setSvgSource] = useState(false);
   useEffect(() => { if (force) setOpen(force.open); }, [force]);
@@ -62,7 +76,7 @@ export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, 
   const { dir, base } = splitPath(f.path);
 
   return (
-    <div className={"dv-file" + (open ? " open" : "")} data-testid="diff-file">
+    <div className={"dv-file" + (open ? " open" : "")} data-testid="diff-file" data-path={f.path}>
       <div className="file-head">
         <button className="dv-toggle" aria-expanded={open} onClick={() => setOpen(!open)}
           title={open ? "Collapse file" : "Expand file"}>
@@ -71,7 +85,16 @@ export const FileDiff = memo(function FileDiff({ f, comments, onComment, force, 
           <span className="dv-path" title={f.path}><span className="dv-dir">{dir}</span><span className="dv-base">{base}</span></span>
           {f.status === "renamed" && f.oldPath && <span className="dv-from" title={f.oldPath}>from {f.oldPath}</span>}
         </button>
+        {conflicted && <span className="dv-flag conflict" title="This file conflicts with the base branch">Conflict</span>}
+        {changedSince && <span className="dv-flag" title="A commit changed this file after you marked it viewed">Changed since viewed</span>}
         {f.binary ? <span className="faint">{kind ? "image" : "binary"}</span> : <><DiffCounts adds={f.adds} dels={f.dels} /><DiffBar adds={f.adds} dels={f.dels} /></>}
+        {onViewed && (
+          <label className={"dv-viewed" + (viewed ? " on" : "")} title={viewed ? "Mark as not viewed" : "Mark as viewed and collapse"}>
+            <input type="checkbox" checked={!!viewed} data-testid="file-viewed"
+              onChange={(e) => { onViewed(f, e.target.checked); setOpen(!e.target.checked); }} />
+            Viewed
+          </label>
+        )}
       </div>
       {open && kind && source && (
         <>

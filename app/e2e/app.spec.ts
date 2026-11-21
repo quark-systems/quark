@@ -528,7 +528,7 @@ test("PR center: list by state, checks, line comment, merge, standing approval",
   // The PR opens on its description; a line comment goes to the worker with its path, line and side.
   await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "Diff" }).click();
-  await page.getByTestId("pr-diff").locator("tr.commentable td.ln").nth(1).click();
+  await page.getByTestId("pr-diff").getByTestId("diff-file").filter({ hasText: "quarkd/src/events.rs" }).locator("tr.commentable td.ln").nth(1).click();
   await page.getByLabel("Line comment").fill("Name this constant");
   await page.getByTestId("pr-diff").getByRole("button", { name: "Comment", exact: true }).click();
   await expect(page.getByTestId("line-comment")).toHaveText("Name this constant");
@@ -664,6 +664,75 @@ test("PR diff shows images: before and after for a changed one, and an added SVG
   // The daemon serves the SVG as an image, never as a page.
   const res = await page.evaluate(() => fetch("http://127.0.0.1:7392/v1/pull-requests/pr-1/files?path=docs/flow.svg&side=head").then((r) => r.headers.get("content-type")));
   expect(res).toBe("image/svg+xml");
+});
+
+test("PR diff has a changed-files tree: marks, joined folders, jump, scroll sync, filters and viewed", async ({ page }) => {
+  await open(page, "#/pr/pr-1");
+  await page.evaluate(() => localStorage.clear());
+  await page.getByRole("tab", { name: "Diff" }).click();
+  const tree = page.getByTestId("file-tree");
+  const rows = tree.getByTestId("file-tree-file");
+
+  // Only the changed files, each with its change; a folder with one folder in it is one row.
+  await expect(rows).toHaveCount(8);
+  await expect(rows.filter({ hasText: "openapi.old.json" })).toHaveAttribute("data-status", "deleted");
+  await expect(rows.filter({ hasText: "check-openapi.sh" })).toHaveAttribute("data-status", "renamed");
+  await expect(rows.filter({ hasText: "schema_check.rs" })).toHaveAttribute("data-status", "added");
+  await expect(rows.filter({ hasText: "events.rs" })).toHaveAttribute("data-status", "modified");
+  await expect(tree.getByRole("treeitem", { name: "ui/src/hooks" })).toBeVisible();
+  // The diff reads in the tree's order: folders first.
+  await expect(page.getByTestId("diff-file").first()).toContainText("api/openapi.old.json");
+  await expect(rows.first()).toHaveAttribute("aria-selected", "true");
+
+  // Picking a file scrolls the diff to it and marks it; scrolling back marks the file in view.
+  await rows.filter({ hasText: "useEvents.ts" }).click();
+  const target = page.getByTestId("diff-file").filter({ hasText: "ui/src/hooks/useEvents.ts" });
+  await expect(target.locator(".file-head")).toBeInViewport();
+  await expect(rows.filter({ hasText: "useEvents.ts" })).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("pr-diff-scroll").evaluate((el) => el.scrollTo({ top: 0 }));
+  await page.getByTestId("pr-diff-scroll").dispatchEvent("wheel");
+  await expect(rows.first()).toHaveAttribute("aria-selected", "true");
+
+  // Folders fold, by click and by keyboard.
+  await tree.getByRole("treeitem", { name: "crates/quarkd" }).click();
+  await expect(rows).toHaveCount(6);
+  await page.keyboard.press("ArrowRight");
+  await expect(rows).toHaveCount(8);
+
+  // The filter box narrows the tree only, opening every folder that holds a match.
+  await page.getByTestId("file-tree-filter").fill("openapi");
+  await expect(rows).toHaveCount(3);
+  await expect(tree.getByRole("treeitem", { name: "crates/quarkd/tests/openapi" })).toBeVisible();
+  await expect(page.getByTestId("diff-file")).toHaveCount(8);
+  await page.getByTestId("file-tree-filter").fill("");
+
+  // Viewed collapses a file, is counted, and can hide viewed files from the tree and the diff.
+  const first = page.getByTestId("diff-file").first();
+  await first.getByTestId("file-viewed").check();
+  await expect(first.locator("table.diff")).toHaveCount(0);
+  await expect(page.getByTestId("viewed-count")).toHaveText("1 / 8 viewed");
+  await page.getByTestId("file-filter-menu").click();
+  await page.getByTestId("filter-viewed").click();
+  await page.keyboard.press("Escape");
+  await expect(rows).toHaveCount(7);
+  await expect(page.getByTestId("diff-file")).toHaveCount(7);
+
+  // A file type can be hidden from both.
+  await page.getByTestId("file-filter-menu").click();
+  await page.getByRole("menuitemcheckbox", { name: /\.rs/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(rows).toHaveCount(5);
+  await expect(page.getByTestId("diff-file").filter({ hasText: "events.rs" })).toHaveCount(0);
+
+  // The tree hides and stays hidden.
+  await page.getByTestId("file-tree-toggle").click();
+  await expect(tree).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("tab", { name: "Diff" }).click();
+  await expect(page.getByTestId("diff-file").first()).toBeVisible();
+  await expect(page.getByTestId("file-tree")).toHaveCount(0);
+  // Viewed marks survive a reload.
+  await expect(page.getByTestId("viewed-count")).toHaveText("1 / 8 viewed");
 });
 
 test("PR diff: clicking an image opens a full-screen preview that zooms, pans and flips between before and after", async ({ page }) => {

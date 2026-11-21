@@ -7,11 +7,12 @@ import { cx } from "./cx";
 export interface MenuOption { value: string; label: string; icon?: React.ReactNode }
 export interface MenuAction { label: string; icon?: React.ReactNode; onSelect: () => void; detail?: React.ReactNode; testid?: string }
 /** A switch that stays in the menu: checked shows a tick, and picking it does not close the menu. */
-export interface MenuCheckbox { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void; icon?: React.ReactNode; testid?: string }
-/** One group of the menu: a choice from a set (shown with a check), a switch with any actions under it, or a list of actions. */
+export interface MenuCheckbox { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void; icon?: React.ReactNode; detail?: React.ReactNode; testid?: string }
+/** One group of the menu: a choice from a set (shown with a check), a switch with any actions under it, several switches, or a list of actions. */
 export type MenuGroup = { label?: string } & (
   | { value: string; options: MenuOption[]; onChange: (value: string) => void }
   | { checkbox: MenuCheckbox; actions?: MenuAction[] }
+  | { checkboxes: MenuCheckbox[] }
   | { actions: MenuAction[] }
 );
 
@@ -20,6 +21,18 @@ const ICON = "inline-flex w-4 shrink-0 justify-center text-dim";
 
 function Check() {
   return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>;
+}
+
+function checkboxItem(c: MenuCheckbox) {
+  return (
+    <DropdownMenu.CheckboxItem key={c.label} checked={c.checked} onCheckedChange={c.onCheckedChange}
+      className={ITEM} onSelect={(e) => e.preventDefault()} data-testid={c.testid}>
+      <span className={ICON}>{c.icon}</span>
+      <span className="flex-1">{c.label}</span>
+      {c.detail != null && <span className="text-s text-dim">{c.detail}</span>}
+      <span className="inline-flex w-3.5 justify-center"><DropdownMenu.ItemIndicator className="inline-flex text-fg"><Check /></DropdownMenu.ItemIndicator></span>
+    </DropdownMenu.CheckboxItem>
+  );
 }
 
 function item(a: MenuAction) {
@@ -62,14 +75,9 @@ export function Menu({ trigger, groups, align = "start", label }: {
                     ))}
                   </DropdownMenu.RadioGroup>
                 ) : "checkbox" in g ? (<>
-                  <DropdownMenu.CheckboxItem checked={g.checkbox.checked} onCheckedChange={g.checkbox.onCheckedChange}
-                    className={ITEM} onSelect={(e) => e.preventDefault()} data-testid={g.checkbox.testid}>
-                    <span className={ICON}>{g.checkbox.icon}</span>
-                    <span className="flex-1">{g.checkbox.label}</span>
-                    <DropdownMenu.ItemIndicator className="inline-flex text-fg"><Check /></DropdownMenu.ItemIndicator>
-                  </DropdownMenu.CheckboxItem>
+                  {checkboxItem(g.checkbox)}
                   {g.actions?.map(item)}
-                </>) : g.actions.map(item)}
+                </>) : "checkboxes" in g ? g.checkboxes.map(checkboxItem) : g.actions.map(item)}
               </DropdownMenu.Group>
             </React.Fragment>
           ))}

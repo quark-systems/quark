@@ -1126,6 +1126,11 @@ function seed() {
     "Binary files a/app/src-tauri/icons/32x32.png and b/app/src-tauri/icons/32x32.png differ\n" +
     "diff --git a/docs/flow.svg b/docs/flow.svg\nnew file mode 100644\nindex 0000000..9a8b7c6\n--- /dev/null\n+++ b/docs/flow.svg\n" +
     `@@ -0,0 +1,${DIAGRAM.length} @@\n` + DIAGRAM.map((l) => "+" + l).join("\n") + "\n";
+  // A renamed, a deleted and a deeply nested new file, so the changed-files tree shows every mark.
+  const TREE_DIFF = "diff --git a/scripts/check-openapi.sh b/scripts/ci/check-openapi.sh\nsimilarity index 92%\nrename from scripts/check-openapi.sh\nrename to scripts/ci/check-openapi.sh\n" +
+    "--- a/scripts/check-openapi.sh\n+++ b/scripts/ci/check-openapi.sh\n@@ -1,3 +1,3 @@\n #!/bin/sh\n-cargo run -p quarkd -- openapi > api/openapi.json\n+cargo run -q -p quarkd -- openapi > api/openapi.json\n git diff --exit-code api/openapi.json\n" +
+    "diff --git a/api/openapi.old.json b/api/openapi.old.json\ndeleted file mode 100644\nindex 3c4d5e6..0000000\n--- a/api/openapi.old.json\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-{\n-  \"openapi\": \"3.0.0\"\n-}\n" +
+    "diff --git a/crates/quarkd/tests/openapi/schema_check.rs b/crates/quarkd/tests/openapi/schema_check.rs\nnew file mode 100644\nindex 0000000..7e8f9a0\n--- /dev/null\n+++ b/crates/quarkd/tests/openapi/schema_check.rs\n@@ -0,0 +1,4 @@\n+#[test]\n+fn openapi_is_current() {\n+    assert!(quarkd::openapi::is_current());\n+}\n";
   const icons = path.join(here, "../src-tauri/icons");
   prFiles.set("pr-1", new Map([
     ["app/src-tauri/icons/32x32.png:base", fs.readFileSync(path.join(icons, "32x32.png"))],
@@ -1133,7 +1138,7 @@ function seed() {
     ["docs/flow.svg:head", Buffer.from(DIAGRAM.join("\n"))],
   ]));
   PR("pr-1", quark, inReview, {
-    number: 2, title: "OpenAPI check in CI", head_ref: "quark/openapi-check", base_ref: "main", diff: DIFFS[0] + IMAGES_DIFF,
+    number: 2, title: "OpenAPI check in CI", head_ref: "quark/openapi-check", base_ref: "main", diff: DIFFS[0] + IMAGES_DIFF + TREE_DIFF,
     body: "Fails CI when `api/openapi.json` is stale, so the app's types never drift from the daemon.",
     checks: [ok("CI / rust"), ok("CI / desktop-app")], updated_at: minutesAgo(40), evidence: evidence("pr-1", false),
   });
