@@ -761,7 +761,7 @@ fn inventory(
             "secrets",
             ".env",
             usize::from(plan.skipped.env_file),
-            "never read. Store a classifier key with `security add-generic-password` and Bob's BOBSHELL_API_KEY in quarkd's environment",
+            "never read. Store a classifier key with `security add-generic-password` and Bob's BOB_API_KEY in quarkd's environment",
         ),
     ] {
         v.push(item(cat, src, "", NotImported, n, why));

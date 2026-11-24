@@ -28,7 +28,9 @@ auth_env = ["BOBSHELL_API_KEY", "BOB_API_KEY"]
 auth_files = ["settings/auth-secrets.json"]
 auth_exhaustive = true
 # Extra accounts are API keys: Bob always keeps its login in ~/.bob.
-key_env = "BOBSHELL_API_KEY"
+# Bob reads both names but refuses to start when they are set to different
+# values, so Quark writes only the one Bob asks to be used from 2.1 on.
+key_env = "BOB_API_KEY"
 team_env = "BOB_TEAM_ID"
 
 [hooks]

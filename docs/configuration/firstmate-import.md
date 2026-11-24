@@ -35,4 +35,4 @@ The import opens files in the home and nothing else. It never runs firstmate's `
 
 ## Not imported
 
-`config/backend` and other session tuning (`startup-memory-budget`), `data/secondmates.md`, everything in `state/` that supervises running workers (watcher, lease, inbox, busy-state, turn-end files), `state/*.check.sh`, status logs with no backlog item, scratch directories in `data/`, and `.env`. The report counts each. For `.env`, store a classifier key with `security add-generic-password` and put Bob's `BOBSHELL_API_KEY` in quarkd's environment.
+`config/backend` and other session tuning (`startup-memory-budget`), `data/secondmates.md`, everything in `state/` that supervises running workers (watcher, lease, inbox, busy-state, turn-end files), `state/*.check.sh`, status logs with no backlog item, scratch directories in `data/`, and `.env`. The report counts each. For `.env`, store a classifier key with `security add-generic-password` and put Bob's `BOB_API_KEY` in quarkd's environment.
