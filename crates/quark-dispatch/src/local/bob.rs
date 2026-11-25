@@ -3,8 +3,8 @@
 //! Two sources, tried in order:
 //!
 //! 1. **Live API**, with the key the Bob account keeps in the Keychain, else
-//!    `BOBSHELL_API_KEY` in quarkd's own environment (the variable Bob itself
-//!    reads): `GET /admin/v1/profile` on `api.us-east.bob.ibm.com`, then each
+//!    `BOB_API_KEY` (or the older `BOBSHELL_API_KEY`) in quarkd's own
+//!    environment: `GET /admin/v1/profile` on `api.us-east.bob.ibm.com`, then each
 //!    team's `/admin/v1/teams/<team>/users/<user>` on its region, summing
 //!    `usage` and `budget_limit` across teams. The key reaches curl on
 //!    stdin as a config line, never on argv, and is never logged.
@@ -39,8 +39,19 @@ use tokio::io::AsyncWriteExt;
 use super::{epoch, selection, snapshot, tidy, utc_iso};
 
 pub const PROVIDER: &str = "bob";
-/// Bob's API key variable.
-pub const KEY_ENV: &str = "BOBSHELL_API_KEY";
+/// Bob's API key variable, the name Bob asks to be used from 2.1 on.
+pub const KEY_ENV: &str = "BOB_API_KEY";
+/// What Bob read before, still honoured for a daemon whose environment has
+/// it. Bob itself refuses to start when the two names disagree, so Quark
+/// sets only [`KEY_ENV`].
+pub const KEY_ENV_WAS: &str = "BOBSHELL_API_KEY";
+
+/// The key in this process's environment, under either name.
+fn key_from_env() -> Option<String> {
+    [KEY_ENV, KEY_ENV_WAS]
+        .into_iter()
+        .find_map(|v| std::env::var(v).ok().and_then(|k| clean_key(&k)))
+}
 const API_HOST: &str = "api.us-east.bob.ibm.com";
 const TRUSTED_SUFFIX: &str = ".bob.ibm.com";
 
@@ -183,15 +194,15 @@ impl BobUsage {
                 .unwrap_or_default(),
             curl: "curl".into(),
             api_timeout: Duration::from_secs(10),
-            api_key: std::env::var(KEY_ENV).ok().and_then(|k| clean_key(&k)),
+            api_key: key_from_env(),
             secrets: None,
         }
     }
 
     /// Sign the read in with the key kept for the Bob account in `secrets`
     /// under `service`, as the app stores it. Without one the environment's
-    /// [`KEY_ENV`] is used, so a daemon started with the variable set keeps
-    /// working.
+    /// key is used, under either name, so a daemon started with the variable
+    /// set keeps working.
     pub fn with_secrets(
         mut self,
         secrets: Arc<dyn quark_supervisor::Secrets>,
@@ -1630,7 +1641,7 @@ esac
     }
 
     /// The key the Bob account keeps signs the read in, so a daemon started
-    /// without BOBSHELL_API_KEY in its own environment still measures Bob.
+    /// without a Bob key in its own environment still measures Bob.
     #[cfg(unix)]
     #[tokio::test]
     async fn the_accounts_kept_key_signs_the_read_in() {

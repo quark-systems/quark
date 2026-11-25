@@ -76,5 +76,5 @@ Reached over the network rather than run as a program.
 | GitHub API | PRs, checks, merges (through `gh`), Beads sync to `refs/dolt/data` | `crates/quarkd/src/forge.rs`, `crates/quarkd/src/beads.rs` |
 | Anthropic OAuth usage API (`api.anthropic.com/api/oauth/usage`) | Claude Code's session and weekly windows, with Claude Code's own login | `crates/quark-dispatch/src/local/claude.rs` |
 | ChatGPT usage API (`chatgpt.com/backend-api/wham/usage`) | Codex's session and weekly windows, with Codex's (or Pi's) login | `crates/quark-dispatch/src/local/codex.rs` |
-| IBM Bob usage API | Bob's live coin usage; needs `BOBSHELL_API_KEY` in quarkd's environment | `crates/quark-dispatch/src/local/bob.rs` |
+| IBM Bob usage API | Bob's live coin usage; needs `BOB_API_KEY` (or the older `BOBSHELL_API_KEY`) in quarkd's environment | `crates/quark-dispatch/src/local/bob.rs` |
 | System One API or an Ollama server | The dispatch classifier, when configured in `~/.quark/config.yaml` | `crates/quark-dispatch/src/classify.rs` |
