@@ -377,7 +377,14 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                         events: events.clone(),
                         compactor: compactor.clone(),
                     },
-                );
+                )
+                .merge(coordinator_http::memory_router(
+                    c.tokens(),
+                    Arc::new(beads::WorkerMemory::new(
+                        std::env::var_os("QUARK_BD").map(Into::into),
+                        layout.home.clone(),
+                    )),
+                ));
                 (
                     Some(routes),
                     Some(tokio::spawn(c.run(config.refresh_interval))),
