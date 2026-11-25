@@ -17,6 +17,11 @@ page lists every merged pull request.
 
 ### Fixed
 
+- A coordinator with many memories now starts its session with all of them. Claude Code shows
+  only a short preview of a session-start hook's output over about 10 KB, so a Project with
+  about 20 memories reached its coordinator with only the first few. The coordinator now starts
+  with your standing rules in full and every other memory as one line, and reads the rest with
+  `bd recall`.
 - What a worker learned now reaches your memory review. A worker's `learned` report, from its
   status file, its MCP `learned` tool or its hook, was recorded as a plain note, so it never
   became a memory proposal and only the coordinator's own `remember` calls did. Learnings

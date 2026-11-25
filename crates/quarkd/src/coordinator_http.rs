@@ -145,6 +145,8 @@ pub struct CoordinatorUrls {
     pub mcp: String,
     /// Hook commands POST to `<hooks>/<event>`.
     pub hooks: String,
+    /// The session-start hook GETs the Project's memory here.
+    pub memory: String,
 }
 
 impl CoordinatorUrls {
@@ -154,6 +156,7 @@ impl CoordinatorUrls {
         Self {
             mcp: format!("{root}/mcp"),
             hooks: format!("{root}/hooks"),
+            memory: format!("{root}/memory"),
         }
     }
 }
@@ -228,6 +231,39 @@ fn routes(
         .route("/{project}/{token}/mcp", post(mcp))
         .route("/{project}/{token}/hooks/{event}", post(hook))
         .with_state(Arc::new(routes))
+}
+
+/// `GET /{project}/{token}/memory`: [`session_memory`] for the Project, as
+/// plain text, for its coordinator's session-start hook. Merge it into the
+/// routes nested under [`PREFIX`].
+pub fn memory_router(tokens: Tokens, memory: Arc<dyn quark_worker::ProjectMemory>) -> Router {
+    Router::new()
+        .route("/{project}/{token}/memory", axum::routing::get(memory_text))
+        .with_state((tokens, memory))
+}
+
+async fn memory_text(
+    State((tokens, memory)): State<(Tokens, Arc<dyn quark_worker::ProjectMemory>)>,
+    UrlPath((project, token)): UrlPath<(String, String)>,
+) -> Response {
+    if !tokens.check(&project, &token) {
+        return not_found();
+    }
+    match memory.memories(&ProjectId::new(project.clone())).await {
+        Ok(m) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            session_memory(&m),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!(%project, error = %e, "the coordinator's session starts without the Project's memory");
+            (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
+        }
+    }
 }
 
 fn not_found() -> Response {
@@ -720,13 +756,68 @@ fn newest_log(roots: &SessionRoots, cwd: &Path) -> Option<(PathBuf, SessionForma
         })
 }
 
-/// Marks Quark's `bd prime` hook, so a later pass replaces its own.
+/// Marks Quark's memory hook, so a later pass replaces its own (and the
+/// `bd prime` hook earlier versions installed).
 const PRIME_MARK: &str = "# quark:bd-prime";
 
-/// Injects the Project's Beads memories at session start. `BEADS_DIR` is in
-/// the coordinator's environment; without `bd`, or without a database yet,
+/// Injects the Project's memory at session start: what quarkd serves at
+/// [`memory`], which fits under the size a harness keeps from a hook's output
+/// (Claude Code shows only a 2 KB preview of more than about 10 KB, so a
+/// plain `bd prime` lost most memories of a large Project). Without quarkd
 /// it prints nothing.
-const PRIME_HOOK: &str = "bd prime --memories-only 2>/dev/null || true # quark:bd-prime";
+fn prime_hook(urls: &CoordinatorUrls) -> String {
+    format!(
+        "curl -fsS -m 10 '{}' 2>/dev/null || true {PRIME_MARK}",
+        urls.memory
+    )
+}
+
+/// Most bytes [`memory`] answers with.
+pub const MAX_SESSION_MEMORY_BYTES: usize = 8 * 1024;
+
+/// The Project's memory as a coordinator's session starts with it: the
+/// standing rules (`quark-rule-…`) in full, since the coordinator applies
+/// them on its own, then every other memory as its key and first line, with
+/// `bd recall` for the rest. At most [`MAX_SESSION_MEMORY_BYTES`].
+pub fn session_memory(memories: &std::collections::BTreeMap<String, String>) -> String {
+    if memories.is_empty() {
+        return String::new();
+    }
+    let (rules, rest): (
+        std::collections::BTreeMap<_, _>,
+        std::collections::BTreeMap<_, _>,
+    ) = memories
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .partition(|(k, _)| k.starts_with("quark-rule-"));
+    let mut out = format!("# Project memory ({})\n\n", memories.len());
+    let budget = MAX_SESSION_MEMORY_BYTES;
+    if !rules.is_empty() {
+        out.push_str("Standing rules the user set; decide the cases they cover yourself:\n\n");
+        for (k, v) in &rules {
+            let entry = format!("## {k}\n\n{}\n\n", v.trim());
+            if out.len() + entry.len() > budget / 2 {
+                out.push_str(&format!(
+                    "## {k}\n\n(Too long to show here: `bd recall {k}`.)\n\n"
+                ));
+                continue;
+            }
+            out.push_str(&entry);
+        }
+    }
+    if !rest.is_empty() {
+        out.push_str(
+            "What the Project learned, one line each. Read one in full with `bd recall <key>`, \
+             search with `bd memories <word>`:\n\n",
+        );
+        let left = budget.saturating_sub(out.len()).max(512);
+        out.push_str(&quark_worker::memory::index(&rest, left).replace(
+            "call `recall` with no arguments for the whole list",
+            "`bd memories` lists them all",
+        ));
+    }
+    out
+}
 
 /// Configure the Claude Code coordinator running in `root` to reach quarkd:
 /// [`SERVER_NAME`] as an approved HTTP MCP server in `.mcp.json`, and a
@@ -776,7 +867,7 @@ pub fn install_claude(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bo
         }
         let groups = start.as_array_mut().expect("array");
         groups.retain(|g| !g.to_string().contains(PRIME_MARK));
-        groups.push(json!({ "hooks": [{ "type": "command", "command": PRIME_HOOK }] }));
+        groups.push(json!({ "hooks": [{ "type": "command", "command": prime_hook(urls) }] }));
     })?;
     Ok(changed)
 }
@@ -879,13 +970,14 @@ pub fn install_bob(root: &Path, urls: &CoordinatorUrls) -> std::io::Result<bool>
         "curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary @- '{}/turn_end' >/dev/null 2>&1 || true",
         urls.hooks
     );
+    let prime = prime_hook(urls);
     changed |= edit_json(&root.join(".bob/settings.json"), |v| {
         if !v["hooks"].is_object() {
             v["hooks"] = json!({});
         }
         for (event, command, mark) in [
             ("Stop", post.as_str(), format!("{PREFIX}/")),
-            ("SessionStart", PRIME_HOOK, PRIME_MARK.to_string()),
+            ("SessionStart", prime.as_str(), PRIME_MARK.to_string()),
         ] {
             let list = &mut v["hooks"][event];
             if !list.is_array() {
@@ -1081,6 +1173,86 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn session_memory_shows_rules_in_full_and_lists_the_rest() {
+        assert_eq!(session_memory(&Default::default()), "");
+        let m: std::collections::BTreeMap<String, String> = [
+            (
+                "quark-rule-merge".to_string(),
+                "Merge your own PRs once CI is green.\nRebase first.".to_string(),
+            ),
+            (
+                "gates".to_string(),
+                "Run the gates on the committed head.\nNot the tree.".to_string(),
+            ),
+        ]
+        .into();
+        let out = session_memory(&m);
+        assert!(out.starts_with("# Project memory (2)\n"), "{out}");
+        assert!(out.contains(
+            "## quark-rule-merge\n\nMerge your own PRs once CI is green.\nRebase first."
+        ));
+        assert!(out.contains("- `gates`: Run the gates on the committed head.\n"));
+        assert!(!out.contains("Not the tree."));
+    }
+
+    #[test]
+    fn session_memory_stays_under_its_cap() {
+        let m: std::collections::BTreeMap<String, String> = (0..200)
+            .map(|i| {
+                (
+                    format!("memory-{i:03}"),
+                    format!("{} {}", "word".repeat(60), i),
+                )
+            })
+            .chain((0..20).map(|i| (format!("quark-rule-{i:02}"), "rule ".repeat(100))))
+            .collect();
+        let out = session_memory(&m);
+        assert!(out.len() <= MAX_SESSION_MEMORY_BYTES + 200, "{}", out.len());
+        assert!(out.contains("`bd memories` lists them all"));
+        assert!(out.contains("(Too long to show here: `bd recall quark-rule-"));
+    }
+
+    #[tokio::test]
+    async fn the_memory_route_needs_the_token() {
+        use tower::ServiceExt;
+        struct Fixed;
+        #[async_trait::async_trait]
+        impl quark_worker::ProjectMemory for Fixed {
+            async fn memories(
+                &self,
+                p: &ProjectId,
+            ) -> quark_core::Result<std::collections::BTreeMap<String, String>> {
+                assert_eq!(p.as_str(), "p1");
+                Ok([("gates".to_string(), "Run the gates.".to_string())].into())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let tokens = Tokens::new(dir.path());
+        let token = tokens.get_or_create("p1").unwrap();
+        let app = memory_router(tokens, Arc::new(Fixed));
+        let get = |uri: String| {
+            axum::http::Request::get(uri)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let res = app
+            .clone()
+            .oneshot(get(format!("/p1/{token}/memory")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            session_memory(&[("gates".to_string(), "Run the gates.".to_string())].into())
+        );
+        let res = app.oneshot(get("/p1/wrong/memory".into())).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
 
     async fn send(app: &Router, req: Request<Body>) -> (StatusCode, Value) {
         let res = app.clone().oneshot(req).await.unwrap();
@@ -1774,7 +1946,7 @@ mod tests {
             .contains("/v1/coordinator/p1/tok/hooks/turn_end"));
         let start = s["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(start.len(), 1);
-        assert_eq!(start[0]["hooks"][0]["command"], PRIME_HOOK);
+        assert_eq!(start[0]["hooks"][0]["command"], prime_hook(&urls));
         // Bob ignores every hook in a file with one key outside its schema.
         for group in stop.iter().chain(start) {
             for k in group.as_object().unwrap().keys() {
@@ -1870,7 +2042,11 @@ mod tests {
         // Beads' memories are injected at session start, by one hook however often this runs.
         let start = read()["hooks"]["SessionStart"].as_array().unwrap().clone();
         assert_eq!(start.len(), 1);
-        assert_eq!(start[0]["hooks"][0]["command"], PRIME_HOOK);
-        assert!(PRIME_HOOK.contains(PRIME_MARK));
+        assert_eq!(start[0]["hooks"][0]["command"], prime_hook(&urls));
+        assert!(prime_hook(&urls).contains(PRIME_MARK));
+        assert!(prime_hook(&urls).ends_with(&format!(
+            "{}' 2>/dev/null || true {PRIME_MARK}",
+            urls.memory
+        )));
     }
 }
