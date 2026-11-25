@@ -8,6 +8,8 @@ use quark_core::event::kinds;
 use quark_core::worker::{Transport, WorkerEnvelope, WorkerMessage, WorkerProtocol};
 use quark_core::{CoreError, EventId, EventLog, HostId, NewEvent, ProjectId, Result, TaskId};
 
+use crate::memory::ProjectMemory;
+
 /// Who is talking: a task and the generation of the worker on it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorkerIdentity {
@@ -92,11 +94,39 @@ pub struct Recorder {
     log: Arc<dyn EventLog>,
     tasks: Arc<dyn TaskDirectory>,
     host: HostId,
+    memory: Option<Arc<dyn ProjectMemory>>,
 }
 
 impl Recorder {
     pub fn new(log: Arc<dyn EventLog>, tasks: Arc<dyn TaskDirectory>, host: HostId) -> Self {
-        Self { log, tasks, host }
+        Self {
+            log,
+            tasks,
+            host,
+            memory: None,
+        }
+    }
+
+    /// Where the MCP `recall` tool reads the Project's memories.
+    pub fn with_memory(mut self, memory: Arc<dyn ProjectMemory>) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
+    /// The Project's memories as `who` may read them: its task must exist and
+    /// `who` must be its current worker. Empty without a memory source.
+    pub async fn memories(&self, who: &WorkerIdentity) -> Result<BTreeMap<String, String>> {
+        let binding = self.binding(&who.task).await?;
+        if binding.generation != who.generation {
+            return Err(CoreError::Refused(format!(
+                "worker generation {} on task {} was replaced; stop working on it",
+                who.generation, who.task
+            )));
+        }
+        match &self.memory {
+            Some(m) => m.memories(&binding.project).await,
+            None => Ok(BTreeMap::new()),
+        }
     }
 
     /// The task's binding, or `NotFound`.

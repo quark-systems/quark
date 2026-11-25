@@ -168,6 +168,77 @@ pub async fn prime_memories(bd: &Path, home: &Path, project_id: &str) -> Option<
     (!text.is_empty()).then_some(text)
 }
 
+/// The Project's Beads memories (key to text) for its workers, read from
+/// the Project's database whatever repo the worker is in: workers run with no
+/// `BEADS_DIR`, so a repo's own Beads database stays the repo's.
+pub struct WorkerMemory {
+    bd: PathBuf,
+    home: PathBuf,
+}
+
+impl WorkerMemory {
+    /// `bd` from `PATH` unless given.
+    pub fn new(bd: Option<PathBuf>, home: PathBuf) -> Self {
+        Self {
+            bd: bd.unwrap_or_else(|| PathBuf::from("bd")),
+            home,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl quark_worker::ProjectMemory for WorkerMemory {
+    async fn memories(
+        &self,
+        project: &quark_core::ProjectId,
+    ) -> quark_core::Result<BTreeMap<String, String>> {
+        let dir = dir_of(&self.home, project.as_str());
+        if !dir.join(".beads").join("metadata.json").is_file() {
+            return Ok(BTreeMap::new());
+        }
+        let (key, value) = agent_env(&self.home, project.as_str());
+        let mut cmd = Command::new(&self.bd);
+        cmd.args(["memories", "--json"])
+            .current_dir(&dir)
+            .env(key, value)
+            .env("BD_NON_INTERACTIVE", "1")
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let backend = |m: String| quark_core::CoreError::Backend(format!("bd memories: {m}"));
+        let out = match tokio::time::timeout(PRIME_TIMEOUT, cmd.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(backend(e.to_string())),
+            Err(_) => {
+                return Err(backend(format!(
+                    "no answer in {}s",
+                    PRIME_TIMEOUT.as_secs()
+                )))
+            }
+        };
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(backend(err.lines().next().unwrap_or("failed").to_string()));
+        }
+        parse_memories(&out.stdout).map_err(|e| backend(format!("unreadable output: {e}")))
+    }
+}
+
+/// `bd memories --json`: an object of key to text. Empty output is no
+/// memories.
+fn parse_memories(stdout: &[u8]) -> Result<BTreeMap<String, String>, serde_json::Error> {
+    if stdout.iter().all(u8::is_ascii_whitespace) {
+        return Ok(BTreeMap::new());
+    }
+    let raw: BTreeMap<String, serde_json::Value> = serde_json::from_slice(stdout)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v.as_str()?.to_string())))
+        .collect())
+}
+
 impl Beads {
     /// `bd` from `PATH` unless given; `api_base` is where the daemon listens.
     pub fn new(bd: Option<PathBuf>, api_base: String) -> Self {
@@ -1339,6 +1410,33 @@ fn tail(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn workers_read_the_projects_memories_not_their_repos() {
+        use quark_worker::ProjectMemory;
+        let home = tempfile::tempdir().unwrap();
+        let bd = home.path().join("bd");
+        std::fs::write(
+            &bd,
+            "#!/bin/sh\n[ \"$*\" = \"memories --json\" ] || exit 1\n\
+             case \"$BEADS_DIR\" in */beads/p1/.beads) ;; *) exit 2;; esac\n\
+             echo '{\"gates\": \"Run the gates.\", \"n\": 3}'\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let memory = WorkerMemory::new(Some(bd), home.path().to_path_buf());
+        let p1 = quark_core::ProjectId::from("p1");
+        // No database yet: no memories, and bd is not run.
+        assert!(memory.memories(&p1).await.unwrap().is_empty());
+        let beads = beads_dir(home.path(), "p1");
+        std::fs::create_dir_all(&beads).unwrap();
+        std::fs::write(beads.join("metadata.json"), "{}").unwrap();
+        let m = memory.memories(&p1).await.unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m["gates"], "Run the gates.");
+        assert!(parse_memories(b"  \n").unwrap().is_empty());
+    }
 
     fn bd(id: &str, status: &str, deps: &[(&str, &str)]) -> BdIssue {
         BdIssue {

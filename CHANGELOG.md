@@ -8,6 +8,13 @@ page lists every merged pull request.
 
 ## Unreleased
 
+### Added
+
+- Workers now get the Project's memory. A new worker's instructions end with a list of what the
+  Project has learned (each memory's key and first line), and the worker can read one in full
+  with the `recall` tool or `curl -s "$QUARK_MEMORY_URL?key=<key>"`. Workers still use the
+  repo's own Beads database for the repo's issues and memories; the Project's stays separate.
+
 ### Fixed
 
 - What a worker learned now reaches your memory review. A worker's `learned` report, from its

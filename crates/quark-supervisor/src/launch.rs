@@ -29,6 +29,9 @@ pub mod env {
     pub const MCP_URL: &str = "QUARK_MCP_URL";
     /// The prefix hook commands POST to: `<url>/<event>`.
     pub const HOOK_URL: &str = "QUARK_HOOK_URL";
+    /// The Project's memory over plain HTTP: `GET <url>`, `?key=` or
+    /// `?query=`, for workers whose harness has no MCP server for Quark.
+    pub const MEMORY_URL: &str = "QUARK_MEMORY_URL";
 }
 
 /// Where a worker reaches the worker protocol over HTTP: the base URL the
@@ -49,6 +52,13 @@ impl WorkerUrls {
     pub fn hooks(&self, task: &TaskId, generation: &str) -> String {
         format!(
             "{}/hooks/{task}/{generation}",
+            self.base.trim_end_matches('/')
+        )
+    }
+
+    pub fn memory(&self, task: &TaskId, generation: &str) -> String {
+        format!(
+            "{}/memory/{task}/{generation}",
             self.base.trim_end_matches('/')
         )
     }
@@ -76,6 +86,8 @@ pub struct Inputs<'a> {
     pub dir: &'a Path,
     pub worktree: &'a Path,
     pub brief: &'a str,
+    /// The Project's memory index, after the brief.
+    pub memory: Option<&'a str>,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     /// Said to a relaunched worker before the brief.
@@ -144,6 +156,7 @@ pub fn plan(i: &Inputs<'_>) -> Result<Plan> {
     if let Some(urls) = i.urls {
         env.insert(env::MCP_URL.into(), urls.mcp(i.task, i.generation));
         env.insert(env::HOOK_URL.into(), urls.hooks(i.task, i.generation));
+        env.insert(env::MEMORY_URL.into(), urls.memory(i.task, i.generation));
     }
     Ok(Plan {
         argv,
@@ -168,6 +181,11 @@ fn compose_brief(i: &Inputs<'_>, status: &Path) -> String {
     if !i.resume {
         out.push_str(i.brief.trim_end());
         out.push('\n');
+        if let Some(memory) = i.memory.filter(|m| !m.trim().is_empty()) {
+            out.push('\n');
+            out.push_str(memory.trim_end());
+            out.push('\n');
+        }
     }
     if !i.steers.is_empty() {
         out.push_str("\nMessages sent while you were not running, oldest first:\n");
@@ -245,6 +263,7 @@ mod tests {
             dir: Path::new("/state/p/t1/g1"),
             worktree: Path::new("/pool/wt-1"),
             brief: "Fix the parser.",
+            memory: None,
             model: None,
             effort: Some("high"),
             note: None,
@@ -293,6 +312,25 @@ mod tests {
             "http://127.0.0.1:7777/v1/worker/mcp/t1/g1"
         );
         assert_eq!(p.env["CLAUDE_CONFIG_DIR"], "/a");
+    }
+
+    #[test]
+    fn the_projects_memory_follows_the_brief_but_not_on_resume() {
+        let reg = ManifestRegistry::builtin();
+        let m = reg.get("claude-code").unwrap().clone();
+        let ids = (ProjectId::from("p"), TaskId::from("t1"));
+        let env = BTreeMap::new();
+        let mut i = inputs(&ids, &m, &[], &env, None);
+        i.memory = Some("Project memory: ...\n\n- `gates`: Run the gates.\n");
+        let brief = compose_brief(&i, Path::new("/s"));
+        assert!(
+            brief.starts_with(
+                "Fix the parser.\n\nProject memory: ...\n\n- `gates`: Run the gates.\n"
+            ),
+            "{brief}"
+        );
+        i.resume = true;
+        assert!(!compose_brief(&i, Path::new("/s")).contains("Project memory"));
     }
 
     #[test]

@@ -37,6 +37,9 @@ const MAX_DIALOG_KEYS: usize = 12;
 /// Longest [`Supervisor::steer_now`] waits for an interrupted worker's
 /// composer before typing the message anyway.
 pub const STEER_NOW_WAIT: Duration = Duration::from_secs(10);
+/// Longest a new worker waits for the Project's memory before starting
+/// without it.
+const MEMORY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The worker signal an agent's start-up hook sends once its input is live.
 const READY: &str = "ready";
@@ -260,6 +263,7 @@ pub struct Supervisor {
     config: Config,
     conversations: Option<Arc<dyn Conversations>>,
     secrets: Option<Arc<dyn crate::Secrets>>,
+    memory: Option<Arc<dyn quark_worker::ProjectMemory>>,
     locks: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
     watches: Mutex<HashMap<Key, Watch>>,
     handling: tokio::sync::Mutex<Seq>,
@@ -297,6 +301,7 @@ impl Supervisor {
             config,
             conversations: None,
             secrets: None,
+            memory: None,
             locks: Mutex::default(),
             watches: Mutex::default(),
             handling: tokio::sync::Mutex::new(handled),
@@ -308,6 +313,38 @@ impl Supervisor {
     pub fn with_conversations(mut self, conversations: Arc<dyn Conversations>) -> Self {
         self.conversations = Some(conversations);
         self
+    }
+
+    /// Where workers read the Project's memory: an index in each new
+    /// worker's brief, and the MCP `recall` tool.
+    pub fn with_memory(mut self, memory: Arc<dyn quark_worker::ProjectMemory>) -> Self {
+        self.recorder = Arc::new(
+            Recorder::new(
+                self.log.clone(),
+                Arc::new(self.fleet.clone()),
+                self.config.host.clone(),
+            )
+            .with_memory(memory.clone()),
+        );
+        self.memory = Some(memory);
+        self
+    }
+
+    /// The memory section of a new worker's brief, if the Project has any.
+    /// A slow or failing read leaves it out rather than holding the launch.
+    async fn memory_section(&self, project: &ProjectId) -> Option<String> {
+        let memory = self.memory.as_ref()?;
+        match tokio::time::timeout(MEMORY_READ_TIMEOUT, memory.memories(project)).await {
+            Ok(Ok(m)) => quark_worker::memory::brief_section(&m),
+            Ok(Err(e)) => {
+                tracing::warn!(%project, error = %e, "the worker starts without the Project's memory");
+                None
+            }
+            Err(_) => {
+                tracing::warn!(%project, "reading the Project's memory took too long; the worker starts without it");
+                None
+            }
+        }
     }
 
     /// Where secret references in a worker's environment are read
@@ -542,6 +579,11 @@ impl Supervisor {
             .join(&generation);
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         let steers: Vec<_> = w.undelivered().cloned().collect();
+        // A resumed conversation already has its brief, memory included.
+        let memory = match resume {
+            true => None,
+            false => self.memory_section(project).await,
+        };
         let plan = launch::plan(&launch::Inputs {
             manifest: &manifest,
             project,
@@ -550,6 +592,7 @@ impl Supervisor {
             dir: &dir,
             worktree: &worktree.path,
             brief: &a.brief,
+            memory: memory.as_deref(),
             model: model.as_deref(),
             effort: effort.as_deref(),
             note,

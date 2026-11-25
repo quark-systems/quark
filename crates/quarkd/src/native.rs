@@ -98,7 +98,11 @@ impl NativeSupervision {
             )
             .await?
             .with_conversations(Arc::new(Transcripts::from_env()))
-            .with_secrets(Arc::new(crate::secrets::Keychain::default())),
+            .with_secrets(Arc::new(crate::secrets::Keychain::default()))
+            .with_memory(Arc::new(crate::beads::WorkerMemory::new(
+                std::env::var_os("QUARK_BD").map(Into::into),
+                config.home.clone(),
+            ))),
         );
         let orphans = supervisor.recover().await?;
         tracing::info!(socket = %socket.display(), orphans, "native supervisor running");

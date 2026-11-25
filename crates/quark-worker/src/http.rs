@@ -11,14 +11,19 @@
 //!   holding a UUID makes a retried POST record once. `200` once recorded,
 //!   `409` for a replaced worker, `404` for an unknown task, `400` for a bad
 //!   hook or body, `503` when the log failed (retry).
+//! - `GET /memory/{task}/{generation}`: the Project's memory as plain text,
+//!   what the MCP `recall` tool answers: `?key=` for one memory, `?query=` to
+//!   search, neither for the list. For workers whose harness has no MCP
+//!   server for Quark; `curl -s "$QUARK_MEMORY_URL?key=..."`. Read only.
 
 use std::sync::Arc;
 
 use axum::body::Bytes;
+use axum::extract::Query;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use quark_core::{CoreError, EventId};
 use serde_json::{json, Value};
@@ -31,6 +36,7 @@ pub fn router(recorder: Arc<Recorder>) -> Router {
     Router::new()
         .route("/mcp/{task}/{generation}", post(mcp))
         .route("/hooks/{task}/{generation}/{event}", post(hook))
+        .route("/memory/{task}/{generation}", get(memory))
         .with_state(recorder)
 }
 
@@ -53,6 +59,38 @@ async fn mcp(
     match McpServer::new(recorder).handle(&who, message).await {
         Some(response) => Json(response).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct MemoryQuery {
+    key: Option<String>,
+    query: Option<String>,
+}
+
+async fn memory(
+    State(recorder): State<Arc<Recorder>>,
+    Path((task, generation)): Path<(String, String)>,
+    Query(q): Query<MemoryQuery>,
+) -> Response {
+    let who = WorkerIdentity::new(task, generation);
+    let arg = |s: &Option<String>| {
+        s.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    match recorder.memories(&who).await {
+        Ok(m) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            crate::memory::recall(&m, arg(&q.key).as_deref(), arg(&q.query).as_deref()),
+        )
+            .into_response(),
+        Err(e) => reply(e),
     }
 }
 
@@ -194,5 +232,53 @@ mod tests {
             assert_eq!(send(&app, req).await.0, StatusCode::OK);
         }
         assert_eq!(log.events().len(), 4);
+    }
+
+    struct Fixed;
+
+    #[async_trait::async_trait]
+    impl crate::memory::ProjectMemory for Fixed {
+        async fn memories(
+            &self,
+            _: &quark_core::ProjectId,
+        ) -> quark_core::Result<std::collections::BTreeMap<String, String>> {
+            Ok([("gates".to_string(), "Run the gates.".to_string())].into())
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_over_plain_http() {
+        let (_, log, tasks) = setup();
+        let rec = Recorder::new(
+            Arc::new(log.clone()),
+            Arc::new(tasks),
+            quark_core::HostId::from("h"),
+        )
+        .with_memory(Arc::new(Fixed));
+        let app = router(Arc::new(rec));
+        let get = |uri: &str| Request::get(uri).body(Body::empty()).unwrap();
+        let text = |res: Response| async move {
+            let status = res.status();
+            let b = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, String::from_utf8(b.to_vec()).unwrap())
+        };
+        let r = app
+            .clone()
+            .oneshot(get("/memory/t1/g2?key=gates"))
+            .await
+            .unwrap();
+        assert_eq!(text(r).await, (StatusCode::OK, "Run the gates.".into()));
+        let r = app.clone().oneshot(get("/memory/t1/g2")).await.unwrap();
+        assert_eq!(
+            text(r).await,
+            (StatusCode::OK, "- `gates`: Run the gates.\n".into())
+        );
+        let (s, _) = send(&app, get("/memory/t1/g1")).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        let (s, _) = send(&app, get("/memory/nope/g1")).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert!(log.events().is_empty());
     }
 }
