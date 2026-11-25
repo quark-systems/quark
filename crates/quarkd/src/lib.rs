@@ -48,6 +48,7 @@ pub mod nudge;
 pub mod outbox;
 pub mod overview;
 pub mod pr_center;
+pub mod pr_conflicts;
 pub mod project_repo;
 pub mod project_sources;
 pub mod projector;

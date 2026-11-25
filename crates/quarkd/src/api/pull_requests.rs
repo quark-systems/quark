@@ -7,8 +7,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use quark_systems::{
-    ErrorBody, MergePullRequest, PrConversation, PrFileSide, PullRequest, PullRequestComment,
-    PullRequestDiff, PullRequestState,
+    ErrorBody, MergePullRequest, Mergeability, PrConversation, PrFileSide, PullRequest,
+    PullRequestComment, PullRequestConflicts, PullRequestDiff, PullRequestState,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -130,6 +130,62 @@ pub async fn diff(
         patch,
         truncated,
     }))
+}
+
+/// The files that stop the pull request merging cleanly. Forges report
+/// only that a pull request conflicts, so when it does the daemon fetches
+/// its base and head into the Project's clone of the repo and lists the
+/// paths a trial merge leaves conflicted. `unknown_reason` says why they
+/// could not be listed.
+#[utoipa::path(
+    get,
+    path = "/v1/pull-requests/{id}/conflicts",
+    tag = "pull-requests",
+    params(("id" = String, Path, description = "Pull request id")),
+    responses(
+        (status = 200, body = PullRequestConflicts),
+        (status = 404, body = ErrorBody)
+    )
+)]
+pub async fn conflicts(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<PullRequestConflicts>, ApiError> {
+    let pr = db(&state, move |s| s.get_pull_request(&id)).await?;
+    let answer = |files, unknown_reason: Option<String>| PullRequestConflicts {
+        pull_request_id: pr.id.clone(),
+        files,
+        unknown_reason,
+    };
+    if pr.mergeable != Mergeability::Conflicting || pr.state.is_final() {
+        return Ok(Json(answer(Vec::new(), None)));
+    }
+    let pid = pr.project_id.clone();
+    let project = db(&state, move |s| s.get_project(&pid)).await?;
+    let (Some(base), Some(head)) = (pr.base_ref.clone(), pr.head_sha.clone()) else {
+        return Ok(Json(answer(
+            Vec::new(),
+            Some("the forge has not reported its base and head yet".into()),
+        )));
+    };
+    if pr.provider != "github" {
+        return Ok(Json(answer(
+            Vec::new(),
+            Some(format!("not worked out for {} pull requests", pr.provider)),
+        )));
+    }
+    let Some(clone) = crate::pr_conflicts::clone_for(&project, &pr) else {
+        return Ok(Json(answer(
+            Vec::new(),
+            Some(format!("the Project has no local clone of {}", pr.repo)),
+        )));
+    };
+    Ok(Json(
+        match crate::pr_conflicts::conflicting_files(&clone, &base, &head, pr.number).await {
+            Ok(files) => answer(files, None),
+            Err(e) => answer(Vec::new(), Some(e)),
+        },
+    ))
 }
 
 /// The pull request's conversation as last read from its forge, oldest
@@ -537,7 +593,17 @@ pub async fn artifact(
 /// [`super::ApiDoc`].
 #[derive(utoipa::OpenApi)]
 #[openapi(
-    paths(list, get, diff, file, conversation, comment, merge, artifact),
+    paths(
+        list,
+        get,
+        diff,
+        conflicts,
+        file,
+        conversation,
+        comment,
+        merge,
+        artifact
+    ),
     components(schemas(
         quark_systems::PullRequestState,
         quark_systems::Mergeability,
@@ -568,6 +634,7 @@ pub(super) fn router() -> axum::Router<AppState> {
         // POST serves the custom method `/v1/pull-requests/{id}:merge`.
         .route("/v1/pull-requests/{id}", get(self::get).post(action))
         .route("/v1/pull-requests/{id}/diff", get(diff))
+        .route("/v1/pull-requests/{id}/conflicts", get(conflicts))
         .route("/v1/pull-requests/{id}/files", get(file))
         .route(
             "/v1/pull-requests/{id}/evidence/artifacts/{artifact_id}",

@@ -70,6 +70,7 @@ const forgeComments = new Map(); // PR id -> PrComment[]
 const prFiles = new Map(); // PR id -> Map
 const IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml" };
 const pullDiffs = new Map(); // PR id -> unified diff text
+const pullConflicts = new Map(); // PR id -> paths that conflict with the base branch
 const artifacts = new Map(); // artifact id -> { content_type, body }
 const prComments = []; // what the app sent, for tests: { pull_request_id, body, path, line, side }
 const memoryProposals = new Map(); // proposal id -> MemoryProposal
@@ -1166,7 +1167,10 @@ function seed() {
   PR("pr-3", site, null, {
     number: 41, title: "Pricing page on the new grid", head_ref: "quark/pricing-grid", base_ref: "main", diff: DIFFS[3],
     state: "draft", checks: [{ name: "build", status: "pending", started_at: minutesAgo(2) }], checks_state: "pending", review_decision: "none",
+    // Conflicts with main in one file: the changed-files tree marks it.
+    mergeable: "conflicting",
   });
+  pullConflicts.set("pr-3", ["src/lib/plans.ts"]);
   PR("pr-4", quark, null, {
     number: 1, title: "Daemon skeleton", head_ref: "quark/daemon", base_ref: "main", diff: DIFFS[2], state: "merged",
     checks: [ok("CI / rust")], review_decision: "approved", merged_at: minutesAgo(300), closed_at: minutesAgo(300), updated_at: minutesAgo(300),
@@ -2454,6 +2458,10 @@ const server = http.createServer(async (req, res) => {
     const rest = r[2];
     if (!pr) return notFound(res);
     if (rest === "" && req.method === "GET") return send(res, 200, pr);
+    if (rest === "/conflicts" && req.method === "GET") {
+      const files = pr.mergeable === "conflicting" ? pullConflicts.get(pr.id) ?? null : [];
+      return send(res, 200, { pull_request_id: pr.id, files: files ?? [], unknown_reason: files ? null : "the Project has no local clone of " + pr.repo });
+    }
     if (rest === "/diff" && req.method === "GET") {
       const path = url.searchParams.get("path");
       if (path && !filesOf(pullDiffs.get(pr.id)).some((f) => f.path === path)) return notFound(res);

@@ -78,6 +78,8 @@ export interface PrConversationEntry {
   kind: PrEntryKind; at?: string | null; comment?: PrComment | null; review?: Review | null; threads: PrThread[];
 }
 export interface PrConversation { pull_request_id: string; entries: PrConversationEntry[] }
+/** Files that stop a conflicting PR merging; `unknown_reason` when the daemon could not list them. */
+export interface PullRequestConflicts { pull_request_id: string; files: string[]; unknown_reason?: string | null }
 export interface PullRequestDiff { pull_request_id: string; path?: string | null; patch: string; truncated: boolean }
 export type DiffSide = "new" | "old";
 export interface PullRequestComment { text: string; path?: string | null; line?: number | null; side?: DiffSide | null }
@@ -87,6 +89,7 @@ export const pullRequestsApi = {
   pullRequests: () => req<PullRequest[]>("GET", "/v1/pull-requests"),
   pullRequest: (id: string) => req<PullRequest>("GET", `/v1/pull-requests/${enc(id)}`),
   pullRequestDiff: (id: string) => req<PullRequestDiff>("GET", `/v1/pull-requests/${enc(id)}/diff`),
+  pullRequestConflicts: (id: string) => req<PullRequestConflicts>("GET", `/v1/pull-requests/${enc(id)}/conflicts`),
   /** The conversation as last read from the forge, oldest first; `comment.updated` and `review.updated` say when it changed. */
   pullRequestConversation: (id: string) => req<PrConversation>("GET", `/v1/pull-requests/${enc(id)}/comments`),
   /** Delivered to the PR's owning worker as a steering message; not posted on the forge. */

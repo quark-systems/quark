@@ -173,7 +173,7 @@ function DiffPanel({ pr, comments, onComment, focus }: {
   const [truncated, setTruncated] = useState(false);
   const [status, setStatus] = useState<"loading" | "ok" | "unavailable" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
-  const conflicts = undefined as ReadonlySet<string> | undefined;
+  const [conflicts, setConflicts] = useState<{ files: ReadonlySet<string>; unknown: string | null } | null>(null);
 
   const source = useMemo<FileSource>(() => ({
     url: (path, side) => api.pullRequestFileUrl(pr.id, path, side),
@@ -196,11 +196,27 @@ function DiffPanel({ pr, comments, onComment, focus }: {
     return () => { live = false; };
   }, [pr.id, pr.head_sha, pr.state]);
 
+  // Which files conflict, when the forge says the PR does; a daemon without the endpoint marks none.
+  useEffect(() => {
+    if (pr.mergeable !== "conflicting") { setConflicts(null); return; }
+    let live = true;
+    api.pullRequestConflicts(pr.id)
+      .then((c) => { if (live) setConflicts({ files: new Set(c.files), unknown: c.files.length ? null : c.unknown_reason ?? null }); })
+      .catch(() => { if (live) setConflicts(null); });
+    return () => { live = false; };
+  }, [pr.id, pr.head_sha, pr.mergeable]);
+
   if (status === "unavailable") return <Unavailable what="The PR diff" endpoint={`GET /v1/pull-requests/${pr.id}/diff`} />;
   if (files && files.length > 0) return (
     <div className="pr-files" data-testid="pr-diff">
-      <ChangedFiles files={files} viewedKey={pr.id} conflicts={conflicts} comments={comments} onComment={onComment} focus={focus} source={source}>
+      <ChangedFiles files={files} viewedKey={pr.id} conflicts={conflicts?.files} comments={comments} onComment={onComment} focus={focus} source={source}>
         {truncated && <div className="state-note">This diff was cut at the daemon's size limit.</div>}
+        {conflicts && conflicts.files.size > 0 && (
+          <div className="state-note bad" data-testid="pr-conflicts">
+            Conflicts with {pr.base_ref ?? "the base branch"} in {conflicts.files.size === 1 ? "1 file" : `${conflicts.files.size} files`}, marked in the file tree.
+          </div>
+        )}
+        {conflicts?.unknown && <div className="state-note" data-testid="pr-conflicts">Conflicts with {pr.base_ref ?? "the base branch"}; could not tell which files: {conflicts.unknown}.</div>}
         {onComment && <div className="faint small-text diff-hint">Click a line number to comment for the worker.</div>}
       </ChangedFiles>
     </div>

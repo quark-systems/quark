@@ -471,6 +471,42 @@ async fn diff_whole_and_per_file() {
 }
 
 #[tokio::test]
+async fn conflicts_are_listed_only_for_a_conflicting_pr_with_a_clone() {
+    let h = harness().await;
+    h.forge
+        .set(URL, forge_pr(PullRequestState::Open, CheckStatus::Success));
+    h.center.refresh().await;
+    let (_, list) = call(&h.app, "GET", "/v1/pull-requests", None).await;
+    let id = list[0]["id"].as_str().unwrap().to_string();
+    let path = format!("/v1/pull-requests/{id}/conflicts");
+
+    // Mergeable: nothing to list, and no git runs.
+    let (status, c) = call(&h.app, "GET", &path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(c["files"], serde_json::json!([]));
+    assert!(c["unknown_reason"].is_null());
+
+    // Conflicting, but the Project has no clone of the repo: it says why.
+    let mut conflict = forge_pr(PullRequestState::Open, CheckStatus::Success);
+    conflict.mergeable = Mergeability::Conflicting;
+    h.forge.set(URL, conflict);
+    h.center.refresh().await;
+    let (status, c) = call(&h.app, "GET", &path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(c["files"], serde_json::json!([]));
+    assert!(
+        c["unknown_reason"]
+            .as_str()
+            .unwrap()
+            .contains("no local clone"),
+        "{c}"
+    );
+
+    let (status, _) = call(&h.app, "GET", "/v1/pull-requests/nope/conflicts", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn comments_reach_the_owning_worker() {
     let h = harness().await;
     h.center.refresh().await;
