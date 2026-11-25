@@ -16,6 +16,9 @@
 //! per launch, so the pair also identifies the caller: a message naming an
 //! old generation is still recorded, then refused so the old worker stops.
 //!
+//! Workers read the Project's memory through [`memory`]: an index in the
+//! brief and the MCP `recall` tool, never the repo's own Beads database.
+//!
 //! The crate records messages only. Turning them into task transitions,
 //! decisions and wakes belongs to the supervisor and coordinator slices.
 
@@ -23,10 +26,12 @@ pub mod file;
 pub mod hook;
 pub mod http;
 pub mod mcp;
+pub mod memory;
 pub mod recorder;
 
 pub use file::{parse_status_line, StatusFile};
 pub use hook::hook_message;
 pub use http::router;
 pub use mcp::McpServer;
+pub use memory::ProjectMemory;
 pub use recorder::{Binding, MemoryTasks, Recorder, TaskDirectory, WorkerIdentity};

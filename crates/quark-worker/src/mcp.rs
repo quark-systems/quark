@@ -28,7 +28,9 @@ const INSTRUCTIONS: &str = "Tell the coordinator about your work with these tool
 instead of writing status into chat. Use `report` when your state changes \
 (working, blocked, paused), `ask` for a question only a person can answer, \
 `learned` for a fact worth keeping in Project memory, and `done` once the \
-deliverable is ready. If a call says this worker was replaced, stop.";
+deliverable is ready. `recall` reads what the Project has learned (its memory); \
+it is separate from any Beads database the repo keeps, which you use as the \
+repo's own instructions say. If a call says this worker was replaced, stop.";
 
 /// Serves the worker tools over JSON-RPC.
 #[derive(Clone)]
@@ -77,6 +79,9 @@ impl McpServer {
             .and_then(Value::as_str)
             .ok_or((codes::INVALID_PARAMS, "missing tool name".to_string()))?;
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        if name == "recall" {
+            return self.recall(who, &args).await;
+        }
         let message = match tool_message(name, &args) {
             Ok(m) => m,
             Err(ToolError::Unknown) => {
@@ -93,6 +98,29 @@ impl McpServer {
             Err(CoreError::Backend(msg)) => Err((
                 codes::INTERNAL_ERROR,
                 format!("not recorded, try again: {msg}"),
+            )),
+            Err(e) => Ok(tool_result(true, &e.to_string())),
+        }
+    }
+}
+
+impl McpServer {
+    /// The Project's memories, read only: an answer, never an event.
+    async fn recall(&self, who: &WorkerIdentity, args: &Value) -> Result<Value, (i64, String)> {
+        let arg = |field: &str| {
+            args.get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        };
+        match self.recorder.memories(who).await {
+            Ok(m) => Ok(tool_result(
+                false,
+                &crate::memory::recall(&m, arg("key"), arg("query")),
+            )),
+            Err(CoreError::Backend(msg)) => Err((
+                codes::INTERNAL_ERROR,
+                format!("could not read the Project's memory, try again: {msg}"),
             )),
             Err(e) => Ok(tool_result(true, &e.to_string())),
         }
@@ -194,6 +222,17 @@ pub fn tools() -> Value {
             }
         },
         {
+            "name": "recall",
+            "description": "Read the Project's memory: what earlier work in this Quark Project learned. With `key`, one memory's full text; with `query`, the memories that mention it; with neither, the list of keys. Read only. The repo's own Beads database, if it has one, is separate.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "A memory's key, as the list or the brief shows it" },
+                    "query": { "type": "string", "description": "Words to look for in keys and texts" }
+                }
+            }
+        },
+        {
             "name": "done",
             "description": "Say the deliverable is ready: a pull request, a ready branch or a written report.",
             "inputSchema": {
@@ -229,6 +268,7 @@ mod tests {
     use super::*;
     use crate::recorder::tests::setup;
     use quark_core::worker::WorkerEnvelope;
+    use std::collections::BTreeMap;
 
     fn req(method: &str, params: Value) -> Value {
         json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params })
@@ -268,7 +308,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_the_four_tools() {
+    async fn lists_the_tools() {
         let (rec, _, _) = setup();
         let r = McpServer::new(rec)
             .handle(
@@ -283,7 +323,7 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["report", "ask", "learned", "done"]);
+        assert_eq!(names, ["report", "ask", "learned", "recall", "done"]);
     }
 
     #[tokio::test]
@@ -380,5 +420,64 @@ mod tests {
         assert_eq!(r["error"]["code"], codes::METHOD_NOT_FOUND);
         let r = mcp.handle(&who, json!([1, 2])).await.unwrap();
         assert_eq!(r["error"]["code"], codes::INVALID_REQUEST);
+    }
+
+    struct Fixed(BTreeMap<String, String>);
+
+    #[async_trait::async_trait]
+    impl crate::memory::ProjectMemory for Fixed {
+        async fn memories(
+            &self,
+            project: &quark_core::ProjectId,
+        ) -> quark_core::Result<BTreeMap<String, String>> {
+            assert_eq!(project.as_str(), "p");
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn recall_reads_the_projects_memory_without_recording() {
+        let (_, log, tasks) = setup();
+        let rec = Arc::new(
+            crate::Recorder::new(
+                Arc::new(log.clone()),
+                Arc::new(tasks),
+                quark_core::HostId::from("h"),
+            )
+            .with_memory(Arc::new(Fixed(BTreeMap::from([(
+                "gates".to_string(),
+                "Run the gates on the committed head.".to_string(),
+            )])))),
+        );
+        let mcp = McpServer::new(rec);
+        let call = |who: &'static str, args: Value| {
+            let mcp = mcp.clone();
+            async move {
+                mcp.handle(
+                    &WorkerIdentity::new("t1", who),
+                    req("tools/call", json!({ "name": "recall", "arguments": args })),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let r = call("g2", json!({ "key": "gates" })).await;
+        assert_eq!(r["result"]["isError"], false);
+        assert_eq!(
+            r["result"]["content"][0]["text"],
+            "Run the gates on the committed head."
+        );
+        let r = call("g2", json!({})).await;
+        assert_eq!(
+            r["result"]["content"][0]["text"],
+            "- `gates`: Run the gates on the committed head.\n"
+        );
+        let r = call("g1", json!({ "key": "gates" })).await;
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("replaced"));
+        assert!(log.events().is_empty(), "recall records nothing");
     }
 }
