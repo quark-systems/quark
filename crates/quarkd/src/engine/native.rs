@@ -779,7 +779,9 @@ pub fn status_entry(message: &WorkerMessage) -> Option<StatusEntry> {
         WorkerMessage::Ask { key, question } => {
             ("needs-decision".into(), Some(key.clone()), question.clone())
         }
-        WorkerMessage::Learned { fact } => ("note".into(), None, fact.clone()),
+        // `learned`, not `note`: the projector turns lines of this kind
+        // into memory proposals.
+        WorkerMessage::Learned { fact } => (crate::memory::LEARNED_VERB.into(), None, fact.clone()),
         WorkerMessage::Done {
             summary,
             pull_request,
@@ -839,5 +841,23 @@ impl ReadModel for WorkerLines {
     async fn reset(&self) -> quark_core::Result<()> {
         *self.lock() = LinesInner::default();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_learning_is_a_learned_line() {
+        let entry = status_entry(&WorkerMessage::Learned {
+            fact: "run the gates on the committed head".into(),
+        })
+        .unwrap();
+        assert_eq!(entry.kind, crate::memory::LEARNED_VERB);
+        assert_eq!(entry.raw, "learned: run the gates on the committed head");
+        let learning = crate::memory::parse_learning(&entry.note, &entry.raw);
+        assert_eq!(learning.text, "run the gates on the committed head");
+        assert_eq!(learning.source, quark_systems::MemorySource::Worker);
     }
 }

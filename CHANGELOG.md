@@ -10,6 +10,10 @@ page lists every merged pull request.
 
 ### Fixed
 
+- What a worker learned now reaches your memory review. A worker's `learned` report, from its
+  status file, its MCP `learned` tool or its hook, was recorded as a plain note, so it never
+  became a memory proposal and only the coordinator's own `remember` calls did. Learnings
+  recorded before this fix stay notes; only new ones are proposed.
 - A wake no longer goes into a coordinator that is in the middle of a turn. When a worker
   finished or asked something while you were talking to the coordinator, or just after Quark
   typed it a note, the wake was typed into the running turn. The harness took it its own way
