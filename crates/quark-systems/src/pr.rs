@@ -294,6 +294,18 @@ pub struct PullRequestDiff {
     pub truncated: bool,
 }
 
+/// The files of a pull request that conflict with its base branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct PullRequestConflicts {
+    pub pull_request_id: String,
+    /// Paths a merge into the base would leave conflicted, as the head names
+    /// them; empty when the forge reports no conflict.
+    pub files: Vec<String>,
+    /// Why the files could not be listed though the forge reports a
+    /// conflict: no local clone of the repo, or git could not fetch or merge.
+    pub unknown_reason: Option<String>,
+}
+
 /// Which side of a diff a line comment is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

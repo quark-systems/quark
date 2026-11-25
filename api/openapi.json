@@ -5444,6 +5444,46 @@
         }
       }
     },
+    "/v1/pull-requests/{id}/conflicts": {
+      "get": {
+        "tags": [
+          "pull-requests"
+        ],
+        "summary": "The files that stop the pull request merging cleanly. Forges report\nonly that a pull request conflicts, so when it does the daemon fetches\nits base and head into the Project's clone of the repo and lists the\npaths a trial merge leaves conflicted. `unknown_reason` says why they\ncould not be listed.",
+        "operationId": "conflicts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pull request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestConflicts"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/pull-requests/{id}/diff": {
       "get": {
         "tags": [
@@ -14066,6 +14106,33 @@
           },
           "text": {
             "type": "string"
+          }
+        }
+      },
+      "PullRequestConflicts": {
+        "type": "object",
+        "description": "The files of a pull request that conflict with its base branch.",
+        "required": [
+          "pull_request_id",
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Paths a merge into the base would leave conflicted, as the head names\nthem; empty when the forge reports no conflict."
+          },
+          "pull_request_id": {
+            "type": "string"
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the files could not be listed though the forge reports a\nconflict: no local clone of the repo, or git could not fetch or merge."
           }
         }
       },

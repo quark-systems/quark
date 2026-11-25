@@ -735,6 +735,16 @@ test("PR diff has a changed-files tree: marks, joined folders, jump, scroll sync
   await expect(page.getByTestId("viewed-count")).toHaveText("1 / 8 viewed");
 });
 
+test("PR diff marks the files that conflict with the base branch", async ({ page }) => {
+  await open(page, "#/pr/pr-3");
+  await page.getByRole("tab", { name: "Diff" }).click();
+  await expect(page.getByTestId("pr-conflicts")).toHaveText("Conflicts with main in 1 file, marked in the file tree.");
+  const rows = page.getByTestId("file-tree").getByTestId("file-tree-file");
+  await expect(rows.filter({ hasText: "plans.ts" })).toHaveAttribute("data-status", "conflicted");
+  await expect(rows.filter({ hasText: "pricing.tsx" })).toHaveAttribute("data-status", "modified");
+  await expect(page.getByTestId("diff-file").filter({ hasText: "src/lib/plans.ts" }).locator(".dv-flag.conflict")).toHaveText("Conflict");
+});
+
 test("PR diff: clicking an image opens a full-screen preview that zooms, pans and flips between before and after", async ({ page }) => {
   await open(page, "#/pr/pr-1");
   await page.getByRole("tab", { name: "Diff" }).click();
