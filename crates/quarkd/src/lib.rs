@@ -384,6 +384,7 @@ pub async fn serve(config: Config, engine: EngineKind) -> anyhow::Result<()> {
                         std::env::var_os("QUARK_BD").map(Into::into),
                         layout.home.clone(),
                     )),
+                    Arc::new(events.clone()),
                 ));
                 (
                     Some(routes),

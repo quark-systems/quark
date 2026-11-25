@@ -61,6 +61,12 @@ pub mod kinds {
     /// A shadow comparison saw the reference and native disagree. Payload:
     /// [`crate::slice::Divergence`].
     pub const SHADOW_DIVERGENCE: &str = "shadow.divergence";
+    /// A session was given the Project's memory: a coordinator's session
+    /// start or a new worker's brief. Payload: `quark_worker::memory::MemoryEvent`.
+    pub const MEMORY_PRIMED: &str = "memory.primed";
+    /// A worker read the Project's memory (`recall`). Payload:
+    /// `quark_worker::memory::MemoryEvent`.
+    pub const MEMORY_READ: &str = "memory.read";
 }
 
 /// An event before the log assigns it a sequence number.

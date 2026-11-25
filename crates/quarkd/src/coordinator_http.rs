@@ -236,34 +236,72 @@ fn routes(
 /// `GET /{project}/{token}/memory`: [`session_memory`] for the Project, as
 /// plain text, for its coordinator's session-start hook. Merge it into the
 /// routes nested under [`PREFIX`].
-pub fn memory_router(tokens: Tokens, memory: Arc<dyn quark_worker::ProjectMemory>) -> Router {
+/// Each answer records a `memory.primed` event in `events`.
+pub fn memory_router(
+    tokens: Tokens,
+    memory: Arc<dyn quark_worker::ProjectMemory>,
+    events: Arc<dyn quark_core::EventLog>,
+) -> Router {
     Router::new()
         .route("/{project}/{token}/memory", axum::routing::get(memory_text))
-        .with_state((tokens, memory))
+        .with_state(Arc::new(MemoryRoute {
+            tokens,
+            memory,
+            events,
+        }))
+}
+
+struct MemoryRoute {
+    tokens: Tokens,
+    memory: Arc<dyn quark_worker::ProjectMemory>,
+    events: Arc<dyn quark_core::EventLog>,
 }
 
 async fn memory_text(
-    State((tokens, memory)): State<(Tokens, Arc<dyn quark_worker::ProjectMemory>)>,
+    State(r): State<Arc<MemoryRoute>>,
     UrlPath((project, token)): UrlPath<(String, String)>,
 ) -> Response {
-    if !tokens.check(&project, &token) {
+    if !r.tokens.check(&project, &token) {
         return not_found();
     }
-    match memory.memories(&ProjectId::new(project.clone())).await {
-        Ok(m) => (
-            StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/plain; charset=utf-8",
-            )],
-            session_memory(&m),
-        )
-            .into_response(),
+    let pid = ProjectId::new(project.clone());
+    let m = match r.memory.memories(&pid).await {
+        Ok(m) => m,
         Err(e) => {
             tracing::warn!(%project, error = %e, "the coordinator's session starts without the Project's memory");
-            (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
+            return (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response();
         }
+    };
+    let text = session_memory(&m);
+    let primed = quark_worker::memory::MemoryEvent::Primed {
+        role: "coordinator".into(),
+        count: m.len(),
+        shown: quark_worker::memory::shown(&text),
+        bytes: text.len(),
+    };
+    match quark_core::NewEvent::typed(
+        crate::host(),
+        pid,
+        None,
+        quark_core::event::kinds::MEMORY_PRIMED,
+        &primed,
+    ) {
+        Ok(e) => {
+            if let Err(e) = r.events.append(e).await {
+                tracing::warn!(%project, error = %e, "could not record the coordinator's memory");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "could not record the coordinator's memory"),
     }
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        text,
+    )
+        .into_response()
 }
 
 fn not_found() -> Response {
@@ -1231,7 +1269,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tokens = Tokens::new(dir.path());
         let token = tokens.get_or_create("p1").unwrap();
-        let app = memory_router(tokens, Arc::new(Fixed));
+        let log = quark_core::fake::MemoryEventLog::new();
+        let app = memory_router(tokens, Arc::new(Fixed), Arc::new(log.clone()));
         let get = |uri: String| {
             axum::http::Request::get(uri)
                 .body(axum::body::Body::empty())
@@ -1252,6 +1291,12 @@ mod tests {
         );
         let res = app.oneshot(get("/p1/wrong/memory".into())).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let events = log.events();
+        assert_eq!(events.len(), 1, "only the answered GET is recorded");
+        assert_eq!(events[0].kind.as_str(), "memory.primed");
+        assert_eq!(events[0].payload["role"], "coordinator");
+        assert_eq!(events[0].payload["count"], 1);
+        assert_eq!(events[0].payload["shown"], 1);
     }
 
     async fn send(app: &Router, req: Request<Body>) -> (StatusCode, Value) {

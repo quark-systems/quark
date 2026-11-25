@@ -10,6 +10,10 @@ page lists every merged pull request.
 
 ### Added
 
+- You can see how sessions use the Project's memory over time. `memory.primed` events record each
+  time a coordinator's session or a new worker is given the memory (how many memories were shown,
+  and their size), and `memory.read` events record each memory a worker asks for. See
+  [Memory use](docs/engine/event-log.md#memory-use).
 - Workers now get the Project's memory. A new worker's instructions end with a list of what the
   Project has learned (each memory's key and first line), and the worker can read one in full
   with the `recall` tool or `curl -s "$QUARK_MEMORY_URL?key=<key>"`. Workers still use the
