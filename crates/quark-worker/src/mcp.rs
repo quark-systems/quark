@@ -105,7 +105,8 @@ impl McpServer {
 }
 
 impl McpServer {
-    /// The Project's memories, read only: an answer, never an event.
+    /// The Project's memories, read only. The answer records a
+    /// `memory.read` event, never a worker message.
     async fn recall(&self, who: &WorkerIdentity, args: &Value) -> Result<Value, (i64, String)> {
         let arg = |field: &str| {
             args.get(field)
@@ -113,11 +114,12 @@ impl McpServer {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
         };
-        match self.recorder.memories(who).await {
-            Ok(m) => Ok(tool_result(
-                false,
-                &crate::memory::recall(&m, arg("key"), arg("query")),
-            )),
+        match self
+            .recorder
+            .recall(who, "mcp", arg("key"), arg("query"))
+            .await
+        {
+            Ok(text) => Ok(tool_result(false, &text)),
             Err(CoreError::Backend(msg)) => Err((
                 codes::INTERNAL_ERROR,
                 format!("could not read the Project's memory, try again: {msg}"),
@@ -478,6 +480,15 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("replaced"));
-        assert!(log.events().is_empty(), "recall records nothing");
+        let kinds: Vec<_> = log
+            .events()
+            .iter()
+            .map(|e| e.kind.as_str().to_string())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["memory.read", "memory.read"],
+            "a replaced worker reads nothing"
+        );
     }
 }

@@ -80,14 +80,18 @@ async fn memory(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     };
-    match recorder.memories(&who).await {
-        Ok(m) => (
+    let (key, query) = (arg(&q.key), arg(&q.query));
+    match recorder
+        .recall(&who, "http", key.as_deref(), query.as_deref())
+        .await
+    {
+        Ok(text) => (
             StatusCode::OK,
             [(
                 axum::http::header::CONTENT_TYPE,
                 "text/plain; charset=utf-8",
             )],
-            crate::memory::recall(&m, arg(&q.key).as_deref(), arg(&q.query).as_deref()),
+            text,
         )
             .into_response(),
         Err(e) => reply(e),
@@ -279,6 +283,7 @@ mod tests {
         assert_eq!(s, StatusCode::CONFLICT);
         let (s, _) = send(&app, get("/memory/nope/g1")).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
-        assert!(log.events().is_empty());
+        assert_eq!(log.events().len(), 2, "one memory.read per answer");
+        assert_eq!(log.events()[0].payload["found"], 1);
     }
 }

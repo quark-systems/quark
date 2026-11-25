@@ -332,10 +332,33 @@ impl Supervisor {
 
     /// The memory section of a new worker's brief, if the Project has any.
     /// A slow or failing read leaves it out rather than holding the launch.
-    async fn memory_section(&self, project: &ProjectId) -> Option<String> {
+    async fn memory_section(&self, project: &ProjectId, task: &TaskId) -> Option<String> {
         let memory = self.memory.as_ref()?;
         match tokio::time::timeout(MEMORY_READ_TIMEOUT, memory.memories(project)).await {
-            Ok(Ok(m)) => quark_worker::memory::brief_section(&m),
+            Ok(Ok(m)) => {
+                let section = quark_worker::memory::brief_section(&m)?;
+                let primed = quark_worker::memory::MemoryEvent::Primed {
+                    role: "worker".into(),
+                    count: m.len(),
+                    shown: quark_worker::memory::shown(&section),
+                    bytes: section.len(),
+                };
+                match NewEvent::typed(
+                    self.config.host.clone(),
+                    project.clone(),
+                    Some(task.clone()),
+                    quark_core::event::kinds::MEMORY_PRIMED,
+                    &primed,
+                ) {
+                    Ok(e) => {
+                        if let Err(e) = self.log.append(e).await {
+                            tracing::warn!(%task, error = %e, "could not record the worker's memory");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "could not record the worker's memory"),
+                }
+                Some(section)
+            }
             Ok(Err(e)) => {
                 tracing::warn!(%project, error = %e, "the worker starts without the Project's memory");
                 None
@@ -582,7 +605,7 @@ impl Supervisor {
         // A resumed conversation already has its brief, memory included.
         let memory = match resume {
             true => None,
-            false => self.memory_section(project).await,
+            false => self.memory_section(project, task).await,
         };
         let plan = launch::plan(&launch::Inputs {
             manifest: &manifest,

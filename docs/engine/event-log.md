@@ -25,6 +25,20 @@ A transition already in the log that the machine refuses leaves the state alone 
 It catches up with the log, checks the transition against the machine, appends it, and only then applies it.
 An illegal transition is refused with `IllegalTransition` and appends nothing.
 
+## Memory use
+
+How sessions use the Project's memory is in two kinds of event:
+
+- `memory.primed`: a session was given the memory. That is a coordinator's session start, when its hook GETs `/memory`, or a new worker's brief. The payload has `role`, `count` (memories the Project had), `shown` (memories named in what the session got) and `bytes`.
+- `memory.read`: a worker asked for memory with `recall` or `$QUARK_MEMORY_URL`. The payload has `via`, `key` or `query`, and `found`.
+
+A coordinator's own `bd recall` and `bd memories` run in its shell and are not recorded. For example, per Project and day:
+
+```sql
+SELECT project, substr(ts, 1, 10) AS day, kind, json_extract(payload, '$.role') AS role, count(*)
+FROM events WHERE kind IN ('memory.primed', 'memory.read') GROUP BY 1, 2, 3, 4 ORDER BY 2;
+```
+
 ## Retention
 
 quarkd's hourly housekeeping (`crates/quarkd/src/housekeeping.rs`) deletes what no read model folds into state, through `SqliteEventLog::prune`:

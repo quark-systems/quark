@@ -11,6 +11,57 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use quark_core::{ProjectId, Result};
+use serde::{Deserialize, Serialize};
+
+/// What the `memory.primed` and `memory.read` events say, so how sessions
+/// use the Project's memory can be seen over time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MemoryEvent {
+    /// A session was given the memory.
+    Primed {
+        /// `coordinator` or `worker`.
+        role: String,
+        /// Memories the Project had.
+        count: usize,
+        /// Memories named in what the session was given.
+        shown: usize,
+        /// Bytes it was given.
+        bytes: usize,
+    },
+    /// A worker asked for memory.
+    Read {
+        /// `mcp` or `http`.
+        via: String,
+        key: Option<String>,
+        query: Option<String>,
+        /// Memories the answer held.
+        found: usize,
+    },
+}
+
+/// Memories `text` (an index or a session's memory) names: its `- ` lines
+/// and `## ` headings, less the line saying how many were left out.
+pub fn shown(text: &str) -> usize {
+    text.lines()
+        .filter(|l| (l.starts_with("- `") || l.starts_with("## ")) && !l.starts_with("- …"))
+        .count()
+}
+
+/// How many memories [`recall`] answers with.
+pub fn found(memories: &BTreeMap<String, String>, key: Option<&str>, query: Option<&str>) -> usize {
+    if let Some(key) = key {
+        return usize::from(memories.contains_key(key));
+    }
+    if let Some(q) = query {
+        let q = q.to_lowercase();
+        return memories
+            .iter()
+            .filter(|(k, t)| k.to_lowercase().contains(&q) || t.to_lowercase().contains(&q))
+            .count();
+    }
+    memories.len()
+}
 
 /// Most bytes of the index a brief carries.
 pub const MAX_INDEX_BYTES: usize = 4 * 1024;
@@ -157,6 +208,17 @@ mod tests {
         assert!(out.ends_with("more; call `recall` with no arguments for the whole list.\n"));
         let shown = out.lines().filter(|l| l.starts_with("- `key-")).count();
         assert!(out.contains(&format!("…and {} more", 100 - shown)));
+    }
+
+    #[test]
+    fn counts_what_was_shown_and_found() {
+        let m = mems(&[("gates", "Run the gates."), ("aws", "Profile apptio-dse.")]);
+        assert_eq!(shown(&index(&m, MAX_INDEX_BYTES)), 2);
+        assert_eq!(shown("- `a`: x\n- …and 3 more; call\n## rule\n"), 2);
+        assert_eq!(found(&m, Some("gates"), None), 1);
+        assert_eq!(found(&m, Some("nope"), None), 0);
+        assert_eq!(found(&m, None, Some("APPTIO")), 1);
+        assert_eq!(found(&m, None, None), 2);
     }
 
     #[test]

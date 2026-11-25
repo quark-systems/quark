@@ -113,9 +113,47 @@ impl Recorder {
         self
     }
 
-    /// The Project's memories as `who` may read them: its task must exist and
-    /// `who` must be its current worker. Empty without a memory source.
-    pub async fn memories(&self, who: &WorkerIdentity) -> Result<BTreeMap<String, String>> {
+    /// Answers a worker's `recall` (see [`crate::memory::recall`]) and records
+    /// a `memory.read` event. A failed record is logged, not the worker's
+    /// problem: the answer is what counts.
+    pub async fn recall(
+        &self,
+        who: &WorkerIdentity,
+        via: &str,
+        key: Option<&str>,
+        query: Option<&str>,
+    ) -> Result<String> {
+        let (project, memories) = self.memories(who).await?;
+        let read = crate::memory::MemoryEvent::Read {
+            via: via.to_string(),
+            key: key.map(str::to_string),
+            query: query.map(str::to_string),
+            found: crate::memory::found(&memories, key, query),
+        };
+        match NewEvent::typed(
+            self.host.clone(),
+            project,
+            Some(who.task.clone()),
+            kinds::MEMORY_READ,
+            &read,
+        ) {
+            Ok(event) => {
+                if let Err(e) = self.log.append(event).await {
+                    tracing::warn!(task = %who.task, error = %e, "could not record a memory read");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not record a memory read"),
+        }
+        Ok(crate::memory::recall(&memories, key, query))
+    }
+
+    /// The Project's memories as `who` may read them, with the Project: its
+    /// task must exist and `who` must be its current worker. Empty without a
+    /// memory source.
+    async fn memories(
+        &self,
+        who: &WorkerIdentity,
+    ) -> Result<(ProjectId, BTreeMap<String, String>)> {
         let binding = self.binding(&who.task).await?;
         if binding.generation != who.generation {
             return Err(CoreError::Refused(format!(
@@ -123,10 +161,11 @@ impl Recorder {
                 who.generation, who.task
             )));
         }
-        match &self.memory {
-            Some(m) => m.memories(&binding.project).await,
-            None => Ok(BTreeMap::new()),
-        }
+        let memories = match &self.memory {
+            Some(m) => m.memories(&binding.project).await?,
+            None => BTreeMap::new(),
+        };
+        Ok((binding.project, memories))
     }
 
     /// The task's binding, or `NotFound`.
