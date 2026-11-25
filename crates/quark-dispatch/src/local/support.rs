@@ -502,6 +502,29 @@ pub fn expand_home(path: &str) -> Option<PathBuf> {
     }
 }
 
+/// Writes an executable script for a test to run, through a child process.
+///
+/// A test binary runs its tests on threads of one process. While that
+/// process has a file open for writing, a child another thread forks at
+/// that moment inherits the descriptor and holds it until it execs, and
+/// running the file meanwhile fails on Linux with "Text file busy". A file
+/// only a child ever had open for writing has no writer left once that
+/// child has exited.
+#[cfg(test)]
+pub fn write_script(path: &Path, script: impl AsRef<str>) {
+    use std::io::Write;
+    let mut sh = std::process::Command::new("sh")
+        .args(["-c", r#"cat > "$1" && chmod 755 "$1""#, "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = sh.stdin.take().unwrap();
+    stdin.write_all(script.as_ref().as_bytes()).unwrap();
+    drop(stdin);
+    assert!(sh.wait().unwrap().success(), "writing {}", path.display());
+}
+
 /// A stand-in curl for tests: each request whose URL contains a route's
 /// pattern gets that route's status and body (the first match wins), and
 /// any other gets a 404.
@@ -524,8 +547,7 @@ pub fn stub_curl(dir: &Path, routes: &[(&str, u16, &[u8])]) -> String {
     }
     script.push_str("*) : > \"$o\"; printf 404;;\nesac\n");
     let curl = dir.join("curl");
-    std::fs::write(&curl, script).unwrap();
-    std::fs::set_permissions(&curl, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_script(&curl, script);
     curl.to_string_lossy().into_owned()
 }
 
@@ -544,14 +566,8 @@ mod tests {
         let curl = tmp.path().join("curl");
         // Writes the body and headers where -o and -D say, and echoes the
         // config it got on stdin into the body.
-        std::fs::write(
-            &curl,
-            "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) o=$2; shift;; -D) d=$2; shift;; esac; shift; done\n\
-             cat > \"$o\"\nprintf 'HTTP/1.1 200 OK\\r\\nGrpc-Status: 0\\r\\n' > \"$d\"\nprintf 200\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&curl, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        write_script(&curl, "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) o=$2; shift;; -D) d=$2; shift;; esac; shift; done\n\
+             cat > \"$o\"\nprintf 'HTTP/1.1 200 OK\\r\\nGrpc-Status: 0\\r\\n' > \"$d\"\nprintf 200\n");
         let http = Http {
             curl: curl.to_string_lossy().into_owned(),
             timeout: Duration::from_secs(5),

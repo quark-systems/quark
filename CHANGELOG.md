@@ -46,6 +46,12 @@ page lists every merged pull request.
   they can read, and exit 1, instead of reporting on it. A `quark.db` at another schema that
   they can read is named at the top of the report and is no longer a finding, so triage files
   no bead for it.
+- A worker's terminal no longer freezes after a burst of output it could not keep up with.
+  `quark-ptyd` buffers 1024 chunks of a session's output per viewer; a viewer that fell further
+  behind asked for a repaint of the screen, the repaint pushed out the chunk the viewer was
+  about to read, and it asked again, without end: the terminal showed nothing more until it
+  was attached again, and `quark-ptyd` kept a core busy repainting. The viewer now skips to
+  the end of what is buffered before it asks. The fix takes effect when `quark-ptyd` restarts.
 
 ## 0.3.1
 

@@ -388,11 +388,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn asks_a_local_ollama_server_without_a_key() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let seen = dir.path().join("seen");
         let curl = dir.path().join("curl");
-        std::fs::write(
+        crate::local::support::write_script(
             &curl,
             format!(
                 "#!/bin/sh\n{{ for a in \"$@\"; do echo \"$a\"; done; echo stdin:; cat; }} > '{}'\n\
@@ -402,9 +401,7 @@ mod tests {
                     "confidence":0.8,"probabilities":{"rule_1":0.9,"rule_2":0.05,"default":0.05}}},
                     "usage":{"input_tokens":52,"output_tokens":0}})
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let c = DispatchConfig::parse(
             r#"{"classifier":{"provider":"ollama","model":"d1","url":"http://mac.lan:11434"},
                 "rules":[{"when":"a","use":{"harness":"claude"}},{"when":"b","use":{"harness":"codex"}}]}"#,

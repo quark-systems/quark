@@ -496,17 +496,14 @@ mod tests {
     /// A fake `kiro-cli` that prints usage only when signed in with `sk-kept`.
     #[cfg(unix)]
     fn fake_kiro(dir: &std::path::Path) -> String {
-        use std::os::unix::fs::PermissionsExt;
         let bin = dir.join("kiro-cli");
-        std::fs::write(
+        crate::local::support::write_script(
             &bin,
             "#!/bin/sh\nif [ \"$KIRO_API_KEY\" = sk-kept ]; then\n\
              echo 'Estimated Usage | resets on 2099-11-01 | KIRO PRO'\n\
              echo 'Credits (250 of 1,000 covered in plan), 25%'\n\
              else echo 'Not logged in.'; fi\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         bin.display().to_string()
     }
 

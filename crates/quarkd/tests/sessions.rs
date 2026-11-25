@@ -35,12 +35,40 @@ fn output(e: &Event) -> Option<(TerminalOutput, Vec<u8>)> {
     Some((out, bytes))
 }
 
-/// How long a flood may take to pass through. It is a second or two on an
-/// idle machine, but every line crosses several processes, so it slows far
-/// more than the machine does when the cores are shared: 37 s with three
-/// busy processes per core, and over 60 s in a gate run beside other gates.
-/// These tests are about what is kept afterwards, not about speed.
-const FLOOD_DEADLINE: Duration = Duration::from_secs(300);
+/// How long a test waits for what it checks. These tests run beside the
+/// rest of the workspace's and beside other gates, with the cores shared. A
+/// flood takes a second or two on an idle machine, but every line crosses
+/// several processes, so it slows far more than the machine does: about
+/// 30 s with three busy processes per core. The deadline is far above that,
+/// so only something that never happens runs into it. These tests are about
+/// what is shown and kept, not about speed.
+const DEADLINE: Duration = Duration::from_secs(300);
+
+/// Waits until replay of `terminal` would give at most the retained output,
+/// starting from a snapshot. The writer appends a flood's last line before
+/// it prunes, so this waits for that prune instead of guessing how long it
+/// takes.
+async fn wait_for_pruned(store: &Store, terminal: &str) {
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    loop {
+        let events = store.events_after(0, 100_000).unwrap();
+        let kept: Vec<_> = events
+            .iter()
+            .filter_map(output)
+            .filter(|(o, _)| o.terminal_id == terminal)
+            .collect();
+        let bytes: usize = kept.iter().map(|(_, b)| b.len()).sum();
+        let first = kept.first().map(|(o, _)| o.kind);
+        if bytes as u64 <= RETAIN_BYTES + 512 * 1024 && first == Some(TerminalChunkKind::Snapshot) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the flood was not pruned to a snapshot: kept {bytes} bytes of output, starting from {first:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
 
 /// Waits for an output event of `terminal` matching `pred`, collecting the
 /// terminal's bytes since the last snapshot.
@@ -51,7 +79,7 @@ async fn wait_for(
     pred: impl Fn(&TerminalOutput, &[u8]) -> bool,
 ) -> (TerminalOutput, Vec<u8>) {
     let mut seen = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + DEADLINE;
     loop {
         let event = tokio::time::timeout_at(deadline, rx.recv())
             .await
@@ -292,7 +320,7 @@ async fn streams_maps_types_and_reattaches() {
 
     // When the program exits its window closes and the terminal goes away.
     sessions.input(task, b"exit\r", None).await.unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + DEADLINE;
     while sessions.list(&project.id).iter().any(|t| t.id == task) {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -344,7 +372,7 @@ async fn floods_are_recorded_and_pruned_to_a_snapshot() {
         .input(&id, b"seq 1 1000000; echo flood-$((1+1))-done\r", None)
         .await
         .unwrap();
-    let deadline = tokio::time::Instant::now() + FLOOD_DEADLINE;
+    let deadline = tokio::time::Instant::now() + DEADLINE;
     let mut last_line = Vec::new();
     loop {
         let event = tokio::time::timeout_at(deadline, rx.recv())
@@ -363,24 +391,7 @@ async fn floods_are_recorded_and_pruned_to_a_snapshot() {
         }
     }
 
-    // Wait for the writer's last prune, then check what replay would give.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let events = store.events_after(0, 100_000).unwrap();
-    let kept: Vec<_> = events
-        .iter()
-        .filter_map(output)
-        .filter(|(o, _)| o.terminal_id == id)
-        .collect();
-    let bytes: usize = kept.iter().map(|(_, b)| b.len()).sum();
-    assert!(
-        bytes as u64 <= RETAIN_BYTES + 512 * 1024,
-        "kept {bytes} bytes of output"
-    );
-    assert_eq!(
-        kept.first().map(|(o, _)| o.kind),
-        Some(TerminalChunkKind::Snapshot),
-        "replay starts from a snapshot"
-    );
+    wait_for_pruned(&store, &id).await;
 
     sessions.detach_all();
     server.kill().await;
@@ -679,7 +690,7 @@ async fn pty_workers_stream_switch_sessions_and_reattach() {
     // When the program exits the terminal goes away, and the next sync does
     // not bring it back while the engine still names the session.
     sessions.input(task, b"exit\r", None).await.unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + DEADLINE;
     while sessions.list(&project.id).iter().any(|t| t.id == task) {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -732,7 +743,7 @@ async fn pty_floods_are_pruned_to_a_snapshot() {
         .input(task, b"seq 1 500000; echo flood-$((1+1))-done\r", None)
         .await
         .unwrap();
-    let deadline = tokio::time::Instant::now() + FLOOD_DEADLINE;
+    let deadline = tokio::time::Instant::now() + DEADLINE;
     let mut last_line = Vec::new();
     let mut snapshots = 0;
     loop {
@@ -760,24 +771,7 @@ async fn pty_floods_are_pruned_to_a_snapshot() {
     }
     assert!(snapshots > 0, "no snapshot after pruning");
 
-    // Wait for the writer's last prune, then check what replay would give.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let events = store.events_after(0, 100_000).unwrap();
-    let kept: Vec<_> = events
-        .iter()
-        .filter_map(output)
-        .filter(|(o, _)| o.terminal_id == task)
-        .collect();
-    let bytes: usize = kept.iter().map(|(_, b)| b.len()).sum();
-    assert!(
-        bytes as u64 <= RETAIN_BYTES + 512 * 1024,
-        "kept {bytes} bytes of output"
-    );
-    assert_eq!(
-        kept.first().map(|(o, _)| o.kind),
-        Some(TerminalChunkKind::Snapshot),
-        "replay starts from a snapshot"
-    );
+    wait_for_pruned(&store, task).await;
     sessions.detach_all();
     backend.kill(&s.id).await.unwrap();
 }
