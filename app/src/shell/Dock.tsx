@@ -12,6 +12,7 @@ import { AttachButton, AttachmentList, Button, CoordinatorMark, Kbd } from "../u
 import { useAttachments, withAttachments } from "../attachments";
 import { useShowHidden } from "./reveal";
 import { BeadText } from "../ui/BeadText";
+import { aboutLine } from "../objectRefs";
 
 export interface DockContext {
   projectId: string | null;
@@ -39,7 +40,7 @@ export function dockContext(route: Route, s: Lookup, fallbackProject: string | n
 
 /** The text sent: the message, with what it is about on a first line the coordinator can follow. */
 export function dockMessage(text: string, ctx: DockContext): string {
-  return ctx.about ? `About "${ctx.about}" (${ctx.link}):\n${text}` : text;
+  return ctx.about && ctx.link ? `${aboutLine({ title: ctx.about, link: ctx.link })}\n${text}` : text;
 }
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
