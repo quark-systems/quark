@@ -15,6 +15,8 @@ import { CommandCard } from "./CommandCard";
 import { activity, Activity, duration, Turn, turnMarkdown } from "./turns";
 import { Work } from "./Work";
 import { BeadMarkdown, BeadText } from "../../ui/BeadText";
+import { ObjectRef } from "../../ui/ObjectRef";
+import { aboutLine, parseAbout, resolveRef, type AboutLine } from "../../objectRefs";
 
 export const TurnView = memo(function TurnView({ turn }: { turn: Turn }) {
   const { freshAfter, pendingNotes } = useTranscript();
@@ -116,12 +118,15 @@ export function UserMessage({ item, pending, note, tone, onEdit, actions, fresh 
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // A message sent about a decision, worker or PR shows that object as a card, not its link.
+  const parsed = parseAbout(item.text);
+  const body = parsed ? parsed.body : item.text;
   const save = async () => {
     if (draft === null || !onEdit) return;
     const text = draft.trim();
-    if (!text || text === item.text.trim()) return setDraft(null);
+    if (!text || text === body.trim()) return setDraft(null);
     setSaving(true);
-    const ok = await onEdit(text);
+    const ok = await onEdit(parsed ? `${aboutLine(parsed.about)}\n${text}` : text);
     setSaving(false);
     if (ok) setDraft(null);
   };
@@ -140,16 +145,30 @@ export function UserMessage({ item, pending, note, tone, onEdit, actions, fresh 
             <Button kind="primary" disabled={saving || !draft.trim()} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</Button>
           </div>
         </div>
+      ) : parsed ? (
+        <div className="tx-bubble tx-about" data-testid="about-message">
+          <AboutCard about={parsed.about} />
+          {body.trim() && <div className="tx-about-body">{body}</div>}
+        </div>
       ) : <div className="tx-bubble">{item.text}</div>}
       {draft === null && (
         <div className="tx-meta">
           {note ?? ago(item.ts)}{item.truncated && " · truncated"}
-          {onEdit && <> · <button type="button" className="tx-link" data-testid="queued-edit-open" onClick={() => setDraft(item.text)}>Edit</button></>}
+          {onEdit && <> · <button type="button" className="tx-link" data-testid="queued-edit-open" onClick={() => setDraft(body)}>Edit</button></>}
           {actions}
         </div>
       )}
     </div>
   );
+}
+
+/** The decision, worker or PR a message is about, live from the store. */
+function AboutCard({ about }: { about: AboutLine }) {
+  const tasks = useStore((s) => s.tasks);
+  const pullRequests = useStore((s) => s.pullRequests);
+  const decisions = useStore((s) => s.decisions);
+  const r = resolveRef(about, { tasks, pullRequests, decisions });
+  return <ObjectRef kind={r.kind} tag={r.tag} status={r.status} href={r.href} title={<BeadText text={r.title} project={r.project} />} />;
 }
 
 const AgentText = memo(function AgentText({ item }: { item: TranscriptItem }) {

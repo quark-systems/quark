@@ -152,3 +152,6 @@ a.tx-wake-worker:hover { text-decoration: underline; }
 .tx-command-status { flex: none; font-size: 11px; color: var(--fg-faint); }
 .tx-compaction { color: var(--fg-dim); margin: 6px 0; }
 .tx-compaction::before, .tx-compaction::after { border-top-style: dashed; }
+/* A message about a decision, worker or PR: the object's card on top, then what was asked. */
+.tx-bubble.tx-about { display: flex; flex-direction: column; gap: 8px; padding: 8px; min-width: min(320px, 100%); }
+.tx-about-body { padding: 0 5px 2px; }

@@ -2,7 +2,7 @@
 // contract and a live example. The same entries render the catalogue page (`#/catalogue`).
 import React, { useState } from "react";
 import type { Decision } from "../api";
-import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, Toggle, UsageMeter, Menu, CountBadge, BeadMarkdown, BeadText, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
+import { AttachButton, AttachmentList, AttachmentChip, Button, ButtonLink, ControlRow, CoordinatorMark, Disclosure, Field, FieldError, FieldHint, FolderPicker, Form, ImagePreview, FormActions, FormError, OptionCards, Select, TextArea, TextInput, Toggle, UsageMeter, Menu, CountBadge, BeadMarkdown, BeadText, ObjectRef, DecisionCard, DecisionEvidence, Kbd, Row, SectionLabel, StatusDot, Tone } from ".";
 
 export interface CatalogueEntry {
   /** The export's name in `src/ui`. */
@@ -101,6 +101,16 @@ export const CATALOGUE: CatalogueEntry[] = [
     when: "Render markdown from an agent (a coordinator message, a decision's context) that may name issues by id.",
     contract: "text; project; inline for one line with no paragraph; as picks the element; short as for BeadText. Each issue named outside code and links becomes a link to it with its title.",
     example: () => <BeadMarkdown project="catalogue" text="Start **quark-e1c** once `quark-6kq` merges." />,
+  },
+  {
+    name: "ObjectRef",
+    when: "Show a decision, worker or pull request that a message is about, such as a message to the coordinator sent from the dock. Never show the object's id or link as text.",
+    contract: "kind: decision | worker | pull-request | page; tag is its short handle (D-14, #95); title (text or BeadText); status is its state word and tone; href opens it in its project. objectRefs.ts resolves an About line to these from the store.",
+    example: () => <div className="cat-inline" style={{ flexDirection: "column", alignItems: "stretch", maxWidth: 480 }}>
+      <ObjectRef kind="decision" tag="D-14" title="Switch slice 2 (dispatch) to the native engine?" status={{ label: "Needs you", tone: "needs-you" }} href="#/catalogue" />
+      <ObjectRef kind="worker" title="Fix the Safari export button" status={{ label: "Busy", tone: "busy" }} href="#/catalogue" />
+      <ObjectRef kind="pull-request" tag="#95" title="Switch dispatch to the native engine" status={{ label: "Merged", tone: "idle" }} href="#/catalogue" />
+    </div>,
   },
   {
     name: "StatusDot",
